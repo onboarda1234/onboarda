@@ -14517,6 +14517,37 @@ function screeningComparisonPrimaryHit(results, context) {
   return (groups[0]._group_records && groups[0]._group_records[0]) || groups[0];
 }
 
+function screeningComparisonProviderReference(hit) {
+  hit = hit || {};
+  return hit.provider_profile_identifier || hit.profile_identifier || hit.provider_risk_identifier ||
+    hit.risk_id || hit.risk_identifier || hit.provider_alert_identifier || hit.alert_identifier ||
+    hit.reference || hit.id || '';
+}
+
+function screeningComparisonHasProviderProfileAttributes(hit) {
+  hit = hit || {};
+  if (hit.profile && typeof hit.profile === 'object' && Object.keys(hit.profile).length) return true;
+  var nameCandidates = [hit.matched_name, hit.profile_name, hit.name, hit.full_name, hit.entity_name, hit.person_name];
+  for (var i = 0; i < nameCandidates.length; i++) {
+    var candidate = String(nameCandidates[i] || '').trim();
+    if (candidate && !isUuidLike(candidate) && !/^ca case\b/i.test(candidate) && !/ evidence$/i.test(candidate)) return true;
+  }
+  var directFields = [
+    hit.date_of_birth, hit.birth_date, hit.dob, hit.year_of_birth,
+    hit.nationality, hit.country, hit.country_code, hit.jurisdiction,
+    hit.position, hit.role, hit.entity_type, hit.company_type,
+    hit.registration_number, hit.incorporation_number, hit.company_number,
+    hit.address, hit.registered_address
+  ];
+  if (directFields.some(function(value) { return !!screeningComparisonDisplayValue(value); })) return true;
+  var indicator = firstEvidenceIndicatorValue(hit, function(_indicator, value) {
+    return value.date_of_birth || value.birth_date || value.dob || value.year_of_birth ||
+      value.nationality || value.country || value.country_code || value.position ||
+      value.aliases || value.alias_names || value.alternative_names || value.alt_names;
+  });
+  return Object.keys(indicator.value || {}).length > 0;
+}
+
 function screeningComparisonAliasesFromHit(hit) {
   var direct = screeningComparisonAliases(hit.aliases || hit.alias_names || hit.alternative_names || hit.alt_names);
   if (direct.length) return direct;
@@ -14592,19 +14623,37 @@ function screeningComparisonRows(rows) {
 function buildScreeningComparisonPanel(mode, declaredSubject, results, options, context) {
   var primaryHit = screeningComparisonPrimaryHit(results, context || {});
   if (!primaryHit) return '';
+  var providerReference = screeningComparisonProviderReference(primaryHit);
+  var categoryBadge = '<span class="badge draft">' + escapeHtml(evidencePrimaryCategoryLabel(primaryHit)) + '</span>';
+  var summaryStyle = 'cursor:pointer;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;';
+  var baseOpen = '<details style="margin-top:14px;padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);">' +
+    '<summary style="' + summaryStyle + '">' +
+      '<div>' +
+        '<div style="font-size:13px;font-weight:700;color:var(--text1);">Declared vs Provider Match</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Comparison shown only when provider profile attributes are available.</div>' +
+      '</div>' +
+      categoryBadge +
+    '</summary>';
+  if (!screeningComparisonHasProviderProfileAttributes(primaryHit)) {
+    return baseOpen +
+      '<div style="margin-top:10px;font-size:12px;color:var(--text2);line-height:1.55;">Provider profile attributes unavailable. Raw provider reference is retained in Audit trace.</div>' +
+      '<details style="margin-top:10px;">' +
+        '<summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--text2);">Audit trace</summary>' +
+        '<div style="margin-top:8px;">' + evidenceInfoGrid([
+          ['Provider', (primaryHit.provider || primaryHit.source || (context || {}).provider)],
+          ['Provider reference', providerReference],
+          ['Raw category/type', evidencePrimaryCategoryLabel(primaryHit)],
+          ['Screened at', (context || {}).screened_at || primaryHit.screened_at]
+        ]) + '</div>' +
+      '</details>' +
+    '</details>';
+  }
   var rows = mode === 'entity'
     ? screeningComparisonEntityFieldRows(declaredSubject || {}, primaryHit, context || {})
     : screeningComparisonPersonFieldRows(declaredSubject || {}, primaryHit, options || {}, context || {});
   var body = screeningComparisonRows(rows);
   if (!body) return '';
-  return '<div style="margin-top:14px;padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);">' +
-    '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
-      '<div>' +
-        '<div style="font-size:13px;font-weight:700;color:var(--text1);">Declared vs Provider Match</div>' +
-        '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Comparison shown against highest-risk provider match.</div>' +
-      '</div>' +
-      '<span class="badge draft">' + escapeHtml(evidencePrimaryCategoryLabel(primaryHit)) + '</span>' +
-    '</div>' +
+  return baseOpen +
     '<div style="overflow:auto;margin-top:10px;">' +
       '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
         '<thead><tr>' +
@@ -14616,7 +14665,7 @@ function buildScreeningComparisonPanel(mode, declaredSubject, results, options, 
         '<tbody>' + body + '</tbody>' +
       '</table>' +
     '</div>' +
-  '</div>';
+  '</details>';
 }
 
 function screeningEvidenceKey(hit, context, index) {
@@ -14672,7 +14721,7 @@ function evidenceSection(title, body) {
 function evidenceTraceabilitySection(body) {
   if (!body) return '';
   return '<details style="margin-top:14px;padding:12px 14px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
-    '<summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text1);">Technical provider details</summary>' +
+    '<summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text1);">Audit trace</summary>' +
     '<div style="margin-top:10px;color:var(--text2);">' + body + '</div>' +
   '</details>';
 }
@@ -15000,6 +15049,8 @@ function providerResultHighlights(results, context) {
       ['Category', groupLabel],
       ['Highest sensitivity', sensitivity],
       ['Risk labels', riskLabels],
+      ['Surfaced by pass', hit.surfaced_by_pass],
+      ['Match score raw value', hit.match_score],
       ['Discovered', discovered]
     ].filter(function(row) { return row[1]; }).map(function(row) {
       return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <strong>' + escapeHtml(String(row[1])) + '</strong></div>';
@@ -15014,7 +15065,10 @@ function providerResultHighlights(results, context) {
         '<span style="margin-left:auto;font-size:11px;color:var(--brand);font-weight:700;">Show evidence</span>' +
       '</summary>' +
       '<div style="margin-top:8px;font-size:11px;color:var(--text2);line-height:1.6;">' +
-        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:4px 12px;">' + traceRows + '</div>' +
+        '<details style="margin-top:6px;">' +
+          '<summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--text2);">Audit trace</summary>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:4px 12px;margin-top:6px;">' + traceRows + '</div>' +
+        '</details>' +
         profileNote +
         '<div style="margin-top:6px;">' + escapeHtml(groupSummary) + '</div>' +
         (anyMissingSource ? '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Source article link is not available from the ComplyAdvantage payload for one or more records.</div>' : '') +
@@ -15957,17 +16011,23 @@ function agent3SeverityBadge(severity) {
   return '<span style="display:inline-flex;align-items:center;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:4px 10px;border-radius:14px;background:' + c.bg + ';border:1px solid ' + c.border + ';color:' + c.text + ';">Severity: ' + escapeHtml(severity || 'Not available') + '</span>';
 }
 
+function agent3DisplayRecommendation(recommendation) {
+  var text = String(recommendation || '').trim();
+  return text.toLowerCase() === 'clear' ? 'No reportable provider hit recorded' : text;
+}
+
 function agent3RecommendationBadge(recommendation) {
-  var r = String(recommendation || '').toLowerCase();
+  var display = agent3DisplayRecommendation(recommendation);
+  var r = String(display || '').toLowerCase();
   var c = { bg: '#f1f5f9', border: 'var(--border1)', text: 'var(--text2)' }; // neutral fallback
-  if (r === 'clear' || r === 'false positive likely') {
+  if (r === 'false positive likely') {
     c = { bg: '#ecfdf5', border: '#a7f3d0', text: '#047857' }; // green
   } else if (r === 'officer review required' || r === 'review required') {
     c = { bg: '#fffbeb', border: '#fde68a', text: '#92400e' }; // amber
   } else if (r === 'edd recommended' || r === 'escalate' || r === 'reject recommended') {
     c = { bg: '#fef2f2', border: '#fecaca', text: '#b91c1c' }; // red / high-warning
   }
-  return '<span style="display:inline-flex;align-items:center;font-size:12px;font-weight:800;padding:4px 12px;border-radius:14px;background:' + c.bg + ';border:1px solid ' + c.border + ';color:' + c.text + ';">Agent recommendation: ' + escapeHtml(recommendation || 'Not available') + '</span>';
+  return '<span style="display:inline-flex;align-items:center;font-size:12px;font-weight:800;padding:4px 12px;border-radius:14px;background:' + c.bg + ';border:1px solid ' + c.border + ';color:' + c.text + ';">Agent recommendation: ' + escapeHtml(display || 'Not available') + '</span>';
 }
 
 function agent3IsDeclaredPepYes(value) {
@@ -16035,13 +16095,28 @@ function agent3HitStatusBadge(status) {
   return '<span style="display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:12px;white-space:nowrap;background:' + m.bg + ';border:1px solid ' + m.border + ';color:' + m.text + ';">' + escapeHtml(m.label) + '</span>';
 }
 
-function agent3ScoreCellHtml(score) {
-  if (score === null || score === undefined || score === '') return '<span style="color:var(--text3);">n/a</span>';
-  var n = Number(score);
-  if (isNaN(n)) return escapeHtml(String(score));
-  var pct = Math.max(0, Math.min(100, n));
-  var color = pct >= 70 ? '#b45309' : '#059669';
-  return '<span style="display:inline-block;height:5px;width:44px;border-radius:3px;background:#e2e8f0;overflow:hidden;vertical-align:middle;margin-right:6px;"><span style="display:block;height:100%;width:' + pct + '%;background:' + color + ';"></span></span>' + escapeHtml(String(n)) + '%';
+function agent3SurfacedByPassMeta(value) {
+  var v = String(value || '').trim().toLowerCase();
+  if (v === 'strict') return { label: 'Strict pass', help: 'Stronger provider match signal; officer verification required.' };
+  if (v === 'relaxed') return { label: 'Relaxed pass', help: 'Broader provider match; review identifiers before clearing.' };
+  if (v === 'both') return { label: 'Strict + relaxed', help: 'Surfaced in both provider passes; high review priority.' };
+  return { label: 'Provider score unavailable', help: 'Provider did not supply numeric score or pass evidence.' };
+}
+
+function agent3ProviderEvidenceCellHtml(row) {
+  row = row || {};
+  var score = row.match_score;
+  if (score !== null && score !== undefined && score !== '') {
+    var n = Number(score);
+    if (!isNaN(n)) {
+      return '<div style="font-weight:800;color:var(--text1);">' + escapeHtml(String(n)) + '%</div>' +
+        '<div style="font-size:10.5px;color:var(--text3);line-height:1.35;margin-top:2px;">Numeric score supplied by provider.</div>';
+    }
+    return '<div style="font-weight:700;color:var(--text1);">' + escapeHtml(String(score)) + '</div>';
+  }
+  var meta = agent3SurfacedByPassMeta(row.surfaced_by_pass);
+  return '<div style="font-weight:800;color:var(--text1);">' + escapeHtml(meta.label) + '</div>' +
+    '<div style="font-size:10.5px;color:var(--text3);line-height:1.35;margin-top:2px;">' + escapeHtml(meta.help) + '</div>';
 }
 
 function agent3HitStatusCountsHtml(counts) {
@@ -16060,7 +16135,56 @@ function agent3LooksLikeUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || '').trim());
 }
 
-// Compact 4-column layout matching the approved mock: Match | Matched entity
+function agent3TraceRowsHtml(rows) {
+  rows = (rows || []).filter(function(row) { return row && row[1] !== null && row[1] !== undefined && String(row[1]).trim() !== ''; });
+  if (!rows.length) return '<div style="font-size:11px;color:var(--text3);">No technical provider metadata available.</div>';
+  return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px 12px;font-size:11px;">' + rows.map(function(row) {
+    return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <strong style="color:var(--text2);word-break:break-word;">' + escapeHtml(String(row[1])) + '</strong></div>';
+  }).join('') + '</div>';
+}
+
+function agent3HitEvidenceDetailsHtml(row) {
+  row = row || {};
+  var url = row.evidence_url || '';
+  var title = row.evidence_title || '';
+  var source = row.evidence_source || '';
+  var snippet = row.evidence_snippet || '';
+  var evidenceBody = '<div style="font-size:11.5px;color:var(--text2);line-height:1.55;">' +
+    (title ? '<div><strong>' + escapeHtml(title) + '</strong></div>' : '') +
+    (source ? '<div style="color:var(--text3);">Source: ' + escapeHtml(source) + '</div>' : '') +
+    (snippet ? '<div style="margin-top:5px;">' + escapeHtml(snippet) + '</div>' : '') +
+    (url ? '<div style="margin-top:7px;"><a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer">Open article/source URL</a></div>' : '<div style="margin-top:7px;color:var(--text3);">No article URL supplied by provider payload.</div>') +
+    '</div>';
+  return '<details style="margin-top:8px;border:1px solid var(--border1);border-radius:8px;background:#fff;">' +
+    '<summary style="cursor:pointer;padding:7px 9px;font-size:11px;font-weight:700;color:var(--text2);">Evidence details</summary>' +
+    '<div style="padding:8px 9px;border-top:1px solid var(--border1);">' + evidenceBody + '</div>' +
+  '</details>';
+}
+
+function agent3AuditTraceHtml(output) {
+  var rows = Array.isArray(output && output.hit_rows) ? output.hit_rows : [];
+  if (!rows.length) return '<div style="font-size:12px;color:var(--text3);">No provider hit metadata is available.</div>';
+  return rows.map(function(row) {
+    row = row || {};
+    var trace = row.audit_trace || {};
+    var title = agent3LooksLikeUuid(row.matched_entity) ? 'Unnamed provider match' : (row.matched_entity || ('Hit ' + row.index));
+    return '<div style="padding:10px;border:1px solid var(--border1);border-radius:8px;background:#fff;margin-bottom:8px;">' +
+      '<div style="font-size:12px;font-weight:800;color:var(--text1);margin-bottom:6px;">' + escapeHtml(title) + '</div>' +
+      agent3TraceRowsHtml([
+        ['Provider reference', trace.provider_reference || row.evidence_ref],
+        ['Evidence ref', trace.evidence_ref || row.evidence_ref],
+        ['Surfaced by pass', trace.surfaced_by_pass || row.surfaced_by_pass],
+        ['Raw category/type', trace.raw_category_type || row.type],
+        ['Match score raw value', trace.match_score_raw],
+        ['Screening mode', trace.screening_mode],
+        ['Screened at', trace.screened_at],
+        ['Pending/degraded reason', trace.pending_degraded_reason]
+      ]) +
+    '</div>';
+  }).join('');
+}
+
+// Compact 4-column layout matching the approved mock: Provider evidence | Matched entity
 // (subject folded beneath) | List | Status & reason. Display only — advisory.
 function agent3HitRowsTableHtml(rows) {
   rows = Array.isArray(rows) ? rows : [];
@@ -16069,7 +16193,7 @@ function agent3HitRowsTableHtml(rows) {
   var td = 'padding:8px;border-bottom:1px solid var(--border1);vertical-align:top;';
   var html = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">';
   html += '<thead><tr>' +
-    '<th style="' + th + 'width:11%;">Match</th>' +
+    '<th style="' + th + 'width:16%;">Provider evidence</th>' +
     '<th style="' + th + 'width:24%;">Matched entity</th>' +
     '<th style="' + th + 'width:18%;">List</th>' +
     '<th style="' + th + '">Status &amp; reason</th>' +
@@ -16080,6 +16204,7 @@ function agent3HitRowsTableHtml(rows) {
     var matched;
     if (agent3LooksLikeUuid(r.matched_entity)) {
       matched = '<span>Unnamed provider match</span>' +
+        '<div style="font-size:10.5px;color:var(--text3);margin-top:2px;">Provider reference</div>' +
         '<div style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--text3);word-break:break-all;" title="' + escapeHtml(String(r.matched_entity)) + '">' + escapeHtml(String(r.matched_entity)) + '</div>';
     } else {
       matched = '<span style="font-weight:600;">' + escapeHtml(r.matched_entity || 'n/a') + '</span>';
@@ -16090,31 +16215,34 @@ function agent3HitRowsTableHtml(rows) {
     if (r.provider) listCell += '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(String(r.provider)) + '</div>';
     var evRef = r.evidence_ref ? ' <span style="color:var(--text3);font-size:10.5px;">[' + escapeHtml(String(r.evidence_ref)) + ']</span>' : '';
     html += '<tr>' +
-      '<td style="' + td + 'white-space:nowrap;">' + agent3ScoreCellHtml(r.match_score) + '</td>' +
+      '<td style="' + td + '">' + agent3ProviderEvidenceCellHtml(r) + '</td>' +
       '<td style="' + td + '">' + matched + '</td>' +
       '<td style="' + td + '">' + listCell + '</td>' +
-      '<td style="' + td + '">' + agent3HitStatusBadge(r.suggested_status) + ' <span style="color:#475569;">' + escapeHtml(r.reason || '') + '</span>' + evRef + '</td>' +
+      '<td style="' + td + '">' + agent3HitStatusBadge(r.suggested_status) + ' <span style="color:#475569;">' + escapeHtml(r.reason || '') + '</span>' + evRef + agent3HitEvidenceDetailsHtml(r) + '</td>' +
       '</tr>';
   });
   html += '</tbody></table></div>';
   return html;
 }
 
-function copyAgent3AuditNote(event) {
-  if (event) { event.preventDefault(); event.stopPropagation(); }
-  // Resolve the note relative to the clicked button's panel first (robust even
-  // if more than one Agent 3 panel were ever rendered), then fall back to id.
-  var btn = event && (event.currentTarget || event.target);
-  var scope = btn && btn.closest ? btn.closest('#agent3-screening-interpretation-panel') : null;
-  var el = (scope && scope.querySelector) ? scope.querySelector('#agent3-audit-note-text') : null;
-  if (!el) el = document.getElementById('agent3-audit-note-text');
-  if (!el) return;
-  var text = el.innerText || el.textContent || '';
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(function() { showToast('Audit note copied.'); }, function() { showToast('Copy failed — select and copy manually.', 'warn'); });
-  } else {
-    showToast('Clipboard unavailable — select and copy manually.', 'warn');
-  }
+function agent3ScreeningResultTerminal(output) {
+  if (!output) return false;
+  if (output.screening_result_terminal === true) return true;
+  if (output.screening_result_terminal === false) return false;
+  var pendingStates = ['pending', 'in_progress', 'retrying', 'pending_provider', 'partial_result', 'degraded', 'errored', 'error', 'failed', 'provider_error', 'timeout'];
+  var values = [
+    output.screening_result_state,
+    output.provider_status,
+    output.screening_status,
+    output.pending_degraded_reason
+  ];
+  (Array.isArray(output.evidence_used) ? output.evidence_used : []).forEach(function(item) {
+    if (!item || typeof item !== 'object') return;
+    values.push(item.screening_result_state, item.provider_status, item.screening_status, item.status, item.pending_degraded_reason);
+  });
+  return !values.some(function(value) {
+    return pendingStates.indexOf(String(value || '').trim().toLowerCase()) !== -1;
+  }) && values.some(function(value) { return String(value || '').trim() !== ''; });
 }
 
 function renderAgent3ScreeningInterpretationPanel(app) {
@@ -16124,6 +16252,7 @@ function renderAgent3ScreeningInterpretationPanel(app) {
   var disabled = AGENT3_SCREENING_INTERPRETATION_BUSY || !(app && (app.id || app.ref)) ? ' disabled' : '';
   var collapsed = isAgent3ScreeningInterpretationCollapsed(app);
   var toggleLabel = collapsed ? 'Expand Agent 3' : 'Collapse Agent 3';
+  var advisoryCopy = 'This is an advisory screening interpretation, not an approval decision.';
   var html = '';
   html += '<div class="card" id="agent3-screening-interpretation-panel" style="margin-bottom:16px;border-left:4px solid #0f766e;background:rgba(15,118,110,0.035);">';
   html += '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">';
@@ -16134,7 +16263,6 @@ function renderAgent3ScreeningInterpretationPanel(app) {
   html += '<button class="btn btn-primary btn-sm" id="agent3-generate-screening-interpretation-btn" onclick="generateAgent3ScreeningInterpretation(event)"' + disabled + '>' + escapeHtml(buttonLabel) + '</button>';
   html += '</div>';
   html += '</div>';
-  html += '<div style="margin:0 18px 12px;padding:9px 12px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;font-size:12px;font-weight:600;color:#92400e;">Officer decision required. Agent 3 provides an advisory interpretation only.</div>';
 
   if (!output) {
     if (collapsed) {
@@ -16147,31 +16275,73 @@ function renderAgent3ScreeningInterpretationPanel(app) {
     return html;
   }
 
+  var hitRows = Array.isArray(output.hit_rows) ? output.hit_rows : [];
+  var hitCounts = output.hit_row_status_counts && typeof output.hit_row_status_counts === 'object' ? output.hit_row_status_counts : {};
+  var totalHits = output.hit_counts && output.hit_counts.total != null ? Number(output.hit_counts.total) : hitRows.length;
+  if (isNaN(totalHits)) totalHits = hitRows.length;
+  var hasProviderHits = totalHits > 0 || hitRows.length > 0;
+  var panelMetaHtml = '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px;">' +
+    agent3RecommendationBadge(output.recommended_disposition) +
+    agent3SeverityBadge(output.severity) +
+    (generatedAt ? '<span class="explain-data-source">Generated: ' + escapeHtml(generatedAt) + '</span>' : '') +
+  '</div>';
+  var providerSummaryHtml = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">' +
+    agent3ProviderHitsHtml(output) +
+    agent3HitStatusCountsHtml(output.hit_row_status_counts) +
+  '</div>';
+
+  html += '<div style="padding:0 18px 18px;">';
+  html += panelMetaHtml;
+  html += providerSummaryHtml;
+
   if (collapsed) {
-    html += '<div style="padding:0 18px 18px;">';
-    html += '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px;">';
-    html += agent3RecommendationBadge(output.recommended_disposition);
-    html += agent3SeverityBadge(output.severity);
-    if (generatedAt) html += '<span class="explain-data-source">Generated: ' + escapeHtml(generatedAt) + '</span>';
-    html += '</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">' + agent3ProviderHitsHtml(output) + agent3HitStatusCountsHtml(output.hit_row_status_counts) + '</div>';
     html += '</div>';
     html += '</div>';
     return html;
   }
 
-  html += '<div style="padding:0 18px 18px;">';
-  // Recommendation / severity / timestamp hierarchy
-  html += '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px;">';
-  html += agent3RecommendationBadge(output.recommended_disposition);
-  html += agent3SeverityBadge(output.severity);
-  if (generatedAt) html += '<span style="font-size:11px;color:var(--text3);">Generated ' + escapeHtml(generatedAt) + '</span>';
-  html += '</div>';
   if (output.ai_notice) {
     html += '<div style="font-size:11.5px;color:var(--text3);margin-bottom:10px;">' + escapeHtml(output.ai_notice) + '</div>';
   }
-  // One chip row: provider hits, declared PEP, per-hit status tally — advisory only
-  html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">' + agent3ProviderHitsHtml(output) + agent3HitStatusCountsHtml(output.hit_row_status_counts) + '</div>';
+
+  var expSummary = 'cursor:pointer;padding:10px 14px;font-size:11.5px;font-weight:700;letter-spacing:.03em;color:var(--text2);background:var(--surface1);display:flex;align-items:center;justify-content:space-between;gap:8px;';
+  var expCnt = 'font-weight:600;color:var(--text3);font-size:11px;';
+  var needReview = hitCounts.needs_review || 0;
+  var hitCountLabel = hitRows.length + ' hit' + (hitRows.length === 1 ? '' : 's') + (needReview ? ' · ' + needReview + ' need review' : '');
+
+  if (!hasProviderHits) {
+    var displayedRecommendation = String(agent3DisplayRecommendation(output.recommended_disposition) || '').trim().toLowerCase();
+    var softPositive = agent3ScreeningResultTerminal(output) && displayedRecommendation === 'no reportable provider hit recorded';
+    var noHitStyle = softPositive
+      ? 'padding:12px 14px;border:1px solid #a7f3d0;border-radius:8px;background:#ecfdf5;color:#047857;'
+      : 'padding:12px 14px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;color:#92400e;';
+    html += '<div style="' + noHitStyle + '">';
+    html += '<div style="font-size:13px;font-weight:800;">Stored provider result contains zero reportable hit rows.</div>';
+    if (!softPositive) {
+      html += '<div style="font-size:12px;line-height:1.5;margin-top:4px;">Stored provider result is not a terminal clean result or another review signal remains present.</div>';
+    }
+    html += '<div style="font-size:12px;line-height:1.5;margin-top:4px;">Officer decision required. ' + escapeHtml(advisoryCopy) + '</div>';
+    html += '</div>';
+    html += '<details style="margin-top:10px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
+    html += '<summary style="' + expSummary + '"><span>Show full detail</span><span style="' + expCnt + '">summary · context · evidence</span></summary>';
+    html += '<div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">';
+    html += agent3ScreeningFieldHtml('Plain-English summary', output.summary);
+    html += agent3ScreeningFieldHtml('Key concerns', output.key_concerns || []);
+    html += agent3ScreeningFieldHtml('False-positive assessment', output.false_positive_assessment);
+    html += agent3ScreeningFieldHtml('Adverse media relevance', output.adverse_media_relevance);
+    html += '</div>';
+    html += '<div style="padding:0 14px 12px;">' + agent3EvidenceHtml(output.evidence_used) + '</div>';
+    html += '</details>';
+    html += '<details style="margin-top:10px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
+    html += '<summary style="' + expSummary + '"><span>Audit trace</span><span style="' + expCnt + '">provider metadata</span></summary>';
+    html += '<div style="padding:12px 14px;">' + agent3AuditTraceHtml(output) + '</div>';
+    html += '</details>';
+    html += '</div>';
+    html += '</div>';
+    return html;
+  }
+
+  html += '<div style="margin-bottom:12px;padding:9px 12px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;font-size:12px;font-weight:600;color:#92400e;">Officer decision required. Agent 3 provides an advisory interpretation only. ' + escapeHtml(advisoryCopy) + '</div>';
   // Primary view: summary + key concerns visible by default
   html += '<div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;">';
   html += '<div style="padding:12px 14px;border-radius:8px;background:#eef2ff;">';
@@ -16181,13 +16351,6 @@ function renderAgent3ScreeningInterpretationPanel(app) {
   html += agent3ScreeningFieldHtml('Key concerns', output.key_concerns || []);
   html += '</div>';
 
-  var expSummary = 'cursor:pointer;padding:10px 14px;font-size:11.5px;font-weight:700;letter-spacing:.03em;color:var(--text2);background:var(--surface1);display:flex;align-items:center;justify-content:space-between;gap:8px;';
-  var expCnt = 'font-weight:600;color:var(--text3);font-size:11px;';
-  var hitRows = Array.isArray(output.hit_rows) ? output.hit_rows : [];
-  var hitCounts = output.hit_row_status_counts && typeof output.hit_row_status_counts === 'object' ? output.hit_row_status_counts : {};
-  var totalHits = output.hit_counts && output.hit_counts.total ? output.hit_counts.total : 0;
-  var needReview = hitCounts.needs_review || 0;
-  var hitCountLabel = hitRows.length + ' hit' + (hitRows.length === 1 ? '' : 's') + (needReview ? ' · ' + needReview + ' need review' : '');
   // Hit-by-hit review — open by default when rows exist (this is the answer)
   html += '<details' + (hitRows.length ? ' open' : '') + ' style="margin-top:12px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
   html += '<summary style="' + expSummary + '"><span>Hit-by-hit review</span><span style="' + expCnt + '">' + escapeHtml(hitCountLabel) + '</span></summary>';
@@ -16204,17 +16367,6 @@ function renderAgent3ScreeningInterpretationPanel(app) {
   html += '<div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">';
   html += agent3ScreeningFieldHtml('False-positive assessment', output.false_positive_assessment);
   html += agent3ScreeningFieldHtml('Adverse media relevance', output.adverse_media_relevance);
-  html += agent3ScreeningFieldHtml('Recommended disposition', output.recommended_disposition);
-  html += '</div>';
-  html += '</details>';
-  // Draft audit note — dark, paste-ready, clipboard only (no mutation, no server call)
-  html += '<details style="margin-top:10px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
-  html += '<summary style="' + expSummary + '"><span>Draft audit note</span><span style="' + expCnt + '">paste-ready</span></summary>';
-  html += '<div style="padding:12px 14px;">';
-  html += '<div style="position:relative;background:#0f172a;border-radius:8px;padding:13px 15px;">';
-  html += '<button class="btn btn-sm" id="agent3-copy-audit-note-btn" onclick="copyAgent3AuditNote(event)" style="position:absolute;top:8px;right:8px;background:#334155;color:#e2e8f0;border:none;">Copy</button>';
-  html += '<pre id="agent3-audit-note-text" style="white-space:pre-wrap;word-break:break-word;margin:0;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#e2e8f0;line-height:1.55;">' + escapeHtml(output.draft_audit_note || 'Not available') + '</pre>';
-  html += '</div>';
   html += '</div>';
   html += '</details>';
   // Evidence used
@@ -16222,6 +16374,10 @@ function renderAgent3ScreeningInterpretationPanel(app) {
   html += '<details style="margin-top:10px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
   html += '<summary style="' + expSummary + '"><span>Evidence used</span><span style="' + expCnt + '">' + escapeHtml(evidenceCount + ' source' + (evidenceCount === 1 ? '' : 's')) + '</span></summary>';
   html += '<div style="padding:12px 14px;">' + agent3EvidenceHtml(output.evidence_used) + '</div>';
+  html += '</details>';
+  html += '<details style="margin-top:10px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
+  html += '<summary style="' + expSummary + '"><span>Audit trace</span><span style="' + expCnt + '">provider metadata</span></summary>';
+  html += '<div style="padding:12px 14px;">' + agent3AuditTraceHtml(output) + '</div>';
   html += '</details>';
   html += '</div>';
   html += '</div>';

@@ -23136,6 +23136,8 @@ AGENT3_DECLARED_PEP_NOTICE = (
     "Stored provider screening may show no external PEP match, but the subject is marked as "
     "Declared PEP. Officer review remains required."
 )
+AGENT3_NO_REPORTABLE_HIT_RECOMMENDATION = "No reportable provider hit recorded"
+AGENT3_SURFACED_BY_PASS_VALUES = {"strict", "relaxed", "both"}
 AGENT3_PEP_TRUE_VALUES = {
     "1",
     "true",
@@ -23309,6 +23311,112 @@ def _agent3_numeric(value):
     if parsed <= 1:
         parsed *= 100
     return round(parsed, 1)
+
+
+def _agent3_first_non_empty(*values):
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                return stripped
+            continue
+        if value:
+            return value
+    return ""
+
+
+def _agent3_surfaced_by_pass(hit):
+    if not isinstance(hit, dict):
+        return ""
+    value = str(hit.get("surfaced_by_pass") or "").strip().lower()
+    return value if value in AGENT3_SURFACED_BY_PASS_VALUES else ""
+
+
+def _agent3_indicator_values(hit):
+    if not isinstance(hit, dict):
+        return []
+    values = []
+    for indicator in _agent3_list(hit.get("indicators")):
+        if not isinstance(indicator, dict):
+            continue
+        value = indicator.get("value")
+        if isinstance(value, dict):
+            values.append(value)
+    return values
+
+
+def _agent3_indicator_first(hit, *keys):
+    for value in _agent3_indicator_values(hit):
+        for key in keys:
+            current = value.get(key)
+            if current:
+                return current
+    return ""
+
+
+def _agent3_indicator_snippet(hit):
+    for value in _agent3_indicator_values(hit):
+        snippets = value.get("snippets")
+        if isinstance(snippets, list):
+            for snippet in snippets:
+                if isinstance(snippet, dict):
+                    text = _agent3_text(snippet.get("text"))
+                    if text:
+                        return text
+                elif snippet:
+                    return _agent3_text(snippet)
+    return ""
+
+
+def _agent3_evidence_details(hit):
+    if not isinstance(hit, dict):
+        return {}
+
+    canonical_url = ""
+    for value in _agent3_indicator_values(hit):
+        canonical = value.get("canonical_url")
+        if isinstance(canonical, dict):
+            canonical_url = _agent3_text(canonical.get("url"))
+        elif isinstance(canonical, str):
+            canonical_url = _agent3_text(canonical)
+        canonical_url = canonical_url or _agent3_text(value.get("url")) or _agent3_text(value.get("raw_url"))
+        if canonical_url:
+            break
+
+    url = _agent3_first_non_empty(
+        hit.get("media_url"),
+        hit.get("source_url"),
+        hit.get("url"),
+        canonical_url,
+    )
+    title = _agent3_first_non_empty(
+        hit.get("media_title"),
+        hit.get("source_title"),
+        hit.get("title"),
+        hit.get("headline"),
+        _agent3_indicator_first(hit, "title", "headline", "source_name"),
+    )
+    source = _agent3_first_non_empty(
+        hit.get("source_name"),
+        hit.get("publisher"),
+        hit.get("publication_name"),
+        _agent3_indicator_first(hit, "source_name", "publisher", "publication_name"),
+    )
+    snippet = _agent3_first_non_empty(
+        hit.get("media_snippet"),
+        hit.get("snippet"),
+        hit.get("summary"),
+        hit.get("match_rationale"),
+        _agent3_indicator_snippet(hit),
+    )
+    return {
+        "url": _agent3_text(url),
+        "title": _agent3_text(title),
+        "source": _agent3_text(source),
+        "snippet": _agent3_text(snippet),
+    }
 
 
 def _agent3_categories(hit, source_hint=""):
@@ -23564,14 +23672,68 @@ def _agent3_screening_report_available(screening_report):
     return any(key in screening_report for key in screening_keys)
 
 
+def _agent3_screening_report_state(screening_report):
+    screening_report = screening_report if isinstance(screening_report, dict) else {}
+    state = _agent3_text(_agent3_first_non_empty(
+        screening_report.get("status"),
+        screening_report.get("provider_status"),
+        screening_report.get("screening_status"),
+        screening_report.get("screening_state"),
+        screening_report.get("state"),
+        screening_report.get("truth_state"),
+        screening_report.get("workflow_status"),
+    ))
+    pending_degraded_reason = _agent3_text(_agent3_first_non_empty(
+        screening_report.get("pending_degraded_reason"),
+        screening_report.get("degraded_reason"),
+        screening_report.get("pending_provider_reason"),
+        screening_report.get("provider_status_reason"),
+        screening_report.get("error_message"),
+    ))
+    degraded_sources = _agent3_list(screening_report.get("degraded_sources"))
+    non_terminal_states = {
+        "pending",
+        "in_progress",
+        "retrying",
+        "pending_provider",
+        "partial_result",
+        "degraded",
+        "errored",
+        "error",
+        "failed",
+        "provider_error",
+        "timeout",
+    }
+    state_norm = state.strip().lower()
+    terminal = not pending_degraded_reason and not degraded_sources and state_norm not in non_terminal_states
+    return {
+        "state": state,
+        "terminal": terminal,
+        "pending_degraded_reason": pending_degraded_reason,
+    }
+
+
 def _agent3_collect_hits(screening_report, app):
     hits = []
+    screening_mode = _agent3_text(screening_report.get("screening_mode"))
+    screened_at = _agent3_text(screening_report.get("screened_at"))
+    pending_degraded_reason = _agent3_text(_agent3_first_non_empty(
+        screening_report.get("pending_degraded_reason"),
+        screening_report.get("degraded_reason"),
+        screening_report.get("pending_provider_reason"),
+        screening_report.get("provider_status_reason"),
+        screening_report.get("error_message"),
+    ))
 
     def add_hit(subject_type, subject_name, hit, source_hint=""):
         categories = _agent3_categories(hit, source_hint)
         matched_name = ""
         list_name = ""
         provider_ref = ""
+        raw_category_type = source_hint or ""
+        surfaced_by_pass = _agent3_surfaced_by_pass(hit)
+        evidence_details = _agent3_evidence_details(hit)
+        match_score_raw = None
         if isinstance(hit, dict):
             matched_name = (
                 hit.get("matched_name")
@@ -23598,21 +23760,43 @@ def _agent3_collect_hits(screening_report, app):
                 or hit.get("reference")
                 or hit.get("entity_id")
                 or hit.get("hit_id")
+                or hit.get("profile_identifier")
+                or hit.get("provider_profile_identifier")
+                or hit.get("provider_risk_identifier")
+                or hit.get("risk_id")
+                or hit.get("alert_identifier")
+                or hit.get("provider_alert_identifier")
                 or ""
             )
+            raw_category_type = _agent3_text(_agent3_first_non_empty(
+                hit.get("category"),
+                hit.get("match_category"),
+                hit.get("type"),
+                hit.get("hit_type"),
+                hit.get("list_type"),
+                source_hint,
+            ))
+            match_score_raw = hit.get("match_score") if "match_score" in hit else hit.get("score")
+        match_score = _agent3_numeric(match_score_raw)
         hits.append({
             "subject_type": subject_type,
             "subject_name": subject_name or "Unknown subject",
             "matched_name": _agent3_text(matched_name, "Stored hit"),
             "categories": categories or ["watchlist"],
-            "match_score": _agent3_numeric(
-                (hit or {}).get("match_score")
-                if isinstance(hit, dict)
-                else None
-            ) or _agent3_numeric((hit or {}).get("score") if isinstance(hit, dict) else None),
+            "match_score": match_score,
+            "match_score_raw": match_score_raw,
+            "surfaced_by_pass": surfaced_by_pass,
             "list_name": _agent3_text(list_name),
             "provider_ref": _agent3_text(provider_ref),
+            "raw_category_type": raw_category_type,
             "source": source_hint or "stored_screening_result",
+            "screening_mode": screening_mode,
+            "screened_at": screened_at,
+            "pending_degraded_reason": pending_degraded_reason,
+            "evidence_url": evidence_details.get("url") or "",
+            "evidence_title": evidence_details.get("title") or "",
+            "evidence_source": evidence_details.get("source") or "",
+            "evidence_snippet": evidence_details.get("snippet") or "",
         })
 
     company_screening = screening_report.get("company_screening")
@@ -23695,7 +23879,7 @@ def _agent3_hit_primary_type(categories):
     return "watchlist"
 
 
-def _agent3_hit_status_and_reason(primary_type, score):
+def _agent3_hit_status_and_reason(primary_type, score, surfaced_by_pass=""):
     """Deterministically classify a single stored hit. No provider calls.
 
     Kept aligned with the panel-level disposition policy so a row's
@@ -23705,7 +23889,18 @@ def _agent3_hit_status_and_reason(primary_type, score):
     needs_review.
     """
     type_label = str(primary_type or "watchlist").replace("_", " ")
+    pass_label = {
+        "strict": "strict pass",
+        "relaxed": "relaxed pass",
+        "both": "strict + relaxed passes",
+    }.get(str(surfaced_by_pass or "").lower(), "")
     if score is None:
+        if pass_label:
+            return (
+                AGENT3_HIT_STATUS_NEEDS_REVIEW,
+                "No numeric confidence score recorded, but the stored provider "
+                f"result was surfaced by {pass_label}; officer review required.",
+            )
         return (
             AGENT3_HIT_STATUS_UNAVAILABLE,
             "No confidence score recorded in the stored provider result; "
@@ -23742,7 +23937,8 @@ def _agent3_build_hit_rows(hits, provider):
         categories = hit.get("categories") or []
         primary = _agent3_hit_primary_type(categories)
         score = hit.get("match_score")
-        status, reason = _agent3_hit_status_and_reason(primary, score)
+        surfaced_by_pass = hit.get("surfaced_by_pass") or ""
+        status, reason = _agent3_hit_status_and_reason(primary, score, surfaced_by_pass)
         provider_ref = hit.get("provider_ref") or ""
         rows.append({
             "index": index + 1,
@@ -23754,9 +23950,25 @@ def _agent3_build_hit_rows(hits, provider):
             "categories": categories,
             "type": primary,
             "match_score": score,
+            "surfaced_by_pass": surfaced_by_pass,
             "suggested_status": status,
             "reason": reason,
             "evidence_ref": provider_ref or f"stored-hit-{index + 1}",
+            "evidence_url": hit.get("evidence_url") or "",
+            "evidence_title": hit.get("evidence_title") or "",
+            "evidence_source": hit.get("evidence_source") or "",
+            "evidence_snippet": hit.get("evidence_snippet") or "",
+            "audit_trace": {
+                "provider": provider,
+                "provider_reference": provider_ref,
+                "evidence_ref": provider_ref or f"stored-hit-{index + 1}",
+                "surfaced_by_pass": surfaced_by_pass,
+                "raw_category_type": hit.get("raw_category_type") or primary,
+                "match_score_raw": hit.get("match_score_raw"),
+                "screening_mode": hit.get("screening_mode") or "",
+                "screened_at": hit.get("screened_at") or "",
+                "pending_degraded_reason": hit.get("pending_degraded_reason") or "",
+            },
         })
     return rows
 
@@ -23766,6 +23978,7 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
     if not _agent3_screening_report_available(screening_report):
         return None
 
+    screening_state_info = _agent3_screening_report_state(screening_report)
     hits = _agent3_collect_hits(screening_report, app)
     declared_pep_subjects = list(declared_pep_subjects or [])
     for subject in _agent3_collect_declared_pep_from_prescreening(prescreening, screening_report):
@@ -23815,7 +24028,7 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         recommendation = "Officer review required"
     else:
         severity = "Low"
-        recommendation = "Clear"
+        recommendation = AGENT3_NO_REPORTABLE_HIT_RECOMMENDATION
 
     key_concerns = []
     if sanctions_count:
@@ -23889,7 +24102,6 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         summary_parts.append(AGENT3_DECLARED_PEP_NOTICE)
     if unresolved_review_count:
         summary_parts.append(f"{unresolved_review_count} screening review item(s) remain unresolved in stored review records.")
-    summary_parts.append(f"Agent recommendation: {recommendation}. Officer decision remains required.")
     summary = " ".join(summary_parts)
     draft_audit_note = (
         "Agent 3 generated an advisory screening interpretation from stored "
@@ -23902,6 +24114,9 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         "provider": provider,
         "screened_at": screening_report.get("screened_at") or "",
         "screening_mode": screening_report.get("screening_mode") or "",
+        "screening_result_state": screening_state_info.get("state") or "",
+        "screening_result_terminal": screening_state_info.get("terminal"),
+        "pending_degraded_reason": screening_state_info.get("pending_degraded_reason") or "",
         "total_hits": total_hits,
         "overall_flags": overall_flags[:10],
     }]
@@ -23926,6 +24141,11 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
             "matched_name": hit.get("matched_name"),
             "categories": hit.get("categories"),
             "match_score": hit.get("match_score"),
+            "surfaced_by_pass": hit.get("surfaced_by_pass"),
+            "evidence_url": hit.get("evidence_url"),
+            "evidence_title": hit.get("evidence_title"),
+            "evidence_source": hit.get("evidence_source"),
+            "evidence_snippet": hit.get("evidence_snippet"),
         })
 
     hit_rows = _agent3_build_hit_rows(hits, provider)
@@ -23944,6 +24164,9 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         "source": AGENT3_SCREENING_INTERPRETATION_SOURCE,
         "provider_call_made": False,
         "risk_or_decision_mutation": False,
+        "screening_result_state": screening_state_info.get("state") or "",
+        "screening_result_terminal": screening_state_info.get("terminal"),
+        "pending_degraded_reason": screening_state_info.get("pending_degraded_reason") or "",
         "ai_mode": "deterministic_fallback",
         "ai_notice": AGENT3_DETERMINISTIC_NOTICE,
         "officer_notice": AGENT3_OFFICER_NOTICE,

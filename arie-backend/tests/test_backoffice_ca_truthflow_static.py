@@ -87,7 +87,8 @@ def test_backoffice_screening_review_adds_declared_vs_provider_comparison():
     person_region = _function_region(html, "buildPersonScreeningReviewCard", "renderScreeningReviewPanel")
 
     assert "Declared vs Provider Match" in html
-    assert "Comparison shown against highest-risk provider match." in html
+    assert "Comparison shown only when provider profile attributes are available." in panel_region
+    assert "Provider profile attributes unavailable. Raw provider reference is retained in Audit trace." in panel_region
     assert "Missing Declared Data" in comparison_region
     assert "Missing Provider Data" in comparison_region
     assert "Likely Match" in comparison_region
@@ -225,7 +226,7 @@ def test_backoffice_screening_evidence_drawer_renders_structured_review_fields()
     drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
     assert "Why this needs review" in drawer_region
     assert "Evidence summary" in drawer_region
-    assert "Technical provider details" in html
+    assert "Audit trace" in html
     assert "Media Evidence" in drawer_region
     assert "PEP Evidence" in drawer_region
     assert "Sanctions / Watchlist Evidence" in drawer_region
@@ -255,7 +256,7 @@ def test_backoffice_screening_evidence_drawer_is_evidence_first_before_traceabil
     assert "function evidenceTraceabilitySection" in html
     assert "<details" in html
     assert "<summary" in html
-    assert "Technical provider details" in html
+    assert "Audit trace" in html
 
 
 def test_backoffice_screening_evidence_drawer_uses_review_friendly_fallbacks():

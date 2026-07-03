@@ -1,9 +1,12 @@
 import json
 import os
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
+import textwrap
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -297,7 +300,7 @@ def _assert_persisted_and_audited(db, app_id, app_ref, expected_recommendation):
             "clean_no_hit",
             _clean_no_hit_prescreening,
             False,
-            "Clear",
+            "No reportable provider hit recorded",
             "Low",
             "No provider hits found in stored screening results",
         ),
@@ -670,10 +673,24 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "Plain-English summary" in html
     assert "False-positive assessment" in html
     assert "Adverse media relevance" in html
-    assert "Recommended disposition" in html
-    assert "Draft audit note" in html
     assert "Evidence used" in html
+    assert "Provider evidence" in html
+    assert "Strict pass" in html
+    assert "Relaxed pass" in html
+    assert "Strict + relaxed" in html
+    assert "Provider score unavailable" in html
+    assert "Stronger provider match signal; officer verification required." in html
+    assert "Broader provider match; review identifiers before clearing." in html
+    assert "Surfaced in both provider passes; high review priority." in html
+    assert "Provider did not supply numeric score or pass evidence." in html
+    assert "No article URL supplied by provider payload." in html
+    assert "Provider reference" in html
+    assert "Audit trace" in html
+    assert "No reportable provider hit recorded" in html
+    assert "This is an advisory screening interpretation, not an approval decision." in html
+    assert "Draft audit note" not in _extract_function(html, "renderAgent3ScreeningInterpretationPanel")
 
+    panel_body = _extract_function(html, "renderAgent3ScreeningInterpretationPanel")
     render_body = _extract_function(html, "renderScreeningReviewPanel")
     fetch_detail_body = _extract_function(html, "fetchApplicationDetail")
     generate_body = _extract_function(html, "generateAgent3ScreeningInterpretation")
@@ -689,6 +706,13 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "boApiCall('GET', '/applications/' + appKey + '/agent3/screening-interpretation'" not in generate_body
     assert "Agent recommendation:" in html
     assert "Decision:" not in render_body
+    assert panel_body.count("agent3RecommendationBadge(output.recommended_disposition)") == 1
+    assert "agent3ScreeningFieldHtml('Recommended disposition'" not in panel_body
+    assert panel_body.count("This is an advisory screening interpretation, not an approval decision.") == 1
+    assert panel_body.count("agent3ProviderHitsHtml(output)") == 1
+    assert panel_body.count("agent3HitStatusCountsHtml(output.hit_row_status_counts)") == 1
+    assert "Show full detail" in panel_body
+    assert "Stored provider result contains zero reportable hit rows." in panel_body
 
     # PR-AGENT3-HIT-LEVEL-UI-1: hit-level rendering binds to the backend output
     # (hit_rows / hit_row_status_counts) and stays advisory + display-only.
@@ -697,13 +721,183 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "output.hit_rows" in html
     assert "output.hit_row_status_counts" in html
     assert "Hit-by-hit review" in html
+    assert "surfaced_by_pass" in html
+    assert "agent3ProviderEvidenceCellHtml" in html
+    assert "agent3HitEvidenceDetailsHtml" in html
+    assert "agent3AuditTraceHtml" in html
     for _status_label in ("Needs review", "Likely false positive", "High-confidence match", "Unavailable"):
         assert _status_label in html
-    # Copyable audit note is clipboard-only: no server call, no decision mutation.
-    copy_body = _extract_function(html, "copyAgent3AuditNote")
-    assert "navigator.clipboard" in copy_body
-    assert "boApiCall(" not in copy_body
-    assert "/agent3/screening-interpretation" not in copy_body
     table_body = _extract_function(html, "agent3HitRowsTableHtml")
     assert "boApiCall(" not in table_body
     assert "/agent3/screening-interpretation" not in table_body
+    assert "agent3HitActionButtonsHtml" not in html
+    assert "False Positive" not in table_body
+    evidence_body = _extract_function(html, "agent3HitEvidenceDetailsHtml")
+    assert "Audit trace" not in evidence_body
+    comparison_body = _extract_function(html, "buildScreeningComparisonPanel")
+    assert "Declared vs Provider Match" in comparison_body
+    assert "Provider profile attributes unavailable. Raw provider reference is retained in Audit trace." in comparison_body
+
+
+def test_backoffice_agent3_provider_evidence_helpers_render_expected_copy():
+    if not shutil.which("node"):
+        pytest.skip("node is not available for helper rendering check")
+    html = BACKOFFICE_HTML.read_text(encoding="utf-8")
+    script = "\n".join([
+        textwrap.dedent(
+            """
+            function escapeHtml(value) {
+              return String(value == null ? '' : value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+            }
+            const failures = [];
+            function assertIncludes(name, haystack, needle) {
+              if (!haystack.includes(needle)) failures.push(name + ' missing ' + needle);
+            }
+            function assertExcludes(name, haystack, needle) {
+              if (haystack.includes(needle)) failures.push(name + ' unexpectedly contained ' + needle);
+            }
+            """
+        ),
+        _extract_function(html, "agent3SurfacedByPassMeta"),
+        _extract_function(html, "agent3ProviderEvidenceCellHtml"),
+        _extract_function(html, "agent3TraceRowsHtml"),
+        _extract_function(html, "agent3HitEvidenceDetailsHtml"),
+        textwrap.dedent(
+            """
+            assertIncludes('strict', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'strict'}), 'Strict pass');
+            assertIncludes('strict help', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'strict'}), 'Stronger provider match signal; officer verification required.');
+            assertIncludes('relaxed', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'relaxed'}), 'Relaxed pass');
+            assertIncludes('both', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'both'}), 'Strict + relaxed');
+            assertIncludes('unavailable', agent3ProviderEvidenceCellHtml({match_score:null}), 'Provider score unavailable');
+            assertIncludes('numeric', agent3ProviderEvidenceCellHtml({match_score:88}), '88%');
+            const evidence = agent3HitEvidenceDetailsHtml({
+              evidence_url:'https://news.example/article',
+              evidence_title:'Article title',
+              evidence_source:'Example News',
+              evidence_snippet:'Article snippet',
+              audit_trace:{provider:'complyadvantage', surfaced_by_pass:'strict'}
+            });
+            assertIncludes('evidence link', evidence, 'href="https://news.example/article"');
+            assertIncludes('evidence title', evidence, 'Article title');
+            assertExcludes('per-row audit trace', evidence, 'Audit trace');
+            assertIncludes('missing url', agent3HitEvidenceDetailsHtml({}), 'No article URL supplied by provider payload.');
+            if (failures.length) {
+              console.error(failures.join('\\n'));
+              process.exit(1);
+            }
+            """
+        ),
+    ])
+    subprocess.run(["node", "-e", script], check=True, text=True, capture_output=True)
+
+
+def test_backoffice_agent3_panel_render_dedupes_recommendation_and_advisory():
+    if not shutil.which("node"):
+        pytest.skip("node is not available for panel rendering check")
+    html = BACKOFFICE_HTML.read_text(encoding="utf-8")
+    script = "\n".join([
+        textwrap.dedent(
+            """
+            function escapeHtml(value) {
+              return String(value == null ? '' : value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+            }
+            const AGENT3_SCREENING_INTERPRETATION_BUSY = false;
+            function getAgent3ScreeningInterpretation(app) { return app.output; }
+            function isAgent3ScreeningInterpretationCollapsed(app) { return !!app.collapsed; }
+            function agent3SeverityBadge(value) { return '<span>Severity: ' + escapeHtml(value) + '</span>'; }
+            function agent3ProviderHitsHtml(output) { return '<span>Provider hits: ' + escapeHtml(output.hit_counts.total) + ' total</span>'; }
+            function agent3HitStatusCountsHtml(counts) { return counts && counts.needs_review ? '<span>Needs review: ' + counts.needs_review + '</span>' : ''; }
+            function agent3ScreeningFieldHtml(label, value) { return '<section><h4>' + escapeHtml(label) + '</h4><p>' + escapeHtml(Array.isArray(value) ? value.join('; ') : value) + '</p></section>'; }
+            function agent3EvidenceHtml(_evidence) { return '<div>Evidence used body</div>'; }
+            function agent3HitRowsTableHtml(rows) { return '<table><tbody><tr><td>hit rows ' + rows.length + '</td></tr></tbody></table>'; }
+            function agent3AuditTraceHtml(_output) { return '<div>Audit trace body</div>'; }
+            const failures = [];
+            function count(haystack, needle) { return (haystack.match(new RegExp(needle.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'), 'g')) || []).length; }
+            function assertEquals(name, actual, expected) {
+              if (actual !== expected) failures.push(name + ' expected ' + expected + ' got ' + actual);
+            }
+            function assertIncludes(name, haystack, needle) {
+              if (!haystack.includes(needle)) failures.push(name + ' missing ' + needle);
+            }
+            function assertExcludes(name, haystack, needle) {
+              if (haystack.includes(needle)) failures.push(name + ' unexpectedly contained ' + needle);
+            }
+            """
+        ),
+        _extract_function(html, "agent3DisplayRecommendation"),
+        _extract_function(html, "agent3RecommendationBadge"),
+        _extract_function(html, "agent3ScreeningResultTerminal"),
+        _extract_function(html, "renderAgent3ScreeningInterpretationPanel"),
+        textwrap.dedent(
+            """
+            const advisory = 'This is an advisory screening interpretation, not an approval decision.';
+            const hitOutput = {
+              recommended_disposition: 'Officer review required',
+              severity: 'Medium',
+              generated_at: '2026-07-03T12:00:00Z',
+              ai_notice: '',
+              hit_counts: {total: 1},
+              hit_rows: [{index: 1}],
+              hit_row_status_counts: {needs_review: 1},
+              summary: 'Stored screening result contains one provider hit.',
+              key_concerns: ['Review the provider evidence.'],
+              false_positive_assessment: 'Officer disambiguation required.',
+              adverse_media_relevance: 'No adverse media hit.',
+              evidence_used: [{source: 'prescreening_data.screening_report'}],
+              screening_result_terminal: true
+            };
+            const hitHtml = renderAgent3ScreeningInterpretationPanel({id: 'app-hit', output: hitOutput});
+            assertEquals('hit recommendation once', count(hitHtml, 'Officer review required'), 1);
+            assertEquals('hit advisory once', count(hitHtml, advisory), 1);
+            assertEquals('hit provider counts once', count(hitHtml, 'Provider hits: 1 total'), 1);
+            assertExcludes('hit lower disposition', hitHtml, 'Recommended disposition');
+            assertIncludes('hit table rendered', hitHtml, 'hit rows 1');
+
+            const noHitOutput = {
+              recommended_disposition: 'No reportable provider hit recorded',
+              severity: 'Low',
+              generated_at: '2026-07-03T12:00:00Z',
+              ai_notice: '',
+              hit_counts: {total: 0},
+              hit_rows: [],
+              hit_row_status_counts: {},
+              summary: 'Stored screening result contains zero provider hit rows.',
+              key_concerns: ['No provider hits found in stored screening results.'],
+              false_positive_assessment: 'No provider false positives to clear.',
+              adverse_media_relevance: 'No provider adverse media hits found.',
+              evidence_used: [{source: 'prescreening_data.screening_report'}],
+              screening_result_terminal: true
+            };
+            const noHitHtml = renderAgent3ScreeningInterpretationPanel({id: 'app-clean', output: noHitOutput});
+            assertEquals('no-hit recommendation once', count(noHitHtml, 'No reportable provider hit recorded'), 1);
+            assertEquals('no-hit advisory once', count(noHitHtml, advisory), 1);
+            assertEquals('no-hit provider counts once', count(noHitHtml, 'Provider hits: 0 total'), 1);
+            assertIncludes('no-hit compact line', noHitHtml, 'Stored provider result contains zero reportable hit rows.');
+            assertIncludes('no-hit full detail toggle', noHitHtml, 'Show full detail');
+            assertExcludes('no-hit empty hit table omitted', noHitHtml, 'hit rows 0');
+
+            const pendingNoHitOutput = Object.assign({}, noHitOutput, {
+              screening_result_terminal: false,
+              screening_result_state: 'pending_provider'
+            });
+            const pendingNoHitHtml = renderAgent3ScreeningInterpretationPanel({id: 'app-pending', output: pendingNoHitOutput});
+            assertIncludes('pending no-hit warning', pendingNoHitHtml, 'Stored provider result is not a terminal clean result');
+            assertExcludes('pending no-hit not green', pendingNoHitHtml, '#ecfdf5');
+            if (failures.length) {
+              console.error(failures.join('\\n'));
+              process.exit(1);
+            }
+            """
+        ),
+    ])
+    subprocess.run(["node", "-e", script], check=True, text=True, capture_output=True)

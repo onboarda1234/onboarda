@@ -1191,12 +1191,14 @@ class TestInlineScreeningRuntime:
         assert result["providerHighlightsHtml"].count("Vladimir Putin") >= 4
         assert "Show evidence" in result["providerHighlightsHtml"]
         assert "Technical provider details" not in result["providerHighlightsHtml"]
+        assert "Audit trace" in result["providerHighlightsHtml"]
         assert "Provider case ID" not in result["providerHighlightsHtml"]
         assert "Provider alert ID" not in result["providerHighlightsHtml"]
         assert "Provider risk ID" not in result["providerHighlightsHtml"]
         assert "<details" in result["providerHighlightsHtml"]
         assert "Declared vs Provider Match" in result["comparisonHtml"]
-        assert "Comparison shown against highest-risk provider match." in result["comparisonHtml"]
+        assert "Comparison shown only when provider profile attributes are available." in result["comparisonHtml"]
+        assert result["comparisonHtml"].startswith("<details")
         assert "Match" in result["comparisonRows"]
         assert "Likely Match" in result["comparisonRows"]
         assert "Conflict" in result["comparisonRows"]
