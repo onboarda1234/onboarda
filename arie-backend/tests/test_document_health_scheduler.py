@@ -210,11 +210,20 @@ def test_default_scope_excludes_fixtures_and_non_approved(sched_db):
     _seed_app(sched_db, "app-scope-ok")
     _seed_app(sched_db, "app-scope-fixture", is_fixture=1)
     _seed_app(sched_db, "app-scope-draft", status="draft")
-    for app in ("app-scope-ok", "app-scope-fixture", "app-scope-draft"):
+    # NULL is_fixture must be treated as non-fixture (the case the removed
+    # COALESCE guarded). `is_fixture IS NOT TRUE` keeps this row in scope.
+    sched_db.execute(
+        "INSERT OR REPLACE INTO applications (id, ref, company_name, risk_level, status, is_fixture) "
+        "VALUES (?, ?, ?, 'MEDIUM', 'approved', NULL)",
+        ("app-scope-nullfix", "REF-app-scope-nullfix", "app-scope-nullfix Ltd"),
+    )
+    sched_db.commit()
+    for app in ("app-scope-ok", "app-scope-fixture", "app-scope-draft", "app-scope-nullfix"):
         _seed_expired_doc(sched_db, app, f"doc-{app}")
 
     ids = dhs.sweep_candidate_application_ids(sched_db)
     assert "app-scope-ok" in ids
+    assert "app-scope-nullfix" in ids
     assert "app-scope-fixture" not in ids
     assert "app-scope-draft" not in ids
 
@@ -225,6 +234,29 @@ def test_default_scope_excludes_fixtures_and_non_approved(sched_db):
     assert summary["created"] == 1
     rows = sched_db.execute("SELECT application_id FROM monitoring_alerts").fetchall()
     assert {r["application_id"] for r in rows} == {"app-scope-fixture"}
+
+
+def test_sweep_scope_sql_is_dialect_neutral_bool():
+    """Sweep scope must not use COALESCE(is_fixture, 0): `is_fixture` is BOOLEAN on
+    PostgreSQL, and COALESCE(boolean, integer) raises DatatypeMismatch (the Phase A
+    dry-run 500). Guards the dialect-neutral `IS TRUE`/`IS NOT TRUE` form. This is a
+    source-level regression that SQLite-only functional tests cannot catch, since
+    SQLite silently evaluates the boolean/integer mix."""
+    import pathlib
+
+    src = pathlib.Path(__file__).resolve().parents[1] / "document_health_scheduler.py"
+    text = src.read_text(encoding="utf-8")
+    assert "COALESCE(is_fixture, 0)" not in text, (
+        "Sweep scope must use a dialect-neutral fixture filter; "
+        "COALESCE(boolean, 0) raises DatatypeMismatch on PostgreSQL."
+    )
+    assert "IN (1, TRUE)" not in text, (
+        "Mixed integer/boolean IN-list (1, TRUE) is not PostgreSQL-safe."
+    )
+    assert "is_fixture IS TRUE" in text and "is_fixture IS NOT TRUE" in text, (
+        "Sweep scope should filter fixtures with `is_fixture IS TRUE` / "
+        "`is_fixture IS NOT TRUE` (valid on PG BOOLEAN and SQLite INTEGER)."
+    )
 
 
 # ── Config gating ────────────────────────────────────────────────────────────

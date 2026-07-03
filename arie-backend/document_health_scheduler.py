@@ -115,16 +115,20 @@ def sweep_candidate_application_ids(
     hidden Phase-B validation sweep, invisible to officer queues.
     A segment allowlist intersects with the scope; unknown ids are ignored.
     """
+    # Dialect-neutral boolean filter: `is_fixture` is BOOLEAN on PostgreSQL and
+    # INTEGER 0/1 on SQLite. `IS TRUE` / `IS NOT TRUE` are NULL-safe and valid on
+    # both dialects; coalescing the boolean column against an integer literal
+    # raises DatatypeMismatch on PostgreSQL. Mirrors the reconciler's proven filter.
     if fixtures_only:
         rows = db.execute(
-            "SELECT id FROM applications WHERE COALESCE(is_fixture, 0) IN (1, TRUE) ORDER BY id"
+            "SELECT id FROM applications WHERE is_fixture IS TRUE ORDER BY id"
         ).fetchall()
     else:
         rows = db.execute(
             """
             SELECT id FROM applications
              WHERE status = 'approved'
-               AND COALESCE(is_fixture, 0) NOT IN (1, TRUE)
+               AND is_fixture IS NOT TRUE
              ORDER BY id
             """
         ).fetchall()
