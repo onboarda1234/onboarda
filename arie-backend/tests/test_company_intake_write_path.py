@@ -197,6 +197,48 @@ def _hydrated_parties(application_id):
         conn.close()
 
 
+def _save_resume(ctx, form_data, *, application_id=None, token=None, expected_status=200):
+    payload = {"form_data": form_data, "last_step": 1}
+    if application_id:
+        payload["application_id"] = application_id
+    resp = requests.post(
+        f"{ctx['base_url']}/api/save-resume",
+        headers=_headers(token or ctx["client1"]),
+        json=payload,
+        timeout=5,
+    )
+    assert resp.status_code == expected_status, resp.text
+    return resp.json()
+
+
+def _application_detail(ctx, app_id, *, token=None, expected_status=200):
+    resp = requests.get(
+        f"{ctx['base_url']}/api/applications/{app_id}",
+        headers=_headers(token or ctx["client1"]),
+        timeout=5,
+    )
+    assert resp.status_code == expected_status, resp.text
+    return resp.json()
+
+
+def _store_parties(application_id, *, directors=None, ubos=None, intermediaries=None):
+    from db import get_db
+    from server import store_application_parties
+
+    conn = get_db()
+    try:
+        store_application_parties(
+            conn,
+            application_id,
+            directors=directors,
+            ubos=ubos,
+            intermediaries=intermediaries,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def test_db_ensure_creates_registry_tables_and_thin_session(monkeypatch, tmp_path):
     import db as db_module
     from db import get_db, init_db
@@ -568,6 +610,368 @@ def test_confirm_pscs_imports_found_candidates_and_dedupes(intake_api):
     assert "response_hash" not in ubo_payload
     assert "source_metadata_json" not in ubo_payload
     assert "imported_by" not in ubo_payload
+
+
+def test_save_resume_syncs_imported_director_edit_to_party_table_and_detail(intake_api):
+    started = _start_intake(intake_api)
+    app_id = started["application"]["id"]
+    imported_at = "2026-06-22T12:00:00+00:00"
+    metadata = {"provider": "companies_house", "endpoint": "/company/12345678/officers"}
+    _store_parties(
+        app_id,
+        directors=[{
+            "person_key": "officer-1",
+            "first_name": "James Benjamin",
+            "last_name": "HEATH",
+            "nationality": "United Kingdom",
+            "country_of_residence": "United Kingdom",
+            "date_of_appointment": "2020-01-01",
+            "is_pep": "No",
+            "source": "companies_house",
+            "officer_role": "director",
+            "officer_entity_type": "individual",
+            "requires_individual_kyc": True,
+            "requires_corporate_structure_review": False,
+            "registry_lookup_id": "lookup-director-1",
+            "response_hash": "director-hash",
+            "source_metadata_json": metadata,
+            "imported_at": imported_at,
+            "imported_by": "client-intake-1",
+        }],
+    )
+
+    body = _save_resume(
+        intake_api,
+        {
+            "prescreening": {"f-reg-name": "Registry Verified Ltd"},
+            "directors": [{
+                "person_key": "officer-1",
+                "first_name": "test",
+                "last_name": "HEATH Test",
+                "nationality": "United Kingdom",
+                "country_of_residence": "United Kingdom",
+                "residential_address": "1 Edited Road",
+                "date_of_appointment": "2021-02-03",
+                "is_pep": "Yes",
+            }],
+            "ubos": [],
+            "intermediaries": [],
+        },
+        application_id=app_id,
+    )
+
+    assert body["status"] == "saved"
+    row = _db_one(
+        """
+        SELECT first_name, last_name, full_name, source, officer_role,
+               officer_entity_type, requires_individual_kyc,
+               requires_corporate_structure_review, registry_lookup_id,
+               response_hash, source_metadata_json, imported_at, imported_by,
+               is_pep, date_of_appointment
+        FROM directors WHERE application_id = ? AND person_key = ?
+        """,
+        (app_id, "officer-1"),
+    )
+    assert row["first_name"] == "test"
+    assert row["last_name"] == "HEATH Test"
+    assert row["full_name"] == "test HEATH Test"
+    assert row["is_pep"] == "Yes"
+    assert row["date_of_appointment"] == "2021-02-03"
+    assert row["source"] == "companies_house"
+    assert row["officer_role"] == "director"
+    assert row["officer_entity_type"] == "individual"
+    assert bool(row["requires_individual_kyc"]) is True
+    assert bool(row["requires_corporate_structure_review"]) is False
+    assert row["registry_lookup_id"] == "lookup-director-1"
+    assert row["response_hash"] == "director-hash"
+    assert json.loads(row["source_metadata_json"]) == metadata
+    assert row["imported_at"] == imported_at
+    assert row["imported_by"] == "client-intake-1"
+
+    directors, _ubos, _intermediaries = _hydrated_parties(app_id)
+    assert directors[0]["residential_address"] == "1 Edited Road"
+    detail = _application_detail(intake_api, app_id)
+    assert detail["directors"][0]["full_name"] == "test HEATH Test"
+    assert detail["prescreening_data"]["directors"][0]["first_name"] == "test"
+    assert _db_one("SELECT status FROM applications WHERE id = ?", (app_id,))["status"] == "draft"
+
+
+def test_save_resume_syncs_imported_llp_member_edit_and_preserves_role(intake_api):
+    started = _start_intake(intake_api, company_number="OC381818")
+    app_id = started["application"]["id"]
+    imported_at = "2026-06-23T12:00:00+00:00"
+    _store_parties(
+        app_id,
+        directors=[{
+            "person_key": "llp-member-1",
+            "first_name": "Stephen Howard",
+            "last_name": "MARGOLIS",
+            "nationality": "United Kingdom",
+            "country_of_residence": "United Kingdom",
+            "is_pep": "No",
+            "source": "companies_house",
+            "officer_role": "llp-designated-member",
+            "officer_entity_type": "individual",
+            "requires_individual_kyc": True,
+            "requires_corporate_structure_review": False,
+            "registry_lookup_id": "lookup-llp-1",
+            "response_hash": "llp-hash",
+            "source_metadata_json": {"provider": "companies_house", "endpoint": "/company/OC381818/officers"},
+            "imported_at": imported_at,
+            "imported_by": "client-intake-1",
+        }],
+    )
+
+    _save_resume(
+        intake_api,
+        {
+            "prescreening": {"f-reg-name": "Registry Verified Ltd"},
+            "directors": [{
+                "person_key": "llp-member-1",
+                "first_name": "Edited Stephen",
+                "last_name": "MARGOLIS Test",
+                "nationality": "United Kingdom",
+                "country_of_residence": "United Kingdom",
+                "is_pep": "No",
+            }],
+        },
+        application_id=app_id,
+    )
+
+    row = _db_one(
+        "SELECT first_name, last_name, full_name, source, officer_role, registry_lookup_id, response_hash, imported_at FROM directors WHERE application_id=? AND person_key=?",
+        (app_id, "llp-member-1"),
+    )
+    assert row["first_name"] == "Edited Stephen"
+    assert row["last_name"] == "MARGOLIS Test"
+    assert row["full_name"] == "Edited Stephen MARGOLIS Test"
+    assert row["source"] == "companies_house"
+    assert row["officer_role"] == "llp-designated-member"
+    assert row["registry_lookup_id"] == "lookup-llp-1"
+    assert row["response_hash"] == "llp-hash"
+    assert row["imported_at"] == imported_at
+    assert _application_detail(intake_api, app_id)["directors"][0]["full_name"] == "Edited Stephen MARGOLIS Test"
+
+
+def test_save_resume_syncs_imported_ubo_edit_and_preserves_psc_provenance(intake_api):
+    started = _start_intake(intake_api)
+    app_id = started["application"]["id"]
+    imported_at = "2026-06-24T12:00:00+00:00"
+    _store_parties(
+        app_id,
+        ubos=[{
+            "person_key": "psc-1",
+            "first_name": "Beneficial",
+            "last_name": "Owner",
+            "nationality": "British",
+            "country_of_residence": "United Kingdom",
+            "ownership_pct": 75,
+            "is_pep": "No",
+            "source": "companies_house",
+            "psc_state": "psc_found",
+            "psc_kind": "individual-person-with-significant-control",
+            "is_candidate_ubo": True,
+            "registry_lookup_id": "lookup-psc-1",
+            "response_hash": "psc-hash",
+            "source_metadata_json": {"provider": "companies_house", "endpoint": "/psc"},
+            "imported_at": imported_at,
+            "imported_by": "client-intake-1",
+        }],
+    )
+
+    _save_resume(
+        intake_api,
+        {
+            "prescreening": {"f-reg-name": "Registry Verified Ltd"},
+            "ubos": [{
+                "person_key": "psc-1",
+                "first_name": "Edited",
+                "last_name": "Owner Test",
+                "nationality": "United Kingdom",
+                "country_of_residence": "France",
+                "residential_address": "2 Owner Road",
+                "ownership_pct": "55.5",
+                "is_pep": "Yes",
+            }],
+        },
+        application_id=app_id,
+    )
+
+    row = _db_one(
+        """
+        SELECT first_name, last_name, full_name, ownership_pct, is_pep, source,
+               psc_state, psc_kind, is_candidate_ubo, registry_lookup_id,
+               response_hash, imported_at
+        FROM ubos WHERE application_id=? AND person_key=?
+        """,
+        (app_id, "psc-1"),
+    )
+    assert row["first_name"] == "Edited"
+    assert row["last_name"] == "Owner Test"
+    assert row["full_name"] == "Edited Owner Test"
+    assert row["ownership_pct"] == 55.5
+    assert row["is_pep"] == "Yes"
+    assert row["source"] == "companies_house"
+    assert row["psc_state"] == "psc_found"
+    assert row["psc_kind"] == "individual-person-with-significant-control"
+    assert bool(row["is_candidate_ubo"]) is True
+    assert row["registry_lookup_id"] == "lookup-psc-1"
+    assert row["response_hash"] == "psc-hash"
+    assert row["imported_at"] == imported_at
+
+    _directors, ubos, _intermediaries = _hydrated_parties(app_id)
+    assert ubos[0]["country_of_residence"] == "France"
+    assert ubos[0]["residential_address"] == "2 Owner Road"
+    assert _application_detail(intake_api, app_id)["ubos"][0]["full_name"] == "Edited Owner Test"
+
+
+def test_save_resume_syncs_imported_intermediary_edit_and_preserves_provenance(intake_api):
+    started = _start_intake(intake_api)
+    app_id = started["application"]["id"]
+    imported_at = "2026-06-25T12:00:00+00:00"
+    _store_parties(
+        app_id,
+        intermediaries=[{
+            "person_key": "corp-psc-1",
+            "entity_name": "Corporate PSC Ltd",
+            "jurisdiction": "United Kingdom",
+            "registration_number": "99999999",
+            "registered_address": "1 Holdco Street",
+            "ownership_pct": 80,
+            "owned_or_controlled_by": "Dana Owner",
+            "source": "companies_house",
+            "psc_state": "corporate_psc",
+            "psc_kind": "corporate-entity-person-with-significant-control",
+            "is_candidate_intermediary": True,
+            "requires_corporate_structure_review": True,
+            "registry_lookup_id": "lookup-corp-1",
+            "response_hash": "corp-hash",
+            "source_metadata_json": {"provider": "companies_house", "endpoint": "/psc"},
+            "imported_at": imported_at,
+            "imported_by": "client-intake-1",
+        }],
+    )
+
+    _save_resume(
+        intake_api,
+        {
+            "prescreening": {"f-reg-name": "Registry Verified Ltd"},
+            "intermediaries": [{
+                "person_key": "corp-psc-1",
+                "entity_name": "Edited Corporate PSC Ltd",
+                "jurisdiction": "Ireland",
+                "registration_number": "IE-123",
+                "registered_address": "9 Edited Street",
+                "ownership_pct": "62",
+                "owned_or_controlled_by": "Edited Owner",
+            }],
+        },
+        application_id=app_id,
+    )
+
+    row = _db_one(
+        """
+        SELECT entity_name, jurisdiction, registration_number, registered_address,
+               ownership_pct, source, psc_state, psc_kind,
+               is_candidate_intermediary, requires_corporate_structure_review,
+               registry_lookup_id, response_hash, imported_at
+        FROM intermediaries WHERE application_id=? AND person_key=?
+        """,
+        (app_id, "corp-psc-1"),
+    )
+    assert row["entity_name"] == "Edited Corporate PSC Ltd"
+    assert row["jurisdiction"] == "Ireland"
+    assert row["registration_number"] == "IE-123"
+    assert row["registered_address"] == "9 Edited Street"
+    assert row["ownership_pct"] == 62
+    assert row["source"] == "companies_house"
+    assert row["psc_state"] == "corporate_psc"
+    assert row["psc_kind"] == "corporate-entity-person-with-significant-control"
+    assert bool(row["is_candidate_intermediary"]) is True
+    assert bool(row["requires_corporate_structure_review"]) is True
+    assert row["registry_lookup_id"] == "lookup-corp-1"
+    assert row["response_hash"] == "corp-hash"
+    assert row["imported_at"] == imported_at
+
+    _directors, _ubos, intermediaries = _hydrated_parties(app_id)
+    assert intermediaries[0]["owned_or_controlled_by"] == "Edited Owner"
+    assert _application_detail(intake_api, app_id)["intermediaries"][0]["entity_name"] == "Edited Corporate PSC Ltd"
+
+
+def test_save_resume_populates_manual_party_rows_and_detail(intake_api):
+    body = _save_resume(
+        intake_api,
+        {
+            "prescreening": {"f-reg-name": "Manual Draft Ltd", "f-inc-country": "United Kingdom"},
+            "directors": [{
+                "person_key": "dir-manual",
+                "first_name": "Manual",
+                "last_name": "Director",
+                "nationality": "United Kingdom",
+                "country_of_residence": "United Kingdom",
+                "residential_address": "1 Manual Road",
+                "date_of_appointment": "2024-01-01",
+                "is_pep": "No",
+            }],
+            "ubos": [{
+                "person_key": "ubo-manual",
+                "first_name": "Manual",
+                "last_name": "Owner",
+                "nationality": "United Kingdom",
+                "country_of_residence": "United Kingdom",
+                "residential_address": "2 Manual Road",
+                "ownership_pct": "100",
+                "is_pep": "No",
+            }],
+            "intermediaries": [{
+                "person_key": "int-manual",
+                "entity_name": "Manual Holdco Ltd",
+                "jurisdiction": "BVI",
+                "registration_number": "BVI-1",
+                "registered_address": "3 Manual Road",
+                "ownership_pct": "100",
+                "owned_or_controlled_by": "Manual Owner",
+            }],
+        },
+    )
+    app_id = body["application_id"]
+
+    app = _db_one("SELECT status FROM applications WHERE id = ?", (app_id,))
+    assert app["status"] == "draft"
+    directors, ubos, intermediaries = _hydrated_parties(app_id)
+    assert directors[0]["full_name"] == "Manual Director"
+    assert directors[0]["residential_address"] == "1 Manual Road"
+    assert ubos[0]["full_name"] == "Manual Owner"
+    assert ubos[0]["ownership_pct"] == 100
+    assert intermediaries[0]["entity_name"] == "Manual Holdco Ltd"
+    assert intermediaries[0]["owned_or_controlled_by"] == "Manual Owner"
+
+    detail = _application_detail(intake_api, app_id)
+    assert detail["directors"][0]["full_name"] == "Manual Director"
+    assert detail["ubos"][0]["full_name"] == "Manual Owner"
+    assert detail["intermediaries"][0]["entity_name"] == "Manual Holdco Ltd"
+
+
+def test_save_resume_without_party_arrays_still_succeeds_without_workflow_side_effects(intake_api):
+    body = _save_resume(
+        intake_api,
+        {
+            "prescreening": {
+                "f-reg-name": "No Party Draft Ltd",
+                "f-inc-country": "United Kingdom",
+            }
+        },
+    )
+    app_id = body["application_id"]
+
+    app = _db_one("SELECT status, prescreening_data FROM applications WHERE id = ?", (app_id,))
+    assert app["status"] == "draft"
+    prescreening = json.loads(app["prescreening_data"])
+    assert "screening_report" not in prescreening
+    assert _db_rows("SELECT * FROM directors WHERE application_id = ?", (app_id,)) == []
+    assert _db_rows("SELECT * FROM ubos WHERE application_id = ?", (app_id,)) == []
+    assert _db_rows("SELECT * FROM intermediaries WHERE application_id = ?", (app_id,)) == []
+    assert _db_rows("SELECT * FROM documents WHERE application_id = ?", (app_id,)) == []
 
 
 @pytest.mark.parametrize(

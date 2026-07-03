@@ -1582,9 +1582,15 @@ def _draft_party_row_is_meaningful(row) -> bool:
         "last_name",
         "nationality",
         "date_of_birth",
+        "country_of_residence",
+        "residential_address",
+        "date_of_appointment",
         "ownership_pct",
         "entity_name",
         "jurisdiction",
+        "registration_number",
+        "registered_address",
+        "owned_or_controlled_by",
     )
     if any(_draft_value_is_meaningful(row.get(key)) for key in interesting_keys):
         return True
@@ -18698,6 +18704,41 @@ class SaveResumeHandler(BaseHandler):
                         real_id,
                     ),
                 )
+                party_updates = {}
+                party_source = form_data if isinstance(form_data, dict) else {}
+                party_source_keys = {
+                    "directors": ("directors",),
+                    "ubos": ("ubos",),
+                    "intermediaries": ("intermediaries", "intermediary_shareholders"),
+                }
+                for key, candidates in party_source_keys.items():
+                    raw_rows = None
+                    for source_key in candidates:
+                        if source_key in party_source:
+                            raw_rows = party_source.get(source_key)
+                            break
+                    if raw_rows is None:
+                        for source_key in candidates:
+                            if source_key in normalized_prescreening:
+                                raw_rows = normalized_prescreening.get(source_key)
+                                break
+                    if raw_rows is not None:
+                        party_updates[key] = [
+                            row for row in raw_rows or []
+                            if _draft_party_row_is_meaningful(row)
+                        ]
+                if party_updates:
+                    try:
+                        store_application_parties(
+                            db,
+                            real_id,
+                            directors=party_updates.get("directors") if "directors" in party_updates else None,
+                            ubos=party_updates.get("ubos") if "ubos" in party_updates else None,
+                            intermediaries=party_updates.get("intermediaries") if "intermediaries" in party_updates else None,
+                        )
+                    except ValueError as exc:
+                        db.rollback()
+                        return self.error(str(exc), 400)
             stored_form_data = encrypt_draft_form_data(form_data)
 
             existing = db.execute(
