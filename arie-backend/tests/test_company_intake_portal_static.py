@@ -384,6 +384,7 @@ def test_portal_contact_prefill_uses_session_data_and_blank_only_setter():
 
     helper_body = _extract_js_function(html, "prefillPortalContactDetailsFromSession")
     setter_body = _extract_js_function(html, "portalContactSetIfBlank")
+    registration_phone_body = _extract_js_function(html, "portalContactSetRegistrationPhoneCode")
 
     assert "AUTH_USER || {}" in helper_body
     assert "portalContactSessionEmail(user)" in helper_body
@@ -392,11 +393,17 @@ def test_portal_contact_prefill_uses_session_data_and_blank_only_setter():
     assert "portalContactSetIfBlank('f-email', email)" in helper_body
     assert "portalContactSetIfBlank('f-contact-first', profileName.first || emailName.first)" in helper_body
     assert "portalContactSetIfBlank('f-contact-last', profileName.last || emailName.last)" in helper_body
-    assert "'f-mobile'" not in helper_body
+    assert "portalContactRegistrationContactForUser(user)" in helper_body
+    assert "portalContactSetIfBlank('f-mobile', registrationContact.mobile_number)" in helper_body
+    assert "portalContactSetRegistrationPhoneCode(registrationContact.mobile_country_code)" in helper_body
 
     assert "if (String(el.value || '').trim()) return false;" in setter_body
     assert "_restoreSelectValue(el, value, id)" in setter_body
     assert "else el.value = value" in setter_body
+    assert "var mobile = String(((document.getElementById('f-mobile') || {}).value) || '').trim();" in registration_phone_body
+    assert "if (mobile) return false;" in registration_phone_body
+    assert "if (current && current !== PORTAL_CONTACT_PREFILL_MU_PHONE_CODE) return false;" in registration_phone_body
+    assert "_restoreSelectValue(el, value, 'f-phone-code')" in registration_phone_body
 
 
 def test_portal_contact_prefill_name_parsing_is_conservative():
@@ -419,6 +426,36 @@ def test_portal_contact_prefill_name_parsing_is_conservative():
     assert "portalContactEmailNameBlocklist[cleaned.toLowerCase()]" in email_part_body
     assert "demo: true" in html
     assert "test: true" in html
+
+
+def test_portal_registration_contact_is_captured_into_session_prefill_source():
+    html = _portal_html()
+
+    register_body = html[html.index("function submitRegister"):html.index("// ─── Login", html.index("function submitRegister"))]
+    from_form_body = _extract_js_function(html, "portalContactRegistrationContactFromForm")
+    normalize_body = _extract_js_function(html, "portalContactNormalizeRegistrationContact")
+    store_body = _extract_js_function(html, "portalContactStoreRegistrationContact")
+    attach_body = _extract_js_function(html, "portalContactAttachRegistrationContact")
+    set_auth_body = _extract_js_function(html, "setAuth")
+    clear_auth_body = _extract_js_function(html, "clearAuth")
+
+    for field_id in ("r-fname", "r-lname", "r-email", "r-phone-code", "r-phone"):
+        assert f"document.getElementById('{field_id}')" in from_form_body
+
+    assert "mobile_country_code" in normalize_body
+    assert "mobile_number" in normalize_body
+    assert "PORTAL_REGISTRATION_CONTACT_STORAGE_KEY" in html
+    assert "sessionStorage.setItem(PORTAL_REGISTRATION_CONTACT_STORAGE_KEY" in store_body
+    assert "sessionStorage.getItem(PORTAL_REGISTRATION_CONTACT_STORAGE_KEY)" in html
+    assert "normalized.email === userEmail.toLowerCase()" in html
+    assert "registration_contact" in attach_body
+    assert "enriched.profile.first_name = normalized.first_name" in attach_body
+    assert "enriched.profile.last_name = normalized.last_name" in attach_body
+    assert "const registrationContact = portalContactRegistrationContactFromForm();" in register_body
+    assert "portalContactStoreRegistrationContact(registrationContact);" in register_body
+    assert "setAuth(resp.token, portalContactAttachRegistrationContact(resp.client, registrationContact));" in register_body
+    assert "portalContactAttachRegistrationContact(user, portalContactStoredRegistrationContactForUser(user))" in set_auth_body
+    assert "PORTAL_REGISTRATION_CONTACT_STORAGE_KEY" in clear_auth_body
 
 
 def test_portal_contact_prefill_runs_after_restore_and_preserves_save_submit_contracts():

@@ -5427,7 +5427,7 @@ async function apiCall(method, path, body, isFormData) {
 
 function setAuth(token, user) {
   AUTH_TOKEN = token;
-  AUTH_USER = user;
+  AUTH_USER = portalContactAttachRegistrationContact(user, portalContactStoredRegistrationContactForUser(user));
   // Auth token kept in memory only; httpOnly session cookie set by server
   updateUserDisplay();
 }
@@ -5455,7 +5455,7 @@ function clearAuth() {
 
   // ── EX-12: Clear all auth token keys and draft data from browser storage ──
   try {
-    ['token', 'access_token', 'portal_token', 'auth_token', 'session_token', 'arie_company_intake_state'].forEach(function(k) {
+    ['token', 'access_token', 'portal_token', 'auth_token', 'session_token', 'arie_company_intake_state', PORTAL_REGISTRATION_CONTACT_STORAGE_KEY].forEach(function(k) {
       localStorage.removeItem(k);
       sessionStorage.removeItem(k);
     });
@@ -5549,6 +5549,7 @@ var PRESCREENING_FIELD_BINDINGS = {
 };
 
 var PORTAL_CONTACT_PREFILL_MU_PHONE_CODE = '+230';
+var PORTAL_REGISTRATION_CONTACT_STORAGE_KEY = 'arie_registration_contact_session';
 var portalContactEmailNameBlocklist = {
   admin: true,
   contact: true,
@@ -5567,11 +5568,79 @@ function portalContactProfileSources(user) {
   var sources = [];
   if (user && typeof user === 'object') {
     sources.push(user);
-    ['profile', 'client', 'account'].forEach(function(key) {
+    ['registration_contact', 'profile', 'client', 'account'].forEach(function(key) {
       if (user[key] && typeof user[key] === 'object') sources.push(user[key]);
     });
   }
   return sources;
+}
+
+function portalContactCleanString(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function portalContactNormalizeRegistrationContact(contact) {
+  if (!contact || typeof contact !== 'object') return {};
+  var email = portalContactCleanString(contact.email || contact.email_address || contact.emailAddress).toLowerCase();
+  var phoneCode = portalContactCleanString(contact.mobile_country_code || contact.mobileCountryCode || contact.phone_code || contact.phoneCode);
+  var normalized = {
+    first_name: portalContactCleanString(contact.first_name || contact.firstName || contact.given_name || contact.givenName),
+    last_name: portalContactCleanString(contact.last_name || contact.lastName || contact.family_name || contact.familyName || contact.surname),
+    email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '',
+    mobile_country_code: phoneCode,
+    mobile_number: portalContactCleanString(contact.mobile_number || contact.mobileNumber || contact.mobile || contact.phone || contact.phone_number || contact.phoneNumber)
+  };
+  return normalized;
+}
+
+function portalContactRegistrationContactFromForm() {
+  return portalContactNormalizeRegistrationContact({
+    first_name: (document.getElementById('r-fname') || {}).value,
+    last_name: (document.getElementById('r-lname') || {}).value,
+    email: (document.getElementById('r-email') || {}).value,
+    mobile_country_code: (document.getElementById('r-phone-code') || {}).value,
+    mobile_number: (document.getElementById('r-phone') || {}).value
+  });
+}
+
+function portalContactStoreRegistrationContact(contact) {
+  var normalized = portalContactNormalizeRegistrationContact(contact);
+  if (!normalized.email) return;
+  try {
+    sessionStorage.setItem(PORTAL_REGISTRATION_CONTACT_STORAGE_KEY, JSON.stringify(normalized));
+  } catch (e) { /* session storage may be unavailable */ }
+}
+
+function portalContactStoredRegistrationContactForUser(user) {
+  var userEmail = portalContactSessionEmail(user);
+  if (!userEmail) return {};
+  try {
+    var raw = sessionStorage.getItem(PORTAL_REGISTRATION_CONTACT_STORAGE_KEY);
+    var parsed = raw ? JSON.parse(raw) : null;
+    var normalized = portalContactNormalizeRegistrationContact(parsed);
+    return normalized.email === userEmail.toLowerCase() ? normalized : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function portalContactAttachRegistrationContact(user, contact) {
+  var normalized = portalContactNormalizeRegistrationContact(contact);
+  if (!normalized.email && user && user.email) normalized.email = String(user.email).trim().toLowerCase();
+  var enriched = Object.assign({}, user || {});
+  if (normalized.email && enriched.email && normalized.email !== String(enriched.email).trim().toLowerCase()) return enriched;
+  if (normalized.first_name || normalized.last_name || normalized.mobile_country_code || normalized.mobile_number) {
+    enriched.registration_contact = Object.assign({}, enriched.registration_contact || {}, normalized);
+    enriched.profile = Object.assign({}, enriched.profile || {});
+    if (normalized.first_name && !enriched.profile.first_name) enriched.profile.first_name = normalized.first_name;
+    if (normalized.last_name && !enriched.profile.last_name) enriched.profile.last_name = normalized.last_name;
+  }
+  return enriched;
+}
+
+function portalContactRegistrationContactForUser(user) {
+  var stored = portalContactStoredRegistrationContactForUser(user);
+  return portalContactAttachRegistrationContact(user, stored).registration_contact || {};
 }
 
 function portalContactFirstString(user, keys) {
@@ -5660,20 +5729,35 @@ function portalContactSetIfBlank(id, value) {
   return String(el.value || '').trim() !== '';
 }
 
+function portalContactSetRegistrationPhoneCode(value) {
+  var el = document.getElementById('f-phone-code');
+  if (!el || value === null || value === undefined || value === '') return false;
+  var current = String(el.value || '').trim();
+  var mobile = String(((document.getElementById('f-mobile') || {}).value) || '').trim();
+  if (mobile) return false;
+  if (current && current !== PORTAL_CONTACT_PREFILL_MU_PHONE_CODE) return false;
+  _restoreSelectValue(el, value, 'f-phone-code');
+  return String(el.value || '').trim() === String(value || '').trim();
+}
+
 function prefillPortalContactDetailsFromSession() {
   var user = AUTH_USER || {};
   var email = portalContactSessionEmail(user);
   var profileName = portalContactNameFromProfile(user);
   var emailName = (!profileName.first || !profileName.last) ? portalContactNameFromEmail(email) : { first: '', last: '' };
+  var registrationContact = portalContactRegistrationContactForUser(user);
   var changed = false;
 
   changed = portalContactSetIfBlank('f-email', email) || changed;
   changed = portalContactSetIfBlank('f-contact-first', profileName.first || emailName.first) || changed;
   changed = portalContactSetIfBlank('f-contact-last', profileName.last || emailName.last) || changed;
 
-  if (portalContactShouldDefaultMauritius(user, email)) {
+  if (registrationContact.mobile_country_code) {
+    changed = portalContactSetRegistrationPhoneCode(registrationContact.mobile_country_code) || changed;
+  } else if (portalContactShouldDefaultMauritius(user, email)) {
     changed = portalContactSetIfBlank('f-phone-code', PORTAL_CONTACT_PREFILL_MU_PHONE_CODE) || changed;
   }
+  changed = portalContactSetIfBlank('f-mobile', registrationContact.mobile_number) || changed;
 
   if (changed && typeof updateProgress === 'function') updateProgress();
   return changed;
@@ -12064,12 +12148,14 @@ function submitRegister(e) {
     try {
       const fname = document.getElementById('r-fname').value.trim();
       const lname = document.getElementById('r-lname').value.trim();
+      const registrationContact = portalContactRegistrationContactFromForm();
       const resp = await apiCall('POST', '/auth/client/register', {
         email: email,
         password: pwd,
         company_name: fname + ' ' + lname + ' — Onboarding'
       });
-      setAuth(resp.token, resp.client);
+      portalContactStoreRegistrationContact(registrationContact);
+      setAuth(resp.token, portalContactAttachRegistrationContact(resp.client, registrationContact));
       btn.disabled = false; btn.innerHTML = '🚀 Create Account & Start Onboarding';
       resetPortalApplicationState();
       prefillApplicationForm();
