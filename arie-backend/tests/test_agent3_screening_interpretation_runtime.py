@@ -1,9 +1,12 @@
 import json
 import os
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
+import textwrap
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -297,7 +300,7 @@ def _assert_persisted_and_audited(db, app_id, app_ref, expected_recommendation):
             "clean_no_hit",
             _clean_no_hit_prescreening,
             False,
-            "Clear",
+            "No reportable provider hit recorded",
             "Low",
             "No provider hits found in stored screening results",
         ),
@@ -671,8 +674,22 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "False-positive assessment" in html
     assert "Adverse media relevance" in html
     assert "Recommended disposition" in html
-    assert "Draft audit note" in html
     assert "Evidence used" in html
+    assert "Provider evidence" in html
+    assert "Strict pass" in html
+    assert "Relaxed pass" in html
+    assert "Strict + relaxed" in html
+    assert "Provider score unavailable" in html
+    assert "Stronger provider match signal; officer verification required." in html
+    assert "Broader provider match; review identifiers before clearing." in html
+    assert "Surfaced in both provider passes; high review priority." in html
+    assert "Provider did not supply numeric score or pass evidence." in html
+    assert "No article URL supplied by provider payload." in html
+    assert "Provider reference" in html
+    assert "Audit trace" in html
+    assert "No reportable provider hit recorded" in html
+    assert "This is an advisory screening interpretation, not an approval decision." in html
+    assert "Draft audit note" not in _extract_function(html, "renderAgent3ScreeningInterpretationPanel")
 
     render_body = _extract_function(html, "renderScreeningReviewPanel")
     fetch_detail_body = _extract_function(html, "fetchApplicationDetail")
@@ -697,13 +714,75 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "output.hit_rows" in html
     assert "output.hit_row_status_counts" in html
     assert "Hit-by-hit review" in html
+    assert "surfaced_by_pass" in html
+    assert "agent3ProviderEvidenceCellHtml" in html
+    assert "agent3HitEvidenceDetailsHtml" in html
+    assert "agent3AuditTraceHtml" in html
     for _status_label in ("Needs review", "Likely false positive", "High-confidence match", "Unavailable"):
         assert _status_label in html
-    # Copyable audit note is clipboard-only: no server call, no decision mutation.
-    copy_body = _extract_function(html, "copyAgent3AuditNote")
-    assert "navigator.clipboard" in copy_body
-    assert "boApiCall(" not in copy_body
-    assert "/agent3/screening-interpretation" not in copy_body
     table_body = _extract_function(html, "agent3HitRowsTableHtml")
     assert "boApiCall(" not in table_body
     assert "/agent3/screening-interpretation" not in table_body
+    action_body = _extract_function(html, "agent3HitActionButtonsHtml")
+    assert "False Positive" in action_body
+    assert "True Match" in action_body
+    assert "Escalate" in action_body
+    assert "Evidence" in action_body
+    assert "disabled" in action_body
+    comparison_body = _extract_function(html, "buildScreeningComparisonPanel")
+    assert "Declared vs Provider Match" in comparison_body
+    assert "Provider profile attributes unavailable. Raw provider reference is retained in Audit trace." in comparison_body
+
+
+def test_backoffice_agent3_provider_evidence_helpers_render_expected_copy():
+    if not shutil.which("node"):
+        pytest.skip("node is not available for helper rendering check")
+    html = BACKOFFICE_HTML.read_text(encoding="utf-8")
+    script = "\n".join([
+        textwrap.dedent(
+            """
+            function escapeHtml(value) {
+              return String(value == null ? '' : value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+            }
+            const failures = [];
+            function assertIncludes(name, haystack, needle) {
+              if (!haystack.includes(needle)) failures.push(name + ' missing ' + needle);
+            }
+            """
+        ),
+        _extract_function(html, "agent3SurfacedByPassMeta"),
+        _extract_function(html, "agent3ProviderEvidenceCellHtml"),
+        _extract_function(html, "agent3TraceRowsHtml"),
+        _extract_function(html, "agent3HitEvidenceDetailsHtml"),
+        textwrap.dedent(
+            """
+            assertIncludes('strict', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'strict'}), 'Strict pass');
+            assertIncludes('strict help', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'strict'}), 'Stronger provider match signal; officer verification required.');
+            assertIncludes('relaxed', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'relaxed'}), 'Relaxed pass');
+            assertIncludes('both', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'both'}), 'Strict + relaxed');
+            assertIncludes('unavailable', agent3ProviderEvidenceCellHtml({match_score:null}), 'Provider score unavailable');
+            assertIncludes('numeric', agent3ProviderEvidenceCellHtml({match_score:88}), '88%');
+            const evidence = agent3HitEvidenceDetailsHtml({
+              evidence_url:'https://news.example/article',
+              evidence_title:'Article title',
+              evidence_source:'Example News',
+              evidence_snippet:'Article snippet',
+              audit_trace:{provider:'complyadvantage', surfaced_by_pass:'strict'}
+            });
+            assertIncludes('evidence link', evidence, 'href="https://news.example/article"');
+            assertIncludes('evidence title', evidence, 'Article title');
+            assertIncludes('audit trace', evidence, 'Audit trace');
+            assertIncludes('missing url', agent3HitEvidenceDetailsHtml({}), 'No article URL supplied by provider payload.');
+            if (failures.length) {
+              console.error(failures.join('\\n'));
+              process.exit(1);
+            }
+            """
+        ),
+    ])
+    subprocess.run(["node", "-e", script], check=True, text=True, capture_output=True)

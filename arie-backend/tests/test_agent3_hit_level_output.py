@@ -40,6 +40,7 @@ def _prescreening_with_hits():
                     {
                         "name": "Hit Level Holdings",
                         "match_score": 96,
+                        "surfaced_by_pass": "both",
                         "category": "sanctions",
                         "sanctions_list": "OFAC SDN",
                         "id": "prov-ref-1",
@@ -48,18 +49,25 @@ def _prescreening_with_hits():
                     {
                         "name": "Hit Level adverse media article",
                         "match_score": 72,
+                        "surfaced_by_pass": "strict",
                         "category": "adverse_media",
                         "list": "Global Media",
+                        "source_url": "https://news.example/hit-level",
+                        "source_title": "Hit Level adverse media article",
+                        "source_name": "Example News",
+                        "media_snippet": "Stored adverse media source text.",
                     },
                     # watchlist, low score -> likely_false_positive
                     {
                         "name": "Unrelated Hitt Level",
                         "match_score": 33,
+                        "surfaced_by_pass": "relaxed",
                         "category": "watchlist",
                     },
-                    # no score -> unavailable
+                    # no numeric score, but strict pass evidence -> needs_review
                     {
                         "name": "No Score Entity",
+                        "surfaced_by_pass": "strict",
                         "category": "pep",
                     },
                 ],
@@ -86,7 +94,7 @@ def test_hit_rows_present_and_shaped():
     assert isinstance(rows, list) and len(rows) == 4
     required = {
         "index", "subject_name", "subject_type", "matched_entity", "provider",
-        "list", "categories", "type", "match_score", "suggested_status",
+        "list", "categories", "type", "match_score", "surfaced_by_pass", "suggested_status",
         "reason", "evidence_ref",
     }
     for row in rows:
@@ -105,11 +113,20 @@ def test_hit_row_status_classification():
     assert by_entity["Hit Level Holdings"]["type"] == "sanctions"
     assert by_entity["Hit Level Holdings"]["list"] == "OFAC SDN"
     assert by_entity["Hit Level Holdings"]["evidence_ref"] == "prov-ref-1"
+    assert by_entity["Hit Level Holdings"]["surfaced_by_pass"] == "both"
 
     assert by_entity["Hit Level adverse media article"]["suggested_status"] == server.AGENT3_HIT_STATUS_NEEDS_REVIEW
+    assert by_entity["Hit Level adverse media article"]["surfaced_by_pass"] == "strict"
+    assert by_entity["Hit Level adverse media article"]["evidence_url"] == "https://news.example/hit-level"
+    assert by_entity["Hit Level adverse media article"]["evidence_title"] == "Hit Level adverse media article"
+    assert by_entity["Hit Level adverse media article"]["evidence_source"] == "Example News"
+    assert "Stored adverse media" in by_entity["Hit Level adverse media article"]["evidence_snippet"]
     assert by_entity["Unrelated Hitt Level"]["suggested_status"] == server.AGENT3_HIT_STATUS_LIKELY_FP
-    assert by_entity["No Score Entity"]["suggested_status"] == server.AGENT3_HIT_STATUS_UNAVAILABLE
+    assert by_entity["Unrelated Hitt Level"]["surfaced_by_pass"] == "relaxed"
+    assert by_entity["No Score Entity"]["suggested_status"] == server.AGENT3_HIT_STATUS_NEEDS_REVIEW
     assert by_entity["No Score Entity"]["match_score"] is None
+    assert by_entity["No Score Entity"]["surfaced_by_pass"] == "strict"
+    assert "strict pass" in by_entity["No Score Entity"]["reason"].lower()
     # synthetic evidence ref when the provider gave none
     assert by_entity["No Score Entity"]["evidence_ref"].startswith("stored-hit-")
 
@@ -137,9 +154,9 @@ def test_hit_row_status_counts_match_rows():
     out = _build()
     counts = out["hit_row_status_counts"]
     assert counts[server.AGENT3_HIT_STATUS_HIGH_CONFIDENCE] == 1
-    assert counts[server.AGENT3_HIT_STATUS_NEEDS_REVIEW] == 1
+    assert counts[server.AGENT3_HIT_STATUS_NEEDS_REVIEW] == 2
     assert counts[server.AGENT3_HIT_STATUS_LIKELY_FP] == 1
-    assert counts[server.AGENT3_HIT_STATUS_UNAVAILABLE] == 1
+    assert counts.get(server.AGENT3_HIT_STATUS_UNAVAILABLE, 0) == 0
     assert sum(counts.values()) == len(out["hit_rows"])
 
 
@@ -174,8 +191,7 @@ def test_clean_report_has_empty_hit_rows():
     assert out is not None
     assert out["hit_rows"] == []
     assert out["hit_row_status_counts"] == {}
-    # existing behaviour preserved
-    assert out["recommended_disposition"] == "Clear"
+    assert out["recommended_disposition"] == server.AGENT3_NO_REPORTABLE_HIT_RECOMMENDATION
     assert out["hit_counts"]["total"] == 0
 
 
@@ -203,3 +219,39 @@ def test_builder_is_pure_no_provider_clients(monkeypatch):
             )
     out = _build()
     assert out is not None and len(out["hit_rows"]) == 4
+
+
+def test_hit_rows_preserve_provider_pass_without_numeric_score():
+    uuid_name = "019f185a-2a5d-7bfb-a85b-c1cfad8e5c5d"
+    prescreening = {
+        "screening_report": {
+            "provider": "complyadvantage",
+            "screening_provider": "complyadvantage",
+            "screening_mode": "live",
+            "screened_at": _ts(),
+            "total_hits": 3,
+            "overall_flags": ["watchlist"],
+            "company_screening": {
+                "company_name": "Hit Level Co Ltd",
+                "matched": True,
+                "results": [
+                    {"matched_name": uuid_name, "category": "watchlist", "surfaced_by_pass": "strict"},
+                    {"name": "Relaxed Only", "category": "watchlist", "surfaced_by_pass": "relaxed"},
+                    {"name": "Both Passes", "category": "watchlist", "surfaced_by_pass": "both"},
+                ],
+            },
+            "director_screenings": [],
+            "ubo_screenings": [],
+        },
+    }
+
+    rows = _build(prescreening=prescreening)["hit_rows"]
+    by_entity = {row["matched_entity"]: row for row in rows}
+    assert by_entity[uuid_name]["match_score"] is None
+    assert by_entity[uuid_name]["surfaced_by_pass"] == "strict"
+    assert by_entity[uuid_name]["suggested_status"] == server.AGENT3_HIT_STATUS_NEEDS_REVIEW
+    assert "strict pass" in by_entity[uuid_name]["reason"].lower()
+    assert by_entity["Relaxed Only"]["surfaced_by_pass"] == "relaxed"
+    assert "relaxed pass" in by_entity["Relaxed Only"]["reason"].lower()
+    assert by_entity["Both Passes"]["surfaced_by_pass"] == "both"
+    assert "strict + relaxed" in by_entity["Both Passes"]["reason"].lower()
