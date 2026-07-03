@@ -1982,6 +1982,28 @@ def _preserved_party_json_text(incoming, existing, key, default="{}"):
     return value
 
 
+def _party_json_object(value):
+    if isinstance(value, dict):
+        return dict(value)
+    parsed = safe_json_loads(value)
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _preserved_party_source_metadata_json_text(incoming, existing):
+    existing_metadata = _party_json_object((existing or {}).get("source_metadata_json"))
+    incoming_has_metadata = isinstance(incoming, dict) and incoming.get("source_metadata_json") not in (None, "")
+    if incoming_has_metadata:
+        incoming_metadata = _party_json_object(incoming.get("source_metadata_json"))
+        merged = dict(existing_metadata)
+        merged.update(incoming_metadata)
+        if existing_metadata.get("registry_originals") and not incoming_metadata.get("registry_originals"):
+            merged["registry_originals"] = existing_metadata["registry_originals"]
+        return json.dumps(merged, default=str, sort_keys=True) if merged else "{}"
+    if existing_metadata:
+        return json.dumps(existing_metadata, default=str, sort_keys=True)
+    return "{}"
+
+
 def _preserved_party_bool(incoming, existing, key, default=False):
     if isinstance(incoming, dict) and incoming.get(key) not in (None, ""):
         value = incoming.get(key)
@@ -2057,7 +2079,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 _preserved_party_bool(director, existing, "requires_corporate_structure_review"),
                 _preserved_party_value(director, existing, "registry_lookup_id"),
                 _preserved_party_value(director, existing, "response_hash"),
-                _preserved_party_json_text(director, existing, "source_metadata_json"),
+                _preserved_party_source_metadata_json_text(director, existing),
                 _preserved_party_nullable_value(director, existing, "imported_at"),
                 _preserved_party_value(director, existing, "imported_by"),
             ))
@@ -2120,7 +2142,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 _preserved_party_bool(ubo, existing, "is_candidate_ubo"),
                 _preserved_party_value(ubo, existing, "registry_lookup_id"),
                 _preserved_party_value(ubo, existing, "response_hash"),
-                _preserved_party_json_text(ubo, existing, "source_metadata_json"),
+                _preserved_party_source_metadata_json_text(ubo, existing),
                 _preserved_party_nullable_value(ubo, existing, "imported_at"),
                 _preserved_party_value(ubo, existing, "imported_by"),
             ))
@@ -2162,7 +2184,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 _preserved_party_bool(intermediary, existing, "requires_corporate_structure_review"),
                 _preserved_party_value(intermediary, existing, "registry_lookup_id"),
                 _preserved_party_value(intermediary, existing, "response_hash"),
-                _preserved_party_json_text(intermediary, existing, "source_metadata_json"),
+                _preserved_party_source_metadata_json_text(intermediary, existing),
                 _preserved_party_nullable_value(intermediary, existing, "imported_at"),
                 _preserved_party_value(intermediary, existing, "imported_by"),
             ))
@@ -6263,6 +6285,7 @@ CLIENT_PARTY_FORBIDDEN_KEYS = {
     "imported_at",
     "imported_by",
     "registry_lookup_id",
+    "registry_originals",
     "response_hash",
     "source",
     "source_metadata_json",
@@ -18469,6 +18492,25 @@ class DashboardHandler(BaseHandler):
 # SAVE & RESUME (Client Portal)
 # ══════════════════════════════════════════════════════════
 
+_REGISTRY_PRESCREENING_PRESERVE_KEYS = (
+    "registry_profile",
+    "registry_sourced_values",
+    "registry_provenance",
+    "registry_field_overrides",
+)
+
+
+def _preserve_existing_registry_prescreening(normalized_prescreening, existing_prescreening_raw):
+    result = dict(normalized_prescreening or {}) if isinstance(normalized_prescreening, dict) else {}
+    existing = parse_json_field(existing_prescreening_raw, {})
+    if not isinstance(existing, dict):
+        return result
+    for key in _REGISTRY_PRESCREENING_PRESERVE_KEYS:
+        if key in existing and existing.get(key) not in (None, ""):
+            result[key] = existing.get(key)
+    return result
+
+
 class SaveResumeHandler(BaseHandler):
     """Portal draft persistence — save / resume / discard a single application's form state.
 
@@ -18505,7 +18547,7 @@ class SaveResumeHandler(BaseHandler):
             self.error("application_id required", 400)
             return None
         row = db.execute(
-            "SELECT id, ref, client_id, status, company_name FROM applications WHERE id=? OR ref=?",
+            "SELECT id, ref, client_id, status, company_name, prescreening_data FROM applications WHERE id=? OR ref=?",
             (app_id, app_id),
         ).fetchone()
         if not row:
@@ -18682,6 +18724,10 @@ class SaveResumeHandler(BaseHandler):
             real_id = app_row["id"]
             if (app_row.get("status") or "") == "draft":
                 normalized_prescreening = SaveResumeHandler._draft_prescreening_from_form_data(form_data)
+                normalized_prescreening = _preserve_existing_registry_prescreening(
+                    normalized_prescreening,
+                    app_row.get("prescreening_data"),
+                )
                 company_name = resolve_application_company_name(
                     form_data if isinstance(form_data, dict) else {},
                     normalized_prescreening,
@@ -24916,6 +24962,7 @@ def _company_intake_update_application_registry_profile(db, app_id, profile, *, 
         prescreening = {}
     metadata = _company_intake_registry_metadata(profile)
     country_value = "United Kingdom" if _company_intake_country_is_gb(country) or _company_intake_profile_indicates_gb(profile) else country
+    registry_values = _company_intake_profile_values(profile, country)
     prescreening["registry_provenance"] = {
         "provider": provider,
         "jurisdiction": profile.get("jurisdiction"),
@@ -24927,6 +24974,7 @@ def _company_intake_update_application_registry_profile(db, app_id, profile, *, 
         "source": provider,
     }
     prescreening["registry_profile"] = profile
+    prescreening["registry_sourced_values"] = registry_values
     prescreening.setdefault("country_of_incorporation", country_value)
     prescreening.setdefault("registration_number", profile.get("company_number"))
     prescreening.setdefault("brn", profile.get("company_number"))
@@ -25175,6 +25223,114 @@ def _company_intake_address_text(value):
     return ", ".join(str(part).strip() for part in parts if str(part or "").strip())
 
 
+def _company_intake_non_empty_originals(values):
+    originals = {}
+    for key, value in values.items():
+        if value in (None, ""):
+            continue
+        if isinstance(value, (dict, list)) and not value:
+            continue
+        originals[key] = value
+    return originals
+
+
+def _company_intake_split_registry_person_name(name):
+    clean = re.sub(r"\s+", " ", str(name or "").strip())
+    if not clean:
+        return "", ""
+    if "," in clean:
+        parts = clean.split(",")
+        return ",".join(parts[1:]).strip() if len(parts) > 1 else "", parts[0].strip()
+    tokens = clean.split(" ")
+    if len(tokens) == 1:
+        return clean, ""
+    return " ".join(tokens[:-1]), tokens[-1]
+
+
+def _company_intake_registry_dob_original(value):
+    if isinstance(value, dict):
+        dob = {}
+        if value.get("year") is not None:
+            dob["year"] = value.get("year")
+        if value.get("month") is not None:
+            dob["month"] = value.get("month")
+        if value.get("day") is not None:
+            dob["day"] = value.get("day")
+        elif value.get("date") is not None:
+            dob["day"] = value.get("date")
+        return dob
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if re.match(r"^\d{4}-\d{1,2}$", text):
+        year, month = text.split("-", 1)
+        return f"{year}-{int(month):02d}"
+    return _normalize_iso_date(text)
+
+
+def _company_intake_individual_registry_originals(record):
+    name = first_non_empty(record.get("full_name"), record.get("name"))
+    first_name = first_non_empty(record.get("first_name"))
+    last_name = first_non_empty(record.get("last_name"))
+    if name and not (first_name or last_name):
+        first_name, last_name = _company_intake_split_registry_person_name(name)
+    return _company_intake_non_empty_originals({
+        "first_name": first_name,
+        "last_name": last_name,
+        "full_name": name,
+        "name": name,
+        "nationality": record.get("nationality"),
+        "date_of_birth": _company_intake_registry_dob_original(record.get("date_of_birth")),
+        "country_of_residence": record.get("country_of_residence"),
+    })
+
+
+def _company_intake_officer_registry_originals(officer):
+    originals = _company_intake_individual_registry_originals(officer)
+    originals.update(_company_intake_non_empty_originals({
+        "date_of_appointment": _normalize_iso_date(officer.get("date_of_appointment") or officer.get("appointed_on")),
+        "appointed_on": _normalize_iso_date(officer.get("date_of_appointment") or officer.get("appointed_on")),
+        "officer_role": officer.get("officer_role"),
+        "officer_entity_type": officer.get("officer_entity_type"),
+    }))
+    return originals
+
+
+def _company_intake_individual_psc_registry_originals(owner, state):
+    originals = _company_intake_individual_registry_originals(owner)
+    ownership_pct = _parse_ownership_pct(owner.get("ownership_pct"), strict=False)
+    originals.update(_company_intake_non_empty_originals({
+        "ownership_pct": ownership_pct,
+        "psc_kind": owner.get("kind"),
+        "psc_state": state,
+    }))
+    return originals
+
+
+def _company_intake_corporate_psc_registry_originals(owner, state):
+    entity_name = first_non_empty(owner.get("entity_name"), owner.get("company_name"), owner.get("full_name"), owner.get("name"))
+    jurisdiction = first_non_empty(owner.get("country_of_incorporation"), owner.get("jurisdiction"))
+    ownership_pct = _parse_ownership_pct(owner.get("ownership_pct"), strict=False)
+    return _company_intake_non_empty_originals({
+        "entity_name": entity_name,
+        "company_name": entity_name,
+        "jurisdiction": jurisdiction,
+        "country_of_incorporation": jurisdiction,
+        "registration_number": owner.get("registration_number"),
+        "registered_address": _company_intake_address_text(owner.get("registered_address")),
+        "ownership_pct": ownership_pct,
+        "psc_kind": owner.get("kind"),
+        "psc_state": state,
+    })
+
+
+def _company_intake_metadata_with_registry_originals(metadata, registry_originals):
+    result = dict(metadata) if isinstance(metadata, dict) else {}
+    if registry_originals:
+        result["registry_originals"] = registry_originals
+    return result
+
+
 _CLIENT_PARTY_FIELDS = {
     "person_key",
     "first_name",
@@ -25237,7 +25393,10 @@ def _company_intake_import_officers(db, *, app_id, officers, lookup_id, response
             "SELECT id FROM directors WHERE application_id = ? AND person_key = ? LIMIT 1",
             (app_id, person_key),
         ).fetchone()
-        source_metadata = officer.get("source_metadata") if isinstance(officer.get("source_metadata"), dict) else {}
+        source_metadata = _company_intake_metadata_with_registry_originals(
+            officer.get("source_metadata") if isinstance(officer.get("source_metadata"), dict) else {},
+            _company_intake_officer_registry_originals(officer),
+        )
         encrypted = encrypt_pii_fields(
             {
                 "nationality": officer.get("nationality") or "",
@@ -25366,8 +25525,12 @@ def _company_intake_import_pscs(db, *, app_id, psc_result, lookup_id, response_h
         if not name:
             skipped += 1
             continue
-        metadata = _company_intake_registry_metadata(psc_result)
+        base_metadata = _company_intake_registry_metadata(psc_result)
         if _company_intake_is_corporate_psc_owner(owner):
+            metadata = _company_intake_metadata_with_registry_originals(
+                base_metadata,
+                _company_intake_corporate_psc_registry_originals(owner, state),
+            )
             person_key = _company_intake_person_key("ch-corp-psc", company_number, name, state, owner.get("kind"))
             existing = db.execute(
                 "SELECT id FROM intermediaries WHERE application_id = ? AND person_key = ? LIMIT 1",
@@ -25446,6 +25609,10 @@ def _company_intake_import_pscs(db, *, app_id, psc_result, lookup_id, response_h
             imported += 1
             continue
 
+        metadata = _company_intake_metadata_with_registry_originals(
+            base_metadata,
+            _company_intake_individual_psc_registry_originals(owner, state),
+        )
         person_key = _company_intake_person_key("ch-psc", company_number, name, state, owner.get("kind"))
         existing = db.execute(
             "SELECT id FROM ubos WHERE application_id = ? AND person_key = ? LIMIT 1",
@@ -25462,6 +25629,7 @@ def _company_intake_import_pscs(db, *, app_id, psc_result, lookup_id, response_h
         common_values = (
             name,
             encrypted.get("nationality", ""),
+            _parse_ownership_pct(owner.get("ownership_pct"), strict=False),
             _company_intake_dob_from_month_year(owner.get("date_of_birth")),
             encrypted.get("country_of_residence", ""),
             encrypted.get("residential_address", ""),
@@ -25481,7 +25649,7 @@ def _company_intake_import_pscs(db, *, app_id, psc_result, lookup_id, response_h
             db.execute(
                 """
                 UPDATE ubos
-                SET full_name = ?, nationality = ?, date_of_birth = ?,
+                SET full_name = ?, nationality = ?, ownership_pct = ?, date_of_birth = ?,
                     country_of_residence = ?, residential_address = ?, source = ?,
                     psc_state = ?, registry_statement_type = ?, psc_status_reason = ?,
                     psc_kind = ?, is_candidate_ubo = ?, registry_lookup_id = ?,
@@ -25507,7 +25675,7 @@ def _company_intake_import_pscs(db, *, app_id, psc_result, lookup_id, response_h
                 person_key,
                 name,
                 encrypted.get("nationality", ""),
-                None,
+                _parse_ownership_pct(owner.get("ownership_pct"), strict=False),
                 "No",
                 "{}",
                 _company_intake_dob_from_month_year(owner.get("date_of_birth")),

@@ -290,6 +290,29 @@ class TestCompaniesHouseProvider:
         assert officers[0]["is_candidate_director"] is True
 
     @patch("company_registry.requests.get")
+    def test_officer_normalization_keeps_registry_original_candidate_values(self, mock_get):
+        import company_registry
+
+        mock_get.return_value = _mock_response(200, {
+            "items": [{
+                "name": "SMITH, Jane Ann",
+                "officer_role": "director",
+                "appointed_on": "2020-01-01",
+                "nationality": "British",
+                "country_of_residence": "United Kingdom",
+                "date_of_birth": {"month": 5, "year": 1980},
+            }],
+        })
+
+        officers = company_registry.get_companies_house_officers("12345678")
+
+        assert officers[0]["name"] == "SMITH, Jane Ann"
+        assert officers[0]["nationality"] == "British"
+        assert officers[0]["country_of_residence"] == "United Kingdom"
+        assert officers[0]["appointed_on"] == "2020-01-01"
+        assert officers[0]["date_of_birth"] == {"month": 5, "year": 1980}
+
+    @patch("company_registry.requests.get")
     def test_corporate_director_classification_requires_structure_review(self, mock_get):
         import company_registry
 
@@ -348,6 +371,28 @@ class TestCompaniesHouseProvider:
         for owner in result["beneficial_owners"]:
             assert owner["candidate_type"] == "beneficial_owner_candidate"
             assert owner["is_candidate_beneficial_owner"] is True
+
+    @patch("company_registry.requests.get")
+    def test_individual_psc_normalization_keeps_registry_original_candidate_values(self, mock_get):
+        import company_registry
+
+        mock_get.return_value = _mock_response(200, {
+            "items": [{
+                "name": "Jane PSC",
+                "kind": "individual-person-with-significant-control",
+                "nationality": "British",
+                "country_of_residence": "United Kingdom",
+                "date_of_birth": {"month": 6, "year": 1975},
+            }],
+        })
+
+        result = company_registry.get_companies_house_pscs("12345678")
+        owner = result["beneficial_owners"][0]
+
+        assert owner["name"] == "Jane PSC"
+        assert owner["nationality"] == "British"
+        assert owner["country_of_residence"] == "United Kingdom"
+        assert owner["date_of_birth"] == {"month": 6, "year": 1975}
 
     @patch("company_registry.requests.get")
     def test_no_psc_reason_uses_empty_registry_result(self, mock_get):

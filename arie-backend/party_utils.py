@@ -216,6 +216,9 @@ def hydrate_party_record(record: dict, pii_fields=None, name_key="full_name", so
     if pii_fields:
         result = decrypt_pii_fields(result, pii_fields, source=source)
     result["pep_declaration"] = parse_json_field(result.get("pep_declaration"), {})
+    source_metadata = parse_json_field(result.get("source_metadata_json"), {})
+    if isinstance(source_metadata.get("registry_originals"), dict):
+        result["registry_originals"] = source_metadata["registry_originals"]
     result["full_name"] = result.get(name_key) or result.get("full_name") or ""
     return result
 
@@ -238,6 +241,9 @@ def get_application_parties(db, application_id):
     intermediaries = []
     for row in db.execute("SELECT * FROM intermediaries WHERE application_id = ?", (application_id,)).fetchall():
         item = decrypt_pii_fields(dict(row), PII_FIELDS_INTERMEDIARIES, source="intermediaries")
+        source_metadata = parse_json_field(item.get("source_metadata_json"), {})
+        if isinstance(source_metadata.get("registry_originals"), dict):
+            item["registry_originals"] = source_metadata["registry_originals"]
         item["full_name"] = item.get("entity_name", "")
         intermediaries.append(item)
     return directors, ubos, intermediaries
