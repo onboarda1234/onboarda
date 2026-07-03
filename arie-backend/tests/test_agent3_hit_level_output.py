@@ -314,6 +314,73 @@ def test_existing_hit_counts_regression():
     assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["other"] == counts["total"]
 
 
+def test_multicategory_sanctions_pep_row_uses_sanctions_primary_bucket():
+    prescreening = {
+        "screening_report": {
+            "provider": "complyadvantage",
+            "screening_provider": "complyadvantage",
+            "screening_mode": "live",
+            "screened_at": _ts(),
+            "total_hits": 1,
+            "company_screening": {
+                "company_name": "Multi Category Co",
+                "matched": True,
+                "results": [
+                    _row("Sanctions and PEP match", categories=["sanctions", "pep"]),
+                ],
+            },
+            "director_screenings": [],
+            "ubo_screenings": [],
+        },
+    }
+    out = _build(prescreening=prescreening)
+    counts = out["hit_counts"]
+
+    assert counts["total"] == 1
+    assert counts["sanctions"] == 1
+    assert counts["pep"] == 0
+    assert counts["adverse_media"] == 0
+    assert counts["other"] == 0
+    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["other"] == counts["total"]
+    assert set(out["hit_rows"][0]["categories"]) == {"sanctions", "pep"}
+    assert out["severity"] == "Critical"
+    assert "1 provider result row(s): 1 sanctions, 0 PEP, 0 provider screening adverse-media row(s), and 0 other/uncategorized row(s)" in out["summary"]
+
+
+def test_multicategory_pep_adverse_media_row_uses_pep_primary_bucket():
+    prescreening = {
+        "screening_report": {
+            "provider": "complyadvantage",
+            "screening_provider": "complyadvantage",
+            "screening_mode": "live",
+            "screened_at": _ts(),
+            "total_hits": 1,
+            "company_screening": {
+                "company_name": "PEP Adverse Co",
+                "matched": True,
+                "results": [
+                    _row("PEP and adverse media match", categories=["pep", "adverse_media"]),
+                ],
+            },
+            "director_screenings": [],
+            "ubo_screenings": [],
+        },
+    }
+    out = _build(prescreening=prescreening)
+    counts = out["hit_counts"]
+
+    assert counts["total"] == 1
+    assert counts["sanctions"] == 0
+    assert counts["pep"] == 1
+    assert counts["adverse_media"] == 0
+    assert counts["other"] == 0
+    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["other"] == counts["total"]
+    assert set(out["hit_rows"][0]["categories"]) == {"pep", "adverse_media"}
+    assert out["severity"] == "High"
+    assert "1 provider result row(s): 0 sanctions, 1 PEP, 0 provider screening adverse-media row(s), and 0 other/uncategorized row(s)" in out["summary"]
+    assert "higher-priority headline buckets" in out["adverse_media_relevance"]
+
+
 def test_multisubject_counts_reconcile_and_intermediary_rows_are_not_adverse_media():
     out = _build(app={"id": "arf-920615", "ref": "ARF-2026-920615"}, prescreening=_arf_920615_like_prescreening())
     counts = out["hit_counts"]

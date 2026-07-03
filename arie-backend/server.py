@@ -23594,6 +23594,17 @@ def _agent3_categories(hit, source_hint=""):
     return sorted(categories)
 
 
+def _agent3_primary_count_bucket(categories):
+    category_set = set(categories or [])
+    if "sanctions" in category_set:
+        return "sanctions"
+    if "pep" in category_set:
+        return "pep"
+    if "adverse_media" in category_set:
+        return "adverse_media"
+    return "other"
+
+
 def _agent3_provider_results(section, source_hint=""):
     if isinstance(section, list):
         return [item for item in section if isinstance(item, dict)]
@@ -24128,10 +24139,22 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         total_hits = len(hits)
     total_hits = max(total_hits, len(hits))
 
-    sanctions_count = sum(1 for hit in hits if "sanctions" in hit.get("categories", []))
-    pep_count = sum(1 for hit in hits if "pep" in hit.get("categories", []))
-    adverse_media_count = sum(1 for hit in hits if "adverse_media" in hit.get("categories", []))
-    other_count = max(0, total_hits - sanctions_count - pep_count - adverse_media_count)
+    risk_sanctions_count = sum(1 for hit in hits if "sanctions" in hit.get("categories", []))
+    risk_pep_count = sum(1 for hit in hits if "pep" in hit.get("categories", []))
+    risk_adverse_media_count = sum(1 for hit in hits if "adverse_media" in hit.get("categories", []))
+    primary_counts = {
+        "sanctions": 0,
+        "pep": 0,
+        "adverse_media": 0,
+        "other": 0,
+    }
+    for hit in hits:
+        primary_counts[_agent3_primary_count_bucket(hit.get("categories", []))] += 1
+    row_count_slack = max(0, total_hits - len(hits))
+    sanctions_count = primary_counts["sanctions"]
+    pep_count = primary_counts["pep"]
+    adverse_media_count = primary_counts["adverse_media"]
+    other_count = primary_counts["other"] + row_count_slack
     declared_pep_count = len(declared_pep_subjects)
     unresolved_review_count = _agent3_unresolved_screening_review_count(screening_reviews)
     overall_flags = [str(flag) for flag in _agent3_list(screening_report.get("overall_flags")) if str(flag or "").strip()]
@@ -24141,16 +24164,16 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         if hit.get("match_score") is not None and hit.get("match_score") < 70
     )
 
-    if sanctions_count:
+    if risk_sanctions_count:
         severity = "Critical"
         recommendation = "Reject recommended"
-    elif pep_count:
+    elif risk_pep_count:
         severity = "High"
         recommendation = "EDD recommended"
     elif declared_pep_count:
         severity = "High"
         recommendation = "Officer review required"
-    elif adverse_media_count:
+    elif risk_adverse_media_count:
         severity = "Medium"
         recommendation = "Officer review required"
     elif total_hits:
@@ -24195,7 +24218,7 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
                 "No provider hits found in stored screening results, so there are no provider false positives to clear. "
                 "This does not independently prove that no compliance risk exists."
             )
-    elif low_confidence_hit_count == len(hits) and hits and not (sanctions_count or pep_count or adverse_media_count):
+    elif low_confidence_hit_count == len(hits) and hits and not (risk_sanctions_count or risk_pep_count or risk_adverse_media_count):
         false_positive_assessment = (
             "False positive likely based on stored low-confidence matches. "
             "Officer should confirm against names, dates, nationality, and identifiers before closing."
@@ -24206,10 +24229,15 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
             "Officer identity disambiguation is required before disposition."
         )
 
-    if adverse_media_count:
+    if risk_adverse_media_count and adverse_media_count:
         adverse_media_relevance = (
             "Stored provider screening adverse-media row(s) are relevant enough for officer review because they are linked "
             "to screened subject names. Assess source reliability, recency, conduct seriousness, and name match quality."
+        )
+    elif risk_adverse_media_count:
+        adverse_media_relevance = (
+            "Detailed row categories include provider screening adverse-media labels on row(s) counted under higher-priority "
+            "headline buckets. Assess source reliability, recency, conduct seriousness, and name match quality."
         )
     else:
         adverse_media_relevance = "No provider screening adverse-media rows found in stored screening results."

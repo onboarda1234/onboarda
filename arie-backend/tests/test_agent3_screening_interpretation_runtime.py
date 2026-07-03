@@ -686,8 +686,8 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "No article URL supplied by provider payload." in html
     assert "Provider reference" in html
     assert "Provider result rows:" in html
-    assert "provider screening adverse media" in html
-    assert "other/uncategorized" in html
+    assert "provider screening adverse-media row(s)" in html
+    assert "other/uncategorized provider result row(s)" in html
     assert "Audit trace" in html
     assert "No reportable provider hit recorded" in html
     assert "This is an advisory screening interpretation, not an approval decision." in html
@@ -786,9 +786,9 @@ def test_backoffice_agent3_provider_count_chip_reconciles_all_buckets():
             assertIncludes('total rows', rendered, 'Provider result rows: 88 total');
             assertIncludes('sanctions count', rendered, '0 sanctions');
             assertIncludes('pep count', rendered, '12 PEP');
-            assertIncludes('provider adverse media label', rendered, '0 provider screening adverse media');
-            assertIncludes('other count', rendered, '76 other/uncategorized');
-            assertEquals('provider adverse media appears once', count(rendered, 'provider screening adverse media'), 1);
+            assertIncludes('provider adverse media label', rendered, '0 provider screening adverse-media row(s)');
+            assertIncludes('other count', rendered, '76 other/uncategorized provider result row(s)');
+            assertEquals('provider adverse media appears once', count(rendered, 'provider screening adverse-media row(s)'), 1);
 
             const legacyRendered = agent3ProviderHitsHtml({
               hit_counts: {
@@ -799,7 +799,7 @@ def test_backoffice_agent3_provider_count_chip_reconciles_all_buckets():
                 declared_pep: 0
               }
             });
-            assertIncludes('legacy other derived', legacyRendered, '4 other/uncategorized');
+            assertIncludes('legacy other derived', legacyRendered, '4 other/uncategorized provider result row(s)');
 
             if (failures.length) {
               console.error(failures.join('\\n'));
