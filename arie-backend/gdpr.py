@@ -21,11 +21,31 @@ logger = logging.getLogger("arie")
 # ══════════════════════════════════════════════════════════
 
 # Maps data_category -> (table_name, date_column)
+#
+# NOTE (audit finding B1): the "session_tokens" category previously mapped to
+# ("audit_log", "timestamp") with a 1-day retention and auto_purge=1. Because
+# the scheduled purge deletes *every* row older than the cutoff (no action/type
+# predicate), that policy was silently destroying the entire generic audit trail
+# down to the last 24 hours on a daily PeriodicCallback in staging/production.
+# The mapping has been removed so token retention can never resolve to the audit
+# trail, and the automatic purge additionally refuses the audit tables outright
+# (see _NEVER_PURGE_TABLES / _NEVER_AUTO_PURGE_TABLES below).
 CATEGORY_TABLE_MAP = {
     "audit_logs": ("audit_log", "timestamp"),
-    "session_tokens": ("audit_log", "timestamp"),  # Token-related audit entries
     "monitoring_alerts": ("monitoring_alerts", "created_at"),
 }
+
+# Tables that hold AML-retention evidence and must be protected from this engine.
+#   * _NEVER_PURGE_TABLES: never deletable by ANY path (manual or scheduled).
+#     The supervisor audit log is the tamper-evident decision chain; deleting
+#     from it would break the hash chain and destroy tamper-evidence.
+#   * _NEVER_AUTO_PURGE_TABLES: never deletable by the AUTOMATIC scheduled purge,
+#     regardless of any (mis)configured retention policy. A human may still run a
+#     deliberate, audited manual retention purge of the generic audit_log, but no
+#     unattended job may ever touch it (defends B1 and the "one flag-flip from
+#     destroying AML history" risk).
+_NEVER_PURGE_TABLES: frozenset = frozenset({"supervisor_audit_log"})
+_NEVER_AUTO_PURGE_TABLES: frozenset = frozenset({"audit_log", "supervisor_audit_log"})
 
 # Explicit identifier allowlists derived from CATEGORY_TABLE_MAP.
 # These are used by _assert_safe_sql_identifier() to guard every f-string SQL
@@ -143,6 +163,20 @@ def purge_expired_data(
     _assert_safe_sql_identifier(table, _ALLOWED_GDPR_TABLES, "table")
     _assert_safe_sql_identifier(date_col, _ALLOWED_GDPR_DATE_COLS, "date_col")
 
+    # Hard protection: the tamper-evident supervisor chain may never be purged by
+    # this engine, on any path. (audit finding B1 / tamper-evidence integrity)
+    if table in _NEVER_PURGE_TABLES:
+        logger.error(
+            "Refusing GDPR purge on protected tamper-evidence table %r (category=%s)",
+            table, category,
+        )
+        return {
+            "category": category,
+            "error": f"Category '{category}' resolves to protected table '{table}'; purge refused",
+            "records_deleted": 0,
+            "records_found": 0,
+        }
+
     # Count and get date range
     stats = db.execute(
         f"SELECT COUNT(*) as cnt, MIN({date_col}) as oldest, MAX({date_col}) as newest FROM {table} WHERE {date_col} < ?",
@@ -200,9 +234,28 @@ def run_scheduled_purge(db, purged_by: str = "system") -> List[Dict]:
 
     results = []
     for policy in policies:
-        result = purge_expired_data(
-            db, policy["data_category"], purged_by=purged_by, dry_run=False
-        )
+        category = policy["data_category"]
+
+        # Defence-in-depth (audit finding B1): the unattended scheduler must never
+        # delete from the audit tables, regardless of how a retention policy is
+        # (mis)configured. Deliberate manual retention purges go through
+        # purge_expired_data() directly and are still permitted for audit_log.
+        mapping = CATEGORY_TABLE_MAP.get(category)
+        resolved_table = mapping[0] if mapping else None
+        if resolved_table in _NEVER_AUTO_PURGE_TABLES:
+            logger.error(
+                "Refusing AUTOMATIC purge of audit table %r (category=%s); "
+                "audit trail is retained and may only be purged by a deliberate manual action",
+                resolved_table, category,
+            )
+            results.append({
+                "category": category,
+                "error": f"automatic purge of protected audit table '{resolved_table}' refused",
+                "records_deleted": 0,
+            })
+            continue
+
+        result = purge_expired_data(db, category, purged_by=purged_by, dry_run=False)
         results.append(result)
 
     return results

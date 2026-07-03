@@ -8380,7 +8380,12 @@ def seed_initial_data(db: DBConnection):
         ("audit_logs", 3650, "Legitimate interest + regulatory", "Audit trail records. 10 years retention for full accountability.", 0, 0),
         ("application_data", 2555, "Regulatory obligation", "Onboarding application forms and submitted data. 7 years post-decision.", 0, 1),
         ("sar_reports", 3650, "Regulatory obligation (FIU reporting)", "Suspicious Activity Reports. 10 years — never auto-purge.", 0, 0),
-        ("session_tokens", 1, "Legitimate interest", "Expired authentication tokens and session data. 24-hour retention.", 1, 0),
+        # auto_purge is 0 (audit finding B1): this policy previously carried
+        # auto_purge=1 while resolving to the audit_log table, so the daily
+        # scheduler was destroying the audit trail. Token cleanup is not wired to
+        # a real table here; the policy is retained for documentation only and
+        # must never auto-purge.
+        ("session_tokens", 1, "Legitimate interest", "Expired authentication tokens and session data. 24-hour retention (documentation only; not auto-purged).", 0, 0),
         ("monitoring_alerts", 2555, "Regulatory obligation", "Ongoing monitoring alerts and risk drift records. 7 years.", 0, 1),
     ]
 

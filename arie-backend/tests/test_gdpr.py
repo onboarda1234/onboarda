@@ -198,3 +198,94 @@ class TestDSAR:
 
         result = complete_dsar(gdpr_db, dsar["id"], "admin001", "Data exported and sent to requester.")
         assert result["status"] == "completed"
+
+
+# ═══════════════════════════════════════════════════════════
+# Audit-Trail Protection Tests (audit finding B1)
+# ═══════════════════════════════════════════════════════════
+
+class TestAuditTrailPurgeProtection:
+    """The scheduled GDPR purge must never destroy the audit trail.
+
+    Regression coverage for B1: the seeded `session_tokens` policy used to map to
+    the `audit_log` table with 1-day retention + auto_purge=1, so the daily
+    scheduler was wiping the entire audit trail down to the last 24 hours.
+    """
+
+    def _insert_old_audit_row(self, db, detail="Old entry"):
+        old_date = (datetime.now(timezone.utc) - timedelta(days=4000)).isoformat()
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, timestamp) VALUES (?,?,?,?,?,?,?,?)",
+            ("test", "Test", "admin", "decision", "app-1", detail, "127.0.0.1", old_date),
+        )
+        db.commit()
+        return old_date
+
+    def test_session_tokens_no_longer_maps_to_audit_log(self):
+        """The dangerous session_tokens -> audit_log mapping must be gone."""
+        from gdpr import CATEGORY_TABLE_MAP
+        assert "session_tokens" not in CATEGORY_TABLE_MAP
+
+    def test_seeded_session_tokens_policy_is_not_auto_purge(self, gdpr_db):
+        """Freshly seeded session_tokens policy must not auto-purge."""
+        row = gdpr_db.execute(
+            "SELECT auto_purge FROM data_retention_policies WHERE data_category = 'session_tokens'"
+        ).fetchone()
+        # Policy may be absent, but if present it must never auto-purge.
+        if row is not None:
+            assert not row["auto_purge"], "session_tokens must not be auto-purge (B1)"
+
+    def test_scheduled_purge_never_deletes_audit_log_even_if_misconfigured(self, gdpr_db):
+        """Even a policy misconfigured to auto-purge audit_log must be refused."""
+        from gdpr import run_scheduled_purge
+        old_date = self._insert_old_audit_row(gdpr_db, "must-survive-scheduled-purge")
+        before = gdpr_db.execute("SELECT COUNT(*) AS c FROM audit_log").fetchone()["c"]
+
+        # Simulate a dangerous misconfiguration: an auto_purge policy for the
+        # audit_logs category (which resolves to the audit_log table).
+        gdpr_db.execute(
+            "UPDATE data_retention_policies SET auto_purge = 1, retention_days = 1 WHERE data_category = 'audit_logs'"
+        )
+        gdpr_db.commit()
+
+        results = run_scheduled_purge(gdpr_db, purged_by="system-scheduler")
+
+        after = gdpr_db.execute("SELECT COUNT(*) AS c FROM audit_log").fetchone()["c"]
+        assert after == before, "scheduled purge must not delete audit_log rows (B1)"
+        # The old row specifically must still be present.
+        survived = gdpr_db.execute(
+            "SELECT COUNT(*) AS c FROM audit_log WHERE timestamp = ?", (old_date,)
+        ).fetchone()["c"]
+        assert survived >= 1
+        # And the refusal must be reported, not silently skipped.
+        audit_result = [r for r in results if r.get("category") == "audit_logs"]
+        assert audit_result and "refused" in (audit_result[0].get("error") or "")
+
+    def test_manual_audit_log_retention_purge_still_permitted(self, gdpr_db):
+        """A deliberate manual purge_expired_data('audit_logs') remains allowed."""
+        from gdpr import purge_expired_data
+        self._insert_old_audit_row(gdpr_db, "manual-purge-ok")
+        result = purge_expired_data(gdpr_db, "audit_logs", purged_by="admin001", dry_run=False)
+        assert "error" not in result
+        assert result["records_deleted"] >= 1
+
+    def test_supervisor_audit_log_can_never_be_purged(self, gdpr_db):
+        """The tamper-evident supervisor chain must be refused on every path."""
+        import gdpr
+        # Temporarily expose supervisor_audit_log as a mapped category to prove the
+        # guard fires even if a future map change resolves to it.
+        original = dict(gdpr.CATEGORY_TABLE_MAP)
+        original_tables = gdpr._ALLOWED_GDPR_TABLES
+        try:
+            gdpr.CATEGORY_TABLE_MAP["supervisor_chain_test"] = ("supervisor_audit_log", "timestamp")
+            gdpr._ALLOWED_GDPR_TABLES = frozenset(list(original_tables) + ["supervisor_audit_log"])
+            gdpr_db.execute(
+                "INSERT INTO data_retention_policies (data_category, retention_days, legal_basis, description, auto_purge, requires_review) VALUES ('supervisor_chain_test', 1, 'test', 'test', 0, 0)"
+            )
+            gdpr_db.commit()
+            result = gdpr.purge_expired_data(gdpr_db, "supervisor_chain_test", dry_run=False)
+            assert "error" in result and "protected" in result["error"]
+            assert result["records_deleted"] == 0
+        finally:
+            gdpr.CATEGORY_TABLE_MAP = original
+            gdpr._ALLOWED_GDPR_TABLES = original_tables
