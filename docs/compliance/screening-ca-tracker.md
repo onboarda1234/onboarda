@@ -74,7 +74,7 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 | ID | Task | Status | Pri | Depends on | Notes |
 |----|------|--------|-----|-----------|-------|
 | RPT-1 | Backend endpoint `GET /api/applications/:id/screening/pdf` | ☑ | P2 | — | **Done** (`6adcc79`). `pdf_generator.build_screening_report_html` / `generate_screening_report_pdf` + `ScreeningReportPDFDownloadHandler`. Renders stored screening_report: subjects, matches, categories, list/source, strict/relaxed confidence, adverse-media evidence links; UUID→"Unnamed provider match". Read-only + audit-logged. 5 unit tests; real PDF renders (weasyprint). |
-| RPT-2 | Frontend **"Screening report (PDF)"** button on entity screening card | ☑ | P2 | RPT-1 | **Done** (`6adcc79`). `downloadScreeningReportPDF()` + button. JS syntax-checked. |
+| RPT-2 | Frontend **"Screening report (PDF)"** button | ◐ | P2 | RPT-1, UI-1 | Handler `downloadScreeningReportPDF()` + endpoint shipped (`6adcc79`, on staging via #644). Button **hidden for now** (`4a6c8db`) — original entity-card-only placement was too buried; endpoint/helper stay dormant. **Re-surface with proper placement in PR-2** (Screening Review header, always visible). Hide takes effect on staging at next merge (option 1 — no dedicated deploy). |
 | RPT-3 | Validate report content quality on prod data | ☐ | P3 | prod CA data, BE-3 | Sandbox report = UUIDs + missing URLs; real names/URLs only once CA prod flows. |
 
 ---
