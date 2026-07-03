@@ -462,7 +462,7 @@ def test_draft_company_documents_section_is_compact_and_draft_worded():
     assert "btn-submit" not in section
     assert "document dashboard" not in section.lower()
     assert html.index('id="draft-company-documents-section"') > html.index('id="ubos-table"')
-    assert html.index('id="draft-company-documents-section"') < html.index("<!-- 14. Consent & Data Protection -->")
+    assert html.index('id="draft-company-documents-section"') < html.index("<!-- 14. Final Confirmation -->")
 
 
 def test_draft_company_documents_are_generated_client_side_from_form_data():
