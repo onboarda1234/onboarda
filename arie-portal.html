@@ -4636,29 +4636,19 @@
 
         
 
-          <div class="ai-check-detail" style="border-left:3px solid var(--green);">
+          <!-- audit finding H1: fabricated PEP-screening and adverse-media cards
+               removed. They cited premium third-party databases (World-Check;
+               ComplyAdvantage Adverse Media) with hardcoded "Clear" results,
+               confidence percentages and article counts, presenting providers
+               that are not integrated / not implemented as having cleared a real
+               applicant. Sanctions/PEP and adverse-media screening are performed
+               and adjudicated by the compliance team in the back office. -->
+          <div class="ai-check-detail" style="border-left:3px solid var(--border2);">
             <div class="ai-check-detail-header">
-              <div class="ai-check-detail-name">⚠️ PEP Screening</div>
-              <span class="ai-status passed" style="font-size:12px;">✓ Clear</span>
+              <div class="ai-check-detail-name">🛡️ Sanctions / PEP &amp; Adverse-Media Screening</div>
             </div>
             <div class="ai-check-detail-body">
-              <div class="ai-detail-row"><span class="ai-detail-label">Database</span><span class="ai-detail-val">World-Check PEP & RCA Database (Tier 1–3) · 4.2M+ profiles</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Checked</span><span class="ai-detail-val">All 2 directors and 2 UBOs · Including Relative & Close Associate (RCA) scan</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Result</span><span class="ai-detail-val" style="color:var(--green);">No PEP classifications identified. No RCA links found.</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Confidence</span><span class="ai-detail-val">98.2% — All name/DOB/nationality combinations resolved uniquely</span></div>
-            </div>
-          </div>
-
-          <div class="ai-check-detail" style="border-left:3px solid var(--green);">
-            <div class="ai-check-detail-header">
-              <div class="ai-check-detail-name">📰 Adverse Media Search</div>
-              <span class="ai-status passed" style="font-size:12px;">✓ Clear</span>
-            </div>
-            <div class="ai-check-detail-body">
-              <div class="ai-detail-row"><span class="ai-detail-label">Sources</span><span class="ai-detail-val">ComplyAdvantage Adverse Media · 100,000+ global news, court & regulatory sources</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Categories</span><span class="ai-detail-val">Financial crime · Fraud · Money laundering · Terrorism financing · Corruption · Regulatory sanctions</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Articles Found</span><span class="ai-detail-val" style="color:var(--green);">0 adverse articles. 2 positive/neutral press mentions identified (not flagged).</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Look-back Period</span><span class="ai-detail-val">5 years · Entities: TechPay Solutions Ltd, James Henderson, Sarah Mitchell, Marcus Webb</span></div>
+              <div class="ai-detail-row"><span class="ai-detail-val">Performed and adjudicated by the compliance team in the back office. Results are not shown in this illustrative preview.</span></div>
             </div>
           </div>
 
