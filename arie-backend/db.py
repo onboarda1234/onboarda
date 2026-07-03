@@ -4009,6 +4009,33 @@ def _create_supervisor_audit_log_indexes(db: DBConnection) -> None:
     """)
 
 
+def _create_supervisor_audit_migrations_table(db: DBConnection) -> None:
+    """Immutable record of any supervisor-audit schema migration (audit finding B2).
+
+    A legacy -> modern schema migration necessarily rehashes rows into the new
+    column layout. If the original table were simply dropped, that rebuild would
+    silently re-seal any pre-migration tampering into a clean-looking chain. To
+    keep the migration non-silent and pre-migration tampering detectable we
+    (a) preserve the original table as an archive and (b) record a seal over the
+    ordered legacy (id, entry_hash) sequence here. The seal plus the archived
+    table let an auditor prove the rebuilt chain corresponds to the original,
+    unaltered legacy rows.
+    """
+    timestamp_type = "TIMESTAMP" if db.is_postgres else "TEXT"
+    timestamp_default = "CURRENT_TIMESTAMP" if db.is_postgres else "(datetime('now'))"
+    db.executescript(f"""
+    CREATE TABLE IF NOT EXISTS supervisor_audit_migrations (
+        id TEXT PRIMARY KEY,
+        migrated_at {timestamp_type} NOT NULL DEFAULT {timestamp_default},
+        legacy_row_count INTEGER NOT NULL,
+        legacy_chain_seal TEXT NOT NULL,
+        modern_chain_head TEXT,
+        archive_table TEXT NOT NULL,
+        note TEXT
+    );
+    """)
+
+
 def _modern_supervisor_audit_row(raw: Dict[str, Any], previous_hash: Optional[str]) -> Dict[str, Any]:
     detail = raw.get("detail")
     if detail in (None, ""):
@@ -4102,8 +4129,38 @@ def _ensure_supervisor_audit_log_schema(db: DBConnection) -> None:
             repaired = _modern_supervisor_audit_row(raw, previous_hash)
             _insert_supervisor_audit_row(db, "supervisor_audit_log_repair", repaired)
             previous_hash = repaired["entry_hash"]
-        db.execute("DROP TABLE supervisor_audit_log")
+
+        # audit finding B2: DO NOT destroy the original chain. Rehashing rows into
+        # the modern schema yields a self-consistent chain that would hide any
+        # pre-migration tampering if the source were dropped. Preserve the original
+        # table as an immutable archive and seal the legacy hash sequence so the
+        # rebuilt chain remains provably derived from the untouched source.
+        archive_suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S") + "_" + secrets.token_hex(3)
+        archive_table = f"supervisor_audit_log_legacy_{archive_suffix}"
+        legacy_seal = hashlib.sha256(
+            "\n".join(
+                f"{raw.get('id')}:{raw.get('entry_hash') or ''}" for raw in legacy_rows
+            ).encode()
+        ).hexdigest()
+
+        db.execute(f"ALTER TABLE supervisor_audit_log RENAME TO {archive_table}")
         db.execute("ALTER TABLE supervisor_audit_log_repair RENAME TO supervisor_audit_log")
+
+        _create_supervisor_audit_migrations_table(db)
+        db.execute(
+            "INSERT INTO supervisor_audit_migrations "
+            "(id, legacy_row_count, legacy_chain_seal, modern_chain_head, archive_table, note) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                secrets.token_hex(8),
+                len(legacy_rows),
+                legacy_seal,
+                previous_hash,
+                archive_table,
+                "Legacy supervisor_audit_log rehashed to modern schema; "
+                "original archived and sealed for tamper-evidence (audit finding B2).",
+            ),
+        )
     else:
         _create_supervisor_audit_log_table(db)
 
@@ -4113,8 +4170,10 @@ def _ensure_supervisor_audit_log_schema(db: DBConnection) -> None:
         "WHERE severity IS NULL OR TRIM(severity) = ''"
     )
     if legacy_rows:
-        logger.info(
-            "Supervisor audit schema repaired and backfilled (%d legacy rows)",
+        logger.warning(
+            "Supervisor audit schema migrated: %d legacy row(s) rehashed into the "
+            "modern chain. Original preserved and sealed for tamper-evidence "
+            "(see supervisor_audit_migrations). (audit finding B2)",
             len(legacy_rows),
         )
     else:
