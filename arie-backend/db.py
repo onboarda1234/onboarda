@@ -1123,6 +1123,26 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_monitoring_review_requests_state
         ON monitoring_alert_review_requests(state);
 
+    -- M2.1 PR-2: officer follow-up tracker for monitoring alerts. Additive
+    -- annotation ledger; NEVER changes monitoring_alerts.status (aging/next-step
+    -- are derived from these rows, not stored on the alert).
+    CREATE TABLE IF NOT EXISTS monitoring_alert_followups (
+        id SERIAL PRIMARY KEY,
+        alert_id INTEGER NOT NULL REFERENCES monitoring_alerts(id) ON DELETE CASCADE,
+        action TEXT NOT NULL DEFAULT 'note'
+            CHECK(action IN ('note','next_step','snooze_until','contacted_client','pending_review','other')),
+        note TEXT,
+        due_at TIMESTAMP,
+        created_by TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        resolved_at TIMESTAMP,
+        resolved_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_monitoring_followups_alert
+        ON monitoring_alert_followups(alert_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_followups_open
+        ON monitoring_alert_followups(alert_id, resolved_at);
+
     -- Client Notifications
     CREATE TABLE IF NOT EXISTS client_notifications (
         id SERIAL PRIMARY KEY,
@@ -2297,6 +2317,26 @@ def _get_sqlite_schema() -> str:
         ON monitoring_alert_review_requests(alert_id);
     CREATE INDEX IF NOT EXISTS idx_monitoring_review_requests_state
         ON monitoring_alert_review_requests(state);
+
+    -- M2.1 PR-2: officer follow-up tracker for monitoring alerts. Additive
+    -- annotation ledger; NEVER changes monitoring_alerts.status (aging/next-step
+    -- are derived from these rows, not stored on the alert).
+    CREATE TABLE IF NOT EXISTS monitoring_alert_followups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        alert_id INTEGER NOT NULL REFERENCES monitoring_alerts(id) ON DELETE CASCADE,
+        action TEXT NOT NULL DEFAULT 'note'
+            CHECK(action IN ('note','next_step','snooze_until','contacted_client','pending_review','other')),
+        note TEXT,
+        due_at TEXT,
+        created_by TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        resolved_at TEXT,
+        resolved_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_monitoring_followups_alert
+        ON monitoring_alert_followups(alert_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_followups_open
+        ON monitoring_alert_followups(alert_id, resolved_at);
 
     -- Client Notifications
     CREATE TABLE IF NOT EXISTS client_notifications (

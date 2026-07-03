@@ -212,6 +212,7 @@ from enhanced_requirements import (
 import monitoring_status as _monitoring_status
 import monitoring_dismissal_control as _mdc
 import monitoring_sla as _monitoring_sla
+import monitoring_followups as _monitoring_followups
 from monitoring_enrollment import (
     backfill_approved_applications as _backfill_monitoring_enrollment,
     enroll_approved_application as _enroll_approved_application_for_monitoring,
@@ -27359,7 +27360,8 @@ class MonitoringAlertCreateHandler(BaseHandler):
 
             refresh_status_map = _monitoring_list_refresh_status_map(db, raw_alerts)
             pending_review_ids = _monitoring_list_pending_review_ids(db, raw_alerts)
-            projected = [_monitoring_list_project_row(row, refresh_status_map, pending_review_ids) for row in raw_alerts]
+            followup_map = _monitoring_followups.open_summary_for_alerts(db, raw_alerts)
+            projected = [_monitoring_list_project_row(row, refresh_status_map, pending_review_ids, followup_map) for row in raw_alerts]
             filtered = []
             for item in projected:
                 if not include_closed and item["is_terminal"]:
@@ -31938,7 +31940,8 @@ def _monitoring_list_pending_review_ids(db, rows):
     return pending
 
 
-def _monitoring_list_project_row(row, refresh_status_map=None, pending_review_ids=None):
+def _monitoring_list_project_row(row, refresh_status_map=None, pending_review_ids=None,
+                                 followup_map=None):
     item = dict(row)
     refresh_request_status = (refresh_status_map or {}).get(item.get("id"))
     status_key = _monitoring_status.effective_status(
@@ -31977,6 +31980,10 @@ def _monitoring_list_project_row(row, refresh_status_map=None, pending_review_id
     })
     # M2.1 PR-1: derived SLA/aging (read-only; never stored on the alert row).
     item["sla"] = _monitoring_sla.derive(item)
+    # M2.1 PR-2: derived open follow-up count / next-due (no stored status).
+    fu = (followup_map or {}).get(item.get("id")) or {}
+    item["open_followup_count"] = fu.get("open_count", 0)
+    item["next_followup_due"] = fu.get("next_due_at")
     return item
 
 
@@ -32264,6 +32271,15 @@ class MonitoringAlertDetailHandler(BaseHandler):
         result["dismissal_tier"] = _mdc.classify_alert_tier(result)
         # M2.1 PR-1: derived SLA/aging (read-only; never stored on the alert row).
         result["sla"] = _monitoring_sla.derive(result)
+        # M2.1 PR-2: officer follow-up tracker (annotation ledger; never mutates
+        # the alert status). "open_count"/"next_due_at" are derived from these rows.
+        try:
+            result["followups"] = _monitoring_followups.list_for_alert(db, alert_id)
+            result["followups_summary"] = _monitoring_followups.open_summary(db, alert_id)
+        except Exception:
+            # Table may predate migration 038 on a legacy DB — degrade quietly.
+            result["followups"] = []
+            result["followups_summary"] = {"open_count": 0, "next_due_at": None}
         db.close()
         self.success(result)
 
@@ -32890,6 +32906,81 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
                 pass
             logger.exception("Monitoring review request action failed")
             return self.error("Review request action failed.", 500)
+        finally:
+            db.close()
+
+
+class MonitoringAlertFollowupHandler(BaseHandler):
+    """POST /api/monitoring/alerts/:id/followups — record an officer follow-up (M2.1 PR-2).
+
+    Additive annotation only — never mutates the alert status, calls no provider,
+    sends no email, runs no agent. Returns the refreshed follow-up list.
+    """
+    def post(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json() or {}
+        db = get_db()
+        try:
+            if not _monitoring_alert_get(db, alert_id):
+                return self.error("Alert not found", 404)
+            try:
+                followup = _monitoring_followups.add_followup(
+                    db, alert_id=alert_id,
+                    action=data.get("action") or "note",
+                    note=data.get("note"),
+                    due_at=data.get("due_at"),
+                    user=user, audit_writer=self.log_audit,
+                )
+            except _monitoring_followups.FollowupError as exc:
+                return self.error(str(exc), exc.status_code)
+            return self.success({
+                "status": "followup_added",
+                "followup": followup,
+                "followups": _monitoring_followups.list_for_alert(db, alert_id),
+                "followups_summary": _monitoring_followups.open_summary(db, alert_id),
+            })
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Monitoring follow-up add failed")
+            return self.error("Follow-up could not be recorded.", 500)
+        finally:
+            db.close()
+
+
+class MonitoringAlertFollowupResolveHandler(BaseHandler):
+    """POST /api/monitoring/alerts/:id/followups/:fid/resolve — close a follow-up (M2.1 PR-2)."""
+    def post(self, alert_id, followup_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        db = get_db()
+        try:
+            if not _monitoring_alert_get(db, alert_id):
+                return self.error("Alert not found", 404)
+            try:
+                _monitoring_followups.resolve_followup(
+                    db, followup_id=int(followup_id), alert_id=alert_id,
+                    user=user, audit_writer=self.log_audit,
+                )
+            except _monitoring_followups.FollowupError as exc:
+                return self.error(str(exc), exc.status_code)
+            return self.success({
+                "status": "followup_resolved",
+                "followups": _monitoring_followups.list_for_alert(db, alert_id),
+                "followups_summary": _monitoring_followups.open_summary(db, alert_id),
+            })
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Monitoring follow-up resolve failed")
+            return self.error("Follow-up could not be resolved.", 500)
         finally:
             db.close()
 
@@ -38830,6 +38921,8 @@ def make_app():
         (r"/api/monitoring/clients", MonitoringClientsHandler),
         # Alerts (more specific routes first)
         (r"/api/monitoring/alerts/([^/]+)/replacement-upload", MonitoringAlertDocumentReplacementUploadHandler),
+        (r"/api/monitoring/alerts/([^/]+)/followups/([0-9]+)/resolve", MonitoringAlertFollowupResolveHandler),
+        (r"/api/monitoring/alerts/([^/]+)/followups", MonitoringAlertFollowupHandler),
         (r"/api/monitoring/alerts/([^/]+)", MonitoringAlertDetailHandler),
         (r"/api/monitoring/alerts", MonitoringAlertCreateHandler),
         # Agents
