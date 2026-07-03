@@ -101,8 +101,13 @@ vm.createContext(sandbox);
   'registrySourceDisplayValue',
   'registryComparableValue',
   'registryPad2',
+  'registryMonthNumber',
   'registryDateComparableValue',
   'registryNumberComparableValue',
+  'registryNameComparableValue',
+  'registryNationalityComparableValue',
+  'registryCountryComparableValue',
+  'registryEntityTypeComparableValue',
   'registryFieldComparableValue',
   'renderCompaniesHouseRegistryBadge',
   'isCompaniesHouseRegistryApp',
@@ -134,6 +139,7 @@ const app = {
       registration_number: '12345678',
       country_of_incorporation: 'United Kingdom',
       incorporation_date: '2020-01-02',
+      entity_type: 'ltd',
     },
   },
 };
@@ -153,33 +159,66 @@ assert(
   sandbox.renderCompaniesHouseFieldBadges(app, { key: 'registration_number', label: 'Registration / BRN' }, '') === '',
   'missing current company value should stay unbadged'
 );
+assert(
+  sandbox.renderCompaniesHouseFieldBadges(app, { key: 'entity_type', label: 'Entity Type' }, 'SME / Private Company') === '',
+  'ambiguous entity type mapping should stay unbadged instead of Edited'
+);
+assert(
+  sandbox.renderCompaniesHouseFieldBadges(app, { key: 'entity_type', label: 'Entity Type' }, 'Private Limited Company').includes('>✓<'),
+  'clear equivalent entity type mapping should tick'
+);
 
 const director = {
   source: 'companies_house',
   full_name: 'Jane Director',
-  nat: 'British',
+  nat: 'GB',
   dob: '1980-05-01',
   country_of_residence: 'United Kingdom',
   residential_address: '',
-  date_of_appointment: '2020-01-02',
+  date_of_appointment: '2 January 2020',
   source_metadata_json: JSON.stringify({
     registry_originals: {
       full_name: 'Jane Director',
       name: 'Jane Director',
       nationality: 'British',
       date_of_birth: '1980-05-01',
-      country_of_residence: 'United Kingdom',
-      appointed_on: '2020-01-02',
+      country_of_residence: 'England',
+      appointed_on: '2020-01-02T00:00:00Z',
     },
   }),
 };
 assert(sandbox.renderPartyRegistryFieldBadge(director, 'director', 'name').includes('>✓<'), 'unchanged imported director name should tick');
 assert(sandbox.renderPartyRegistryFieldBadge({ ...director, full_name: 'Jane Edited' }, 'director', 'name').includes('>Edited<'), 'edited imported director name should show Edited');
 assert(sandbox.renderPartyRegistryFieldBadge(director, 'director', 'country_of_residence').includes('>✓<'), 'unchanged director residence should tick');
+assert(sandbox.renderPartyRegistryFieldBadge(director, 'director', 'nationality').includes('>✓<'), 'British and GB nationality values should compare as unchanged');
+assert(sandbox.renderPartyRegistryFieldBadge(director, 'director', 'date_of_appointment').includes('>✓<'), 'equivalent appointment date formats should tick');
 assert(sandbox.renderPartyRegistryFieldBadge(director, 'director', 'residential_address') === '', 'director residential address should not badge without explicit support');
 assert(sandbox.renderPartyRegistryFieldBadge(director, 'director', 'pep') === '', 'director PEP should never badge');
 assert(sandbox.renderPartyRegistryFieldBadge({ ...director, source: '' }, 'director', 'name') === '', 'manual director should not badge');
 assert(sandbox.renderPartyRegistryFieldBadge({ ...director, full_name: '' }, 'director', 'name') === '', 'missing current director name should not become Edited');
+const editedDirectorNameOnly = { ...director, full_name: 'Jane Edited' };
+assert(!sandbox.renderPartyRegistryFieldBadge(editedDirectorNameOnly, 'director', 'nationality').includes('>Edited<'), 'editing director name must not mark unchanged nationality as Edited');
+assert(!sandbox.renderPartyRegistryFieldBadge(editedDirectorNameOnly, 'director', 'country_of_residence').includes('>Edited<'), 'editing director name must not mark unchanged residence as Edited');
+assert(!sandbox.renderPartyRegistryFieldBadge(editedDirectorNameOnly, 'director', 'date_of_appointment').includes('>Edited<'), 'editing director name must not mark unchanged appointment date as Edited');
+
+const commaNameDirector = {
+  source: 'companies_house',
+  full_name: 'John Michael Smith',
+  nat: 'British',
+  country_of_residence: 'United Kingdom',
+  date_of_appointment: '2020-01-02',
+  source_metadata_json: JSON.stringify({
+    registry_originals: {
+      full_name: 'SMITH, John Michael',
+      nationality: 'GBR',
+      country_of_residence: 'Wales',
+      appointed_on: '2020-01-02',
+    },
+  }),
+};
+assert(sandbox.renderPartyRegistryFieldBadge(commaNameDirector, 'director', 'name').includes('>✓<'), 'Companies House comma-format name should compare as unchanged');
+assert(!sandbox.renderPartyRegistryFieldBadge(commaNameDirector, 'director', 'nationality').includes('>Edited<'), 'unedited director nationality aliases should not show Edited');
+assert(!sandbox.renderPartyRegistryFieldBadge(commaNameDirector, 'director', 'country_of_residence').includes('>Edited<'), 'unedited director residence aliases should not show Edited');
 
 const ubo = {
   source: 'companies_house',
