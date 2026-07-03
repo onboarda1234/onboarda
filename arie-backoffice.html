@@ -15323,7 +15323,7 @@ function screeningReviewCard(title, badgesHtml, bodyHtml, isFocused) {
 }
 
 function screeningReportDownloadButtonHtml() {
-  return '<button class="badge" style="cursor:pointer;border:1px solid var(--border1);background:var(--surface2);color:var(--text2);font-weight:700;" ' +
+  return '<button class="btn btn-outline btn-sm" ' +
     'onclick="downloadScreeningReportPDF()" title="Generate a PDF of the stored screening results for officer review">' +
     '📄 Screening report (PDF)</button>';
 }
@@ -15445,7 +15445,6 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   if (companyHits.sanctions_hits > 0) badges.push(screeningTagBadge('Sanctions', 'high'));
   if (companyHits.adverse_media_hits > 0) badges.push(screeningTagBadge('Adverse Media', 'pending'));
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow, { suppressChip: screeningReviewDisplayLabel(reviewRow) === String(primaryEntityLabel || '') }));
-  badges.push(screeningReportDownloadButtonHtml());
 
   var body = '';
   body += screeningDecisionSummaryPanel({
@@ -16181,7 +16180,10 @@ function renderScreeningReviewPanel(app, focus) {
   html += '<div class="card" style="margin-bottom:16px;border-left:4px solid var(--brand);background:rgba(43,47,143,0.03);">';
   html += '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">';
   html += '<div><div class="card-title">Screening Review</div><div style="font-size:12px;color:var(--text3);margin-top:4px;">Stored provider AML/watchlist and PEP results for this application. This is the dedicated review surface opened from the Screening Queue.</div></div>';
-  html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-left:auto;">' + screeningModeBadge(screeningSummary.screening_mode) + (screeningSummary.screened_at ? '<span class="explain-data-source">Last screened: ' + escapeHtml(String(screeningSummary.screened_at).replace('T', ' ').slice(0, 19)) + '</span>' : '') + '</div>';
+  // Screening report (PDF) export button hidden for now — pending PR-2 placement/UX.
+  // The endpoint (GET /api/applications/:id/screening/pdf) and downloadScreeningReportPDF()
+  // remain available; re-add screeningReportDownloadButtonHtml() here to surface it.
+  html += '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-left:auto;">' + screeningModeBadge(screeningSummary.screening_mode) + (screeningSummary.screened_at ? '<span class="explain-data-source">Last screened: ' + escapeHtml(String(screeningSummary.screened_at).replace('T', ' ').slice(0, 19)) + '</span>' : '') + '</div>';
   html += '</div>';
   // EX-10: Screening freshness warning in review panel
   if (screeningSummary.screening_freshness) {

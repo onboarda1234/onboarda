@@ -693,18 +693,23 @@ def _screening_report_hits(screening_report: Dict) -> list:
                 category = str(categories[0])
             else:
                 category = _first(result, "category", "match_category") or "watchlist"
-            surfaced = str(result.get("surfaced_by_pass") or "").lower()
-            if surfaced == "both":
-                confidence = "High (strict + relaxed match)"
-            elif surfaced == "strict":
-                confidence = "High (strict match)"
-            elif surfaced == "relaxed":
-                confidence = "Lower (relaxed match only)"
+            # Prefer the provider's numeric match strength (0–100); fall back to
+            # the strict/relaxed confidence signal, then to "not scored".
+            score = result.get("match_score")
+            if not isinstance(score, (int, float)):
+                score = result.get("score")
+            if isinstance(score, (int, float)):
+                confidence = f"{score}%"
             else:
-                score = result.get("match_score")
-                if score is None:
-                    score = result.get("score")
-                confidence = f"{score}%" if isinstance(score, (int, float)) else "Not scored by provider"
+                surfaced = str(result.get("surfaced_by_pass") or "").lower()
+                if surfaced == "both":
+                    confidence = "High (strict + relaxed match)"
+                elif surfaced == "strict":
+                    confidence = "High (strict match)"
+                elif surfaced == "relaxed":
+                    confidence = "Lower (relaxed match only)"
+                else:
+                    confidence = "Not scored by provider"
             evidence_url = ""
             evidence_snippet = ""
             for indicator in (result.get("indicators") or []):
