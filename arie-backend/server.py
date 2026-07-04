@@ -3919,6 +3919,17 @@ class AdminResetDBHandler(BaseHandler):
             self.error("Invalid confirmation", 403)
             return
         try:
+            # B3: the wipe AND the re-seed both mutate the tables the boot
+            # phase touches — hold the cross-task boot lock for the WHOLE
+            # reset so a rolling deploy cannot interleave with either half,
+            # and a lock timeout aborts BEFORE anything is wiped.
+            from boot_lock import acquire_boot_migration_lock
+            _reset_lease = acquire_boot_migration_lock(timeout_seconds=60)
+        except RuntimeError as lock_err:
+            logger.error(f"Admin reset refused — boot-migration lock busy: {lock_err}")
+            self.error("Reset refused: a deploy/boot is in progress. Retry shortly.", 503)
+            return
+        try:
             db = get_db()
             if db.is_postgres:
                 # Disable FK constraints, truncate all tables, re-enable
@@ -3944,28 +3955,22 @@ class AdminResetDBHandler(BaseHandler):
             db.commit()
             # Re-seed directly (don't use init_db which may skip if schema exists)
             from db import seed_initial_data
-            from boot_lock import acquire_boot_migration_lock
-            # B3: the admin reset re-seed mutates the same tables the boot
-            # phase does — take the same cross-task lock so a rolling deploy
-            # cannot race a staging reset.
-            _reset_lease = acquire_boot_migration_lock(timeout_seconds=60)
             try:
-                try:
-                    seed_initial_data(db)
-                    logger.info("Database re-seeded successfully after reset")
-                except Exception as seed_err:
-                    logger.error(f"Re-seed failed: {seed_err}", exc_info=True)
-                    db.close()
-                    self.error(f"Wipe succeeded but re-seed failed: {str(seed_err)}", 500)
-                    return
-            finally:
-                _reset_lease.release()
+                seed_initial_data(db)
+                logger.info("Database re-seeded successfully after reset")
+            except Exception as seed_err:
+                logger.error(f"Re-seed failed: {seed_err}", exc_info=True)
+                db.close()
+                self.error(f"Wipe succeeded but re-seed failed: {str(seed_err)}", 500)
+                return
             db.close()
             self.log_audit(user, "Admin Reset", "Database", "Staging database reset and re-seeded")
             self.success({"status": "reset_complete", "message": "Database wiped and re-seeded"})
         except Exception as e:
             logger.error(f"DB reset failed: {e}", exc_info=True)
             self.error(f"Reset failed: {str(e)}", 500)
+        finally:
+            _reset_lease.release()
 
 
 class AdminResetPasswordHandler(BaseHandler):

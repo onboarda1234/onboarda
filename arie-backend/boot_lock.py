@@ -22,6 +22,13 @@ session advisory lock held on a DEDICATED (non-pooled) connection:
 
 The supervisor-chain append lock (supervisor/audit.py, key 8674309921) and
 this key must stay distinct.
+
+Operational note: a waiting task blocks BEFORE it starts listening, so
+container/ALB health-check grace periods shorter than the first task's
+mutation phase will kill-and-restart waiters (safe — the waiter holds
+nothing, disconnect is clean, ECS retries — but noisy). The typical phase
+is seconds; if a long migration is expected, ensure the ECS healthCheck
+startPeriod / ALB grace period accommodates it.
 """
 
 import logging

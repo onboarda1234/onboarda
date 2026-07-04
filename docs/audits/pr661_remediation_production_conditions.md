@@ -55,12 +55,15 @@ entry count) — the same anchoring as PC-1 option 2. Not required for a pilot.
 ~~Migrations and boot-time schema mutation run per ECS task with no cross-task
 advisory lock, so a rolling deploy that boots ≥2 tasks concurrently can race
 (`schema_version` UNIQUE violation / concurrent `ALTER`).~~ Closed: PR-11
-serializes the whole boot mutation phase (init_db → seeds → migrations) and
-the admin-reset re-seed under a bounded-wait PostgreSQL advisory lock
-(`boot_lock.py`, key 8674309941) held on a dedicated connection; timeout
-fails startup loudly instead of racing, and process exit (including crash)
-releases the lock via disconnect. The supervisor-chain *append* fork race was
-already closed in PR #661 (advisory lock + unique index).
+serializes the whole boot mutation phase (init_db → seeds → migrations), the
+admin-reset wipe + re-seed, and the `migrate.py up` operator command under a
+bounded-wait PostgreSQL advisory lock (`boot_lock.py`, key 8674309941) held
+on a dedicated connection; timeout fails startup loudly instead of racing,
+and process exit (including crash) releases the lock via disconnect. The
+supervisor-chain *append* fork race was already closed in PR #661 (advisory
+lock + unique index). Residual scope note: the manual fixtures/demo seed
+scripts (`fixtures/seeder.py`, `demo_pilot_data.py`) remain unserialized
+one-off tools — do not run them during a deploy window.
 
 ### PC-4 — The two drafts must not be wired without their follow-ups
 - **H2 erasure (`gdpr_erasure.py`)** — off, unwired, `dry_run=True` default.

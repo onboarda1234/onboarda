@@ -68,8 +68,15 @@ def cmd_status():
 def cmd_up():
     """Apply all pending migrations."""
     from migrations.runner import run_all_migrations
+    from boot_lock import acquire_boot_migration_lock
     print("\n  Applying pending migrations...")
-    count = run_all_migrations()
+    # B3: an operator-run migration can race a concurrently booting deploy —
+    # take the same cross-task lock the server boot phase holds.
+    lease = acquire_boot_migration_lock(timeout_seconds=300)
+    try:
+        count = run_all_migrations()
+    finally:
+        lease.release()
     if count > 0:
         print(f"  Applied {count} migration(s) successfully.\n")
     else:

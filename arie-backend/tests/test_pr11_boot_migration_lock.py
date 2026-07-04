@@ -90,11 +90,11 @@ def test_pg_waiter_proceeds_after_holder_releases(pg_dsn):
 
     thread = threading.Thread(target=waiter)
     thread.start()
-    time.sleep(0.6)  # let the waiter block on pg_advisory_lock
+    time.sleep(1.2)  # generous: waiter must reach pg_advisory_lock under CI load
     holder.release()
     thread.join(timeout=10)
     assert not thread.is_alive(), "waiter never acquired after release"
-    assert result["elapsed"] >= 0.4, "waiter did not actually block"
+    assert result["elapsed"] >= 0.8, "waiter did not actually block"
 
 
 def test_pg_crashed_holder_releases_via_disconnect(pg_dsn):
