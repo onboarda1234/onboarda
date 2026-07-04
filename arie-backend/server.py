@@ -32180,6 +32180,25 @@ def _monitoring_alert_audit_history(db, alert_id):
     return history
 
 
+def _monitoring_alert_overdue_escalations(db, alert_id):
+    try:
+        rows = db.execute(
+            """
+            SELECT id, alert_id, reason, escalated_by, escalated_by_role,
+                   escalated_at, prior_status, new_status, sla_state,
+                   days_overdue, sla_due_at, sla_days,
+                   alert_severity_at_escalation
+              FROM monitoring_alert_escalations
+             WHERE alert_id = ?
+             ORDER BY escalated_at DESC, id DESC
+            """,
+            (alert_id,),
+        ).fetchall()
+    except Exception:
+        return []
+    return [dict(row) for row in rows]
+
+
 def _monitoring_alert_owner_label(db, owner_id):
     if not owner_id:
         return "Unassigned"
@@ -32210,6 +32229,144 @@ def _monitoring_alert_action_note_required(alert, outcome):
         or severity in ("high", "critical")
         or (outcome in ("false_positive", "no_material_impact") and material_type)
     )
+
+
+def _execute_monitoring_decision_outcome(db, user, alert_id, alert_before, *,
+                                         outcome, note, audit_writer, commit=True):
+    """Execute a configured Monitoring decision outcome.
+
+    This is the existing ``save_decision`` transition shape factored into a
+    helper so narrow wrappers can reuse canonical outcomes such as
+    ``escalate_to_sco`` without inventing a new status path.
+    """
+    cfg = MONITORING_DECISION_OUTCOMES[outcome]
+    decision_payload = {
+        "alert_id": alert_id,
+        "application_id": alert_before.get("application_id"),
+        "outcome": outcome,
+        "note": note,
+        "decided_by": user.get("sub", ""),
+        "decided_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    if cfg["status"] is None:
+        # M1.1: outcome records officer bookkeeping only; alert.status stays
+        # canonical.
+        db.execute(
+            """
+            UPDATE monitoring_alerts
+               SET officer_action = ?,
+                   officer_notes = ?,
+                   reviewed_at = CURRENT_TIMESTAMP,
+                   reviewed_by = COALESCE(reviewed_by, ?)
+             WHERE id = ?
+            """,
+            (
+                cfg["officer_action"],
+                json.dumps(decision_payload, sort_keys=True),
+                user.get("sub", ""),
+                alert_id,
+            ),
+        )
+    else:
+        db.execute(
+            """
+            UPDATE monitoring_alerts
+               SET status = ?,
+                   officer_action = ?,
+                   officer_notes = ?,
+                   reviewed_at = CURRENT_TIMESTAMP,
+                   reviewed_by = COALESCE(reviewed_by, ?),
+                   resolved_at = CASE WHEN ? IN ('resolved','waived') THEN CURRENT_TIMESTAMP ELSE resolved_at END
+             WHERE id = ?
+            """,
+            (
+                cfg["status"],
+                cfg["officer_action"],
+                json.dumps(decision_payload, sort_keys=True),
+                user.get("sub", ""),
+                cfg["status"],
+                alert_id,
+            ),
+        )
+    decision_after_state = {"officer_action": cfg["officer_action"], "outcome": outcome}
+    if cfg["status"] is not None:
+        decision_after_state["status"] = cfg["status"]
+    audit_writer(
+        user,
+        cfg["audit_action"],
+        f"monitoring_alert:{alert_id}",
+        json.dumps(decision_payload, default=str, sort_keys=True),
+        db=db,
+        before_state={
+            "status": alert_before.get("status"),
+            "officer_action": alert_before.get("officer_action"),
+        },
+        after_state=decision_after_state,
+        commit=False,
+    )
+    if commit:
+        db.commit()
+    return {
+        "alert_id": alert_id,
+        "status": cfg["status"] if cfg["status"] is not None else alert_before.get("status"),
+        "outcome": outcome,
+    }
+
+
+def _record_monitoring_overdue_escalation(db, alert_id, user, *,
+                                          reason, alert_before, alert_after, sla):
+    escalated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    payload = {
+        "alert_id": alert_id,
+        "reason": reason,
+        "escalated_by": user.get("sub", ""),
+        "escalated_by_role": user.get("role", ""),
+        "escalated_at": escalated_at,
+        "prior_status": alert_before.get("status"),
+        "new_status": alert_after.get("status"),
+        "severity": alert_before.get("severity"),
+        "sla_state": sla.get("sla_state"),
+        "days_overdue": sla.get("days_overdue"),
+        "sla_due_at": sla.get("sla_due_at"),
+        "sla_days": sla.get("sla_days"),
+    }
+    db.execute(
+        """
+        INSERT INTO monitoring_alert_escalations
+            (alert_id, reason, escalated_by, escalated_by_role, escalated_at,
+             prior_status, new_status, sla_state, days_overdue, sla_due_at,
+             sla_days, alert_severity_at_escalation)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            alert_id,
+            reason,
+            payload["escalated_by"],
+            payload["escalated_by_role"],
+            escalated_at,
+            payload["prior_status"],
+            payload["new_status"],
+            payload["sla_state"],
+            payload["days_overdue"],
+            payload["sla_due_at"],
+            payload["sla_days"],
+            payload["severity"],
+        ),
+    )
+    row = db.execute(
+        """
+        SELECT id, alert_id, reason, escalated_by, escalated_by_role,
+               escalated_at, prior_status, new_status, sla_state,
+               days_overdue, sla_due_at, sla_days,
+               alert_severity_at_escalation
+          FROM monitoring_alert_escalations
+         WHERE alert_id = ?
+         ORDER BY id DESC
+         LIMIT 1
+        """,
+        (alert_id,),
+    ).fetchone()
+    return dict(row) if row else payload
 
 
 def _monitoring_alert_provider_evidence(db, alert_id):
@@ -32292,6 +32449,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
             # Table may predate migration 038 on a legacy DB — degrade quietly.
             result["followups"] = []
             result["followups_summary"] = {"open_count": 0, "next_due_at": None}
+        result["overdue_escalations"] = _monitoring_alert_overdue_escalations(db, alert_id)
         db.close()
         self.success(result)
 
@@ -32618,73 +32776,11 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             user=user, audit_writer=self.log_audit,
                         )
                     else:
-                        decision_payload = {
-                            "alert_id": alert_id,
-                            "application_id": alert_before.get("application_id"),
-                            "outcome": outcome,
-                            "note": note,
-                            "decided_by": user.get("sub", ""),
-                            "decided_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                        }
-                        if cfg["status"] is None:
-                            # M1.1: outcome records officer bookkeeping only;
-                            # alert.status stays canonical.
-                            db.execute(
-                                """
-                                UPDATE monitoring_alerts
-                                   SET officer_action = ?,
-                                       officer_notes = ?,
-                                       reviewed_at = CURRENT_TIMESTAMP,
-                                       reviewed_by = COALESCE(reviewed_by, ?)
-                                 WHERE id = ?
-                                """,
-                                (
-                                    cfg["officer_action"],
-                                    json.dumps(decision_payload, sort_keys=True),
-                                    user.get("sub", ""),
-                                    alert_id,
-                                ),
-                            )
-                        else:
-                            db.execute(
-                                """
-                                UPDATE monitoring_alerts
-                                   SET status = ?,
-                                       officer_action = ?,
-                                       officer_notes = ?,
-                                       reviewed_at = CURRENT_TIMESTAMP,
-                                       reviewed_by = COALESCE(reviewed_by, ?),
-                                       resolved_at = CASE WHEN ? IN ('resolved','waived') THEN CURRENT_TIMESTAMP ELSE resolved_at END
-                                 WHERE id = ?
-                                """,
-                                (
-                                    cfg["status"],
-                                    cfg["officer_action"],
-                                    json.dumps(decision_payload, sort_keys=True),
-                                    user.get("sub", ""),
-                                    cfg["status"],
-                                    alert_id,
-                                ),
-                            )
-                        decision_after_state = {"officer_action": cfg["officer_action"], "outcome": outcome}
-                        if cfg["status"] is not None:
-                            decision_after_state["status"] = cfg["status"]
-                        self.log_audit(
-                            user,
-                            cfg["audit_action"],
-                            f"monitoring_alert:{alert_id}",
-                            json.dumps(decision_payload, default=str, sort_keys=True),
-                            db=db,
-                            before_state={"status": alert_before.get("status"), "officer_action": alert_before.get("officer_action")},
-                            after_state=decision_after_state,
-                            commit=False,
+                        result = _execute_monitoring_decision_outcome(
+                            db, user, alert_id, alert_before,
+                            outcome=outcome, note=note,
+                            audit_writer=self.log_audit,
                         )
-                        db.commit()
-                        result = {
-                            "alert_id": alert_id,
-                            "status": cfg["status"] if cfg["status"] is not None else alert_before.get("status"),
-                            "outcome": outcome,
-                        }
                 elif canonical_action == "dismiss":
                     dismissal_reason = data.get("dismissal_reason")
                     if not dismissal_reason:
@@ -32755,6 +32851,104 @@ class MonitoringAlertDetailHandler(BaseHandler):
                 "alert": dict(_monitoring_alert_get(db, alert_id) or {}),
                 "audit_history": _monitoring_alert_audit_history(db, alert_id),
             })
+        finally:
+            db.close()
+
+
+class MonitoringAlertOverdueEscalationHandler(BaseHandler):
+    """POST /api/monitoring/alerts/:id/escalate-overdue — manual M2.1 escalation."""
+    def post(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        reason = str(data.get("reason") or data.get("note") or "").strip()
+        if not reason:
+            return self.error("A reason is required to escalate an overdue alert.", 400)
+
+        db = get_db()
+        try:
+            alert_before_row = _monitoring_alert_get(db, alert_id)
+            if not alert_before_row:
+                return self.error("Alert not found", 404)
+            alert_before = dict(alert_before_row)
+            prior_status_key = _monitoring_status.canonical_filter_status(alert_before.get("status"))
+            if _monitoring_status.is_terminal(alert_before.get("status"), alert_before.get("resolved_at")):
+                return self.error("Closed or terminal alerts cannot be escalated as overdue.", 409)
+            if prior_status_key == "escalated":
+                return self.error("This alert is already escalated.", 409)
+
+            sla = _monitoring_sla.derive(alert_before)
+            if sla.get("sla_state") != "overdue":
+                return self.error("Only actively overdue alerts can be escalated.", 409)
+
+            result = _execute_monitoring_decision_outcome(
+                db, user, alert_id, alert_before,
+                outcome="escalate_to_sco", note=reason,
+                audit_writer=self.log_audit,
+                commit=False,
+            )
+            alert_after = dict(_monitoring_alert_get(db, alert_id) or {})
+            escalation = _record_monitoring_overdue_escalation(
+                db, alert_id, user,
+                reason=reason,
+                alert_before=alert_before,
+                alert_after=alert_after,
+                sla=sla,
+            )
+            overdue_payload = {
+                "alert_id": alert_id,
+                "actor_id": user.get("sub", ""),
+                "actor_role": user.get("role", ""),
+                "reason": reason,
+                "prior_status": alert_before.get("status"),
+                "new_status": alert_after.get("status"),
+                "severity": alert_before.get("severity"),
+                "sla_state": sla.get("sla_state"),
+                "days_overdue": sla.get("days_overdue"),
+                "sla_due_at": sla.get("sla_due_at"),
+                "sla_days": sla.get("sla_days"),
+                "escalation_id": escalation.get("id"),
+            }
+            self.log_audit(
+                user,
+                "monitoring.alert.overdue_escalated",
+                f"monitoring_alert:{alert_id}",
+                json.dumps(overdue_payload, default=str, sort_keys=True),
+                db=db,
+                before_state={
+                    "status": alert_before.get("status"),
+                    "sla_state": sla.get("sla_state"),
+                    "sla_due_at": sla.get("sla_due_at"),
+                    "sla_days": sla.get("sla_days"),
+                },
+                after_state={
+                    "status": alert_after.get("status"),
+                    "escalation_id": escalation.get("id"),
+                },
+                commit=False,
+            )
+            db.commit()
+            refreshed = dict(_monitoring_alert_get(db, alert_id) or {})
+            refreshed["sla"] = _monitoring_sla.derive(refreshed)
+            refreshed["overdue_escalations"] = _monitoring_alert_overdue_escalations(db, alert_id)
+            self.success({
+                "status": "overdue_escalated",
+                "action": "escalate_overdue",
+                "result": result,
+                "new_status": refreshed.get("status"),
+                "escalation": escalation,
+                "alert": refreshed,
+                "audit_history": _monitoring_alert_audit_history(db, alert_id),
+            })
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("monitoring overdue escalation failed: alert_id=%s", alert_id)
+            self.error("Failed to escalate overdue alert.", 500)
         finally:
             db.close()
 
@@ -38933,6 +39127,7 @@ def make_app():
         (r"/api/monitoring/clients", MonitoringClientsHandler),
         # Alerts (more specific routes first)
         (r"/api/monitoring/alerts/([^/]+)/replacement-upload", MonitoringAlertDocumentReplacementUploadHandler),
+        (r"/api/monitoring/alerts/([^/]+)/escalate-overdue", MonitoringAlertOverdueEscalationHandler),
         (r"/api/monitoring/alerts/([^/]+)/followups/([0-9]+)/resolve", MonitoringAlertFollowupResolveHandler),
         (r"/api/monitoring/alerts/([^/]+)/followups", MonitoringAlertFollowupHandler),
         (r"/api/monitoring/alerts/([^/]+)", MonitoringAlertDetailHandler),
