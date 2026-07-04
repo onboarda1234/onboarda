@@ -1241,6 +1241,30 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_monitoring_followups_open
         ON monitoring_alert_followups(alert_id, resolved_at);
 
+    -- M2.1 PR-4: officer-triggered overdue escalation ledger. Additive
+    -- metadata only; the canonical alert status still moves through the
+    -- existing monitoring decision transition to monitoring_alerts.status =
+    -- 'escalated'.
+    CREATE TABLE IF NOT EXISTS monitoring_alert_escalations (
+        id SERIAL PRIMARY KEY,
+        alert_id INTEGER NOT NULL REFERENCES monitoring_alerts(id) ON DELETE CASCADE,
+        reason TEXT NOT NULL,
+        escalated_by TEXT,
+        escalated_by_role TEXT,
+        escalated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        prior_status TEXT,
+        new_status TEXT,
+        sla_state TEXT,
+        days_overdue INTEGER,
+        sla_due_at TIMESTAMP,
+        sla_days INTEGER,
+        alert_severity_at_escalation TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_monitoring_alert_escalations_alert
+        ON monitoring_alert_escalations(alert_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_alert_escalations_actor
+        ON monitoring_alert_escalations(escalated_by);
+
     -- Client Notifications
     CREATE TABLE IF NOT EXISTS client_notifications (
         id SERIAL PRIMARY KEY,
@@ -2440,6 +2464,30 @@ def _get_sqlite_schema() -> str:
         ON monitoring_alert_followups(alert_id);
     CREATE INDEX IF NOT EXISTS idx_monitoring_followups_open
         ON monitoring_alert_followups(alert_id, resolved_at);
+
+    -- M2.1 PR-4: officer-triggered overdue escalation ledger. Additive
+    -- metadata only; the canonical alert status still moves through the
+    -- existing monitoring decision transition to monitoring_alerts.status =
+    -- 'escalated'.
+    CREATE TABLE IF NOT EXISTS monitoring_alert_escalations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        alert_id INTEGER NOT NULL REFERENCES monitoring_alerts(id) ON DELETE CASCADE,
+        reason TEXT NOT NULL,
+        escalated_by TEXT,
+        escalated_by_role TEXT,
+        escalated_at TEXT DEFAULT (datetime('now')),
+        prior_status TEXT,
+        new_status TEXT,
+        sla_state TEXT,
+        days_overdue INTEGER,
+        sla_due_at TEXT,
+        sla_days INTEGER,
+        alert_severity_at_escalation TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_monitoring_alert_escalations_alert
+        ON monitoring_alert_escalations(alert_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_alert_escalations_actor
+        ON monitoring_alert_escalations(escalated_by);
 
     -- Client Notifications
     CREATE TABLE IF NOT EXISTS client_notifications (

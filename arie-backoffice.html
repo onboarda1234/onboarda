@@ -23740,6 +23740,51 @@ function monitoringAlertIsTerminal(alert) {
   return ['dismissed','resolved','waived','routed_to_edd'].indexOf((alert || {}).statusKey) >= 0 || (alert && alert.rawStatusKey === 'routed_to_review');
 }
 
+function monitoringAlertCanEscalateOverdue(alert) {
+  if (!alert) return false;
+  var role = (currentUser && currentUser.role) || '';
+  if (['admin','sco','co'].indexOf(role) < 0) return false;
+  var sla = alert.sla || {};
+  if (sla.sla_state !== 'overdue') return false;
+  var status = monitoringCanonicalToken(alert.statusKey || alert.rawStatusKey || '');
+  var rawStatus = monitoringCanonicalToken((alert.raw && alert.raw.status) || '');
+  if (status === 'escalated' || rawStatus === 'escalated') return false;
+  if (monitoringAlertIsTerminal(alert)) return false;
+  if (['closed','cancelled','canceled'].indexOf(status) >= 0 || ['closed','cancelled','canceled'].indexOf(rawStatus) >= 0) return false;
+  if (alert.raw && alert.raw.resolved_at) return false;
+  return true;
+}
+
+function renderMonitoringOverdueEscalationAction(alert) {
+  if (!monitoringAlertCanEscalateOverdue(alert)) return '';
+  var sla = alert.sla || {};
+  var label = sla.sla_label || 'Overdue';
+  var due = monitoringSlaDateLabel(sla);
+  return '<div data-monitoring-overdue-escalation-action="true" style="border:1px solid var(--red-bg);background:rgba(220,38,38,0.04);border-radius:8px;padding:12px;display:grid;gap:10px;">' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><span class="badge very-high" style="font-size:11px;">' + escapeHtml(label) + '</span><strong style="font-size:13px;color:var(--text1);">Escalate overdue alert</strong>' + (due ? '<span style="font-size:12px;color:var(--text3);">SLA due ' + escapeHtml(due) + '</span>' : '') + '</div>' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.5;">This action routes through the existing Escalate to SCO path and records overdue-specific audit context. It does not change the SLA due date or follow-up dates.</div>' +
+    '<div><div class="form-label">Escalation reason <span style="color:var(--red);">*</span></div><textarea class="form-input" id="monitoring-overdue-escalation-reason" rows="3" placeholder="Explain why this overdue alert needs senior escalation now."></textarea></div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-primary btn-sm" id="monitoring-escalate-overdue-btn" onclick="escalateMonitoringAlertOverdue()">Escalate overdue</button><span id="monitoring-overdue-escalation-result" style="font-size:12px;"></span></div>' +
+  '</div>';
+}
+
+function renderMonitoringOverdueEscalationSummary(alert) {
+  var rows = (alert && alert.raw && Array.isArray(alert.raw.overdue_escalations)) ? alert.raw.overdue_escalations : [];
+  if (!rows.length) return '';
+  var latest = rows[0] || {};
+  return monitoringDetailCard('Overdue Escalation',
+    monitoringInfoGrid([
+      ['Escalated at', monitoringTextValue(latest.escalated_at, 'Not available')],
+      ['Escalated by', monitoringTextValue(latest.escalated_by, 'Not available')],
+      ['Prior status', monitoringTextValue(latest.prior_status, 'Not available')],
+      ['New status', monitoringTextValue(latest.new_status, 'Not available')],
+      ['Days overdue', monitoringTextValue(latest.days_overdue, 'Not available')],
+      ['SLA due date', monitoringTextValue(latest.sla_due_at, 'Not available')],
+      ['Reason', monitoringTextValue(latest.reason, 'Not available')]
+    ])
+  );
+}
+
 function renderMonitoringReplacementUploadControl(uploaded) {
   if (uploaded) return '';
   return '<details data-monitoring-replacement-upload="true" style="border:1px solid var(--border1);border-radius:8px;background:var(--surface2);padding:10px 12px;">' +
@@ -23775,6 +23820,7 @@ function renderMonitoringDocumentDecisionSection(alert) {
   actionButtons.push('<button class="btn btn-outline btn-sm" id="monitoring-waive-updated-document-btn" onclick="reviewMonitoringUpdatedDocument(\'waive_updated_document\')">Waive with reason</button>');
   return monitoringDetailCard('Officer Action',
     '<div style="display:grid;gap:12px;">' +
+      renderMonitoringOverdueEscalationAction(alert) +
       '<div style="font-size:12px;color:var(--text3);line-height:1.5;">Next step: ' + escapeHtml(monitoringDocumentRefreshNextAction(alert, ctx)) + '</div>' +
       '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' + actionButtons.join('') + '</div>' +
       renderMonitoringReplacementUploadControl(uploaded) +
@@ -23817,6 +23863,7 @@ function renderMonitoringDecisionSection(alert) {
     : '';
   return monitoringDetailCard('Officer Action',
     '<div style="display:grid;gap:12px;" data-monitoring-dismissal-tier="' + tier + '">' +
+      renderMonitoringOverdueEscalationAction(alert) +
       '<div style="font-size:12px;color:var(--text3);line-height:1.5;">Suggested action: ' + escapeHtml(monitoringRecommendedNextStep(alert)) + '</div>' +
       (controlNote ? '<div style="font-size:12px;color:var(--amber);line-height:1.5;">' + escapeHtml(controlNote) + '</div>' : '') +
       '<div style="display:grid;grid-template-columns:minmax(220px,320px) 1fr;gap:12px;align-items:start;">' +
@@ -23925,7 +23972,7 @@ function renderMonitoringDownstreamLinks(alert) {
 
 function monitoringAuditLabel(action) {
   var map = {
-    'monitoring.alert.review_started': 'Review started', 'monitoring.alert.assigned': 'Assigned', 'monitoring.alert.false_positive': 'False positive saved', 'monitoring.alert.no_material_impact': 'No material impact saved', 'monitoring.alert.routed_to_edd': 'Routed to EDD', 'monitoring.alert.escalated_to_sco': 'Escalated to SCO', 'monitoring.alert.risk_profile_update_required': 'Risk profile update required', 'monitoring.alert.further_information_requested': 'Further information requested', 'monitoring.alert.document_update_requested': 'Document update requested', 'monitoring.alert.document_already_updated': 'Document already updated', 'monitoring.alert.document_waived': 'Document waived', 'monitoring.alert.overdue_document_escalated': 'Overdue item escalated', 'monitoring.alert.dismissed': 'Dismissed', 'monitoring.alert.triaged': 'Review started',
+    'monitoring.alert.review_started': 'Review started', 'monitoring.alert.assigned': 'Assigned', 'monitoring.alert.false_positive': 'False positive saved', 'monitoring.alert.no_material_impact': 'No material impact saved', 'monitoring.alert.routed_to_edd': 'Routed to EDD', 'monitoring.alert.escalated_to_sco': 'Escalated to SCO', 'monitoring.alert.overdue_escalated': 'Overdue alert escalated', 'monitoring.alert.risk_profile_update_required': 'Risk profile update required', 'monitoring.alert.further_information_requested': 'Further information requested', 'monitoring.alert.document_update_requested': 'Document update requested', 'monitoring.alert.document_already_updated': 'Document already updated', 'monitoring.alert.document_waived': 'Document waived', 'monitoring.alert.overdue_document_escalated': 'Overdue item escalated', 'monitoring.alert.dismissed': 'Dismissed', 'monitoring.alert.triaged': 'Review started',
     'monitoring.alert.evidence_fetch_succeeded': 'Evidence fetch succeeded', 'monitoring.alert.evidence_unavailable': 'Evidence unavailable from provider', 'monitoring.alert.webhook_duplicate_ignored': 'Webhook duplicate ignored',
     'updated_document_requested': 'Updated document requested', 'document_request_notification_sent': 'Document request notification sent', 'document_request_notification_failed': 'Document request notification not sent', 'client_document_upload_received': 'Client document upload received', 'backoffice_replacement_uploaded': 'Back-office replacement uploaded', 'updated_document_accepted': 'Updated document accepted', 'updated_document_rejected': 'Updated document rejected', 'updated_document_waived': 'Updated document waived', 'monitoring_alert_resolved': 'Monitoring alert resolved'
   };
@@ -24022,6 +24069,7 @@ function renderMonitoringAlertDetailView() {
     body.innerHTML =
       renderMonitoringDocumentExpiryCard(alert, statusBadge, severityBadge) +
       renderMonitoringDecisionSection(alert) +
+      renderMonitoringOverdueEscalationSummary(alert) +
       renderMonitoringAuditHistory(alert, state.auditHistory || []) +
       renderMonitoringTechnicalDetails(alert, state.auditHistory || []);
     updateMonitoringDecisionNoteHint();
@@ -24044,6 +24092,7 @@ function renderMonitoringAlertDetailView() {
     ]) + renderMonitoringDownstreamLinks(alert) + renderMonitoringAssignmentSection(alert)) +
     monitoringDetailCard('Issue / Evidence', monitoringAlertEvidenceHtml(alert)) +
     renderMonitoringDecisionSection(alert) +
+    renderMonitoringOverdueEscalationSummary(alert) +
     renderMonitoringAuditHistory(alert, state.auditHistory || []) +
     renderMonitoringTechnicalDetails(alert, state.auditHistory || []);
   updateMonitoringDecisionNoteHint();
@@ -24308,6 +24357,31 @@ async function saveMonitoringAlertDecision() {
     if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">' + escapeHtml(err.message || 'Save failed') + '</span>';
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = origLabel; }
+  }
+}
+
+async function escalateMonitoringAlertOverdue() {
+  var alert = MONITORING_ALERT_DETAIL && MONITORING_ALERT_DETAIL.normalized;
+  if (!alert || !alert.id) return;
+  var reasonEl = document.getElementById('monitoring-overdue-escalation-reason');
+  var resultEl = document.getElementById('monitoring-overdue-escalation-result');
+  var btn = document.getElementById('monitoring-escalate-overdue-btn');
+  var reason = reasonEl ? reasonEl.value.trim() : '';
+  if (!reason) {
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">A reason is required for overdue escalation.</span>';
+    return;
+  }
+  var original = btn ? btn.textContent : 'Escalate overdue';
+  if (btn) { btn.disabled = true; btn.textContent = 'Escalating...'; }
+  try {
+    await boApiCall('POST', '/monitoring/alerts/' + encodeURIComponent(alert.id) + '/escalate-overdue', { reason: reason });
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--green);">Overdue alert escalated.</span>';
+    showToast('Overdue alert escalated');
+    await refreshMonitoringAlertDetail();
+  } catch(err) {
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--red);">' + escapeHtml(err.message || 'Escalation failed') + '</span>';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = original; }
   }
 }
 
