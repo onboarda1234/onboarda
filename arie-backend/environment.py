@@ -33,13 +33,40 @@ _UPLOAD_LATENCY_DEFAULTS = {flag: False for flag in UPLOAD_LATENCY_FLAGS}
 
 VALID_ENVIRONMENTS = ("development", "testing", "demo", "staging", "production")
 
-def get_environment() -> str:
-    """Get current environment from ENV variable. Defaults to 'development' for safety."""
-    env = (os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or "development").lower().strip()
+# Common aliases, canonicalized BEFORE validation (audit H8 / PR-13).
+# Previously ENVIRONMENT=prod was rejected here and fell back to
+# 'development' — silently stripping a production box of every production
+# safety gate (validate_config, validate_environment, PII checks) while
+# other modules still treated the raw string as production. Aliasing to the
+# canonical name is the fail-safe direction.
+_ENV_ALIASES = {
+    "prod": "production",
+    "stage": "staging",
+    "dev": "development",
+    "test": "testing",
+}
+
+
+def canonicalize_environment(raw) -> str:
+    """Return the canonical environment name for any raw ENVIRONMENT value.
+
+    Lowercases/strips, maps known aliases (prod→production, stage→staging,
+    dev→development, test→testing), and falls back to 'development' (with an
+    error log) for anything unrecognised. This is the single source of truth
+    for environment-name normalization — config.py uses it too, so
+    config.ENVIRONMENT and environment.ENV can never disagree again.
+    """
+    env = (raw or "development").lower().strip()
+    env = _ENV_ALIASES.get(env, env)
     if env not in VALID_ENVIRONMENTS:
         logger.error(f"REJECTED: Invalid ENVIRONMENT='{env}' — not in {VALID_ENVIRONMENTS}. Defaulting to 'development'.")
         env = "development"
     return env
+
+
+def get_environment() -> str:
+    """Get current environment from ENV variable. Defaults to 'development' for safety."""
+    return canonicalize_environment(os.environ.get("ENVIRONMENT") or os.environ.get("ENV"))
 
 ENV = get_environment()
 

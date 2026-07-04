@@ -123,6 +123,8 @@ class TestConfigValidationPII:
         monkeypatch.setenv("SECRET_KEY", "test-staging-secret-key-1234567890abcdef")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.setenv("PII_ENCRYPTION_KEY", Fernet.generate_key().decode())
+        # PR-13 (audit H8): DATABASE_URL is now a hard requirement in staging.
+        monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example:5432/staging")
         import importlib
         import config as cfg
         importlib.reload(cfg)

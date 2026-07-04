@@ -37,7 +37,14 @@ class ConfigError(Exception):
 # Environment
 # ══════════════════════════════════════════════════════════════
 
-ENVIRONMENT = os.getenv("ENVIRONMENT", os.getenv("ENV", "development"))
+# Canonicalized via environment.canonicalize_environment (audit H8 / PR-13):
+# the raw value previously produced split-brain behaviour — ENVIRONMENT=prod
+# left every IS_* flag False here (skipping validate_config entirely) while
+# other modules string-matched "prod" as production. environment.py imports
+# nothing from this module, so this import cannot cycle.
+from environment import canonicalize_environment as _canonicalize_environment
+
+ENVIRONMENT = _canonicalize_environment(os.getenv("ENVIRONMENT", os.getenv("ENV", "development")))
 IS_TESTING = ENVIRONMENT == "testing"
 IS_DEMO = ENVIRONMENT == "demo"
 IS_STAGING = ENVIRONMENT == "staging"
@@ -170,7 +177,14 @@ def validate_config():
         if not ANTHROPIC_API_KEY:
             errors.append("ANTHROPIC_API_KEY is required")
         if not DATABASE_URL:
-            warnings.append("DATABASE_URL not set — using SQLite (not recommended for production)")
+            # Audit H8 / PR-13: hard error, not a warning. Without DATABASE_URL
+            # the app boots on SQLite inside the container — ephemeral storage
+            # for a regulated AML platform. db.py's C-07 guard only fires at
+            # request time and only for production; the deploy must fail here.
+            errors.append(
+                "DATABASE_URL is required in staging and production — "
+                "SQLite fallback would store regulated data on ephemeral container disk"
+            )
         if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
             warnings.append("SUMSUB credentials not set — KYC verification will be unavailable")
         if not PII_ENCRYPTION_KEY:
