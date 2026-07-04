@@ -4303,6 +4303,21 @@ def _readiness_status_payload():
                 checks["database"]["status"] = "degraded"
                 checks["database"]["detail"] = "idle-in-transaction sessions detected"
                 ready = False
+        # PR-31: observable GDPR retention-policy count. Deliberately
+        # NON-GATING here — an empty table is made visible for the
+        # post-deploy verification gate, but readiness semantics (fail vs
+        # degrade) for it belong to the screening-readiness work (B6-B5).
+        try:
+            pol_row = db.execute(
+                "SELECT COUNT(*) AS c FROM data_retention_policies"
+            ).fetchone()
+            pol_count = int(dict(pol_row).get("c") or 0) if pol_row else 0
+            checks["retention_policies"] = {
+                "status": "ok" if pol_count > 0 else "empty",
+                "count": pol_count,
+            }
+        except Exception as pol_exc:
+            checks["retention_policies"] = {"status": "unknown", "detail": str(pol_exc)}
     except Exception as e:
         checks["database"] = {"status": "failed", "detail": str(e)}
         ready = False
