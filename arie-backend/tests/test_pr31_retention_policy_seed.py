@@ -64,8 +64,12 @@ def fresh_sqlite(tmp_path, monkeypatch):
     try:
         importlib.reload(config_module)
         importlib.reload(db_module)
-    except Exception:
-        pass
+    except Exception as exc:  # teardown must not mask the test result
+        import logging
+        logging.getLogger(__name__).warning(
+            "fresh_sqlite teardown reload failed — later tests may see stale "
+            "config/db state: %s", exc
+        )
 
 
 def test_fresh_sqlite_seed_populates_retention_policies(fresh_sqlite):
@@ -217,8 +221,12 @@ def fresh_pg(monkeypatch):
     parts = urlsplit(base_dsn)
     admin = psycopg2.connect(base_dsn)
     admin.autocommit = True
-    with admin.cursor() as cur:
-        cur.execute(f'CREATE DATABASE "{db_name}"')
+    try:
+        with admin.cursor() as cur:
+            cur.execute(f'CREATE DATABASE "{db_name}"')
+    except Exception:
+        admin.close()
+        raise
     fresh_dsn = urlunsplit((parts.scheme, parts.netloc, "/" + db_name, parts.query, parts.fragment))
 
     orig_db_url = os.environ.get("DATABASE_URL")
@@ -245,8 +253,12 @@ def fresh_pg(monkeypatch):
             import db as db_module
             importlib.reload(config_module)
             importlib.reload(db_module)
-        except Exception:
-            pass
+        except Exception as exc:  # teardown must not mask the test result
+            import logging
+            logging.getLogger(__name__).warning(
+                "fresh_pg teardown reload failed — later tests may see stale "
+                "config/db state: %s", exc
+            )
         try:
             with admin.cursor() as cur:
                 cur.execute(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')

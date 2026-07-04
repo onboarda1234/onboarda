@@ -8239,6 +8239,7 @@ def _ensure_retention_policies(db: DBConnection) -> int:
         return int(dict(row).get("c") or 0) if row else 0
 
     before = _count()
+    failures = 0
     for policy in _DEFAULT_RETENTION_POLICIES:
         try:
             db.execute(
@@ -8246,7 +8247,18 @@ def _ensure_retention_policies(db: DBConnection) -> int:
                 policy
             )
         except Exception as e:
-            logger.warning(f"Data retention policy '{policy[0]}' ensure failed: {e}")
+            failures += 1
+            logger.error(f"Data retention policy '{policy[0]}' ensure failed: {e}")
+    if failures == len(_DEFAULT_RETENTION_POLICIES):
+        # Every insert failed — the table is likely missing or misconfigured.
+        # Loud by design: a silently-empty policy table is the exact failure
+        # mode this function exists to prevent.
+        logger.error(
+            "All %d retention-policy inserts failed — data_retention_policies "
+            "may be missing or misconfigured; retention enforcement has no "
+            "policies to act on",
+            failures,
+        )
     inserted = _count() - before
     if inserted > 0:
         db.commit()
