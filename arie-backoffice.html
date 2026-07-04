@@ -4729,6 +4729,62 @@ function monitoringAlertAgeDueLabel(alert) {
   return days === 0 ? 'Today' : (days + 'd');
 }
 
+function monitoringSlaToneBadgeClass(sla_tone) {
+  var tone = String(sla_tone || 'grey').trim().toLowerCase();
+  var map = { green: 'approved', amber: 'high', red: 'very-high', grey: 'draft' };
+  return map[tone] || map.grey;
+}
+
+function monitoringSlaDisplay(sla) {
+  if (!sla || typeof sla !== 'object') return null;
+  var state = String(sla.sla_state || '').trim().toLowerCase();
+  if (!state || state === 'unknown') return null;
+  var label = String(sla.sla_label || '').trim();
+  if (state === 'closed' && sla.closed_within_sla === false) label = 'Closed late';
+  if (!label || label === '—') return null;
+  var tone = String(sla.sla_tone || 'grey').trim().toLowerCase();
+  if (['green', 'amber', 'red', 'grey'].indexOf(tone) < 0) tone = 'grey';
+  if (state === 'closed') tone = 'grey';
+  return {
+    state: state,
+    label: label,
+    tone: tone,
+    badgeClass: monitoringSlaToneBadgeClass(tone),
+    dueAt: sla.sla_due_at || '',
+    ageDays: sla.business_age_days != null ? sla.business_age_days : sla.age_days,
+    daysUntilDue: sla.days_until_due,
+    daysOverdue: sla.days_overdue,
+    closedWithinSla: sla.closed_within_sla
+  };
+}
+
+function renderMonitoringSlaChip(sla) {
+  var display = monitoringSlaDisplay(sla);
+  if (!display) return '';
+  return '<span class="badge ' + display.badgeClass + '" data-monitoring-sla-chip="true" data-sla-state="' + escapeHtml(display.state) + '" title="SLA: ' + escapeHtml(display.label) + '" style="font-size:11px;white-space:nowrap;">' + escapeHtml(display.label) + '</span>';
+}
+
+function monitoringSlaDateLabel(sla) {
+  var display = monitoringSlaDisplay(sla);
+  if (!display || !display.dueAt) return '';
+  return String(display.dueAt).replace('T', ' ').slice(0, 16);
+}
+
+function monitoringSlaAgeLabel(sla) {
+  var display = monitoringSlaDisplay(sla);
+  if (!display) return '';
+  if (display.ageDays === null || display.ageDays === undefined || display.ageDays === '') return '';
+  var days = Number(display.ageDays);
+  if (!isFinite(days)) return String(display.ageDays);
+  return days === 1 ? '1 day' : String(days) + ' days';
+}
+
+function renderMonitoringSlaDetailValue(sla) {
+  var chip = renderMonitoringSlaChip(sla);
+  if (!chip) return monitoringTextValue('', 'Not available');
+  return chip;
+}
+
 function monitoringSeverityBadgeClass(severityKey) {
   return { critical: 'very-high', high: 'high', medium: 'medium', low: 'low' }[severityKey] || 'medium';
 }
@@ -4774,6 +4830,7 @@ function normalizeMonitoringAlert(raw) {
     linked_edd_case_id: raw.linked_edd_case_id,
     officer_action: raw.officer_action || null,
     officer_notes: raw.officer_notes || null,
+    sla: raw.sla || null,
     scenario_code: fixtureScenarioCodeFromRef(raw.source_reference || '')
   };
 }
@@ -23579,6 +23636,9 @@ function renderMonitoringDocumentExpiryCard(alert, statusBadge, severityBadge) {
       ['Severity', severityBadge],
       ['Request status', monitoringTextValue(monitoringDocumentRefreshStatusLabel(req.status || ctx.request_status || alert.statusKey), 'Not available')],
       ['Due date', monitoringTextValue(ctx.due_date || req.due_date || '', 'Not set')],
+      ['SLA', renderMonitoringSlaDetailValue(alert.sla)],
+      ['SLA due date', monitoringTextValue(monitoringSlaDateLabel(alert.sla), 'Not set')],
+      ['Alert age', monitoringTextValue(monitoringSlaAgeLabel(alert.sla), 'Not available')],
       ['Replacement uploaded', uploaded ? 'Yes' : 'No'],
       ['Upload source', monitoringTextValue(uploadSource, 'Not uploaded')],
       ['Officer owner', monitoringTextValue(alert.owner, 'Unassigned')],
@@ -23976,6 +24036,9 @@ function renderMonitoringAlertDetailView() {
       ['Status', statusBadge],
       ['Owner', monitoringTextValue(alert.owner, 'Unassigned')],
       ['Date detected', monitoringTextValue(raw.discovered_at || raw.created_at || alert.date, 'Not available')],
+      ['SLA', renderMonitoringSlaDetailValue(alert.sla)],
+      ['SLA due date', monitoringTextValue(monitoringSlaDateLabel(alert.sla), 'Not set')],
+      ['Alert age', monitoringTextValue(monitoringSlaAgeLabel(alert.sla), 'Not available')],
       ['Age / due status', monitoringTextValue(monitoringAlertAgeDueLabel(alert), 'Not available')],
       ['Source / provider', monitoringTextValue(monitoringProviderLabel(raw, parseMonitoringSourceReference(raw.source_reference)), 'Not available')]
     ]) + renderMonitoringDownstreamLinks(alert) + renderMonitoringAssignmentSection(alert)) +
@@ -24381,13 +24444,17 @@ function renderMonitoringAlerts() {
     var clientTitle = alert.clientTitle ? ' title="' + escapeHtml(alert.clientTitle) + '"' : '';
     var owner = alert.owner || 'Unassigned';
     var ageDue = monitoringAlertAgeDueLabel(alert);
+    var slaChip = renderMonitoringSlaChip(alert.sla);
+    var slaCell = slaChip
+      ? (slaChip + '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(ageDue) + '</div>')
+      : escapeHtml(ageDue);
     tr.innerHTML = '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(alert.date) + '</td>' +
       '<td' + clientTitle + '>' + escapeHtml(alert.client || 'Unmapped client') + '</td>' +
       '<td style="font-size:12px;">' + escapeHtml(alert.type) + '</td>' +
       '<td><span class="badge ' + severityColor + '" style="font-size:11px;">' + escapeHtml(alert.severity) + '</span></td>' +
       '<td style="font-size:12px;">' + escapeHtml(owner) + '</td>' +
       '<td><span class="badge ' + statusBadgeClass + '" style="font-size:11px;">' + escapeHtml(alert.status) + '</span></td>' +
-      '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(ageDue) + '</td>' +
+      '<td style="font-size:12px;color:var(--text3);">' + slaCell + '</td>' +
       '<td><button class="btn btn-sm btn-outline" type="button">Open</button></td>';
     var openBtn = tr.querySelector('button');
     if (openBtn) {
