@@ -816,9 +816,24 @@ def screening_adverse_truth_requires_compliance(summary: Mapping[str, Any]) -> b
     return _token(summary.get("approval_effect")) == EFFECT_COMPLIANCE
 
 
+def _screening_adverse_truth_display_reasons(reasons: Any) -> str:
+    counts: dict[str, int] = {}
+    for reason in reasons or []:
+        text = str(reason or "").strip()
+        if not text:
+            continue
+        counts[text] = counts.get(text, 0) + 1
+    return "; ".join(
+        f"{reason} ({count})" if count > 1 else reason
+        for reason, count in counts.items()
+    )
+
+
 def screening_adverse_truth_blocker_message(summary: Mapping[str, Any]) -> str:
     effect = _token(summary.get("approval_effect"))
-    reasons = "; ".join(summary.get("blocking_reasons") or summary.get("approval_blocked_reasons") or [])
+    reasons = _screening_adverse_truth_display_reasons(
+        summary.get("blocking_reasons") or summary.get("approval_blocked_reasons") or []
+    )
     if effect == EFFECT_PROHIBITED:
         return (
             "ComplyAdvantage Mesh screening/adverse-media truth produced a prohibited fail-closed result"

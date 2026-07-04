@@ -212,6 +212,7 @@ from enhanced_requirements import (
 import monitoring_status as _monitoring_status
 import monitoring_dismissal_control as _mdc
 import monitoring_sla as _monitoring_sla
+import monitoring_followups as _monitoring_followups
 from monitoring_enrollment import (
     backfill_approved_applications as _backfill_monitoring_enrollment,
     enroll_approved_application as _enroll_approved_application_for_monitoring,
@@ -23465,31 +23466,116 @@ def _agent3_evidence_details(hit):
     }
 
 
+def _agent3_category_tokens(value):
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return set(), ""
+    normalized = re.sub(r"[^a-z0-9]+", " ", raw).strip()
+    return set(normalized.split()), raw
+
+
+def _agent3_category_texts(value):
+    texts = []
+    if isinstance(value, dict):
+        for item in value.values():
+            texts.extend(_agent3_category_texts(item))
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            texts.extend(_agent3_category_texts(item))
+    elif value is not None:
+        text = str(value).strip()
+        if text:
+            texts.append(text)
+    return texts
+
+
+def _agent3_adverse_media_text(text):
+    tokens, raw = _agent3_category_tokens(text)
+    if not raw:
+        return False
+    normalized = re.sub(r"[^a-z0-9]+", " ", raw).strip()
+    joined = "_".join(normalized.split())
+    explicit_values = {
+        "adverse_media",
+        "adverse news",
+        "adverse_news",
+        "negative_news",
+        "negative news",
+        "media adverse media",
+    }
+    return (
+        raw in explicit_values
+        or normalized in explicit_values
+        or joined in explicit_values
+        or "adverse_media" in raw
+        or "negative_news" in raw
+        or "negative news" in normalized
+        or ("adverse" in tokens and "media" in tokens)
+    )
+
+
 def _agent3_categories(hit, source_hint=""):
     categories = set()
-    source_text = source_hint.lower()
-    if "sanction" in source_text:
+    source_tokens, source_raw = _agent3_category_tokens(source_hint)
+    if "sanction" in source_tokens or "sanctions" in source_tokens:
         categories.add("sanctions")
-    if "pep" in source_text:
+    if "pep" in source_tokens:
         categories.add("pep")
-    if "adverse" in source_text or "media" in source_text:
+    if _agent3_adverse_media_text(source_raw):
         categories.add("adverse_media")
 
     if not isinstance(hit, dict):
         return sorted(categories)
 
-    for key in ("category", "type", "hit_type", "list_type", "match_type"):
+    for key in (
+        "match_category",
+        "match_categories",
+        "category",
+        "categories",
+        "risk_type",
+        "risk_types",
+        "risk_type_keys",
+        "risk_type_labels",
+        "risk_labels",
+        "type",
+        "hit_type",
+        "list_type",
+        "match_type",
+    ):
         value = hit.get(key)
-        if isinstance(value, str):
-            value = [value]
-        for item in _agent3_list(value):
-            text = str(item or "").lower()
-            if "sanction" in text:
+        for item in _agent3_category_texts(value):
+            tokens, raw = _agent3_category_tokens(item)
+            if "sanction" in tokens or "sanctions" in tokens or "sanctioned" in tokens:
                 categories.add("sanctions")
-            if "pep" in text or "politically exposed" in text:
+            if "pep" in tokens or "politically exposed" in raw:
                 categories.add("pep")
-            if "adverse" in text or "media" in text:
+            if _agent3_adverse_media_text(raw):
                 categories.add("adverse_media")
+
+    for indicator in _agent3_list(hit.get("indicators")):
+        if not isinstance(indicator, dict):
+            continue
+        for key in ("type", "name", "label", "taxonomy_key", "taxonomy_label", "risk_type", "risk_label"):
+            value = indicator.get(key)
+            for item in _agent3_category_texts(value):
+                tokens, raw = _agent3_category_tokens(item)
+                if "sanction" in tokens or "sanctions" in tokens:
+                    categories.add("sanctions")
+                if "pep" in tokens or "politically exposed" in raw:
+                    categories.add("pep")
+                if _agent3_adverse_media_text(raw):
+                    categories.add("adverse_media")
+        value = indicator.get("value")
+        if isinstance(value, dict):
+            for key in ("taxonomy_key", "taxonomy_label", "risk_type", "risk_label", "type", "label"):
+                for item in _agent3_category_texts(value.get(key)):
+                    tokens, raw = _agent3_category_tokens(item)
+                    if "sanction" in tokens or "sanctions" in tokens:
+                        categories.add("sanctions")
+                    if "pep" in tokens or "politically exposed" in raw:
+                        categories.add("pep")
+                    if _agent3_adverse_media_text(raw):
+                        categories.add("adverse_media")
 
     for key, category in (
         ("is_sanctioned", "sanctions"),
@@ -23499,6 +23585,7 @@ def _agent3_categories(hit, source_hint=""):
         ("pep", "pep"),
         ("politically_exposed", "pep"),
         ("is_adverse_media", "adverse_media"),
+        ("has_adverse_media_hit", "adverse_media"),
         ("adverse_media", "adverse_media"),
         ("adverse", "adverse_media"),
     ):
@@ -23506,6 +23593,17 @@ def _agent3_categories(hit, source_hint=""):
             categories.add(category)
 
     return sorted(categories)
+
+
+def _agent3_primary_count_bucket(categories):
+    category_set = set(categories or [])
+    if "sanctions" in category_set:
+        return "sanctions"
+    if "pep" in category_set:
+        return "pep"
+    if "adverse_media" in category_set:
+        return "adverse_media"
+    return "other"
 
 
 def _agent3_provider_results(section, source_hint=""):
@@ -24042,9 +24140,22 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         total_hits = len(hits)
     total_hits = max(total_hits, len(hits))
 
-    sanctions_count = sum(1 for hit in hits if "sanctions" in hit.get("categories", []))
-    pep_count = sum(1 for hit in hits if "pep" in hit.get("categories", []))
-    adverse_media_count = sum(1 for hit in hits if "adverse_media" in hit.get("categories", []))
+    risk_sanctions_count = sum(1 for hit in hits if "sanctions" in hit.get("categories", []))
+    risk_pep_count = sum(1 for hit in hits if "pep" in hit.get("categories", []))
+    risk_adverse_media_count = sum(1 for hit in hits if "adverse_media" in hit.get("categories", []))
+    primary_counts = {
+        "sanctions": 0,
+        "pep": 0,
+        "adverse_media": 0,
+        "other": 0,
+    }
+    for hit in hits:
+        primary_counts[_agent3_primary_count_bucket(hit.get("categories", []))] += 1
+    row_count_slack = max(0, total_hits - len(hits))
+    sanctions_count = primary_counts["sanctions"]
+    pep_count = primary_counts["pep"]
+    adverse_media_count = primary_counts["adverse_media"]
+    other_count = primary_counts["other"] + row_count_slack
     declared_pep_count = len(declared_pep_subjects)
     unresolved_review_count = _agent3_unresolved_screening_review_count(screening_reviews)
     overall_flags = [str(flag) for flag in _agent3_list(screening_report.get("overall_flags")) if str(flag or "").strip()]
@@ -24054,16 +24165,16 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         if hit.get("match_score") is not None and hit.get("match_score") < 70
     )
 
-    if sanctions_count:
+    if risk_sanctions_count:
         severity = "Critical"
         recommendation = "Reject recommended"
-    elif pep_count:
+    elif risk_pep_count:
         severity = "High"
         recommendation = "EDD recommended"
     elif declared_pep_count:
         severity = "High"
         recommendation = "Officer review required"
-    elif adverse_media_count:
+    elif risk_adverse_media_count:
         severity = "Medium"
         recommendation = "Officer review required"
     elif total_hits:
@@ -24084,10 +24195,9 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
     if declared_pep_count:
         key_concerns.append(AGENT3_DECLARED_PEP_NOTICE)
     if adverse_media_count:
-        key_concerns.append(f"{adverse_media_count} stored adverse media hit(s) require relevance and materiality review.")
-    unknown_count = max(0, total_hits - sanctions_count - pep_count - adverse_media_count)
-    if unknown_count:
-        key_concerns.append(f"{unknown_count} stored screening hit(s) need identity disambiguation.")
+        key_concerns.append(f"{adverse_media_count} stored provider screening adverse-media row(s) require relevance and materiality review.")
+    if other_count:
+        key_concerns.append(f"{other_count} other/uncategorized provider result row(s) need identity disambiguation.")
     if unresolved_review_count:
         key_concerns.append(f"{unresolved_review_count} existing screening review item(s) are not fully resolved in stored review records.")
     if not key_concerns:
@@ -24109,7 +24219,7 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
                 "No provider hits found in stored screening results, so there are no provider false positives to clear. "
                 "This does not independently prove that no compliance risk exists."
             )
-    elif low_confidence_hit_count == len(hits) and hits and not (sanctions_count or pep_count or adverse_media_count):
+    elif low_confidence_hit_count == len(hits) and hits and not (risk_sanctions_count or risk_pep_count or risk_adverse_media_count):
         false_positive_assessment = (
             "False positive likely based on stored low-confidence matches. "
             "Officer should confirm against names, dates, nationality, and identifiers before closing."
@@ -24120,13 +24230,18 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
             "Officer identity disambiguation is required before disposition."
         )
 
-    if adverse_media_count:
+    if risk_adverse_media_count and adverse_media_count:
         adverse_media_relevance = (
-            "Stored adverse media hit(s) are relevant enough for officer review because they are linked "
+            "Stored provider screening adverse-media row(s) are relevant enough for officer review because they are linked "
             "to screened subject names. Assess source reliability, recency, conduct seriousness, and name match quality."
         )
+    elif risk_adverse_media_count:
+        adverse_media_relevance = (
+            "Detailed row categories include provider screening adverse-media labels on row(s) counted under higher-priority "
+            "headline buckets. Assess source reliability, recency, conduct seriousness, and name match quality."
+        )
     else:
-        adverse_media_relevance = "No provider adverse media hits found in stored screening results."
+        adverse_media_relevance = "No provider screening adverse-media rows found in stored screening results."
 
     app_ref = _agent3_row_get(app, "ref") or _agent3_row_get(app, "id") or "application"
     provider = (
@@ -24136,11 +24251,12 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
     )
     if total_hits:
         hit_summary = (
-            f"show {total_hits} provider hit(s): {sanctions_count} sanctions, "
-            f"{pep_count} PEP, and {adverse_media_count} adverse media"
+            f"show {total_hits} provider result row(s): {sanctions_count} sanctions, "
+            f"{pep_count} PEP, {adverse_media_count} provider screening adverse-media row(s), "
+            f"and {other_count} other/uncategorized row(s) requiring identity disambiguation"
         )
     else:
-        hit_summary = "show no provider hits found"
+        hit_summary = "show no provider result rows found"
     summary_parts = [
         f"Stored screening results for {app_ref} {hit_summary}.",
     ]
@@ -24232,6 +24348,7 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
             "pep": pep_count,
             "declared_pep": declared_pep_count,
             "adverse_media": adverse_media_count,
+            "other": other_count,
             "low_confidence": low_confidence_hit_count,
             "unresolved_screening_reviews": unresolved_review_count,
         },
@@ -27255,7 +27372,8 @@ class MonitoringAlertCreateHandler(BaseHandler):
 
             refresh_status_map = _monitoring_list_refresh_status_map(db, raw_alerts)
             pending_review_ids = _monitoring_list_pending_review_ids(db, raw_alerts)
-            projected = [_monitoring_list_project_row(row, refresh_status_map, pending_review_ids) for row in raw_alerts]
+            followup_map = _monitoring_followups.open_summary_for_alerts(db, raw_alerts)
+            projected = [_monitoring_list_project_row(row, refresh_status_map, pending_review_ids, followup_map) for row in raw_alerts]
             filtered = []
             for item in projected:
                 if not include_closed and item["is_terminal"]:
@@ -31834,7 +31952,8 @@ def _monitoring_list_pending_review_ids(db, rows):
     return pending
 
 
-def _monitoring_list_project_row(row, refresh_status_map=None, pending_review_ids=None):
+def _monitoring_list_project_row(row, refresh_status_map=None, pending_review_ids=None,
+                                 followup_map=None):
     item = dict(row)
     refresh_request_status = (refresh_status_map or {}).get(item.get("id"))
     status_key = _monitoring_status.effective_status(
@@ -31873,6 +31992,10 @@ def _monitoring_list_project_row(row, refresh_status_map=None, pending_review_id
     })
     # M2.1 PR-1: derived SLA/aging (read-only; never stored on the alert row).
     item["sla"] = _monitoring_sla.derive(item)
+    # M2.1 PR-2: derived open follow-up count / next-due (no stored status).
+    fu = (followup_map or {}).get(item.get("id")) or {}
+    item["open_followup_count"] = fu.get("open_count", 0)
+    item["next_followup_due"] = fu.get("next_due_at")
     return item
 
 
@@ -32160,6 +32283,15 @@ class MonitoringAlertDetailHandler(BaseHandler):
         result["dismissal_tier"] = _mdc.classify_alert_tier(result)
         # M2.1 PR-1: derived SLA/aging (read-only; never stored on the alert row).
         result["sla"] = _monitoring_sla.derive(result)
+        # M2.1 PR-2: officer follow-up tracker (annotation ledger; never mutates
+        # the alert status). "open_count"/"next_due_at" are derived from these rows.
+        try:
+            result["followups"] = _monitoring_followups.list_for_alert(db, alert_id)
+            result["followups_summary"] = _monitoring_followups.open_summary(db, alert_id)
+        except Exception:
+            # Table may predate migration 038 on a legacy DB — degrade quietly.
+            result["followups"] = []
+            result["followups_summary"] = {"open_count": 0, "next_due_at": None}
         db.close()
         self.success(result)
 
@@ -32786,6 +32918,81 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
                 pass
             logger.exception("Monitoring review request action failed")
             return self.error("Review request action failed.", 500)
+        finally:
+            db.close()
+
+
+class MonitoringAlertFollowupHandler(BaseHandler):
+    """POST /api/monitoring/alerts/:id/followups — record an officer follow-up (M2.1 PR-2).
+
+    Additive annotation only — never mutates the alert status, calls no provider,
+    sends no email, runs no agent. Returns the refreshed follow-up list.
+    """
+    def post(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json() or {}
+        db = get_db()
+        try:
+            if not _monitoring_alert_get(db, alert_id):
+                return self.error("Alert not found", 404)
+            try:
+                followup = _monitoring_followups.add_followup(
+                    db, alert_id=alert_id,
+                    action=data.get("action") or "note",
+                    note=data.get("note"),
+                    due_at=data.get("due_at"),
+                    user=user, audit_writer=self.log_audit,
+                )
+            except _monitoring_followups.FollowupError as exc:
+                return self.error(str(exc), exc.status_code)
+            return self.success({
+                "status": "followup_added",
+                "followup": followup,
+                "followups": _monitoring_followups.list_for_alert(db, alert_id),
+                "followups_summary": _monitoring_followups.open_summary(db, alert_id),
+            })
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Monitoring follow-up add failed")
+            return self.error("Follow-up could not be recorded.", 500)
+        finally:
+            db.close()
+
+
+class MonitoringAlertFollowupResolveHandler(BaseHandler):
+    """POST /api/monitoring/alerts/:id/followups/:fid/resolve — close a follow-up (M2.1 PR-2)."""
+    def post(self, alert_id, followup_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        db = get_db()
+        try:
+            if not _monitoring_alert_get(db, alert_id):
+                return self.error("Alert not found", 404)
+            try:
+                _monitoring_followups.resolve_followup(
+                    db, followup_id=int(followup_id), alert_id=alert_id,
+                    user=user, audit_writer=self.log_audit,
+                )
+            except _monitoring_followups.FollowupError as exc:
+                return self.error(str(exc), exc.status_code)
+            return self.success({
+                "status": "followup_resolved",
+                "followups": _monitoring_followups.list_for_alert(db, alert_id),
+                "followups_summary": _monitoring_followups.open_summary(db, alert_id),
+            })
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Monitoring follow-up resolve failed")
+            return self.error("Follow-up could not be resolved.", 500)
         finally:
             db.close()
 
@@ -38726,6 +38933,8 @@ def make_app():
         (r"/api/monitoring/clients", MonitoringClientsHandler),
         # Alerts (more specific routes first)
         (r"/api/monitoring/alerts/([^/]+)/replacement-upload", MonitoringAlertDocumentReplacementUploadHandler),
+        (r"/api/monitoring/alerts/([^/]+)/followups/([0-9]+)/resolve", MonitoringAlertFollowupResolveHandler),
+        (r"/api/monitoring/alerts/([^/]+)/followups", MonitoringAlertFollowupHandler),
         (r"/api/monitoring/alerts/([^/]+)", MonitoringAlertDetailHandler),
         (r"/api/monitoring/alerts", MonitoringAlertCreateHandler),
         # Agents
