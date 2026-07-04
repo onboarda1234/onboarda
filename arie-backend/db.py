@@ -206,7 +206,14 @@ def acquire_scheduler_lock(name: str, dsn: str = None) -> SchedulerLockLease:
         return SchedulerLockLease(None, True)
     conn = None
     try:
-        conn = psycopg2.connect(dsn, sslmode="require", connect_timeout=10)
+        # TCP keepalives: the lock is only as strong as this session. If the
+        # socket died silently (RDS failover/partition), PG would release the
+        # lock server-side while the tick still runs — keepalives bound that
+        # window to ~60s instead of the OS default of hours.
+        conn = psycopg2.connect(
+            dsn, sslmode="require", connect_timeout=10,
+            keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
+        )
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(%s)", (key,))

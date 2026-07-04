@@ -217,3 +217,37 @@ def test_all_five_schedulers_are_decorated():
             f"{tick_fn} is not guarded by @_singleton_tick — it would run on "
             "every ECS task simultaneously (audit H9)"
         )
+
+
+def test_every_periodic_callback_registration_is_guarded():
+    """Structural guard: a SIXTH scheduler added without @_singleton_tick must
+    fail this test, not slip past a pinned five-name list (adversarial-review
+    finding). Every function handed to PeriodicCallback — and every *_tick
+    handed to call_later for an initial run — must be decorated."""
+    with open(os.path.join(BACKEND, "server.py"), encoding="utf-8") as fh:
+        src = fh.read()
+
+    import db as db_module
+
+    registered = re.findall(r"PeriodicCallback\(\s*(\w+)", src)
+    assert registered, "no PeriodicCallback registrations found"
+    assert len(registered) == len(db_module.SCHEDULER_LOCK_KEYS), (
+        f"{len(registered)} PeriodicCallback registrations but "
+        f"{len(db_module.SCHEDULER_LOCK_KEYS)} scheduler locks — a new "
+        "scheduler must get its own lock key and @_singleton_tick guard"
+    )
+
+    initial_runs = [
+        fn for fn in re.findall(r"call_later\(\s*[^,]+,\s*(\w+)", src)
+        if fn.endswith("_tick") or fn.endswith("_notification_tick")
+    ]
+
+    for fn_name in set(registered) | set(initial_runs):
+        m = re.search(rf"^(\s*)def {fn_name}\(", src, re.MULTILINE)
+        assert m, f"{fn_name} is registered as a scheduler but has no def in server.py"
+        before = src[: m.start()].rstrip().splitlines()[-1].strip()
+        assert before.startswith("@_singleton_tick("), (
+            f"{fn_name} is registered with PeriodicCallback/call_later but is "
+            "not guarded by @_singleton_tick — it would run on every ECS task "
+            "simultaneously (audit H9)"
+        )

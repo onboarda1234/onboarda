@@ -39310,6 +39310,13 @@ def _singleton_tick(name):
     named PostgreSQL advisory lock (db.acquire_scheduler_lock, dedicated
     non-pooled connection); if another task already holds it, this tick is
     skipped. Without PostgreSQL (dev/test) the lease is always granted.
+
+    SEMANTICS — mutual exclusion, NOT once-per-interval: tasks whose timers
+    fire at different moments each acquire the then-free lock and run,
+    serialized. What this guard eliminates is the CONCURRENT read-before-mark
+    race (the H9 duplicate-notification mechanism). Jobs must therefore stay
+    idempotent / mark their own per-row state — all five do today — and any
+    future tick added under this guard must too.
     """
     def decorate(fn):
         import functools
