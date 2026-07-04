@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional, Union
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from .enums import NameType, ScreeningStatus
 from .primitives import CADateOfBirth, CAPaginatedCollection, CAWireModel
@@ -15,9 +15,29 @@ class CAAdditionalField(CAWireModel):
     value: Optional[str] = None
 
 
+def _coerce_name_type(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, NameType):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text.upper().replace("-", "_").replace(" ", "_")
+    try:
+        return NameType(normalized)
+    except ValueError:
+        return None
+
+
 class CAName(CAWireModel):
     name: str
     type: Optional[NameType] = None
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def tolerate_provider_name_type(cls, value):
+        return _coerce_name_type(value)
 
 
 class CARelationship(CAWireModel):
@@ -34,6 +54,11 @@ class CAPosition(CAWireModel):
 class CAProfileCompanyName(CAWireModel):
     name: str
     type: Optional[NameType] = None
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def tolerate_provider_name_type(cls, value):
+        return _coerce_name_type(value)
 
 
 class CAProfileCompanyLocation(CAWireModel):
