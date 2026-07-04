@@ -3944,14 +3944,22 @@ class AdminResetDBHandler(BaseHandler):
             db.commit()
             # Re-seed directly (don't use init_db which may skip if schema exists)
             from db import seed_initial_data
+            from boot_lock import acquire_boot_migration_lock
+            # B3: the admin reset re-seed mutates the same tables the boot
+            # phase does — take the same cross-task lock so a rolling deploy
+            # cannot race a staging reset.
+            _reset_lease = acquire_boot_migration_lock(timeout_seconds=60)
             try:
-                seed_initial_data(db)
-                logger.info("Database re-seeded successfully after reset")
-            except Exception as seed_err:
-                logger.error(f"Re-seed failed: {seed_err}", exc_info=True)
-                db.close()
-                self.error(f"Wipe succeeded but re-seed failed: {str(seed_err)}", 500)
-                return
+                try:
+                    seed_initial_data(db)
+                    logger.info("Database re-seeded successfully after reset")
+                except Exception as seed_err:
+                    logger.error(f"Re-seed failed: {seed_err}", exc_info=True)
+                    db.close()
+                    self.error(f"Wipe succeeded but re-seed failed: {str(seed_err)}", 500)
+                    return
+            finally:
+                _reset_lease.release()
             db.close()
             self.log_audit(user, "Admin Reset", "Database", "Staging database reset and re-seeded")
             self.success({"status": "reset_complete", "message": "Database wiped and re-seeded"})
@@ -39308,6 +39316,18 @@ if __name__ == "__main__":
     validate_environment()
     logger.info("startup: completed validate_environment (+%s)", _elapsed())
 
+    # B3 / PC-3: serialize the boot mutation phase (init_db → seeds →
+    # migrations) across ECS tasks. A rolling deploy boots 2+ tasks
+    # concurrently; unserialized they race CREATE/ALTER/seed inserts
+    # (schema_version UNIQUE violations). On timeout/failure the acquire
+    # RAISES and startup halts — never proceeds unlocked. Process exit,
+    # including a crash mid-migration, releases the lock via disconnect,
+    # so the failure paths need no explicit release.
+    from boot_lock import acquire_boot_migration_lock
+    logger.info("startup: acquiring boot-migration lock (+%s)", _elapsed())
+    _boot_lock_lease = acquire_boot_migration_lock()
+    logger.info("startup: boot-migration lock acquired (+%s)", _elapsed())
+
     logger.info("startup: entering init_db (+%s)", _elapsed())
     init_db()
     logger.info("startup: completed init_db (+%s)", _elapsed())
@@ -39343,6 +39363,10 @@ if __name__ == "__main__":
             )
             raise
     logger.info("startup: completed run_all_migrations (+%s)", _elapsed())
+
+    # End of the schema mutation phase — later tasks may now proceed.
+    _boot_lock_lease.release()
+    logger.info("startup: boot-migration lock released (+%s)", _elapsed())
 
     # Initialize supervisor framework
     if SUPERVISOR_AVAILABLE:

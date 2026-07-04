@@ -51,13 +51,16 @@ internally-consistent chain). This is honestly documented in the verifier
 docstring. Closing it requires a persisted/sealed external anchor (head hash +
 entry count) — the same anchoring as PC-1 option 2. Not required for a pilot.
 
-### PC-3 — Multi-task migration & boot concurrency (B3, out of scope of this PR)
-Migrations and boot-time schema mutation run per ECS task with no cross-task
+### PC-3 — Multi-task migration & boot concurrency (B3) — **CLOSED by PR-11**
+~~Migrations and boot-time schema mutation run per ECS task with no cross-task
 advisory lock, so a rolling deploy that boots ≥2 tasks concurrently can race
-(`schema_version` UNIQUE violation / concurrent `ALTER`). The supervisor-chain
-*append* fork race is closed in this PR (advisory lock + unique index), but the
-**migration-runner** singleton-safety is a separate B3 item and must be closed
-before multi-task production deploys.
+(`schema_version` UNIQUE violation / concurrent `ALTER`).~~ Closed: PR-11
+serializes the whole boot mutation phase (init_db → seeds → migrations) and
+the admin-reset re-seed under a bounded-wait PostgreSQL advisory lock
+(`boot_lock.py`, key 8674309941) held on a dedicated connection; timeout
+fails startup loudly instead of racing, and process exit (including crash)
+releases the lock via disconnect. The supervisor-chain *append* fork race was
+already closed in PR #661 (advisory lock + unique index).
 
 ### PC-4 — The two drafts must not be wired without their follow-ups
 - **H2 erasure (`gdpr_erasure.py`)** — off, unwired, `dry_run=True` default.
