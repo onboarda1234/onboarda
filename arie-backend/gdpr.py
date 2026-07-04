@@ -15,6 +15,80 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("arie")
 
+DSAR_ERASURE_OUTCOME_RESPONSE_COMPLETED_NO_EXECUTION = "response_completed_no_erasure_executed"
+DSAR_ERASURE_OUTCOME_RETAINED_LEGAL = "retained_under_legal_obligation"
+DSAR_ERASURE_OUTCOME_PARTIAL = "partially_erased"
+
+
+def _truthy_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+
+
+def _parse_retained_categories(value: Any) -> Any:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (list, dict)):
+        return value
+    try:
+        return json.loads(str(value))
+    except (TypeError, ValueError):
+        return value
+
+
+def format_dsar_for_response(row: Optional[Dict]) -> Optional[Dict]:
+    """Return a DSAR API payload with legally honest erasure status wording."""
+    if row is None:
+        return None
+
+    payload = dict(row)
+    request_type = str(payload.get("request_type") or "").lower()
+    status = str(payload.get("status") or "").lower()
+    erasure_executed = _truthy_bool(payload.get("erasure_executed"))
+    retention_outcome = payload.get("retention_outcome")
+    if retention_outcome == DSAR_ERASURE_OUTCOME_PARTIAL and not erasure_executed:
+        retention_outcome = "partial_retention_outcome_unverified"
+        payload["retention_outcome"] = retention_outcome
+
+    payload["erasure_executed"] = erasure_executed
+    payload["retained_categories"] = _parse_retained_categories(payload.get("retained_categories"))
+
+    if request_type == "erasure":
+        if erasure_executed:
+            status_label = "Erasure executed"
+            status_detail = "The erasure executor has recorded an erasure action for this request."
+        elif retention_outcome == DSAR_ERASURE_OUTCOME_RETAINED_LEGAL:
+            status_label = "Request response completed; data retained under legal obligation"
+            status_detail = "The response workflow is complete. Records remain retained under AML/legal retention."
+        elif retention_outcome == DSAR_ERASURE_OUTCOME_PARTIAL:
+            status_label = "Request response completed; partial retention outcome recorded"
+            status_detail = "The response workflow is complete. Regulated categories remain retained as recorded."
+        elif status == "completed":
+            status_label = "Request response completed; erasure not executed"
+            status_detail = "The response workflow is complete. No erasure executor ran in this workflow."
+        elif status == "rejected":
+            status_label = "Request rejected"
+            status_detail = "The erasure request was rejected; no erasure executor ran in this workflow."
+        else:
+            status_label = "Request pending review"
+            status_detail = "The erasure request is still in the response workflow. No erasure executor has run."
+    elif status == "completed":
+        status_label = "Request response completed"
+        status_detail = "The response workflow is complete."
+    elif status == "rejected":
+        status_label = "Request rejected"
+        status_detail = "The request was rejected."
+    else:
+        status_label = "Request pending review"
+        status_detail = "The request is still in the response workflow."
+
+    payload["status_label"] = status_label
+    payload["status_detail"] = status_detail
+    return payload
+
 
 # ══════════════════════════════════════════════════════════
 # RETENTION POLICY QUERIES
@@ -300,7 +374,11 @@ def create_dsar(
     ).fetchone()
 
     logger.info("DSAR created: type=%s, email=%s, due=%s", request_type, requester_email, due_at)
-    return dict(row) if row else {"status": "created", "due_at": due_at}
+    return format_dsar_for_response(dict(row)) if row else {
+        "status": "created",
+        "due_at": due_at,
+        "erasure_executed": False,
+    }
 
 
 def get_pending_dsars(db) -> List[Dict]:
@@ -308,7 +386,7 @@ def get_pending_dsars(db) -> List[Dict]:
     rows = db.execute(
         "SELECT * FROM data_subject_requests WHERE status IN ('pending', 'in_progress') ORDER BY due_at ASC"
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [format_dsar_for_response(dict(r)) for r in rows]
 
 
 def complete_dsar(
@@ -322,11 +400,63 @@ def complete_dsar(
     if new_status not in ("completed", "rejected"):
         return {"error": "Status must be 'completed' or 'rejected'"}
 
+    existing = db.execute(
+        "SELECT * FROM data_subject_requests WHERE id = ?",
+        (dsar_id,),
+    ).fetchone()
+    if not existing:
+        return {"error": f"DSAR {dsar_id} not found"}
+    existing = dict(existing)
+    request_type = str(existing.get("request_type") or "").lower()
+    erasure_executed = _truthy_bool(existing.get("erasure_executed"))
+    retention_outcome = existing.get("retention_outcome")
+    erasure_notes = existing.get("erasure_notes")
+
+    if (
+        new_status == "completed"
+        and request_type == "erasure"
+        and not erasure_executed
+        and not retention_outcome
+    ):
+        retention_outcome = DSAR_ERASURE_OUTCOME_RESPONSE_COMPLETED_NO_EXECUTION
+    if new_status == "completed" and request_type == "erasure" and not erasure_executed and not erasure_notes:
+        erasure_notes = (
+            "Response workflow completed. No erasure executor ran; underlying "
+            "records may remain subject to AML/legal retention."
+        )
+
     db.execute(
-        "UPDATE data_subject_requests SET status = ?, handled_by = ?, response_notes = ?, completed_at = ? WHERE id = ?",
-        (new_status, handled_by, response_notes, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"), dsar_id)
+        """
+        UPDATE data_subject_requests
+           SET status = ?,
+               handled_by = ?,
+               response_notes = ?,
+               completed_at = ?,
+               erasure_executed = COALESCE(erasure_executed, FALSE),
+               retention_outcome = ?,
+               erasure_notes = ?
+         WHERE id = ?
+        """,
+        (
+            new_status,
+            handled_by,
+            response_notes,
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            retention_outcome,
+            erasure_notes,
+            dsar_id,
+        )
     )
     db.commit()
 
+    row = db.execute(
+        "SELECT * FROM data_subject_requests WHERE id = ?",
+        (dsar_id,),
+    ).fetchone()
     logger.info("DSAR %d marked as %s by %s", dsar_id, new_status, handled_by)
-    return {"id": dsar_id, "status": new_status, "handled_by": handled_by}
+    return format_dsar_for_response(dict(row)) if row else {
+        "id": dsar_id,
+        "status": new_status,
+        "handled_by": handled_by,
+        "erasure_executed": False,
+    }

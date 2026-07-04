@@ -8,6 +8,7 @@ import json
 import sqlite3
 import logging
 import hashlib
+import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any, Optional, Dict, List, Tuple
@@ -43,7 +44,19 @@ FILE_MIGRATIONS_REQUIRING_RUNNER = frozenset({
     # databases. Like 020 it is not represented by init_db DDL, so it must run
     # through the file runner rather than being pre-marked "covered by init_db".
     "039",
+    # Migration 040 adds DSAR erasure-truth columns to existing databases. Fresh
+    # installs already get the columns from init_db DDL; long-lived databases
+    # must still run the file migration instead of treating it as covered.
+    "040",
 })
+
+DSAR_ERASURE_TRUTH_COLUMNS = (
+    "erasure_executed",
+    "retention_outcome",
+    "retained_until",
+    "retained_categories",
+    "erasure_notes",
+)
 
 _PR_CR1R_MANUAL_DEFAULTS_MARKER_KEY = "pr_cr1r_manual_defaults"
 _PEP_PROVIDER_DETECTION_REPAIR_MARKER_KEY = "pr_pep_provider_detection_separation"
@@ -254,8 +267,48 @@ class DBConnection:
         if self.is_postgres:
             cursor = self._cursor_or_create()
             cursor.execute(self._translate_query(sql))
+        elif "ADD COLUMN IF NOT EXISTS" in self._strip_sql_line_comments(sql).upper():
+            self._execute_sqlite_script_with_add_column_if_not_exists(sql)
         else:
             self.conn.executescript(sql)
+
+    @staticmethod
+    def _strip_sql_line_comments(sql: str) -> str:
+        return "\n".join(
+            line for line in sql.splitlines()
+            if not line.strip().startswith("--")
+        )
+
+    def _execute_sqlite_script_with_add_column_if_not_exists(self, sql: str) -> None:
+        """Execute scripts using ALTER TABLE ADD COLUMN IF NOT EXISTS on SQLite.
+
+        SQLite does not support that syntax, but file migrations need an
+        idempotent way to be safe after init_db-created schemas. This shim only
+        handles the exact additive ALTER pattern; all other statements execute
+        normally after stripping leading SQL line comments.
+        """
+        cursor = self._cursor_or_create()
+        pattern = re.compile(
+            r"^ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+"
+            r"IF\s+NOT\s+EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$",
+            re.IGNORECASE | re.DOTALL,
+        )
+        for raw_statement in self._strip_sql_line_comments(sql).split(";"):
+            statement = raw_statement.strip()
+            if not statement:
+                continue
+            match = pattern.match(statement)
+            if match:
+                table, column, definition = match.groups()
+                columns = {
+                    str(row["name"]).lower()
+                    for row in cursor.execute(f"PRAGMA table_info({table})").fetchall()
+                }
+                if column.lower() in columns:
+                    continue
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition.strip()}")
+                continue
+            cursor.execute(statement)
 
     def fetchone(self):
         """Fetch single row. Returns sqlite3.Row (SQLite) or dict (PostgreSQL)."""
@@ -1436,6 +1489,11 @@ def _get_postgres_schema() -> str:
         status TEXT DEFAULT 'pending' CHECK(status IN ('pending','in_progress','completed','rejected','expired')),
         description TEXT,
         response_notes TEXT,
+        erasure_executed BOOLEAN NOT NULL DEFAULT false,
+        retention_outcome TEXT,
+        retained_until TEXT,
+        retained_categories TEXT,
+        erasure_notes TEXT,
         handled_by TEXT REFERENCES users(id),
         received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         due_at TIMESTAMP,
@@ -2624,6 +2682,11 @@ def _get_sqlite_schema() -> str:
         status TEXT DEFAULT 'pending' CHECK(status IN ('pending','in_progress','completed','rejected','expired')),
         description TEXT,
         response_notes TEXT,
+        erasure_executed INTEGER NOT NULL DEFAULT 0,
+        retention_outcome TEXT,
+        retained_until TEXT,
+        retained_categories TEXT,
+        erasure_notes TEXT,
         handled_by TEXT REFERENCES users(id),
         received_at TEXT DEFAULT (datetime('now')),
         due_at TEXT,
@@ -2982,6 +3045,18 @@ def _mark_known_migrations_as_applied(db: DBConnection):
             continue
         version = parts[1]
         if version in FILE_MIGRATIONS_REQUIRING_RUNNER:
+            if version == "040" and _dsar_erasure_truth_columns_present(db):
+                existing = db.execute(
+                    "SELECT 1 FROM schema_version WHERE version = ?",
+                    (version,),
+                ).fetchone()
+                if existing is None:
+                    db.execute(
+                        "INSERT INTO schema_version (version, filename, description, checksum) "
+                        "VALUES (?, ?, ?, ?)",
+                        (version, path.name, "covered by init_db", "init_db"),
+                    )
+                continue
             # Repair prior deploys that incorrectly pre-marked a data migration
             # as "covered by init_db". A genuinely applied file migration has
             # its file checksum, so it is left untouched.
@@ -3004,6 +3079,17 @@ def _mark_known_migrations_as_applied(db: DBConnection):
             (version, path.name, "covered by init_db", "init_db"),
         )
     db.commit()
+
+
+def _dsar_erasure_truth_columns_present(db: DBConnection) -> bool:
+    """Return whether data_subject_requests already carries H2A truth columns."""
+    try:
+        return all(
+            _safe_column_exists(db, "data_subject_requests", column)
+            for column in DSAR_ERASURE_TRUTH_COLUMNS
+        )
+    except Exception:
+        return False
 
 
 def _ensure_default_compliance_resources(db: DBConnection):
