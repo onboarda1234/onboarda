@@ -275,6 +275,10 @@ class TestDSAR:
         assert result["retained_until"] == "2033-01-01"
         assert result["retained_categories"] == ["client_pii", "kyc_documents"]
         assert result["status_label"] == "Request response completed; data retained under legal obligation"
+        assert "retained" in result["status_detail"].lower()
+        assert "retained" in result["erasure_notes"].lower()
+        for forbidden in ("erased", "deleted", "forgotten"):
+            assert forbidden not in result["erasure_notes"].lower()
 
     def test_response_copy_uses_removal_terms_only_after_execution(self):
         """API-facing DSAR copy must not say erased/deleted/forgotten unless execution is true."""
@@ -300,6 +304,19 @@ class TestDSAR:
             "erasure_executed": True,
         })
         assert "Erasure executed" in executed["status_label"]
+
+        partial = format_dsar_for_response({
+            "id": 4,
+            "request_type": "erasure",
+            "status": "completed",
+            "erasure_executed": True,
+            "retention_outcome": "partially_erased",
+            "retained_categories": json.dumps(["kyc_documents"]),
+        })
+        assert partial["retention_outcome"] == "partially_erased"
+        assert partial["retained_categories"] == ["kyc_documents"]
+        assert partial["status_label"] == "Partial erasure recorded; regulated data retained"
+        assert "Regulated categories remain retained" in partial["status_detail"]
 
         inconsistent = format_dsar_for_response({
             "id": 3,
@@ -402,6 +419,18 @@ class TestDSAR:
             assert marker["checksum"] != "init_db"
         finally:
             wrapped.close()
+
+    def test_sqlite_add_column_shim_splits_quoted_semicolons(self):
+        """SQLite migration shim must not split inside SQL string literals."""
+        from db import DBConnection
+
+        assert DBConnection._split_sql_statements(
+            "SELECT 'alpha;beta'; SELECT \"gamma;delta\"; SELECT 'it''s;ok';"
+        ) == [
+            "SELECT 'alpha;beta'",
+            'SELECT "gamma;delta"',
+            "SELECT 'it''s;ok'",
+        ]
 
 
 # ═══════════════════════════════════════════════════════════

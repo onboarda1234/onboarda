@@ -57,15 +57,15 @@ def format_dsar_for_response(row: Optional[Dict]) -> Optional[Dict]:
     payload["retained_categories"] = _parse_retained_categories(payload.get("retained_categories"))
 
     if request_type == "erasure":
-        if erasure_executed:
+        if retention_outcome == DSAR_ERASURE_OUTCOME_PARTIAL and erasure_executed:
+            status_label = "Partial erasure recorded; regulated data retained"
+            status_detail = "The erasure executor recorded a partial outcome. Regulated categories remain retained as recorded."
+        elif erasure_executed:
             status_label = "Erasure executed"
             status_detail = "The erasure executor has recorded an erasure action for this request."
         elif retention_outcome == DSAR_ERASURE_OUTCOME_RETAINED_LEGAL:
             status_label = "Request response completed; data retained under legal obligation"
             status_detail = "The response workflow is complete. Records remain retained under AML/legal retention."
-        elif retention_outcome == DSAR_ERASURE_OUTCOME_PARTIAL:
-            status_label = "Request response completed; partial retention outcome recorded"
-            status_detail = "The response workflow is complete. Regulated categories remain retained as recorded."
         elif status == "completed":
             status_label = "Request response completed; erasure not executed"
             status_detail = "The response workflow is complete. No erasure executor ran in this workflow."
@@ -406,24 +406,14 @@ def complete_dsar(
     ).fetchone()
     if not existing:
         return {"error": f"DSAR {dsar_id} not found"}
-    existing = dict(existing)
-    request_type = str(existing.get("request_type") or "").lower()
-    erasure_executed = _truthy_bool(existing.get("erasure_executed"))
-    retention_outcome = existing.get("retention_outcome")
-    erasure_notes = existing.get("erasure_notes")
-
-    if (
-        new_status == "completed"
-        and request_type == "erasure"
-        and not erasure_executed
-        and not retention_outcome
-    ):
-        retention_outcome = DSAR_ERASURE_OUTCOME_RESPONSE_COMPLETED_NO_EXECUTION
-    if new_status == "completed" and request_type == "erasure" and not erasure_executed and not erasure_notes:
-        erasure_notes = (
-            "Response workflow completed. No erasure executor ran; underlying "
-            "records may remain subject to AML/legal retention."
-        )
+    no_execution_notes = (
+        "Response workflow completed. No erasure executor ran; underlying "
+        "records may remain subject to AML/legal retention."
+    )
+    legal_retention_notes = (
+        "Response workflow completed. Records remain retained under "
+        "AML/legal retention."
+    )
 
     db.execute(
         """
@@ -433,8 +423,28 @@ def complete_dsar(
                response_notes = ?,
                completed_at = ?,
                erasure_executed = COALESCE(erasure_executed, FALSE),
-               retention_outcome = ?,
-               erasure_notes = ?
+               retention_outcome = CASE
+                   WHEN request_type = 'erasure'
+                    AND ? = 'completed'
+                    AND COALESCE(erasure_executed, FALSE) = FALSE
+                    AND retention_outcome IS NULL
+                   THEN ?
+                   ELSE retention_outcome
+               END,
+               erasure_notes = CASE
+                   WHEN request_type = 'erasure'
+                    AND ? = 'completed'
+                    AND COALESCE(erasure_executed, FALSE) = FALSE
+                    AND erasure_notes IS NULL
+                    AND retention_outcome = ?
+                   THEN ?
+                   WHEN request_type = 'erasure'
+                    AND ? = 'completed'
+                    AND COALESCE(erasure_executed, FALSE) = FALSE
+                    AND erasure_notes IS NULL
+                   THEN ?
+                   ELSE erasure_notes
+               END
          WHERE id = ?
         """,
         (
@@ -442,8 +452,13 @@ def complete_dsar(
             handled_by,
             response_notes,
             datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
-            retention_outcome,
-            erasure_notes,
+            new_status,
+            DSAR_ERASURE_OUTCOME_RESPONSE_COMPLETED_NO_EXECUTION,
+            new_status,
+            DSAR_ERASURE_OUTCOME_RETAINED_LEGAL,
+            legal_retention_notes,
+            new_status,
+            no_execution_notes,
             dsar_id,
         )
     )

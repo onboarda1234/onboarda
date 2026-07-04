@@ -279,6 +279,49 @@ class DBConnection:
             if not line.strip().startswith("--")
         )
 
+    @staticmethod
+    def _split_sql_statements(sql: str) -> List[str]:
+        statements: List[str] = []
+        current: List[str] = []
+        in_single_quote = False
+        in_double_quote = False
+        i = 0
+        while i < len(sql):
+            char = sql[i]
+            current.append(char)
+
+            if in_single_quote:
+                if char == "'" and i + 1 < len(sql) and sql[i + 1] == "'":
+                    current.append(sql[i + 1])
+                    i += 2
+                    continue
+                if char == "'":
+                    in_single_quote = False
+            elif in_double_quote:
+                if char == '"' and i + 1 < len(sql) and sql[i + 1] == '"':
+                    current.append(sql[i + 1])
+                    i += 2
+                    continue
+                if char == '"':
+                    in_double_quote = False
+            elif char == "'":
+                in_single_quote = True
+            elif char == '"':
+                in_double_quote = True
+            elif char == ";":
+                current.pop()
+                statement = "".join(current).strip()
+                if statement:
+                    statements.append(statement)
+                current = []
+
+            i += 1
+
+        statement = "".join(current).strip()
+        if statement:
+            statements.append(statement)
+        return statements
+
     def _execute_sqlite_script_with_add_column_if_not_exists(self, sql: str) -> None:
         """Execute scripts using ALTER TABLE ADD COLUMN IF NOT EXISTS on SQLite.
 
@@ -293,10 +336,7 @@ class DBConnection:
             r"IF\s+NOT\s+EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$",
             re.IGNORECASE | re.DOTALL,
         )
-        for raw_statement in self._strip_sql_line_comments(sql).split(";"):
-            statement = raw_statement.strip()
-            if not statement:
-                continue
+        for statement in self._split_sql_statements(self._strip_sql_line_comments(sql)):
             match = pattern.match(statement)
             if match:
                 table, column, definition = match.groups()
