@@ -154,6 +154,81 @@ def close_pg_pool():
 
 
 # ============================================================================
+# Cross-task singleton scheduler locks (audit H9 / PR-14)
+# ============================================================================
+# Every ECS task runs the same Tornado PeriodicCallbacks, so before this fix
+# every scheduled job (GDPR purge, monitoring automation, document health,
+# memo recovery, PRS-6 notifications) executed once PER TASK per interval —
+# duplicate purges and duplicate client notifications with 2+ tasks. Each
+# tick now first takes a PostgreSQL session advisory lock on a DEDICATED
+# (non-pooled) connection; whoever gets it runs, everyone else skips that
+# tick. A dedicated connection makes release unconditional: closing it —
+# including via process crash — releases the lock. Pooled connections are
+# deliberately NOT used: session advisory locks survive putconn and would
+# leak to the next borrower.
+
+SCHEDULER_LOCK_KEYS = {
+    "gdpr_purge": 8674309931,
+    "monitoring_automation": 8674309932,
+    "document_health": 8674309933,
+    "memo_recovery": 8674309934,
+    "prs6_notifications": 8674309935,
+}
+
+
+class SchedulerLockLease:
+    """Holds (or reports failure to hold) one scheduler advisory lock."""
+
+    def __init__(self, conn, acquired):
+        self._conn = conn
+        self.acquired = acquired
+
+    def release(self):
+        if self._conn is not None:
+            try:
+                self._conn.close()  # disconnecting releases the session lock
+            except Exception:
+                pass
+            self._conn = None
+
+
+def acquire_scheduler_lock(name: str, dsn: str = None) -> SchedulerLockLease:
+    """Try to become the cross-task singleton runner for a scheduled tick.
+
+    Returns a SchedulerLockLease; ``acquired`` False means another task holds
+    the lock (or the lock service was unreachable) and this tick must be
+    skipped. Without PostgreSQL (single-process dev/test) the lease is always
+    acquired, with no connection held.
+    """
+    key = SCHEDULER_LOCK_KEYS[name]  # unknown name = programming error, loud
+    dsn = dsn or (DATABASE_URL if USE_POSTGRESQL else None)
+    if not dsn:
+        return SchedulerLockLease(None, True)
+    conn = None
+    try:
+        conn = psycopg2.connect(dsn, sslmode="require", connect_timeout=10)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (key,))
+            acquired = bool(cur.fetchone()[0])
+        if not acquired:
+            conn.close()
+            return SchedulerLockLease(None, False)
+        return SchedulerLockLease(conn, True)
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        # Skip rather than run unlocked: if the lock connection failed, the
+        # database is almost certainly unreachable and the tick would fail
+        # anyway — and running unlocked reintroduces the duplicate-run bug.
+        logger.error(f"scheduler-lock '{name}': acquisition failed — skipping this tick: {e}")
+        return SchedulerLockLease(None, False)
+
+
+# ============================================================================
 # Connection Wrapper Classes
 # ============================================================================
 
