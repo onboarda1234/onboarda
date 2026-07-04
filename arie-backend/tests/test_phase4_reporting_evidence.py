@@ -214,7 +214,11 @@ class _Phase4ReportingHTTPBase(AsyncHTTPTestCase):
         return {"Authorization": f"Bearer {token}"}
 
     def _seed_apps(self, db):
-        suffix = uuid.uuid4().hex[:8]
+        # Digits-only random fragment: uuid hex fragments can legitimately
+        # contain "e2e" (all hex digits), which matches the production fixture
+        # filter's %e2e% ref pattern and silently drops the row from report
+        # scope — the source of the assert 4 == 5 flake (PR-32).
+        suffix = f"{uuid.uuid4().int % 10**8:08d}"
         self.report_ref_1 = f"P4-RPT-{suffix}-001"
         self.report_ref_2 = f"P4-RPT-{suffix}-002"
         self.report_ref_3 = f"P4-RPT-{suffix}-003"
@@ -258,7 +262,7 @@ class _Phase4ReportingHTTPBase(AsyncHTTPTestCase):
                 """,
                 (
                     app_id,
-                    f"PR14-RPT-{uuid.uuid4().hex[:8]}",
+                    f"PR14-RPT-{uuid.uuid4().int % 10**8:08d}",
                     f"PR14 Reconcile {index} Ltd",
                     "approved",
                     "MEDIUM",
@@ -413,7 +417,7 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
                 """,
                 (
                     f"phase4-report-reconcile-{suffix}-{uuid.uuid4().hex[:8]}",
-                    f"P4-RPT-RECON-{suffix}-{uuid.uuid4().hex[:8]}",
+                    f"P4-RPT-RECON-{suffix}-{uuid.uuid4().int % 10**8:08d}",
                     f"Phase Four Reconcile {suffix.title()} Ltd",
                     status,
                     "LOW",
