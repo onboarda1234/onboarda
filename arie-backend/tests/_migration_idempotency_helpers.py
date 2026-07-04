@@ -55,7 +55,10 @@ import sys
 # Make arie-backend importable regardless of pytest's cwd.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-FRESH_INIT_PENDING_DATA_MIGRATIONS = 1
+# Data migrations that init_db does NOT represent in its DDL and that therefore
+# run through the file runner on a fresh install: 020 (historical fixture
+# backfill) and 039 (audit finding B1 — flip session_tokens auto_purge).
+FRESH_INIT_PENDING_DATA_MIGRATIONS = 2
 
 
 @contextlib.contextmanager

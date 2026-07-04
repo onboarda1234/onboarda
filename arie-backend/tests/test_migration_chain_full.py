@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests._migration_idempotency_helpers import fresh_migration_db
 
-_FILE_RUNNER_DATA_MIGRATIONS = {"020"}
+_FILE_RUNNER_DATA_MIGRATIONS = {"020", "039"}
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations" / "scripts"
 
 

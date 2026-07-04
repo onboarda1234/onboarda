@@ -7,6 +7,7 @@ import hashlib
 import html
 import io
 import json
+import logging
 import os
 import re
 import zipfile
@@ -16,6 +17,8 @@ from typing import Any
 
 from config import UPLOAD_DIR
 from memo_governance import latest_compliance_memo_row, memo_selection_metadata
+
+logger = logging.getLogger("arie")
 
 try:
     import weasyprint
@@ -635,16 +638,54 @@ def _load_case(db, app: dict[str, Any]) -> dict[str, Any]:
         (app_id,),
     )
     memo = _row_dict(latest_compliance_memo_row(db, app_id))
+
+    # Audit trail (H4): widen the target match beyond the two `ref` shapes so
+    # events keyed by the application id are not silently dropped, and raise the
+    # ceiling far above the old hard LIMIT 5000 (which kept only the OLDEST 5000
+    # rows and dropped the most recent). Truncation, if it ever occurs, is
+    # recorded explicitly rather than hidden.
+    audit_targets = [app["ref"], f"application:{app['ref']}"]
+    if app_id not in (None, ""):
+        audit_targets += [str(app_id), f"application:{app_id}"]
+    _seen: set = set()
+    audit_targets = [t for t in audit_targets if not (t in _seen or _seen.add(t))]
+    _placeholders = ", ".join("?" for _ in audit_targets)
+    AUDIT_CEILING = 50000
     audit = _rows(
         db,
-        """
+        f"""
         SELECT * FROM audit_log
-        WHERE target IN (?, ?)
+        WHERE target IN ({_placeholders})
         ORDER BY timestamp ASC, id ASC
-        LIMIT 5000
+        LIMIT ?
         """,
-        (app["ref"], f"application:{app['ref']}"),
+        (*audit_targets, AUDIT_CEILING + 1),
     )
+    audit_truncated = len(audit) > AUDIT_CEILING
+    if audit_truncated:
+        audit = audit[:AUDIT_CEILING]
+
+    # Supervisor tamper-evident chain (H4): a regulator must be able to verify
+    # the decision hash-chain from the pack itself. Include this application's
+    # supervisor_audit_log rows (with their hash columns) plus a full-chain
+    # verification attestation. Failures degrade gracefully — the pack must
+    # still export — but are recorded so the omission is never silent.
+    try:
+        supervisor_audit = _rows(
+            db,
+            "SELECT * FROM supervisor_audit_log WHERE application_id = ? ORDER BY timestamp ASC, id ASC",
+            (app_id,),
+        ) if app_id not in (None, "") else []
+    except Exception as exc:  # table absent / query error — never crash the pack
+        supervisor_audit = []
+        logger.warning("evidence pack: supervisor_audit_log unavailable: %s", exc)
+
+    try:
+        from supervisor.audit import AuditLogger
+        chain_verification = AuditLogger().verify_chain_integrity()
+    except Exception as exc:
+        chain_verification = {"verified": None, "reason": f"verification unavailable: {exc}"}
+
     return {
         "application": app,
         "prescreening": prescreening if isinstance(prescreening, dict) else {},
@@ -658,6 +699,9 @@ def _load_case(db, app: dict[str, Any]) -> dict[str, Any]:
         "screening_reviews": screening_reviews,
         "memo": memo,
         "audit": audit,
+        "audit_truncated": audit_truncated,
+        "supervisor_audit": supervisor_audit,
+        "supervisor_chain_verification": chain_verification,
     }
 
 
@@ -908,6 +952,67 @@ def render_audit_trail_csv(case: dict[str, Any], redaction_level: str) -> bytes:
     return output.getvalue().encode("utf-8")
 
 
+def render_supervisor_audit_chain_csv(case: dict[str, Any], redaction_level: str) -> bytes:
+    """Render this application's tamper-evident supervisor audit chain (H4).
+
+    Independent verifiability: at ``full_internal`` redaction each row includes a
+    ``canonical_hash_payload`` column — the exact JSON that was SHA-256'd to
+    produce ``entry_hash`` — so a third party can recompute
+    ``sha256(canonical_hash_payload) == entry_hash`` and walk
+    ``previous_hash -> entry_hash`` without trusting this system. The full payload
+    is withheld at ``external_redacted`` because it embeds the un-redacted record
+    fields; at that level the pack still carries the hashes and the system's
+    verification attestation, and points to the full-internal pack for
+    independent recomputation.
+    """
+    from supervisor.audit import supervisor_hash_payload
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    verification = case.get("supervisor_chain_verification") or {}
+    full = redaction_level == "full_internal"
+    writer.writerow(["# supervisor_audit_chain"])
+    writer.writerow(["# hash_algorithm", "sha256(canonical_hash_payload) == entry_hash; hash_version=2"])
+    writer.writerow(["# independently_recomputable", "yes" if full else "no (full_internal pack required — payload withheld under redaction)"])
+    writer.writerow(["# chain_verified", verification.get("verified")])
+    writer.writerow(["# entries_checked", verification.get("entries_checked", "")])
+    writer.writerow(["# total_entries", verification.get("total_entries", "")])
+    writer.writerow(["# broken_link_count", len(verification.get("broken_links", []) or [])])
+    if verification.get("reason"):
+        writer.writerow(["# note", verification.get("reason")])
+    writer.writerow([])
+
+    header = [
+        "timestamp", "event_type", "severity", "actor_id", "actor_role",
+        "action", "detail", "previous_hash", "entry_hash",
+    ]
+    if full:
+        header.append("canonical_hash_payload")
+    writer.writerow(header)
+
+    for row in case.get("supervisor_audit", []) or []:
+        detail = row.get("detail") or ""
+        if not full:
+            detail = _summarize(detail, 200)
+        record = [
+            row.get("timestamp"),
+            row.get("event_type"),
+            row.get("severity"),
+            row.get("actor_id"),
+            row.get("actor_role"),
+            row.get("action"),
+            detail,
+            row.get("previous_hash"),
+            row.get("entry_hash"),
+        ]
+        if full:
+            payload = supervisor_hash_payload(row, row.get("previous_hash"))
+            record.append(json.dumps(payload, sort_keys=True))
+        writer.writerow(record)
+    return output.getvalue().encode("utf-8")
+
+
 def _resolve_upload_document_path(stored_path: str | None) -> str | None:
     if not stored_path:
         return None
@@ -1004,6 +1109,25 @@ def _manifest_pdf(
         ("Included sections", ", ".join(request["include_sections"])),
     ])
     body += _section("Files Included In ZIP", files_html)
+
+    verification = case.get("supervisor_chain_verification") or {}
+    verified = verification.get("verified")
+    verified_label = "VERIFIED — intact" if verified is True else (
+        "NOT VERIFIED — see broken_links" if verified is False else "Unavailable"
+    )
+    chain_rows = [
+        ("Supervisor chain integrity", verified_label),
+        ("Entries checked", verification.get("entries_checked", "")),
+        ("Total chain entries", verification.get("total_entries", "")),
+        ("Broken links", len(verification.get("broken_links", []) or [])),
+        ("This application's chain rows", len(case.get("supervisor_audit", []) or [])),
+    ]
+    if verification.get("reason"):
+        chain_rows.append(("Note", verification.get("reason")))
+    if case.get("audit_truncated"):
+        chain_rows.append(("Audit trail", "TRUNCATED at ceiling — not all events included"))
+    body += _section("Audit Chain Verification", _table(chain_rows))
+
     body += _section("MVP Notes", f"<p>{_esc(GENERATED_BY_NOTE)} Redaction is conservative and does not replace a formal redaction review.</p>")
     body += failures_html
     return _html_doc("RegMind Evidence Pack", body)
@@ -1038,6 +1162,9 @@ def build_evidence_pack_zip(
         add("06_compliance_memo.pdf", render_compliance_memo(case))
     if "audit_trail" in sections:
         add("07_audit_trail.csv", render_audit_trail_csv(case, request["redaction_level"]))
+        # H4: include the tamper-evident supervisor decision chain + attestation
+        # so the pack is independently verifiable, not just container-hashed.
+        add("08_supervisor_audit_chain.csv", render_supervisor_audit_chain_csv(case, request["redaction_level"]))
 
     retrieval_failures: list[str] = []
     if "documents" in sections:

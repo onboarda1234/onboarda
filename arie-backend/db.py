@@ -38,6 +38,11 @@ FILE_MIGRATIONS_REQUIRING_RUNNER = frozenset({
     # Migration 020 is a data backfill. It is not represented by init_db's
     # schema DDL, so long-lived databases must let the file runner execute it.
     "020",
+    # Migration 039 is a data fix (audit finding B1): it flips the seeded
+    # session_tokens retention policy to auto_purge=FALSE on already-deployed
+    # databases. Like 020 it is not represented by init_db DDL, so it must run
+    # through the file runner rather than being pre-marked "covered by init_db".
+    "039",
 })
 
 _PR_CR1R_MANUAL_DEFAULTS_MARKER_KEY = "pr_cr1r_manual_defaults"
@@ -4047,6 +4052,51 @@ def _create_supervisor_audit_log_indexes(db: DBConnection) -> None:
     CREATE INDEX IF NOT EXISTS idx_sup_audit_pipeline ON supervisor_audit_log(pipeline_id);
     CREATE INDEX IF NOT EXISTS idx_sup_audit_actor ON supervisor_audit_log(actor_id);
     """)
+    # Structural anti-fork backstop (audit finding H12 / B3): at most one entry
+    # may reference a given predecessor hash, so two concurrent appends can never
+    # both chain off the same tail. Genesis entries carry NULL previous_hash and
+    # are excluded by the partial predicate (valid on both PostgreSQL and SQLite
+    # >= 3.8). Best-effort: if a pre-existing fork already violates uniqueness we
+    # log loudly rather than block startup — the fork is then visible for repair
+    # and new forks are still prevented once the index exists.
+    try:
+        db.executescript(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_sup_audit_prev_hash "
+            "ON supervisor_audit_log(previous_hash) WHERE previous_hash IS NOT NULL;"
+        )
+    except Exception as exc:  # pre-existing duplicate previous_hash (a legacy fork)
+        logger.error(
+            "Could not create unique anti-fork index on supervisor_audit_log.previous_hash "
+            "(a pre-existing chain fork likely exists and needs investigation): %s",
+            exc,
+        )
+
+
+def _create_supervisor_audit_migrations_table(db: DBConnection) -> None:
+    """Immutable record of any supervisor-audit schema migration (audit finding B2).
+
+    A legacy -> modern schema migration necessarily rehashes rows into the new
+    column layout. If the original table were simply dropped, that rebuild would
+    silently re-seal any pre-migration tampering into a clean-looking chain. To
+    keep the migration non-silent and pre-migration tampering detectable we
+    (a) preserve the original table as an archive and (b) record a seal over the
+    ordered legacy (id, entry_hash) sequence here. The seal plus the archived
+    table let an auditor prove the rebuilt chain corresponds to the original,
+    unaltered legacy rows.
+    """
+    timestamp_type = "TIMESTAMP" if db.is_postgres else "TEXT"
+    timestamp_default = "CURRENT_TIMESTAMP" if db.is_postgres else "(datetime('now'))"
+    db.executescript(f"""
+    CREATE TABLE IF NOT EXISTS supervisor_audit_migrations (
+        id TEXT PRIMARY KEY,
+        migrated_at {timestamp_type} NOT NULL DEFAULT {timestamp_default},
+        legacy_row_count INTEGER NOT NULL,
+        legacy_chain_seal TEXT NOT NULL,
+        modern_chain_head TEXT,
+        archive_table TEXT NOT NULL,
+        note TEXT
+    );
+    """)
 
 
 def _modern_supervisor_audit_row(raw: Dict[str, Any], previous_hash: Optional[str]) -> Dict[str, Any]:
@@ -4135,6 +4185,14 @@ def _ensure_supervisor_audit_log_schema(db: DBConnection) -> None:
                 "SELECT * FROM supervisor_audit_log ORDER BY timestamp ASC"
             ).fetchall()
         ]
+        if not legacy_rows:
+            # Empty legacy table — nothing to preserve or seal. Replace it in
+            # place with the modern schema rather than creating an empty archive.
+            db.execute("DROP TABLE supervisor_audit_log")
+            _create_supervisor_audit_log_table(db)
+            _create_supervisor_audit_log_indexes(db)
+            logger.info("Supervisor audit schema replaced (empty legacy table)")
+            return
         db.execute("DROP TABLE IF EXISTS supervisor_audit_log_repair")
         _create_supervisor_audit_log_table(db, "supervisor_audit_log_repair")
         previous_hash = None
@@ -4142,8 +4200,38 @@ def _ensure_supervisor_audit_log_schema(db: DBConnection) -> None:
             repaired = _modern_supervisor_audit_row(raw, previous_hash)
             _insert_supervisor_audit_row(db, "supervisor_audit_log_repair", repaired)
             previous_hash = repaired["entry_hash"]
-        db.execute("DROP TABLE supervisor_audit_log")
+
+        # audit finding B2: DO NOT destroy the original chain. Rehashing rows into
+        # the modern schema yields a self-consistent chain that would hide any
+        # pre-migration tampering if the source were dropped. Preserve the original
+        # table as an immutable archive and seal the legacy hash sequence so the
+        # rebuilt chain remains provably derived from the untouched source.
+        archive_suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S") + "_" + secrets.token_hex(3)
+        archive_table = f"supervisor_audit_log_legacy_{archive_suffix}"
+        legacy_seal = hashlib.sha256(
+            "\n".join(
+                f"{raw.get('id')}:{raw.get('entry_hash') or ''}" for raw in legacy_rows
+            ).encode()
+        ).hexdigest()
+
+        db.execute(f"ALTER TABLE supervisor_audit_log RENAME TO {archive_table}")
         db.execute("ALTER TABLE supervisor_audit_log_repair RENAME TO supervisor_audit_log")
+
+        _create_supervisor_audit_migrations_table(db)
+        db.execute(
+            "INSERT INTO supervisor_audit_migrations "
+            "(id, legacy_row_count, legacy_chain_seal, modern_chain_head, archive_table, note) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                secrets.token_hex(8),
+                len(legacy_rows),
+                legacy_seal,
+                previous_hash,
+                archive_table,
+                "Legacy supervisor_audit_log rehashed to modern schema; "
+                "original archived and sealed for tamper-evidence (audit finding B2).",
+            ),
+        )
     else:
         _create_supervisor_audit_log_table(db)
 
@@ -4153,8 +4241,10 @@ def _ensure_supervisor_audit_log_schema(db: DBConnection) -> None:
         "WHERE severity IS NULL OR TRIM(severity) = ''"
     )
     if legacy_rows:
-        logger.info(
-            "Supervisor audit schema repaired and backfilled (%d legacy rows)",
+        logger.warning(
+            "Supervisor audit schema migrated: %d legacy row(s) rehashed into the "
+            "modern chain. Original preserved and sealed for tamper-evidence "
+            "(see supervisor_audit_migrations). (audit finding B2)",
             len(legacy_rows),
         )
     else:
@@ -8420,7 +8510,12 @@ def seed_initial_data(db: DBConnection):
         ("audit_logs", 3650, "Legitimate interest + regulatory", "Audit trail records. 10 years retention for full accountability.", 0, 0),
         ("application_data", 2555, "Regulatory obligation", "Onboarding application forms and submitted data. 7 years post-decision.", 0, 1),
         ("sar_reports", 3650, "Regulatory obligation (FIU reporting)", "Suspicious Activity Reports. 10 years — never auto-purge.", 0, 0),
-        ("session_tokens", 1, "Legitimate interest", "Expired authentication tokens and session data. 24-hour retention.", 1, 0),
+        # auto_purge is 0 (audit finding B1): this policy previously carried
+        # auto_purge=1 while resolving to the audit_log table, so the daily
+        # scheduler was destroying the audit trail. Token cleanup is not wired to
+        # a real table here; the policy is retained for documentation only and
+        # must never auto-purge.
+        ("session_tokens", 1, "Legitimate interest", "Expired authentication tokens and session data. 24-hour retention (documentation only; not auto-purged).", 0, 0),
         ("monitoring_alerts", 2555, "Regulatory obligation", "Ongoing monitoring alerts and risk drift records. 7 years.", 0, 1),
     ]
 

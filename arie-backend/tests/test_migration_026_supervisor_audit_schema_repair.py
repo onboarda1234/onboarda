@@ -142,6 +142,78 @@ def test_supervisor_audit_schema_repair_backfills_legacy_rows(tmp_path, monkeypa
             db.close()
 
 
+def test_supervisor_audit_migration_preserves_and_seals_legacy(tmp_path, monkeypatch):
+    """audit finding B2: the legacy chain must be archived (not dropped) and sealed.
+
+    Rehashing legacy rows into the modern schema must not silently destroy the
+    original chain — otherwise a pre-migration tamper is re-sealed into a clean
+    chain undetectably. The original table must be preserved and a seal over the
+    ordered legacy (id, entry_hash) sequence recorded.
+    """
+    import hashlib
+
+    with _isolated_db(tmp_path, monkeypatch) as db_module:
+        db = db_module.get_db()
+        try:
+            db.executescript(
+                """
+                CREATE TABLE supervisor_audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT,
+                    event_type TEXT NOT NULL,
+                    application_id TEXT,
+                    pipeline_id TEXT,
+                    agent_type TEXT,
+                    actor TEXT,
+                    action TEXT NOT NULL,
+                    details TEXT DEFAULT '{}',
+                    prev_hash TEXT,
+                    entry_hash TEXT
+                );
+                INSERT INTO supervisor_audit_log
+                    (timestamp, event_type, application_id, actor, action, details, entry_hash)
+                VALUES
+                    ('2026-01-01T00:00:01', 'pipeline_completed', 'app-a', 'agent-1', 'Event A', '{}', 'hashA'),
+                    ('2026-01-01T00:00:02', 'pipeline_completed', 'app-b', 'agent-2', 'Event B', '{}', 'hashB');
+                """
+            )
+            db.commit()
+
+            db_module._ensure_supervisor_audit_log_schema(db)
+            db.commit()
+
+            # 1. A migration record must exist, counting both legacy rows.
+            rec = db.execute("SELECT * FROM supervisor_audit_migrations").fetchall()
+            assert len(rec) == 1
+            rec = dict(rec[0])
+            assert rec["legacy_row_count"] == 2
+
+            # 2. The archived original table must still exist with the ORIGINAL
+            #    entry hashes intact (evidence preserved, not destroyed).
+            archive_table = rec["archive_table"]
+            assert archive_table.startswith("supervisor_audit_log_legacy_")
+            archived = db.execute(
+                f"SELECT entry_hash FROM {archive_table} ORDER BY timestamp ASC"
+            ).fetchall()
+            assert [r["entry_hash"] for r in archived] == ["hashA", "hashB"]
+
+            # 3. The recorded seal must equal a seal recomputed from the archive,
+            #    so any later mutation of the archive is detectable.
+            expected_seal = hashlib.sha256(
+                "\n".join(["1:hashA", "2:hashB"]).encode()
+            ).hexdigest()
+            assert rec["legacy_chain_seal"] == expected_seal
+
+            # 4. The live chain still holds exactly the migrated rows (re-hashed).
+            live = db.execute(
+                "SELECT entry_hash FROM supervisor_audit_log ORDER BY timestamp ASC"
+            ).fetchall()
+            assert len(live) == 2
+            assert all(r["entry_hash"] not in ("hashA", "hashB") for r in live)
+        finally:
+            db.close()
+
+
 def test_migration_026_marker_is_sqlite_safe(tmp_path, monkeypatch):
     with _isolated_db(tmp_path, monkeypatch):
         migration = os.path.join(
