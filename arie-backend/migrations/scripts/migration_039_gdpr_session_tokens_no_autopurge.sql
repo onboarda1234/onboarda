@@ -1,4 +1,4 @@
--- Migration 038: Stop the daily audit-trail destruction (audit finding B1)
+-- Migration 039: Stop the daily audit-trail destruction (audit finding B1)
 -- =====================================================================
 -- The seeded "session_tokens" retention policy shipped with auto_purge=1 while
 -- CATEGORY_TABLE_MAP resolved that category to the audit_log table with a 1-day

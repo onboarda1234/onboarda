@@ -57,7 +57,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Data migrations that init_db does NOT represent in its DDL and that therefore
 # run through the file runner on a fresh install: 020 (historical fixture
-# backfill) and 038 (audit finding B1 — flip session_tokens auto_purge).
+# backfill) and 039 (audit finding B1 — flip session_tokens auto_purge).
 FRESH_INIT_PENDING_DATA_MIGRATIONS = 2
 
 

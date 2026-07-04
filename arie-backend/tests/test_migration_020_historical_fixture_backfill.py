@@ -51,19 +51,19 @@ def _rewind_020(db):
     db.commit()
 
 
-def _premark_038(db):
-    """Mark migration 038 as already applied.
+def _premark_039(db):
+    """Mark migration 039 as already applied.
 
-    038 (audit finding B1 — flip session_tokens auto_purge) is an unrelated data
+    039 (audit finding B1 — flip session_tokens auto_purge) is an unrelated data
     migration that also runs through the file runner. These tests assert exact
-    020 runner counts, so 038 is neutralised here with a real (non-"init_db")
+    020 runner counts, so 039 is neutralised here with a real (non-"init_db")
     checksum that survives _mark_known_migrations_as_applied.
     """
-    db.execute("DELETE FROM schema_version WHERE version = '038'")
+    db.execute("DELETE FROM schema_version WHERE version = '039'")
     db.execute(
         "INSERT INTO schema_version (version, filename, description, checksum) VALUES (?, ?, ?, ?)",
-        ("038", "migration_038_gdpr_session_tokens_no_autopurge.sql",
-         "gdpr session tokens no autopurge", "test-premark-038"),
+        ("039", "migration_039_gdpr_session_tokens_no_autopurge.sql",
+         "gdpr session tokens no autopurge", "test-premark-039"),
     )
     db.commit()
 
@@ -121,7 +121,7 @@ def test_migration_020_marks_exact_historical_fixture_pairs_and_is_idempotent(
 
         from migrations.runner import run_all_migrations_with_connection
 
-        _premark_038(db)
+        _premark_039(db)
         assert run_all_migrations_with_connection(db) == 1
         assert set(_fixture_values(db).values()) == {1}
         assert _audit_count(db) == 1
@@ -146,7 +146,7 @@ def test_migration_020_requires_exact_company_name_match(tmp_path, monkeypatch):
 
         from migrations.runner import run_all_migrations_with_connection
 
-        _premark_038(db)
+        _premark_039(db)
         assert run_all_migrations_with_connection(db) == 1
         row = db.execute(
             "SELECT is_fixture FROM applications WHERE id = ?",
@@ -187,7 +187,7 @@ def test_init_db_premarked_020_is_repaired_then_runner_applies(
 
         from migrations.runner import run_all_migrations_with_connection
 
-        _premark_038(db)
+        _premark_039(db)
         assert run_all_migrations_with_connection(db) == 1
         row = db.execute(
             "SELECT is_fixture FROM applications WHERE id = ?",
@@ -242,7 +242,7 @@ def test_init_db_does_not_delete_real_020_migration_row(
 
         from migrations.runner import run_all_migrations_with_connection
 
-        _premark_038(db)
+        _premark_039(db)
         assert run_all_migrations_with_connection(db) == 0
         row = db.execute(
             "SELECT is_fixture FROM applications WHERE id = ?",

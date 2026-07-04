@@ -38,11 +38,11 @@ FILE_MIGRATIONS_REQUIRING_RUNNER = frozenset({
     # Migration 020 is a data backfill. It is not represented by init_db's
     # schema DDL, so long-lived databases must let the file runner execute it.
     "020",
-    # Migration 038 is a data fix (audit finding B1): it flips the seeded
+    # Migration 039 is a data fix (audit finding B1): it flips the seeded
     # session_tokens retention policy to auto_purge=FALSE on already-deployed
     # databases. Like 020 it is not represented by init_db DDL, so it must run
     # through the file runner rather than being pre-marked "covered by init_db".
-    "038",
+    "039",
 })
 
 _PR_CR1R_MANUAL_DEFAULTS_MARKER_KEY = "pr_cr1r_manual_defaults"
