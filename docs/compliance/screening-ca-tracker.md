@@ -1,6 +1,6 @@
 # Screening / ComplyAdvantage — Work Tracker
 
-_Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02._
+_Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-03._
 
 **Status:** ☐ Not started · ◐ In progress · ☑ Done · ⛔ Blocked
 **Priority:** P1 (before prod) · P2 (soon) · P3 (nice-to-have)
@@ -48,10 +48,11 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 
 | ID | Task | Status | Pri | Depends on | Notes |
 |----|------|--------|-----|-----------|-------|
-| BE-1 | Surface CA's `match_score` into the hit rows | ◐ | P2 | — | **Implemented** (branch): `_match_score_percentage(match)` in normalizer.py surfaces `profile.match_details.match_score` ×100 (0–100, null-safe, passes-through already-% values) + `surfaced_by_pass` into `_legacy_screening_result_from_match`. Agent 3 collector reads it automatically; PDF flattener now prefers % then strict/relaxed confidence. Tests: `test_ca_match_score_surfacing.py` (7) + regressions green (CA suite 57, agent3/inline/pdf 34). **Still to do: verify `match_score` is non-null on a real staging CA response** before relying on the % in PR-2 UI. |
-| BE-2 | Panel/PDF show real **match % + confidence** (risk level deferred) | ☐ | P2 | BE-1 | With BE-1 surfacing `match_score`, the panel/PDF can show a genuine match **percentage** (mockup-style bar) — it's name-match strength, not a risk grade. Strict/relaxed confidence is the fallback when score is null. The CA **risk level** (Medium/High/Prohibited) still needs CA *case* data (case runs risk model at close) — larger, separate; deferred. |
-| BE-3 | Root-fix `matched_name`-is-UUID | ☐ | P2 | — | Currently only cosmetic "Unnamed provider match" fallback (shipped in #640). Real cause: `_profile_name(profile) or profile_identifier` (normalizer.py:385) falls back to UUID when CA profile has no name records (sandbox sparse data). Likely resolves on prod data — validate first. |
-| BE-4 | Adverse-media source URL — **validate on prod data (no code)** | ☐ | P3 | prod CA data | Pipeline fully intact (`_canonicalize_article` → `canonical_url` → UI "source" link). Missing URLs = CA payload omits `article.url` (sandbox). Displays automatically when CA supplies it. |
+| BE-1 | Surface CA's `match_score` into the hit rows | ☑ | P2 | BE-5 | **Done via BE-5 (#663/#664) — captured, NOT %-displayed.** `provider_match_score_raw` now stored (fresh-screen validated: `0.7`); UI-facing `match_score` stays null so the strict/relaxed badge remains the confidence signal. **Open:** CA clarification on the score scale (0.7 vs 1.7 for exact_match) before any display. |
+| BE-2 | Panel/PDF confidence = **strict/relaxed pass** (match % only if present; risk level deferred) | ☑ | P2 | — | **Done — PR #655** (backend surfaced `surfaced_by_pass` into `hit_rows` + `agent3ProviderEvidenceCellHtml` renders Strict/Relaxed/Strict+relaxed; numeric % only when non-null). CA **risk level** (Medium/High/Prohibited) still needs CA *case* data — separate; deferred. |
+| BE-3 | Root-fix `matched_name`-is-UUID | ☑ | P2 | BE-5 | **Done via BE-5 (#663/#664).** `_profile_name` now returns `matching_name`; UUID only as a labelled provider reference. Fresh-screen validated: real (non-UUID) matched name persisted. |
+| BE-4 | Adverse-media source URL + category | ☑ | P2 | BE-5 | **Done via BE-5 (#663/#664).** `provider_media_evidence` (url/title/snippet/date/identifier) + `provider_aml_types_raw` → mapped categories now stored. Fresh-screen validated: `adverse_media` category + media URL/snippet persisted. Feeds #658 counts with real categories. |
+| BE-5 | **Fix CA alert-risk profile JSON paths** (umbrella for BE-1/3/4) | ☑ | **P1** | — | **DONE — #663 (path/model/normalizer fix) + #664 (name-type tolerance), merged + deployed + fresh-screen validated 2026-07-04** (fixture `ARF-2026-920620`). Reads `raw["detail"]["profile"]` (parse-tolerant fallback → never 500s), adapts the live profile shape, maps `matching_name`/`aml_types`/`media[]`, captures `match_score` raw. Confirmed: real name, `adverse_media` category, media URL/snippet, `provider_match_score_raw=0.7`, `match_types=["exact_match"]`, UI `match_score`=null, no mutation. #664 added `NameType` coercion so an unknown provider `name.type` can't drop the profile. |
 
 ---
 
@@ -59,13 +60,13 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 
 | ID | Task | Status | Pri | Depends on | Notes |
 |----|------|--------|-----|-----------|-------|
-| UI-1 | Scope the de-duplication PR (one decision banner, one hit card/match, collapse repeats) | ☐ | P2 | UI-2, BE-1 | Trace: body stacks 9 panels (arie-backoffice.html 15443–15486); CA match string prints 3×, name ~5×. Frontend-only, medium PR; static-contract test will need updates. |
-| UI-2 | Extend mockup with **sanctions + PEP evidence variants** | ◐ | P2 | — | Only adverse-media drawn so far. Evidence drawer must switch fields by category (sanctions: list/authority/program/ref; PEP: position/country/class). |
+| UI-1 | Scope the de-duplication PR (one decision banner, one hit card/match, collapse repeats) | ☑ | P2 | UI-2, BE-2 | **Done — PR #655** (merged + deployed + verified 2026-07-03). Recommendation/counts/advisory each render once (de-dup locked with `count==1` render tests); one collapsed audit trace. Hit card leads with strict/relaxed pass + category + evidence, no match %. |
+| UI-2 | Extend mockup with **sanctions + PEP evidence variants** | ☑ | P2 | — | **Done — PR #655.** Per-hit "Evidence details" drawer renders category-specific fields (adverse-media title/source/snippet/URL with safe fallback; sanctions + PEP variants); UUID matched entity stays "Unnamed provider match" with the raw UUID labelled as a provider reference. |
 | UI-3 | Design decision: **two-tier disclosure** — substantive evidence one-click; technical UUID refs buried | ☑ | P2 | — | Locked in mockup: per-hit "View evidence" (article/source/snippet/link) separate from technical-refs disclosure. |
-| UI-4 | Sequence: **BE-1 (match_score plumbing) before UI-1** | ☑ | — | — | So hit cards render a real match % + confidence, not an empty score. |
-| UI-5 | **Kill repetitive counts/status** (staging feedback 2026-07-02) | ☐ | P2 | — | Same facts restated 4–5×: provider-hit counts appear in the chip row **and** Plain-English summary **and** Key concerns; "Officer review required" appears in the recommendation badge, advisory line, Recommended disposition, summary **and** key concerns; the matched UUID repeats in the hit row **and** Evidence-used (2×). State each fact **once**: counts in one chip row, disposition once, matched entity once. |
-| UI-6 | **Evaluate/remove the "Draft audit note" section** (staging feedback) | ☐ | P2 | — | Officer reports it unused. Check whether the paste-ready block / Copy / "Add to audit note" feeds anything real (does it write to the audit trail or a note field, or is it copy-only?). If copy-only with no workflow use → **remove**; if it has a genuine use, keep but justify. Decide before UI-1 lands. |
-| UI-7 | **Compact "no hits / Clear" variant** (staging feedback 2026-07-02) | ☐ | P2 | — | With 0 provider hits the panel shows ~7 near-empty sections all restating "no hits found" (summary, Key concerns, FP box, adverse-media box, Recommended disposition, empty hit table, audit note). Render a **compact clear state** instead: one line — "No provider hits in stored screening results · Advisory: Clear · officer decision still required" — **keep the one real caveat** ("no hits ≠ no compliance risk", once), omit/collapse the empty hit table + FP boxes + audit note + evidence list behind a single toggle. Full layout only when hits exist. |
+| UI-4 | ~~Sequence: BE-1 (match_score) before UI-1~~ — **SUPERSEDED** | ☑ | — | — | Original intent (render a real match %) is retired: BE-1 validation proved Mesh returns no `match_score` (`profile: null`). Hit cards render **strict/relaxed pass + category + evidence** instead (BE-2 reframe). No BE-1 gate on UI-1 anymore. |
+| UI-5 | **Kill repetitive counts/status** (staging feedback 2026-07-02) | ☑ | P2 | — | **Done — PR #655.** Recommendation, provider counts, and the advisory sentence each render once (locked by `count==1` render tests); UUID printed once. Advisory sentence also removed from the backend summary (fixed at source). |
+| UI-6 | **Evaluate/remove the "Draft audit note" section** (staging feedback) | ☑ | P2 | — | **Done — PR #655: removed.** Confirmed copy-only (no audit-trail/API write); officers reported it unused → removed from the UI. Backend `draft_audit_note` field retained but no longer rendered. |
+| UI-7 | **Compact "no hits / Clear" variant** (staging feedback 2026-07-02) | ☑ | P2 | — | **Done — PR #655.** 0-hit panel renders a one-line state + single caveat, with full detail behind a "Show full detail" toggle. Soft-green **only** when the provider result is terminal AND no reportable hits (degraded/errored → amber, not green — backend emits `screening_result_terminal`). |
 
 ---
 
@@ -74,7 +75,7 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 | ID | Task | Status | Pri | Depends on | Notes |
 |----|------|--------|-----|-----------|-------|
 | RPT-1 | Backend endpoint `GET /api/applications/:id/screening/pdf` | ☑ | P2 | — | **Done** (`6adcc79`). `pdf_generator.build_screening_report_html` / `generate_screening_report_pdf` + `ScreeningReportPDFDownloadHandler`. Renders stored screening_report: subjects, matches, categories, list/source, strict/relaxed confidence, adverse-media evidence links; UUID→"Unnamed provider match". Read-only + audit-logged. 5 unit tests; real PDF renders (weasyprint). |
-| RPT-2 | Frontend **"Screening report (PDF)"** button | ◐ | P2 | RPT-1, UI-1 | Handler `downloadScreeningReportPDF()` + endpoint shipped (`6adcc79`, on staging via #644). Button **hidden for now** (`4a6c8db`) — original entity-card-only placement was too buried; endpoint/helper stay dormant. **Re-surface with proper placement in PR-2** (Screening Review header, always visible). Hide takes effect on staging at next merge (option 1 — no dedicated deploy). |
+| RPT-2 | ~~Frontend **"Screening report (PDF)"** button~~ — **SUPERSEDED by RPT-5** | ☑ | P2 | — | Endpoint/handler shipped but button stays **hidden/dormant**. Officer decided the UI already shows the needed info and regulator evidence should be **CA-native** (RPT-5 CA Screening Certificate), not a RegMind PDF. Not re-surfaced in PR-2. Endpoint left dormant (no removal). |
 | RPT-3 | Validate report content quality on prod data | ☐ | P3 | prod CA data, BE-3 | Sandbox report = UUIDs + missing URLs; real names/URLs only once CA prod flows. |
 
 ---
@@ -88,7 +89,10 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 - ☑ `webhook.site` webhooks set Inactive (deletion still pending — CA-4)
 - ☑ Trace: confirmed CA=screening / Sumsub=IDV responsibility split (screening_config.py)
 - ☑ Trace: adverse-media URL pipeline intact (`_canonicalize_article` → `canonical_url` → UI link)
-- ☑ Trace (corrected): CA Mesh **does** return a per-match `match_score` — `CAMatchDetails.match_score` (0–1 float) modeled on `CAProfile.match_details`; screening normalizer doesn't surface it → BE-1. (Supersedes earlier "no score" note.)
+- ⚠️ Trace (2026-07-03, SUPERSEDED same day): earlier concluded Mesh "doesn't populate" score/name/URL because `match.profile` was null. **That was a symptom, not the cause** — see the CA-confirmed finding below.
+- ☑ **Trace (FINAL, CA-confirmed 2026-07-03): wrong JSON paths, not a Mesh limitation.** CA support + raw-payload inspection (2 sandbox specimens) proved the data **is** returned: profile at `risks[].detail.profile` (we read top-level `raw["profile"]` → null), name at `.matching_name`, score at `.match_score` (**observed 0.7 and 1.7 — not 0–1, not a %; provider weight**), category at `.risk_indicators.aml_types[]`, media URL at `.risk_indicators.media[].url`. Our `CAProfile` model shape also mismatches (`match_details` vs `match_score`). → BE-1/3/4 reopened as **BE-5** (P1 code fix). Strict/relaxed stays the UI confidence signal (Option-1 validated); score captured but not %-displayed pending CA scale clarification. Open Q to CA: what is the `match_score` scale/semantics?
+- ☑ **PR #647** — CA workflow `ERRORED` status handled (no more 500; degraded `pending_provider`/re-screen report persisted). Merged (`e8eeffb`) + deployed to staging + verified 2026-07-03 (fresh screen returned 200, degraded report, no ValidationError). Also revealed the **duplicate-external-id → ERRORED** trigger (re-screening an existing customer errors — the fix covers it).
+- ☑ **PR-2 = PR #655 + #658** — Agent 3 panel redesign, both merged + deployed + verified PASS (2026-07-03). **#655** (evidence-led panel: strict/relaxed pass, de-dup, audit-note removal, compact no-hit state, conditional Declared-vs-Provider). **#658** (count reconciliation: fixed the `intermediary_screenings` → adverse-media substring bug — `"media"` inside `"inter**media**ry"` — via token matching; primary-category partitioning so headline counts sum to total without double-counting multi-risk hits, while severity still uses contains-category semantics). Both display-only; no workflow/provider/risk/status/approval change.
 - ☑ RPT-1/RPT-2 screening-report PDF — **PR #644 merged + deploying to staging** (2026-07-02)
 - ☑ CA-1 single-risk-type re-test **passed** — both subtests: Mick Davis (PEP-only) → 75 → High; DGUP Granitny (Sanctions-only) → 100 → Prohibited. Models validated; Boris 450 was a poisoned fixture.
 - ☑ CA-2 entity-level TP-marking SOP drafted (`sop-screening-true-positive-marking.md`, pending MLRO sign-off)
@@ -98,9 +102,13 @@ _Module: RegMind screening + Agent 3 + CA Mesh config. Last updated: 2026-07-02.
 
 ## Recommended next order
 
-1. **BE-1** (surface `match_score`, small backend) → **UI-2** (sanctions/PEP evidence variants) → **UI-1 + UI-5 + UI-6** (de-dup PR: one hit card with real match %, collapse repeated counts/status, resolve the Draft-audit-note section). Verify `match_score` populated on a real staging response first.
-2. **PROD-0/0b** provision prod env + CA workspace → **PROD-1/2/3** replication (config validated, gated on infra + prod DNS).
-3. **CA-6/CA-7/CA-8** (2nd admin, rescreen perm, source coverage) — CA-console hygiene.
-4. **CA-11 / BE-3 / BE-4 / RPT-3** — confirm on prod CA data.
+**3-PR plan (locked 2026-07-03; low-risk, no combining):** ✅ PR-2 = Agent 3 panel redesign (**DONE — #655 + #658**) · ☐ BE-3 = standalone `matched_name` fix (prod-gated) · ☐ RPT-5 = CA Screening Certificate (pending mockup sign-off).
+
+1. ~~**PR-2**~~ — **DONE** (#655 + #658, merged + deployed + verified).
+2. ~~**BE-5**~~ — **DONE** (#663 + #664, merged + deployed + fresh-screen validated 2026-07-04). Real names + categories + adverse-media URLs now captured; score captured (not %-displayed) pending CA scale answer.
+3. **RPT-5** CA Screening Certificate — **now unblocked** (BE-5 done). Build on real captured name/category/media. Awaiting mockup sign-off. Also: CA-console settings inventory in flight (for PROD replication).
+4. **PROD-0/0b** provision prod env + CA workspace → **PROD-1/2/3** replication (config validated, gated on infra + prod DNS).
+5. **CA-6/CA-7/CA-8** (2nd admin, rescreen perm, source coverage) — CA-console hygiene.
+5. **CA-11 / BE-3 / BE-4 / RPT-3** — confirm on prod CA data (BE-3 real names + BE-4 URLs both need CA to embed a profile/URLs).
 
 _Strategic note: treat CA's risk level as a provider-side **triage** signal, not RegMind's authoritative risk grade — `rule_engine.py` owns LOW/MEDIUM/HIGH/VERY_HIGH. Don't over-fit CA's SUM scoring._
