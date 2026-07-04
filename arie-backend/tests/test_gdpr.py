@@ -7,6 +7,7 @@ import sys
 import json
 import sqlite3
 import tempfile
+from pathlib import Path
 import pytest
 from datetime import datetime, timedelta, timezone
 
@@ -173,6 +174,7 @@ class TestDSAR:
         from gdpr import create_dsar
         result = create_dsar(gdpr_db, "erasure", "jane@example.com", "Jane Doe", description="Delete all my data")
         assert "error" not in result
+        assert result["erasure_executed"] is False
 
     def test_invalid_request_type_rejected(self, gdpr_db):
         """Invalid DSAR type must be rejected."""
@@ -190,7 +192,7 @@ class TestDSAR:
         assert "pending@example.com" in emails
 
     def test_complete_dsar(self, gdpr_db):
-        """Completing a DSAR must update status and set completion timestamp."""
+        """Completing a DSAR must update response-workflow status only."""
         from gdpr import create_dsar, complete_dsar, get_pending_dsars
         create_dsar(gdpr_db, "portability", "complete@example.com")
         pending = get_pending_dsars(gdpr_db)
@@ -198,6 +200,237 @@ class TestDSAR:
 
         result = complete_dsar(gdpr_db, dsar["id"], "admin001", "Data exported and sent to requester.")
         assert result["status"] == "completed"
+        assert result["status_label"] == "Request response completed"
+        assert result["erasure_executed"] is False
+
+    def test_complete_erasure_dsar_does_not_imply_erasure(self, gdpr_db):
+        """Completing an erasure request must not claim data removal occurred."""
+        from gdpr import (
+            DSAR_ERASURE_OUTCOME_RESPONSE_COMPLETED_NO_EXECUTION,
+            complete_dsar,
+            create_dsar,
+        )
+
+        created = create_dsar(
+            gdpr_db,
+            "erasure",
+            "truthful@example.com",
+            "Truthful Requester",
+            description="Please process my erasure request",
+        )
+        result = complete_dsar(
+            gdpr_db,
+            created["id"],
+            "admin001",
+            "Response sent to requester. No erasure executor was run.",
+        )
+
+        assert result["status"] == "completed"
+        assert result["erasure_executed"] is False
+        assert result["retention_outcome"] == DSAR_ERASURE_OUTCOME_RESPONSE_COMPLETED_NO_EXECUTION
+        assert result["status_label"] == "Request response completed; erasure not executed"
+        assert "No erasure executor ran" in result["status_detail"]
+
+        user_visible = " ".join(
+            str(result.get(key) or "")
+            for key in ("status_label", "status_detail")
+        ).lower()
+        for forbidden in ("erased", "deleted", "forgotten"):
+            assert forbidden not in user_visible
+
+        stored = gdpr_db.execute(
+            "SELECT erasure_executed, retention_outcome, erasure_notes "
+            "FROM data_subject_requests WHERE id = ?",
+            (created["id"],),
+        ).fetchone()
+        assert stored["erasure_executed"] in (0, False)
+        assert stored["retention_outcome"] == DSAR_ERASURE_OUTCOME_RESPONSE_COMPLETED_NO_EXECUTION
+        assert "No erasure executor ran" in stored["erasure_notes"]
+
+    def test_legal_retention_outcome_copy_is_honest(self, gdpr_db):
+        """A retained erasure request must say retained, not removed."""
+        from gdpr import DSAR_ERASURE_OUTCOME_RETAINED_LEGAL, complete_dsar, create_dsar
+
+        created = create_dsar(gdpr_db, "erasure", "retained@example.com")
+        gdpr_db.execute(
+            """
+            UPDATE data_subject_requests
+               SET retention_outcome = ?,
+                   retained_until = ?,
+                   retained_categories = ?
+             WHERE id = ?
+            """,
+            (
+                DSAR_ERASURE_OUTCOME_RETAINED_LEGAL,
+                "2033-01-01",
+                json.dumps(["client_pii", "kyc_documents"]),
+                created["id"],
+            ),
+        )
+        gdpr_db.commit()
+
+        result = complete_dsar(gdpr_db, created["id"], "admin001", "Retention response sent.")
+        assert result["erasure_executed"] is False
+        assert result["retention_outcome"] == DSAR_ERASURE_OUTCOME_RETAINED_LEGAL
+        assert result["retained_until"] == "2033-01-01"
+        assert result["retained_categories"] == ["client_pii", "kyc_documents"]
+        assert result["status_label"] == "Request response completed; data retained under legal obligation"
+        assert "retained" in result["status_detail"].lower()
+        assert "retained" in result["erasure_notes"].lower()
+        for forbidden in ("erased", "deleted", "forgotten"):
+            assert forbidden not in result["erasure_notes"].lower()
+
+    def test_response_copy_uses_removal_terms_only_after_execution(self):
+        """API-facing DSAR copy must not say erased/deleted/forgotten unless execution is true."""
+        from gdpr import format_dsar_for_response
+
+        not_executed = format_dsar_for_response({
+            "id": 1,
+            "request_type": "erasure",
+            "status": "completed",
+            "erasure_executed": False,
+        })
+        visible = " ".join(
+            str(not_executed.get(key) or "")
+            for key in ("status_label", "status_detail")
+        ).lower()
+        for forbidden in ("erased", "deleted", "forgotten"):
+            assert forbidden not in visible
+
+        executed = format_dsar_for_response({
+            "id": 2,
+            "request_type": "erasure",
+            "status": "completed",
+            "erasure_executed": True,
+        })
+        assert "Erasure executed" in executed["status_label"]
+
+        partial = format_dsar_for_response({
+            "id": 4,
+            "request_type": "erasure",
+            "status": "completed",
+            "erasure_executed": True,
+            "retention_outcome": "partially_erased",
+            "retained_categories": json.dumps(["kyc_documents"]),
+        })
+        assert partial["retention_outcome"] == "partially_erased"
+        assert partial["retained_categories"] == ["kyc_documents"]
+        assert partial["status_label"] == "Partial erasure recorded; regulated data retained"
+        assert "Regulated categories remain retained" in partial["status_detail"]
+
+        inconsistent = format_dsar_for_response({
+            "id": 3,
+            "request_type": "erasure",
+            "status": "completed",
+            "erasure_executed": False,
+            "retention_outcome": "partially_erased",
+        })
+        inconsistent_visible = " ".join(
+            str(inconsistent.get(key) or "")
+            for key in ("retention_outcome", "status_label", "status_detail")
+        ).lower()
+        for forbidden in ("erased", "deleted", "forgotten"):
+            assert forbidden not in inconsistent_visible
+        assert inconsistent["retention_outcome"] == "partial_retention_outcome_unverified"
+
+    def test_migration_040_registered_and_fresh_schema_has_truth_columns(self, gdpr_db):
+        """Fresh init_db carries the columns and records 040 as schema-covered."""
+        import db as db_module
+
+        assert "040" in db_module.FILE_MIGRATIONS_REQUIRING_RUNNER
+        columns = {
+            row["name"]
+            for row in gdpr_db.execute("PRAGMA table_info(data_subject_requests)").fetchall()
+        }
+        assert set(db_module.DSAR_ERASURE_TRUTH_COLUMNS).issubset(columns)
+
+        marker = gdpr_db.execute(
+            "SELECT filename, description, checksum FROM schema_version WHERE version = ?",
+            ("040",),
+        ).fetchone()
+        assert marker is not None
+        assert marker["filename"] == "migration_040_dsar_status_truthfulness.sql"
+        assert marker["description"] == "covered by init_db"
+        assert marker["checksum"] == "init_db"
+
+    def test_migration_040_runs_on_preexisting_database(self, tmp_path):
+        """Existing databases without the H2A columns must run migration 040."""
+        from db import DBConnection, DSAR_ERASURE_TRUTH_COLUMNS
+        from migrations.runner import MIGRATIONS_DIR, ensure_schema_version_table, run_all_migrations_with_connection
+
+        db_path = tmp_path / "legacy_dsar.db"
+        conn = sqlite3.connect(str(db_path))
+        wrapped = DBConnection(conn)
+        try:
+            wrapped.executescript("""
+            CREATE TABLE data_subject_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_type TEXT NOT NULL CHECK(request_type IN ('access','rectification','erasure','portability','restriction','objection')),
+                requester_email TEXT NOT NULL,
+                requester_name TEXT,
+                client_id TEXT,
+                status TEXT DEFAULT 'pending' CHECK(status IN ('pending','in_progress','completed','rejected','expired')),
+                description TEXT,
+                response_notes TEXT,
+                handled_by TEXT,
+                received_at TEXT DEFAULT (datetime('now')),
+                due_at TEXT,
+                completed_at TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            """)
+            wrapped.execute(
+                "INSERT INTO data_subject_requests (request_type, requester_email, status) VALUES (?, ?, ?)",
+                ("erasure", "legacy@example.com", "pending"),
+            )
+            ensure_schema_version_table(wrapped)
+            for path in sorted(Path(MIGRATIONS_DIR).glob("migration_*.sql")):
+                version = path.stem.split("_", 2)[1]
+                if version == "040":
+                    continue
+                wrapped.execute(
+                    "INSERT INTO schema_version (version, filename, description, checksum) "
+                    "VALUES (?, ?, ?, ?)",
+                    (version, path.name, "preseeded by test", "preseed"),
+                )
+            wrapped.commit()
+
+            applied = run_all_migrations_with_connection(wrapped)
+            assert applied == 1
+
+            columns = {
+                row["name"]
+                for row in wrapped.execute("PRAGMA table_info(data_subject_requests)").fetchall()
+            }
+            assert set(DSAR_ERASURE_TRUTH_COLUMNS).issubset(columns)
+            row = wrapped.execute(
+                "SELECT erasure_executed, retention_outcome FROM data_subject_requests WHERE requester_email = ?",
+                ("legacy@example.com",),
+            ).fetchone()
+            assert row["erasure_executed"] in (0, False)
+            assert row["retention_outcome"] is None
+
+            marker = wrapped.execute(
+                "SELECT filename, checksum FROM schema_version WHERE version = ?",
+                ("040",),
+            ).fetchone()
+            assert marker is not None
+            assert marker["filename"] == "migration_040_dsar_status_truthfulness.sql"
+            assert marker["checksum"] != "init_db"
+        finally:
+            wrapped.close()
+
+    def test_sqlite_add_column_shim_splits_quoted_semicolons(self):
+        """SQLite migration shim must not split inside SQL string literals."""
+        from db import DBConnection
+
+        assert DBConnection._split_sql_statements(
+            "SELECT 'alpha;beta'; SELECT \"gamma;delta\"; SELECT 'it''s;ok';"
+        ) == [
+            "SELECT 'alpha;beta'",
+            'SELECT "gamma;delta"',
+            "SELECT 'it''s;ok'",
+        ]
 
 
 # ═══════════════════════════════════════════════════════════
