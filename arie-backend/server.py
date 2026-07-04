@@ -4330,7 +4330,7 @@ def _readiness_status_payload():
 
     # 3. Required config present (environment-specific)
     missing_config = []
-    if ENVIRONMENT in ("staging", "production", "prod"):
+    if ENVIRONMENT in ("staging", "production"):
         if not os.environ.get("PII_ENCRYPTION_KEY"):
             missing_config.append("PII_ENCRYPTION_KEY")
         if not SECRET_KEY:

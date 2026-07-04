@@ -44,7 +44,13 @@ class ConfigError(Exception):
 # nothing from this module, so this import cannot cycle.
 from environment import canonicalize_environment as _canonicalize_environment
 
-ENVIRONMENT = _canonicalize_environment(os.getenv("ENVIRONMENT", os.getenv("ENV", "development")))
+# The `or` chain (not getenv defaults) matches environment.py exactly: a
+# SET-BUT-EMPTY ENVIRONMENT must fall through to ENV, not shadow it —
+# render.yaml services set ENV, and an IaC layer adding an empty ENVIRONMENT
+# previously re-split the brain (config→development, environment→ENV value).
+ENVIRONMENT = _canonicalize_environment(
+    os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or "development"
+)
 IS_TESTING = ENVIRONMENT == "testing"
 IS_DEMO = ENVIRONMENT == "demo"
 IS_STAGING = ENVIRONMENT == "staging"

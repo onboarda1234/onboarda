@@ -580,11 +580,13 @@ def automation_enabled(environment: Optional[str] = None) -> bool:
     env_value = os.environ.get("MONITORING_AUTOMATION_ENABLED")
     if env_value is not None:
         return _truthy(env_value)
-    return str(environment or os.environ.get("ENVIRONMENT") or "").strip().lower() in {
-        "staging",
-        "production",
-        "prod",
-    }
+    # Canonicalized (audit H8 / PR-13): the raw set covered "prod" but not
+    # "stage", so ENVIRONMENT=stage ran as staging everywhere else while the
+    # due-review scheduler silently stayed off.
+    from environment import canonicalize_environment
+    return canonicalize_environment(
+        environment or os.environ.get("ENVIRONMENT") or os.environ.get("ENV")
+    ) in {"staging", "production"}
 
 
 __all__ = [

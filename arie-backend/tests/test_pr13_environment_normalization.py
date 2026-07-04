@@ -73,8 +73,19 @@ def _reload_both(monkeypatch, raw):
 
 @pytest.fixture()
 def restore_modules():
+    # Snapshot the ambient env vars OURSELVES: pytest finalizes fixtures in
+    # reverse setup order, so this teardown runs BEFORE monkeypatch undoes
+    # its setenv calls — reloading without restoring first would re-bake the
+    # monkeypatched value into config/environment for the rest of the session
+    # (adversarial-review finding, empirically proven to leak).
+    orig = {var: os.environ.get(var) for var in ("ENVIRONMENT", "ENV")}
     yield
-    # Re-canonicalize against the real (test) environment for later tests.
+    for var, value in orig.items():
+        if value is None:
+            os.environ.pop(var, None)
+        else:
+            os.environ[var] = value
+
     import environment as environment_module
     import config as config_module
 
@@ -147,8 +158,9 @@ def test_validate_config_allows_missing_database_url_in_development(monkeypatch,
     config_module.validate_config()  # must not raise
 
 
-def test_readiness_reports_missing_database_url(monkeypatch):
-    """The operator surface mirrors the boot gate."""
+def test_readiness_reports_missing_database_url(monkeypatch, temp_db):
+    """The operator surface mirrors the boot gate. (temp_db keeps the payload's
+    DB-connectivity check off the repo-dir default SQLite file.)"""
     import server
 
     monkeypatch.setattr(server, "ENVIRONMENT", "staging")
@@ -160,3 +172,76 @@ def test_readiness_reports_missing_database_url(monkeypatch):
     assert config_check["status"] == "failed"
     assert "DATABASE_URL" in config_check["missing"]
     assert ready is False
+
+
+# ---------------------------------------------------------------------------
+# Set-but-empty ENVIRONMENT must fall through to ENV on BOTH sides
+# (adversarial-review finding: getenv-default vs `or`-chain divergence)
+# ---------------------------------------------------------------------------
+
+def test_empty_environment_falls_through_to_env_on_both_sides(monkeypatch, restore_modules):
+    """render.yaml services set ENV; an IaC layer adding an EMPTY ENVIRONMENT
+    previously re-split the brain (config→development, environment→ENV)."""
+    monkeypatch.setenv("ENVIRONMENT", "")
+    monkeypatch.setenv("ENV", "staging")
+
+    import environment as environment_module
+    import config as config_module
+
+    importlib.reload(environment_module)
+    importlib.reload(config_module)
+
+    assert environment_module.ENV == "staging"
+    assert config_module.ENVIRONMENT == "staging", (
+        "set-but-empty ENVIRONMENT shadowed ENV in config.py — split-brain"
+    )
+    assert config_module.IS_STAGING is True
+
+
+# ---------------------------------------------------------------------------
+# Raw os.environ readers must agree with the canonical value
+# ---------------------------------------------------------------------------
+
+def test_webhook_signature_status_fail_closed_under_prod_alias(monkeypatch):
+    """The nastiest drift: raw 'prod' used to yield disabled_non_production —
+    fail-OPEN webhook signatures on a box booting with production gates."""
+    from screening_complyadvantage import webhook_handler as wh
+
+    monkeypatch.setenv("ENVIRONMENT", "prod")
+    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.delenv("COMPLYADVANTAGE_WEBHOOK_SECRET", raising=False)
+
+    status = wh._signature_status(b"{}", {})
+    assert status == "deployed_secret_missing", (
+        f"ENVIRONMENT=prod with no webhook secret must fail CLOSED "
+        f"(deployed_secret_missing), got {status!r}"
+    )
+
+
+def test_monitoring_automation_enabled_for_stage_alias(monkeypatch):
+    """'stage' canonicalizes to staging everywhere — the scheduler must not
+    silently stay off for it (and 'prod' must count as production)."""
+    import monitoring_automation as ma
+
+    monkeypatch.delenv("MONITORING_AUTOMATION_ENABLED", raising=False)
+    monkeypatch.delenv("ENV", raising=False)
+
+    monkeypatch.setenv("ENVIRONMENT", "stage")
+    assert ma.automation_enabled() is True
+    monkeypatch.setenv("ENVIRONMENT", "prod")
+    assert ma.automation_enabled() is True
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    assert ma.automation_enabled() is False
+
+
+def test_screening_config_defaults_resolve_for_aliases(monkeypatch):
+    import screening_config as sc
+
+    monkeypatch.delenv("ENABLE_SCREENING_ABSTRACTION", raising=False)
+    monkeypatch.delenv("SCREENING_PROVIDER", raising=False)
+    monkeypatch.delenv("ENV", raising=False)
+
+    monkeypatch.setenv("ENVIRONMENT", "prod")
+    # 'prod' must hit the canonical production defaults, not the fallbacks.
+    assert sc.get_active_provider_name() == sc._PROVIDER_DEFAULTS["production"]
+    assert sc.is_abstraction_enabled() is sc._ABSTRACTION_DEFAULTS["production"]
