@@ -4052,6 +4052,24 @@ def _create_supervisor_audit_log_indexes(db: DBConnection) -> None:
     CREATE INDEX IF NOT EXISTS idx_sup_audit_pipeline ON supervisor_audit_log(pipeline_id);
     CREATE INDEX IF NOT EXISTS idx_sup_audit_actor ON supervisor_audit_log(actor_id);
     """)
+    # Structural anti-fork backstop (audit finding H12 / B3): at most one entry
+    # may reference a given predecessor hash, so two concurrent appends can never
+    # both chain off the same tail. Genesis entries carry NULL previous_hash and
+    # are excluded by the partial predicate (valid on both PostgreSQL and SQLite
+    # >= 3.8). Best-effort: if a pre-existing fork already violates uniqueness we
+    # log loudly rather than block startup — the fork is then visible for repair
+    # and new forks are still prevented once the index exists.
+    try:
+        db.executescript(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_sup_audit_prev_hash "
+            "ON supervisor_audit_log(previous_hash) WHERE previous_hash IS NOT NULL;"
+        )
+    except Exception as exc:  # pre-existing duplicate previous_hash (a legacy fork)
+        logger.error(
+            "Could not create unique anti-fork index on supervisor_audit_log.previous_hash "
+            "(a pre-existing chain fork likely exists and needs investigation): %s",
+            exc,
+        )
 
 
 def _create_supervisor_audit_migrations_table(db: DBConnection) -> None:

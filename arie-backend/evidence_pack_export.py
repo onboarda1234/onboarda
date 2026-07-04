@@ -955,16 +955,26 @@ def render_audit_trail_csv(case: dict[str, Any], redaction_level: str) -> bytes:
 def render_supervisor_audit_chain_csv(case: dict[str, Any], redaction_level: str) -> bytes:
     """Render this application's tamper-evident supervisor audit chain (H4).
 
-    The hash columns (previous_hash, entry_hash) are always included — even at
-    the external redaction level — because they carry no PII and are exactly what
-    lets a regulator independently re-verify the decision chain. A verification
-    attestation header records the full-chain integrity result at export time.
+    Independent verifiability: at ``full_internal`` redaction each row includes a
+    ``canonical_hash_payload`` column — the exact JSON that was SHA-256'd to
+    produce ``entry_hash`` — so a third party can recompute
+    ``sha256(canonical_hash_payload) == entry_hash`` and walk
+    ``previous_hash -> entry_hash`` without trusting this system. The full payload
+    is withheld at ``external_redacted`` because it embeds the un-redacted record
+    fields; at that level the pack still carries the hashes and the system's
+    verification attestation, and points to the full-internal pack for
+    independent recomputation.
     """
+    from supervisor.audit import supervisor_hash_payload
+
     output = io.StringIO()
     writer = csv.writer(output)
 
     verification = case.get("supervisor_chain_verification") or {}
+    full = redaction_level == "full_internal"
     writer.writerow(["# supervisor_audit_chain"])
+    writer.writerow(["# hash_algorithm", "sha256(canonical_hash_payload) == entry_hash; hash_version=2"])
+    writer.writerow(["# independently_recomputable", "yes" if full else "no (full_internal pack required — payload withheld under redaction)"])
     writer.writerow(["# chain_verified", verification.get("verified")])
     writer.writerow(["# entries_checked", verification.get("entries_checked", "")])
     writer.writerow(["# total_entries", verification.get("total_entries", "")])
@@ -973,15 +983,19 @@ def render_supervisor_audit_chain_csv(case: dict[str, Any], redaction_level: str
         writer.writerow(["# note", verification.get("reason")])
     writer.writerow([])
 
-    writer.writerow([
+    header = [
         "timestamp", "event_type", "severity", "actor_id", "actor_role",
         "action", "detail", "previous_hash", "entry_hash",
-    ])
+    ]
+    if full:
+        header.append("canonical_hash_payload")
+    writer.writerow(header)
+
     for row in case.get("supervisor_audit", []) or []:
         detail = row.get("detail") or ""
-        if redaction_level == "external_redacted":
+        if not full:
             detail = _summarize(detail, 200)
-        writer.writerow([
+        record = [
             row.get("timestamp"),
             row.get("event_type"),
             row.get("severity"),
@@ -991,7 +1005,11 @@ def render_supervisor_audit_chain_csv(case: dict[str, Any], redaction_level: str
             detail,
             row.get("previous_hash"),
             row.get("entry_hash"),
-        ])
+        ]
+        if full:
+            payload = supervisor_hash_payload(row, row.get("previous_hash"))
+            record.append(json.dumps(payload, sort_keys=True))
+        writer.writerow(record)
     return output.getvalue().encode("utf-8")
 
 

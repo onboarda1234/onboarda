@@ -36,6 +36,10 @@ from .schemas import (
     Severity,
 )
 
+# Fixed PostgreSQL advisory-lock key that serializes appends to the single
+# supervisor verdict hash chain (audit finding H12 / B3).
+_SUPERVISOR_CHAIN_LOCK_KEY = 8674309921
+
 # ---------------------------------------------------------------------------
 # Standalone transactional helper — does NOT open its own connection
 # ---------------------------------------------------------------------------
@@ -71,6 +75,16 @@ def append_verdict_chain_entry(
     """
     from datetime import datetime, timezone
     from uuid import uuid4
+
+    # Serialize concurrent appends so two transactions cannot select the same
+    # chain tail and insert successors with the same previous_hash — a fork
+    # (audit finding H12 / B3). On PostgreSQL a transaction-scoped advisory lock,
+    # held until the caller commits, makes the tail-select + insert atomic across
+    # sessions. SQLite already serializes writers, and the unique partial index on
+    # previous_hash (see db.py _create_supervisor_audit_log_indexes) is the
+    # structural backstop on both engines.
+    if getattr(db, "is_postgres", False):
+        db.execute("SELECT pg_advisory_xact_lock(?)", (_SUPERVISOR_CHAIN_LOCK_KEY,))
 
     # Retrieve the current chain tail to link the new entry (audit finding H12).
     # The tail is the entry whose hash is not referenced as any other entry's
@@ -175,6 +189,43 @@ def _timestamp_for_hash(value: Any) -> str:
             value = value.astimezone(timezone.utc).replace(tzinfo=None)
         return value.strftime("%Y-%m-%dT%H:%M:%SZ")
     return "" if value is None else str(value)
+
+
+def supervisor_hash_payload(row: Dict[str, Any], previous_hash: Optional[str]) -> Dict[str, Any]:
+    """Canonical v2 hash payload for a supervisor_audit_log row.
+
+    Byte-for-byte identical to what ``append_verdict_chain_entry`` hashes and what
+    ``verify_chain_integrity`` recomputes, so
+    ``sha256(json.dumps(payload, sort_keys=True))`` == the row's ``entry_hash``.
+    Exposed so the regulator evidence pack can export the exact payload and the
+    chain becomes independently recomputable by a third party (audit finding H4).
+    """
+    return {
+        "audit_id": row.get("id"),
+        "timestamp": _timestamp_for_hash(row.get("timestamp")),
+        "event_type": row.get("event_type"),
+        "severity": row.get("severity") or "info",
+        "pipeline_id": row.get("pipeline_id") or "",
+        "application_id": row.get("application_id") or "",
+        "run_id": row.get("run_id") or "",
+        "agent_type": row.get("agent_type") or "",
+        "actor_type": row.get("actor_type") or "system",
+        "actor_id": row.get("actor_id") or "",
+        "actor_name": row.get("actor_name") or "",
+        "actor_role": row.get("actor_role") or "",
+        "action": row.get("action"),
+        "detail": row.get("detail") or "",
+        "data": json.loads(row.get("data_json") or "{}"),
+        "previous_hash": previous_hash or "",
+        "hash_version": 2,
+    }
+
+
+def supervisor_entry_hash(row: Dict[str, Any], previous_hash: Optional[str]) -> str:
+    """SHA-256 of the canonical v2 payload — see supervisor_hash_payload."""
+    return hashlib.sha256(
+        json.dumps(supervisor_hash_payload(row, previous_hash), sort_keys=True).encode()
+    ).hexdigest()
 
 
 def _get_db():
@@ -533,28 +584,9 @@ class AuditLogger:
         """
 
         def _recompute(row, prev):
-            entry_data = {
-                "audit_id": row["id"],
-                "timestamp": _timestamp_for_hash(row["timestamp"]),
-                "event_type": row["event_type"],
-                "severity": row["severity"] or "info",
-                "pipeline_id": row["pipeline_id"] or "",
-                "application_id": row["application_id"] or "",
-                "run_id": row["run_id"] or "",
-                "agent_type": row["agent_type"] or "",
-                "actor_type": row["actor_type"] or "system",
-                "actor_id": row["actor_id"] or "",
-                "actor_name": row["actor_name"] or "",
-                "actor_role": row["actor_role"] or "",
-                "action": row["action"],
-                "detail": row["detail"] or "",
-                "data": json.loads(row["data_json"] or "{}"),
-                "previous_hash": prev or "",
-                "hash_version": 2,
-            }
-            return hashlib.sha256(
-                json.dumps(entry_data, sort_keys=True).encode()
-            ).hexdigest()
+            # Shared canonical payload so the verifier and the evidence-pack
+            # export hash the exact same bytes (audit finding H4).
+            return supervisor_entry_hash(row, prev)
 
         db = None
         try:

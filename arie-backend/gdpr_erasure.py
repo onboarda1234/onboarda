@@ -240,10 +240,17 @@ def execute_subject_erasure(
         plan["changes_made"] = False
         return plan
 
+    _ensure_erasure_log_table(db)
+
     if override_retention and not (override_reason and override_reason.strip()):
+        # Record the refused attempt in the immutable log before returning, so an
+        # override attempt without a written reason leaves an audit trail too.
+        _log_erasure(db, client_id=client_id, application_id=None, requested_by=requested_by,
+                     action="refused_override_without_reason", tables_affected=[],
+                     retention_overridden=True,
+                     note="override_retention requested without a written override_reason")
         return {**plan, "action": "refused", "error": "override_retention requires a written override_reason"}
 
-    _ensure_erasure_log_table(db)
     erased_apps, retained_refused, tables_touched = [], [], set()
 
     for entry in plan["applications"]:

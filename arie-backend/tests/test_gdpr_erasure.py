@@ -100,3 +100,21 @@ def test_override_retention_requires_reason(db):
     assert res["action"] == "refused"
     d = db.execute("SELECT full_name FROM directors WHERE application_id = 'a-ov'").fetchone()
     assert d["full_name"] == "John Doe"
+
+
+def test_override_without_reason_refusal_is_logged(db):
+    """The refused override-without-reason attempt must leave an audit trail."""
+    import gdpr_erasure as ge
+    _seed(db, "c-ovlog", "a-ovlog", "R-OVLOG", 30)
+    res = ge.execute_subject_erasure(
+        db, "c-ovlog", requested_by="admin", dry_run=False,
+        override_retention=True, override_reason="   ",
+    )
+    db.commit()
+    assert res["action"] == "refused"
+    log = db.execute(
+        "SELECT action, retention_overridden FROM gdpr_erasure_log "
+        "WHERE client_id = 'c-ovlog' AND action = 'refused_override_without_reason'"
+    ).fetchone()
+    assert log is not None
+    assert log["retention_overridden"] in (1, True)

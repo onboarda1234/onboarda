@@ -68,5 +68,47 @@ def test_supervisor_chain_csv_carries_hashes_and_attestation(temp_db):
         # Verification attestation header present.
         assert "chain_verified" in csv_text
         assert case["supervisor_audit"][0]["entry_hash"] in csv_text
+        # Full payload COLUMN is withheld under external redaction (the string may
+        # still appear in the algorithm note header, so check the column row).
+        header_line = next(l for l in csv_text.splitlines() if l.startswith("timestamp,"))
+        assert "canonical_hash_payload" not in header_line
+    finally:
+        db.close()
+
+
+def test_supervisor_chain_csv_is_independently_recomputable(temp_db):
+    """H4: at full_internal a third party can recompute sha256(payload)==entry_hash."""
+    import csv
+    import io
+    import hashlib
+    from db import get_db
+    from supervisor.audit import append_verdict_chain_entry
+    import evidence_pack_export as ep
+
+    db = get_db()
+    try:
+        _seed_app_with_chain(db, app_id="app-h4c", ref="ARF-H4C")
+        # A second entry so linkage (previous_hash -> entry_hash) is exercised too.
+        append_verdict_chain_entry(
+            db=db, application_id="app-h4c", verdict="CONSISTENT_WITH_WARNINGS",
+            contradiction_count=1, supervisor_confidence=0.9, memo_id="memo-h4c-2",
+        )
+        db.commit()
+        app = dict(db.execute("SELECT * FROM applications WHERE id = 'app-h4c'").fetchone())
+        case = ep._load_case(db, app)
+
+        text = ep.render_supervisor_audit_chain_csv(case, "full_internal").decode("utf-8")
+        rows = [r for r in csv.reader(io.StringIO(text)) if r]
+        hi = next(i for i, r in enumerate(rows) if r and r[0] == "timestamp")
+        header = rows[hi]
+        assert "canonical_hash_payload" in header
+        p_idx = header.index("canonical_hash_payload")
+        h_idx = header.index("entry_hash")
+
+        data_rows = rows[hi + 1:]
+        assert len(data_rows) == 2
+        for r in data_rows:
+            recomputed = hashlib.sha256(r[p_idx].encode()).hexdigest()
+            assert recomputed == r[h_idx], "independent recompute of entry_hash failed"
     finally:
         db.close()

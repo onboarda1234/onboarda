@@ -475,6 +475,43 @@ class TestAuditChainEntry:
         assert result["entries_checked"] == 4
         assert result.get("broken_links", []) == []
 
+    def test_unique_index_prevents_chain_fork(self, temp_db):
+        """H12/B3: two entries cannot share one predecessor (structural anti-fork).
+
+        The unique partial index on previous_hash forbids a second successor of
+        the same tail, so a concurrent append that raced past the tail-select
+        fails closed instead of forking the chain.
+        """
+        import sqlite3
+        self._clear_chain(temp_db)
+        from db import get_db
+        from supervisor.audit import append_verdict_chain_entry
+        db = get_db()
+        for i in range(2):
+            append_verdict_chain_entry(
+                db=db, application_id="app-fork", verdict="CONSISTENT",
+                contradiction_count=0, supervisor_confidence=1.0, memo_id=f"m{i}",
+            )
+            db.commit()
+        db.close()
+
+        # The genesis entry's hash is already referenced by entry #1's
+        # previous_hash. Inserting a second row that also points at genesis is a
+        # fork; the unique index must reject it.
+        conn = sqlite3.connect(temp_db)
+        genesis_hash = conn.execute(
+            "SELECT entry_hash FROM supervisor_audit_log WHERE previous_hash IS NULL"
+        ).fetchone()[0]
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO supervisor_audit_log "
+                "(id, timestamp, event_type, severity, action, previous_hash, entry_hash) "
+                "VALUES ('forkrow', '2026-01-01T00:00:00Z', 'x', 'info', 'x', ?, 'forkhash')",
+                (genesis_hash,),
+            )
+            conn.commit()
+        conn.close()
+
     def test_recent_tamper_detected_within_limit_window(self, temp_db):
         """H3: verifying with a small limit must check the MOST RECENT entries.
 
