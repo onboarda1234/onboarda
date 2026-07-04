@@ -11,7 +11,9 @@ from screening_complyadvantage.exceptions import CATimeout, CAUnexpectedResponse
 from screening_complyadvantage.normalizer import ScreeningApplicationContext
 from screening_complyadvantage.orchestrator import (
     ComplyAdvantageScreeningOrchestrator,
+    _category_from_aml_type,
     _mark_report_pending_after_timeout,
+    _normalise_risk_as_alert,
 )
 
 
@@ -359,6 +361,8 @@ def test_case_creation_maps_mesh_profile_risk_indicators_to_pep_hit():
             "profile": {
                 "identifier": "profile-mesh-pep",
                 "matching_name": "pravind jugnauth",
+                "match_score": 0.7,
+                "match_types": ["exact_match"],
                 "risk_indicators": {
                     "aml_types": ["pep-class-1"],
                     "peps": [{
@@ -389,12 +393,22 @@ def test_case_creation_maps_mesh_profile_risk_indicators_to_pep_hit():
 
     assert report["total_hits"] == 1
     assert report["any_pep_hits"] is True
-    assert report["overall_flags"] == ["ComplyAdvantage PEP hit: risk-mesh-pep"]
+    assert report["overall_flags"] == ["ComplyAdvantage PEP hit: pravind jugnauth"]
     assert report["director_screenings"][0]["has_pep_hit"] is True
     assert report["director_screenings"][0]["pep_classes"] == ["PEP_CLASS_1"]
+    screening = report["director_screenings"][0]["screening"]
+    result = screening["results"][0]
+    assert result["name"] == "pravind jugnauth"
+    assert result["match_score"] is None
+    assert result["provider_match_score_raw"] == 0.7
+    assert result["provider_match_types"] == ["exact_match"]
+    assert result["provider_aml_types_raw"] == ["pep-class-1"]
     provider_match = report["provider_specific"]["complyadvantage"]["matches"][0]
     assert provider_match["indicators"][0]["taxonomy_key"] == "r_pep_class_1"
     assert provider_match["indicators"][0]["value"]["class"] == "PEP_CLASS_1"
+    assert provider_match["provider_match_score_raw"] == 0.7
+    assert provider_match["provider_match_types"] == ["exact_match"]
+    assert provider_match["provider_aml_types_raw"] == ["pep-class-1"]
 
 
 def test_case_creation_maps_mesh_list_risk_indicators_to_pep_hit():
@@ -467,6 +481,180 @@ def test_case_creation_maps_mesh_list_risk_indicators_to_pep_hit():
     assert provider_match["indicators"][0]["taxonomy_key"] == "r_pep_class_1"
     assert provider_match["indicators"][0]["value"]["class"] == "PEP_CLASS_1"
     assert provider_match["indicators"][0]["value"]["position"] == "Leader"
+
+
+@pytest.mark.parametrize(
+    ("aml_type", "expected"),
+    [
+        ("sanction", "sanctions"),
+        ("sanctions", "sanctions"),
+        ("pep", "pep"),
+        ("pep-class-1", "pep"),
+        ("pep-class-4", "pep"),
+        ("politically-exposed", "pep"),
+        ("adverse-media-v2-regulatory", "adverse_media"),
+        ("adverse-media-financial-crime", "adverse_media"),
+        ("adverse-media-terrorism", "adverse_media"),
+        ("adverse-media-general", "adverse_media"),
+        ("adverse_media", "adverse_media"),
+        ("negative-news", "adverse_media"),
+        ("warning", "watchlist"),
+        ("fitness-probity", "watchlist"),
+        ("watchlist", "watchlist"),
+        ("unknown-taxonomy-key", "other"),
+    ],
+)
+def test_mesh_alert_aml_type_category_mapping(aml_type, expected):
+    assert _category_from_aml_type(aml_type) == expected
+
+
+def test_alert_risk_profile_name_fallbacks_from_live_shape():
+    matching = _normalise_risk_as_alert(
+        "risk-name",
+        {"detail": {"profile": {"identifier": "profile-name", "matching_name": "Matched Provider Name"}}},
+    )["profile"]
+    assert matching["matching_name"] == "Matched Provider Name"
+    assert matching["company"]["names"]["values"][0]["name"] == "Matched Provider Name"
+
+    company = _normalise_risk_as_alert(
+        "risk-company",
+        {"detail": {"profile": {"identifier": "profile-company", "company": {"names": ["Company Alias Ltd"]}}}},
+    )["profile"]
+    assert company["company"]["names"]["values"][0]["name"] == "Company Alias Ltd"
+
+    person = _normalise_risk_as_alert(
+        "risk-person",
+        {"detail": {"profile": {"identifier": "profile-person", "person": {"names": [{"name": "Person Alias"}]}}}},
+    )["profile"]
+    assert person["person"]["names"]["values"][0]["name"] == "Person Alias"
+
+    fallback = _normalise_risk_as_alert(
+        "risk-no-name",
+        {"detail": {"profile": {"identifier": "profile-no-name"}}},
+    )["profile"]
+    assert fallback["identifier"] == "profile-no-name"
+    assert fallback["company"]["names"]["values"] == []
+    assert fallback["matching_name"] is None
+
+
+def test_case_creation_captures_mesh_media_evidence_and_raw_score_without_percentage():
+    data = deepcopy(_fixture("pep_canonical.json"))
+    alert = data["workflow"].pop("alerts")[0]
+    data["workflow"]["step_details"]["alerting"] = {
+        "status": "COMPLETED",
+        "step_output": {"alerts": [alert]},
+    }
+    mesh_risk = {
+        "identifier": "risk-mesh-media",
+        "type": "ENTITY_SCREENING",
+        "decision": "NOT_REVIEWED",
+        "detail": {
+            "profile": {
+                "identifier": "profile-mesh-media",
+                "matching_name": "Adverse Media Subject",
+                "match_score": 1.7,
+                "match_types": ["exact_match"],
+                "risk_indicators": {
+                    "aml_types": ["adverse-media-v2-regulatory"],
+                    "media": [{
+                        "url": "https://news.example.test/adverse-media",
+                        "title": "Adverse media headline",
+                        "snippet": "Stored provider snippet.",
+                        "publishing_date": "2024-01-02",
+                        "identifier": "media-evidence-1",
+                    }],
+                    "lists": [],
+                    "peps": [],
+                },
+            },
+        },
+    }
+    data["alerts_risks"] = {"alert-pep": [mesh_risk]}
+    data["deep_risks"] = {"risk-mesh-media": mesh_risk}
+    client = _client_for_single(data)
+
+    report = _orchestrator(client).screen_customer_two_pass(
+        strict_customer=_customer("strict"),
+        relaxed_customer=_customer("strict"),
+        application_context=_context(data),
+        monitoring_enabled=False,
+    )
+
+    assert report["total_hits"] == 1
+    assert report["has_adverse_media_hit"] is True
+    result = report["director_screenings"][0]["screening"]["results"][0]
+    assert result["name"] == "Adverse Media Subject"
+    assert result["match_score"] is None
+    assert result["provider_match_score_raw"] == 1.7
+    assert result["provider_match_types"] == ["exact_match"]
+    assert result["provider_aml_types_raw"] == ["adverse-media-v2-regulatory"]
+    assert result["provider_media_evidence"] == [{
+        "url": "https://news.example.test/adverse-media",
+        "title": "Adverse media headline",
+        "snippet": "Stored provider snippet.",
+        "publishing_date": "2024-01-02",
+        "identifier": "media-evidence-1",
+    }]
+    assert result["source_url"] == "https://news.example.test/adverse-media"
+    assert result["media_title"] == "Adverse media headline"
+    assert result["media_snippet"] == "Stored provider snippet."
+    assert result["publication_date"] == "2024-01-02"
+    assert result["provider_media_identifier"] == "media-evidence-1"
+    provider_match = report["provider_specific"]["complyadvantage"]["matches"][0]
+    assert provider_match["provider_match_score_raw"] == 1.7
+    assert provider_match["provider_match_types"] == ["exact_match"]
+    assert provider_match["provider_aml_types_raw"] == ["adverse-media-v2-regulatory"]
+    assert provider_match["provider_media_evidence"][0]["url"] == "https://news.example.test/adverse-media"
+
+
+def test_case_creation_tolerates_malformed_mesh_profile_without_crashing():
+    data = deepcopy(_fixture("pep_canonical.json"))
+    alert = data["workflow"].pop("alerts")[0]
+    data["workflow"]["step_details"]["alerting"] = {
+        "status": "COMPLETED",
+        "step_output": {"alerts": [alert]},
+    }
+    mesh_risk = {
+        "identifier": "risk-mesh-malformed",
+        "type": "ENTITY_SCREENING",
+        "decision": "NOT_REVIEWED",
+        "detail": {
+            "profile": {
+                "identifier": "profile-mesh-malformed",
+                "company": {"names": "not-a-list"},
+                "risk_indicators": "not-a-dict",
+                "match_score": "not-a-number",
+                "match_types": "not-a-list",
+            },
+        },
+    }
+    data["alerts_risks"] = {"alert-pep": [mesh_risk]}
+    data["deep_risks"] = {"risk-mesh-malformed": mesh_risk}
+    client = _client_for_single(data)
+
+    report = _orchestrator(client).screen_customer_two_pass(
+        strict_customer=_customer("strict"),
+        relaxed_customer=_customer("strict"),
+        application_context=_context(data),
+        monitoring_enabled=False,
+    )
+
+    assert report["total_hits"] == 1
+    result = report["director_screenings"][0]["screening"]["results"][0]
+    assert result["name"] == "profile-mesh-malformed"
+    assert result["match_score"] is None
+    assert result["match_category"] == "other"
+    assert "provider_match_score_raw" not in result
+
+
+def test_alert_risk_profile_missing_or_non_dict_profile_does_not_raise():
+    missing = _normalise_risk_as_alert("risk-missing", {"detail": {}})
+    assert missing["identifier"] == "risk-missing"
+    assert "profile" not in missing
+
+    malformed = _normalise_risk_as_alert("risk-malformed", {"detail": {"profile": "not-a-dict"}})
+    assert malformed["identifier"] == "risk-malformed"
+    assert "profile" not in malformed
 
 
 def test_case_creation_skipped_clean_path_fetches_no_risks_or_deep_risks():

@@ -376,12 +376,13 @@ def derive_company_screening_from_matches(matches: list[MergedMatch], screened_a
 
 
 def _match_score_percentage(match: MergedMatch):
-    """CA's per-match name-match strength as a 0–100 percentage, or None.
+    """Provider percentage score as a 0–100 percentage, or None.
 
-    ComplyAdvantage returns ``match_details.match_score`` as a 0–1 fraction; the
-    stored screening_report convention (and the Agent 3 thresholds) use a 0–100
-    scale, so scale up. Defensive: pass through values that already look like a
-    percentage (>1). Returns None when the provider gave no score.
+    Historical normalized fixtures carry ``match_details.match_score`` as a
+    percentage-capable score. Live Mesh alert-risk ``detail.profile.match_score``
+    is not used here: sandbox returned 0.7 and 1.7 for exact_match risks, so
+    that value is captured as ``provider_match_score_raw`` pending CA scale
+    clarification.
     """
     profile = match.profile
     if profile is None:
@@ -397,9 +398,15 @@ def _legacy_screening_result_from_match(match: MergedMatch, rollups: dict) -> di
     """Compatibility result shape used by existing Back Office review widgets."""
     indicators = [_indicator_payload(indicator) for indicator in _all_indicators(match.risk)]
     risk_types = _risk_type_payloads(match.risk)
-    categories = _match_categories(rollups, indicators)
+    provider_aml_types_raw = _profile_list(match.profile, "provider_aml_types_raw")
+    provider_categories = _categories_from_provider_aml_types(provider_aml_types_raw)
+    categories = _ordered_unique(_match_categories(rollups, indicators) + provider_categories)
     provider_references = _match_provider_references(match)
-    return {
+    provider_match_score_raw = _profile_provider_match_score_raw(match.profile)
+    provider_match_types = _profile_list(match.profile, "provider_match_types")
+    provider_media_evidence = _profile_media_evidence(match.profile)
+    first_media = provider_media_evidence[0] if provider_media_evidence else {}
+    result = {
         "name": _profile_name(match.profile) or match.profile_identifier,
         # CA name-match strength (0–100), None when the provider gave no score.
         # surfaced_by_pass (strict/relaxed/both) is the confidence fallback the
@@ -427,6 +434,26 @@ def _legacy_screening_result_from_match(match: MergedMatch, rollups: dict) -> di
         "pep_classes": extract_pep_classes(match),
         "indicators": indicators,
     }
+    if provider_match_score_raw is not None:
+        result["provider_match_score_raw"] = provider_match_score_raw
+    if provider_match_types:
+        result["provider_match_types"] = provider_match_types
+    if provider_aml_types_raw:
+        result["provider_aml_types_raw"] = provider_aml_types_raw
+    if provider_media_evidence:
+        result["provider_media_evidence"] = provider_media_evidence
+    if first_media:
+        result.update({
+            "media_url": first_media.get("url"),
+            "source_url": first_media.get("url"),
+            "media_title": first_media.get("title"),
+            "source_title": first_media.get("title"),
+            "media_snippet": first_media.get("snippet"),
+            "snippet": first_media.get("snippet"),
+            "publication_date": first_media.get("publishing_date"),
+            "provider_media_identifier": first_media.get("identifier"),
+        })
+    return {key: value for key, value in result.items() if value not in ([], {})}
 
 
 def apply_top_level_rollups(director_screenings, ubo_screenings, company_screening) -> dict:
@@ -810,6 +837,85 @@ def _risk_type_payloads(risk):
     return payloads
 
 
+def _profile_list(profile, attr):
+    if profile is None:
+        return []
+    value = getattr(profile, attr, None)
+    if not isinstance(value, list):
+        return []
+    result = []
+    for item in value:
+        if item in (None, "", [], {}):
+            continue
+        text = str(item).strip() if not isinstance(item, dict) else item
+        if text:
+            result.append(text)
+    return result
+
+
+def _profile_provider_match_score_raw(profile):
+    if profile is None:
+        return None
+    value = getattr(profile, "provider_match_score_raw", None)
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _profile_media_evidence(profile):
+    if profile is None:
+        return []
+    rows = getattr(profile, "provider_media_evidence", None)
+    if not isinstance(rows, list):
+        return []
+    result = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        current = {
+            key: item.get(key)
+            for key in ("url", "title", "snippet", "publishing_date", "identifier")
+            if item.get(key) not in (None, "", [], {})
+        }
+        if current:
+            result.append(current)
+    return result
+
+
+def _categories_from_provider_aml_types(values):
+    categories = []
+    saw_raw = False
+    for value in values or []:
+        saw_raw = True
+        category = _category_from_provider_aml_type(value)
+        if category not in categories:
+            categories.append(category)
+    return categories or (["other"] if saw_raw else [])
+
+
+def _category_from_provider_aml_type(value):
+    text = str(value or "").strip().lower().replace("_", "-").replace(" ", "-")
+    if not text:
+        return "other"
+    if text.startswith("sanction"):
+        return "sanctions"
+    if text.startswith("pep") or "politically-exposed" in text:
+        return "pep"
+    if text.startswith("adverse-media") or "negative-news" in text:
+        return "adverse_media"
+    if text == "warning" or text.startswith("fitness-probity") or "watchlist" in text:
+        return "watchlist"
+    return "other"
+
+
+def _ordered_unique(values):
+    result = []
+    for value in values or []:
+        if value in (None, "", [], {}):
+            continue
+        if value not in result:
+            result.append(value)
+    return result
+
+
 def _match_categories(rollups, indicators):
     categories = []
     if rollups.get("has_pep_hit"):
@@ -826,6 +932,11 @@ def _match_categories(rollups, indicators):
 def _profile_name(profile):
     if profile is None:
         return ""
+    if getattr(profile, "matching_name", None):
+        return profile.matching_name
+    details = getattr(profile, "match_details", None)
+    if getattr(details, "matched_name", None):
+        return details.matched_name
     if profile.person is not None and profile.person.names.values:
         return profile.person.names.values[0].name
     if profile.company is not None and profile.company.names.values:
@@ -887,6 +998,10 @@ def _build_provider_specific_block(
 
 
 def _provider_match(match, include_surfaced_by_pass):
+    provider_match_score_raw = _profile_provider_match_score_raw(match.profile)
+    provider_match_types = _profile_list(match.profile, "provider_match_types")
+    provider_aml_types_raw = _profile_list(match.profile, "provider_aml_types_raw")
+    provider_media_evidence = _profile_media_evidence(match.profile)
     data = {
         "profile_identifier": match.profile_identifier,
         "alert_identifier": match.alert_id,
@@ -899,6 +1014,14 @@ def _provider_match(match, include_surfaced_by_pass):
         "relationships": _relationships(match.profile),
         "indicators": [_indicator_payload(i) for i in _all_indicators(match.risk)],
     }
+    if provider_match_score_raw is not None:
+        data["provider_match_score_raw"] = provider_match_score_raw
+    if provider_match_types:
+        data["provider_match_types"] = provider_match_types
+    if provider_aml_types_raw:
+        data["provider_aml_types_raw"] = provider_aml_types_raw
+    if provider_media_evidence:
+        data["provider_media_evidence"] = provider_media_evidence
     if include_surfaced_by_pass:
         data["surfaced_by_pass"] = match.surfaced_by_pass
     raw_extras = _match_raw_extras(match)

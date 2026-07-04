@@ -183,9 +183,14 @@ class CAProfile(CAWireModel):
     company: Optional[CAProfileCompany] = None
     vessel: Optional[dict] = None
     entity_type: Optional[str] = None
-    match_details: CAMatchDetails
-    risk_types: list[str]
-    risk_indicators: list[CARiskIndicator]
+    match_details: CAMatchDetails = Field(default_factory=CAMatchDetails)
+    risk_types: list[str] = Field(default_factory=list)
+    risk_indicators: list[CARiskIndicator] = Field(default_factory=list)
+    matching_name: Optional[str] = None
+    provider_match_score_raw: Optional[float] = None
+    provider_match_types: list[str] = Field(default_factory=list)
+    provider_aml_types_raw: list[str] = Field(default_factory=list)
+    provider_media_evidence: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def exactly_one_subject_kind(self) -> "CAProfile":

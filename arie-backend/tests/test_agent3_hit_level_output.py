@@ -497,3 +497,45 @@ def test_hit_rows_preserve_provider_pass_without_numeric_score():
     assert "relaxed pass" in by_entity["Relaxed Only"]["reason"].lower()
     assert by_entity["Both Passes"]["surfaced_by_pass"] == "both"
     assert "strict + relaxed" in by_entity["Both Passes"]["reason"].lower()
+
+
+def test_agent3_does_not_render_raw_provider_score_as_percentage():
+    prescreening = {
+        "screening_report": {
+            "provider": "complyadvantage",
+            "screening_provider": "complyadvantage",
+            "screening_mode": "live",
+            "screened_at": _ts(),
+            "total_hits": 2,
+            "company_screening": {
+                "company_name": "Raw Score Co Ltd",
+                "matched": True,
+                "results": [
+                    {
+                        "name": "Raw Score 0.7",
+                        "provider_match_score_raw": 0.7,
+                        "provider_match_types": ["exact_match"],
+                        "category": "watchlist",
+                        "surfaced_by_pass": "strict",
+                    },
+                    {
+                        "name": "Raw Score 1.7",
+                        "provider_match_score_raw": 1.7,
+                        "provider_match_types": ["exact_match"],
+                        "category": "watchlist",
+                        "surfaced_by_pass": "relaxed",
+                    },
+                ],
+            },
+            "director_screenings": [],
+            "ubo_screenings": [],
+        },
+    }
+
+    rows = _build(prescreening=prescreening)["hit_rows"]
+
+    assert [row["match_score"] for row in rows] == [None, None]
+    assert "strict pass" in rows[0]["reason"].lower()
+    assert "relaxed pass" in rows[1]["reason"].lower()
+    assert "0.7%" not in rows[0]["reason"]
+    assert "1.7%" not in rows[1]["reason"]
