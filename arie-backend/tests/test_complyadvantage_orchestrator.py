@@ -537,6 +537,116 @@ def test_alert_risk_profile_name_fallbacks_from_live_shape():
     assert fallback["matching_name"] is None
 
 
+@pytest.mark.parametrize("name_type", [None, "LOCAL_SCRIPT_ALIAS", {"unexpected": "shape"}])
+def test_alert_risk_profile_tolerates_non_critical_name_type_metadata(name_type):
+    name_value = {"name": "Provider Alias"}
+    if name_type is not None:
+        name_value["type"] = name_type
+    profile = _normalise_risk_as_alert(
+        "risk-runtime-name-type",
+        {
+            "detail": {
+                "profile": {
+                    "identifier": "profile-runtime-name-type",
+                    "matching_name": "Runtime Matched Name",
+                    "match_score": 0.7,
+                    "match_types": ["exact_match"],
+                    "person": {"names": {"values": [name_value]}},
+                    "risk_indicators": {
+                        "aml_types": ["adverse-media-v2-regulatory"],
+                        "media": [{
+                            "url": "https://news.example.test/runtime-name-type",
+                            "title": "Runtime media",
+                            "snippet": "Runtime snippet",
+                            "publishing_date": "2026-01-02",
+                            "identifier": "runtime-media-1",
+                        }],
+                    },
+                },
+            },
+        },
+    )["profile"]
+
+    assert profile["matching_name"] == "Runtime Matched Name"
+    assert profile["person"]["names"]["values"][0]["name"] == "Provider Alias"
+    assert profile["person"]["names"]["values"][0].get("type") is None
+    assert profile["provider_aml_types_raw"] == ["adverse-media-v2-regulatory"]
+    assert profile["provider_match_score_raw"] == 0.7
+    assert profile["provider_match_types"] == ["exact_match"]
+    assert profile["provider_media_evidence"][0]["url"] == "https://news.example.test/runtime-name-type"
+
+
+def test_case_creation_preserves_mesh_profile_when_person_name_type_is_unexpected():
+    data = deepcopy(_fixture("pep_canonical.json"))
+    alert = data["workflow"].pop("alerts")[0]
+    data["workflow"]["step_details"]["alerting"] = {
+        "status": "COMPLETED",
+        "step_output": {"alerts": [alert]},
+    }
+    mesh_risk = {
+        "identifier": "risk-mesh-runtime-name-type",
+        "type": "ENTITY_SCREENING",
+        "decision": "NOT_REVIEWED",
+        "detail": {
+            "profile": {
+                "identifier": "profile-mesh-runtime-name-type",
+                "matching_name": "Runtime Matched Name",
+                "match_score": 0.7,
+                "match_types": ["exact_match"],
+                "person": {
+                    "names": {
+                        "values": [{
+                            "name": "Provider Alias",
+                            "type": "LOCAL_SCRIPT_ALIAS",
+                        }],
+                    },
+                },
+                "risk_indicators": {
+                    "aml_types": ["adverse-media-v2-regulatory"],
+                    "media": [{
+                        "url": "https://news.example.test/runtime-name-type",
+                        "title": "Runtime media",
+                        "snippet": "Runtime snippet",
+                        "publishing_date": "2026-01-02",
+                        "identifier": "runtime-media-1",
+                    }],
+                    "lists": [],
+                    "peps": [],
+                },
+            },
+        },
+    }
+    data["alerts_risks"] = {"alert-pep": [mesh_risk]}
+    data["deep_risks"] = {"risk-mesh-runtime-name-type": mesh_risk}
+    client = _client_for_single(data)
+
+    report = _orchestrator(client).screen_customer_two_pass(
+        strict_customer=_customer("strict"),
+        relaxed_customer=_customer("strict"),
+        application_context=_context(data),
+        monitoring_enabled=False,
+    )
+
+    assert report["total_hits"] == 1
+    assert report["has_adverse_media_hit"] is True
+    result = report["director_screenings"][0]["screening"]["results"][0]
+    assert result["name"] == "Runtime Matched Name"
+    assert result["match_score"] is None
+    assert result["provider_match_score_raw"] == 0.7
+    assert result["provider_match_types"] == ["exact_match"]
+    assert result["provider_aml_types_raw"] == ["adverse-media-v2-regulatory"]
+    assert result["match_category"] == "adverse_media"
+    assert result["provider_media_evidence"][0]["url"] == "https://news.example.test/runtime-name-type"
+    assert result["source_url"] == "https://news.example.test/runtime-name-type"
+    provider_match = report["provider_specific"]["complyadvantage"]["matches"][0]
+    assert provider_match["profile"]["person"]["names"]["values"][0]["name"] == "Provider Alias"
+    assert provider_match["profile"]["person"]["names"]["values"][0].get("type") is None
+    assert provider_match["provider_match_score_raw"] == 0.7
+    assert provider_match["provider_match_types"] == ["exact_match"]
+    assert provider_match["provider_aml_types_raw"] == ["adverse-media-v2-regulatory"]
+    assert provider_match["provider_media_evidence"][0]["url"] == "https://news.example.test/runtime-name-type"
+
+
 def test_case_creation_captures_mesh_media_evidence_and_raw_score_without_percentage():
     data = deepcopy(_fixture("pep_canonical.json"))
     alert = data["workflow"].pop("alerts")[0]
