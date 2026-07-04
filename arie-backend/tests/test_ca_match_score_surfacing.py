@@ -1,10 +1,9 @@
-"""BE-1 — surface ComplyAdvantage match_score into the legacy screening result.
+"""BE-1 — surface proven percentage scores into the legacy screening result.
 
-CA Mesh returns a per-match name-match strength at
-``profile.match_details.match_score`` (0–1 float). The legacy result the back
-office / Agent 3 / screening PDF read must carry it as a 0–100 percentage, plus
-the strict/relaxed confidence signal as a fallback. Null-safe when the provider
-gives no score.
+Historical normalized fixtures use ``profile.match_details.match_score`` as a
+percentage-capable value. Live CA Mesh ``detail.profile.match_score`` is kept as
+raw provider data instead because sandbox values 0.7 and 1.7 were both returned
+for exact matches.
 """
 import os
 import sys
@@ -73,6 +72,29 @@ def test_legacy_result_null_score_keeps_confidence_fallback():
     row = _legacy_screening_result_from_match(_match(None, "relaxed"), {})
     assert row["match_score"] is None
     assert row["surfaced_by_pass"] == "relaxed"
+
+
+def test_live_provider_raw_score_is_captured_but_not_rendered_as_percentage():
+    profile = CAProfile(
+        identifier="p",
+        company=CAProfileCompany(),
+        provider_match_score_raw=1.7,
+        provider_match_types=["exact_match"],
+    )
+    match = MergedMatch(
+        risk=CARiskDetail(),
+        surfaced_by_pass="strict",
+        profile=profile,
+        profile_identifier="p",
+        risk_id="r",
+        alert_id="a",
+    )
+
+    row = _legacy_screening_result_from_match(match, {})
+
+    assert row["match_score"] is None
+    assert row["provider_match_score_raw"] == 1.7
+    assert row["provider_match_types"] == ["exact_match"]
 
 
 def test_pdf_flattener_prefers_percentage_then_confidence():

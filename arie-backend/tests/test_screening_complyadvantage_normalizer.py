@@ -15,6 +15,7 @@ from screening_complyadvantage.models import (
     CAPEPValue,
     CAPaginatedCollection,
     CAProfile,
+    CAProfileCompany,
     CAProfilePerson,
     CARiskDetail,
     CARiskDetailInner,
@@ -32,7 +33,9 @@ from screening_complyadvantage.normalizer import (
     compute_ca_screening_hash,
     compute_match_rollups,
     extract_pep_classes,
+    _category_from_provider_aml_type,
     _indicator_label,
+    _legacy_screening_result_from_match,
     merge_two_pass_results,
     normalize_single_pass,
     normalize_two_pass_screening,
@@ -177,6 +180,88 @@ def test_normalize_pep_via_fixture():
     assert result["provider_profile_identifier"]
     assert "PEP" in result["match_categories"]
     assert result["risk_type_keys"]
+
+
+@pytest.mark.parametrize(
+    ("aml_type", "expected"),
+    [
+        ("sanction", "sanctions"),
+        ("sanctions", "sanctions"),
+        ("pep", "pep"),
+        ("pep-class-1", "pep"),
+        ("pep-class-4", "pep"),
+        ("politically-exposed", "pep"),
+        ("adverse-media-v2-regulatory", "adverse_media"),
+        ("adverse-media-financial-crime", "adverse_media"),
+        ("adverse-media-terrorism", "adverse_media"),
+        ("adverse-media-general", "adverse_media"),
+        ("adverse_media", "adverse_media"),
+        ("negative-news", "adverse_media"),
+        ("warning", "watchlist"),
+        ("fitness-probity", "watchlist"),
+        ("watchlist", "watchlist"),
+        ("unknown-taxonomy-key", "other"),
+    ],
+)
+def test_provider_aml_type_category_mapping(aml_type, expected):
+    assert _category_from_provider_aml_type(aml_type) == expected
+
+
+def test_legacy_result_captures_provider_profile_fields_without_rendered_score():
+    profile = CAProfile(
+        identifier="profile-live",
+        matching_name="Live Provider Match",
+        company=CAProfileCompany(),
+        provider_match_score_raw=0.7,
+        provider_match_types=["exact_match"],
+        provider_aml_types_raw=["adverse-media-financial-crime"],
+        provider_media_evidence=[{
+            "url": "https://news.example.test/story",
+            "title": "Provider title",
+            "snippet": "Provider snippet",
+            "publishing_date": "2024-01-02",
+            "identifier": "media-live-1",
+        }],
+    )
+    match = MergedMatch(
+        risk=CARiskDetail(),
+        surfaced_by_pass="strict",
+        profile=profile,
+        profile_identifier="profile-live",
+        risk_id="risk-live",
+        alert_id="alert-live",
+    )
+
+    row = _legacy_screening_result_from_match(match, {})
+
+    assert row["name"] == "Live Provider Match"
+    assert row["match_score"] is None
+    assert row["provider_match_score_raw"] == 0.7
+    assert row["provider_match_types"] == ["exact_match"]
+    assert row["provider_aml_types_raw"] == ["adverse-media-financial-crime"]
+    assert row["match_categories"] == ["adverse_media"]
+    assert row["media_url"] == "https://news.example.test/story"
+    assert row["source_url"] == "https://news.example.test/story"
+    assert row["media_title"] == "Provider title"
+    assert row["media_snippet"] == "Provider snippet"
+    assert row["publication_date"] == "2024-01-02"
+    assert row["provider_media_identifier"] == "media-live-1"
+
+
+def test_legacy_result_keeps_uuid_fallback_when_profile_has_no_name_fields():
+    profile = CAProfile(identifier="019f185a-2a5d-7bfb-a85b-c1cfad8e5c5d", company=CAProfileCompany())
+    match = MergedMatch(
+        risk=CARiskDetail(),
+        surfaced_by_pass="strict",
+        profile=profile,
+        profile_identifier=profile.identifier,
+        risk_id="risk-uuid",
+    )
+
+    row = _legacy_screening_result_from_match(match, {})
+
+    assert row["name"] == "019f185a-2a5d-7bfb-a85b-c1cfad8e5c5d"
+    assert row["provider_profile_identifier"] == "019f185a-2a5d-7bfb-a85b-c1cfad8e5c5d"
 
 
 def test_normalize_promotes_mesh_provider_references_to_subject_evidence():

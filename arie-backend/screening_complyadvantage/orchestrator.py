@@ -530,10 +530,124 @@ def _normalise_risk_as_alert(risk_id, raw, *, alert_id=None):
     data = {"identifier": risk_id}
     if alert_id:
         data["alert_identifier"] = alert_id
-    if raw.get("profile") is not None:
-        data["profile"] = CAProfile.model_validate(raw["profile"]).model_dump(mode="json")
+    profile = _normalise_alert_risk_profile(risk_id, raw)
+    if profile is not None:
+        data["profile"] = profile
     data.setdefault("risk_details", {"values": []})
     return data
+
+
+def _normalise_alert_risk_profile(risk_id, raw):
+    profile = _mesh_profile_from_risk(raw)
+    if not isinstance(profile, dict):
+        return None
+    try:
+        if "match_details" in profile:
+            return CAProfile.model_validate(profile).model_dump(mode="json")
+        adapted = _adapt_mesh_alert_profile(risk_id, profile)
+        if adapted is None:
+            return None
+        return CAProfile.model_validate(adapted).model_dump(mode="json")
+    except Exception:
+        logger.warning(
+            "ca_alert_risk_profile_parse_failed risk_id=%s profile_shape=ignored",
+            risk_id,
+            exc_info=True,
+        )
+        return None
+
+
+def _adapt_mesh_alert_profile(risk_id, profile):
+    if not isinstance(profile, dict):
+        return None
+    identifier = _text_or_none(profile.get("identifier")) or str(risk_id)
+    matching_name = _first_text(
+        profile.get("matching_name"),
+        profile.get("display_name"),
+        profile.get("name"),
+        profile.get("caption"),
+    )
+    company = _adapt_profile_subject(profile.get("company"), matching_name, company=True)
+    person = _adapt_profile_subject(profile.get("person"), matching_name, company=False)
+    vessel = profile.get("vessel") if isinstance(profile.get("vessel"), dict) else None
+    if company is None and person is None and vessel is None:
+        if matching_name:
+            company = {"names": {"values": [{"name": matching_name}]}}
+        else:
+            company = {}
+    raw_score = profile.get("match_score")
+    # CA sandbox returned 0.7 and 1.7 for exact_match risks, so match_score is
+    # captured as provider raw score and not rendered as a percentage pending CA
+    # scale clarification.
+    provider_match_score_raw = raw_score if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool) else None
+    indicators = profile.get("risk_indicators") if isinstance(profile.get("risk_indicators"), dict) else {}
+    data = {
+        "identifier": identifier,
+        "entity_type": profile.get("entity_type"),
+        "matching_name": matching_name,
+        "match_details": {"matched_name": matching_name} if matching_name else {},
+        "risk_types": [],
+        "risk_indicators": [],
+        "provider_match_score_raw": provider_match_score_raw,
+        "provider_match_types": _string_list(profile.get("match_types")),
+        "provider_aml_types_raw": _string_list(indicators.get("aml_types")),
+        "provider_media_evidence": _media_evidence_from_indicators(indicators),
+    }
+    if company is not None:
+        data["company"] = company
+    if person is not None:
+        data["person"] = person
+    if vessel is not None:
+        data["vessel"] = vessel
+    return {key: value for key, value in data.items() if value not in (None, [])}
+
+
+def _adapt_profile_subject(value, fallback_name=None, *, company):
+    if not isinstance(value, dict):
+        return None
+    subject = dict(value)
+    subject["names"] = _adapt_profile_names(subject.get("names"), fallback_name, company=company)
+    return subject
+
+
+def _adapt_profile_names(value, fallback_name=None, *, company):
+    values = []
+    if isinstance(value, dict):
+        raw_values = value.get("values") if isinstance(value.get("values"), list) else []
+    elif isinstance(value, list):
+        raw_values = value
+    else:
+        raw_values = []
+    for item in raw_values:
+        if isinstance(item, dict):
+            name = _first_text(item.get("name"), item.get("value"), item.get("full_name"))
+            if name:
+                current = {"name": name}
+                if item.get("type"):
+                    current["type"] = item.get("type")
+                values.append(current)
+        else:
+            name = _text_or_none(item)
+            if name:
+                values.append({"name": name})
+    if not values and fallback_name:
+        values.append({"name": fallback_name})
+    return {"values": values}
+
+
+def _first_text(*values):
+    for value in values:
+        text = _text_or_none(value)
+        if text:
+            return text
+    return None
+
+
+def _text_or_none(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _extract_alert_ids(workflow_raw):
@@ -612,6 +726,10 @@ def _parse_mesh_profile_risk_detail(profile):
     values.extend(_parse_mesh_pep_indicators(indicators))
     values.extend(_parse_mesh_media_indicators(indicators))
     values.extend(_parse_mesh_watchlist_indicators(indicators))
+    values.extend(_parse_mesh_aml_type_fallback_indicators(
+        indicators,
+        existing_categories={_category_from_risk_type_key(item.risk_type.key) for item in values},
+    ))
     return CARiskDetail(values=values)
 
 
@@ -689,10 +807,16 @@ def _parse_mesh_list_media_group(group, risk_type):
         value = CAMediaArticleValue.model_validate({
             "title": item.get("title") or item.get("headline") or item.get("name"),
             "url": item.get("url") or item.get("link"),
-            "publication_date": _mesh_date(item.get("publication_date") or item.get("published_at") or item.get("date")),
+            "publication_date": _mesh_date(
+                item.get("publication_date") or item.get("publishing_date") or item.get("published_at") or item.get("date")
+            ),
+            "snippets": _mesh_snippets(item),
             "source_name": item.get("source_name") or item.get("source"),
             "categories": _string_list(item.get("aml_types")),
-            "source_metadata": {"source": "mesh_profile_risk_indicators"},
+            "source_metadata": {
+                "source": "mesh_profile_risk_indicators",
+                "identifier": item.get("identifier"),
+            },
         })
         parsed.append(CARiskDetailInner(risk_type=risk_type, indicators=[
             CAMediaIndicator(risk_type=risk_type, value=value)
@@ -742,7 +866,33 @@ def _mesh_date(value):
 def _string_list(values):
     if not isinstance(values, list):
         return []
-    return values
+    result = []
+    for value in values:
+        text = _text_or_none(value)
+        if text:
+            result.append(text)
+    return result
+
+
+def _media_evidence_from_indicators(indicators):
+    media = indicators.get("media") if isinstance(indicators, dict) else None
+    if not isinstance(media, list):
+        return []
+    evidence = []
+    for item in media:
+        if not isinstance(item, dict):
+            continue
+        evidence.append({
+            key: item.get(key)
+            for key in ("url", "title", "snippet", "publishing_date", "identifier")
+            if item.get(key) not in (None, "", [], {})
+        })
+    return evidence
+
+
+def _mesh_snippets(item):
+    snippet = _first_text(item.get("snippet"), item.get("summary"))
+    return [{"text": snippet}] if snippet else []
 
 
 def _mesh_location_country(item):
@@ -806,10 +956,14 @@ def _parse_mesh_media_indicators(indicators):
         value = CAMediaArticleValue.model_validate({
             "title": item.get("title") or item.get("headline") or item.get("name"),
             "url": item.get("url") or item.get("link"),
-            "publication_date": item.get("publication_date") or item.get("published_at") or item.get("date"),
+            "publication_date": item.get("publication_date") or item.get("publishing_date") or item.get("published_at") or item.get("date"),
+            "snippets": _mesh_snippets(item),
             "source_name": item.get("source_name") or item.get("source"),
             "categories": item.get("aml_types") if isinstance(item.get("aml_types"), list) else [],
-            "source_metadata": {"source": "mesh_profile_risk_indicators"},
+            "source_metadata": {
+                "source": "mesh_profile_risk_indicators",
+                "identifier": item.get("identifier"),
+            },
         })
         parsed.append(CARiskDetailInner(risk_type=risk_type, indicators=[
             CAMediaIndicator(risk_type=risk_type, value=value)
@@ -839,6 +993,92 @@ def _parse_mesh_watchlist_indicators(indicators):
             CAWatchlistIndicator(risk_type=risk_type, value=value)
         ]))
     return parsed
+
+
+def _parse_mesh_aml_type_fallback_indicators(indicators, *, existing_categories):
+    aml_types = _string_list(indicators.get("aml_types")) if isinstance(indicators, dict) else []
+    parsed = []
+    for category in _categories_from_aml_types(aml_types):
+        if category in existing_categories:
+            continue
+        if category == "pep":
+            risk_type = CARiskType(key="r_pep_class_1", label="PEP")
+            value = CAPEPValue.model_validate({
+                "class": "PEP_CLASS_1",
+                "source_metadata": {"source": "mesh_profile_aml_types", "aml_types": aml_types},
+            })
+            parsed.append(CARiskDetailInner(risk_type=risk_type, indicators=[
+                CAPEPIndicator(risk_type=risk_type, value=value)
+            ]))
+        elif category == "adverse_media":
+            risk_type = CARiskType(key="r_adverse_media_general", label="Adverse media")
+            value = CAMediaArticleValue.model_validate({
+                "source_metadata": {"source": "mesh_profile_aml_types", "aml_types": aml_types},
+            })
+            parsed.append(CARiskDetailInner(risk_type=risk_type, indicators=[
+                CAMediaIndicator(risk_type=risk_type, value=value)
+            ]))
+        elif category == "sanctions":
+            risk_type = CARiskType(key="r_direct_sanctions_exposure", label="Sanctions exposure")
+            value = CASanctionValue.model_validate({
+                "source_metadata": {"source": "mesh_profile_aml_types", "aml_types": aml_types},
+            })
+            parsed.append(CARiskDetailInner(risk_type=risk_type, indicators=[
+                CASanctionIndicator(risk_type=risk_type, value=value)
+            ]))
+        elif category == "watchlist":
+            risk_type = CARiskType(key="r_watchlist", label="Watchlist")
+            value = CAWatchlistValue.model_validate({
+                "source_metadata": {"source": "mesh_profile_aml_types", "aml_types": aml_types},
+            })
+            parsed.append(CARiskDetailInner(risk_type=risk_type, indicators=[
+                CAWatchlistIndicator(risk_type=risk_type, value=value)
+            ]))
+    return parsed
+
+
+def _categories_from_aml_types(aml_types):
+    categories = []
+    for value in aml_types or []:
+        category = _category_from_aml_type(value)
+        if category != "other" and category not in categories:
+            categories.append(category)
+    return categories
+
+
+def _category_from_aml_type(value):
+    text = _text_or_none(value)
+    if not text:
+        return "other"
+    normalized = text.lower().replace("_", "-").replace(" ", "-")
+    if normalized.startswith("sanction"):
+        return "sanctions"
+    if normalized.startswith("pep") or "politically-exposed" in normalized:
+        return "pep"
+    if (
+        normalized.startswith("adverse-media")
+        or normalized.startswith("adverse-media")
+        or "negative-news" in normalized
+    ):
+        return "adverse_media"
+    if normalized == "warning" or normalized.startswith("fitness-probity") or "watchlist" in normalized:
+        return "watchlist"
+    return "other"
+
+
+def _category_from_risk_type_key(key):
+    if not key:
+        return "other"
+    text = str(key).lower()
+    if text.startswith(_PEP_RISK_PREFIX) or text == _RCA_RISK_KEY:
+        return "pep"
+    if text.startswith(_ADVERSE_MEDIA_RISK_PREFIX):
+        return "adverse_media"
+    if text.startswith(_SANCTIONS_EXPOSURE_PREFIX) or text == "r_direct_sanctions_exposure":
+        return "sanctions"
+    if text in _WATCHLIST_RISK_KEYS:
+        return "watchlist"
+    return "other"
 
 
 def _mesh_field_value(item, tag):
