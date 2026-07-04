@@ -45,5 +45,5 @@ Invoke them by asking Claude to act in that role, e.g.:
 - **Identity verification service:** Sumsub (individual KYC/IDV)
 - **Screening and monitoring service:** ComplyAdvantage (sanctions/PEP/RCA/adverse media/customer and company monitoring)
 - **Other external services:** Claude API (AI agents), OpenCorporates (company registry)
-- **AI Agents:** 10 agents (4 active in pilot: Identity, FinCrime Screening, UBO Mapping, Compliance Memo)
+- **AI Agents:** 10 agents (4 active in pilot: Identity, FinCrime Screening, UBO Mapping, Compliance Memo — the memo narrative itself is a deterministic build, not LLM-drafted)
 - **Target market:** Mauritius-based financial services, expanding to ADGM/DIFC

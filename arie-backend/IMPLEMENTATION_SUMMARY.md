@@ -53,7 +53,9 @@ Analyzes ownership layers, identifies beneficial owners, and flags structural ri
 **Returns**: Structure type, complexity score, UBO status, nominee indicators, jurisdiction flags, recommendations.
 
 ### 4. Agent 5: Compliance Memo Generation
-Produces comprehensive, board-ready compliance narrative using Claude Opus (thorough + detailed).
+Produces comprehensive, board-ready compliance narrative using Claude Opus (thorough + detailed) —
+available only via the off-by-default `ENABLE_CLAUDE_MEMO` draft integration; the live memo path is
+deterministic (`memo_handler.py`).
 
 **Features**:
 - HTML-formatted professional memo

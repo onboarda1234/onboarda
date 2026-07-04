@@ -74,16 +74,16 @@ class TestPartB_AdvisoryLabeling:
     def test_memo_header_has_advisory_badge(self, backoffice_html):
         # The memo header should contain the advisory badge
         memo_header_match = re.search(
-            r'Compliance Onboarding Memo.*?ai-advisory-badge.*?AI-Generated.*?Advisory Only',
+            r'Compliance Onboarding Memo.*?ai-advisory-badge.*?System-Generated.*?Advisory Only',
             backoffice_html,
             re.DOTALL
         )
         assert memo_header_match is not None, \
-            "Memo header should have 'AI-Generated — Advisory Only' badge"
+            "Memo header should have 'System-Generated — Advisory Only' badge"
 
     def test_memo_rendered_content_has_advisory_banner(self, backoffice_html):
         # renderMemoSections() must add an advisory banner
-        assert "AI-Generated — Advisory Only" in backoffice_html
+        assert "System-Generated — Advisory Only" in backoffice_html
         # Verify it's inside the function (use next function as boundary)
         fn_start = backoffice_html.index('function renderMemoSections')
         fn_end = backoffice_html.index('function generateComplianceMemo', fn_start)
@@ -93,7 +93,7 @@ class TestPartB_AdvisoryLabeling:
 
     def test_validation_panel_has_advisory_badge(self, backoffice_html):
         validation_match = re.search(
-            r'memo-validation-panel.*?ai-advisory-badge.*?AI-Generated.*?Advisory Only',
+            r'memo-validation-panel.*?ai-advisory-badge.*?System-Generated.*?Advisory Only',
             backoffice_html,
             re.DOTALL
         )

@@ -61,12 +61,28 @@ def test_memo_handler_is_llm_free():
 
 
 def test_enable_claude_memo_not_defaulted_anywhere():
-    """No runtime config, container build, or deploy manifest may set the flag."""
+    """No runtime config, container build, or deploy manifest may set the flag.
+
+    The surfaces are required to EXIST — a rename must fail this test rather
+    than silently vaporising the guard — and the GitHub workflow files are
+    scanned too (deploy-staging.yml injects ECS task environment).
+    """
     for parts in CONFIG_SURFACES:
         path = os.path.join(*parts)
-        if not os.path.exists(path):
-            continue
+        assert os.path.exists(path), (
+            f"{path} is missing — if it was renamed, update CONFIG_SURFACES in "
+            "this test so the ENABLE_CLAUDE_MEMO guard follows it"
+        )
         assert "ENABLE_CLAUDE_MEMO" not in _read(*parts), (
             f"{path} sets or references ENABLE_CLAUDE_MEMO — the Claude memo "
             "integration must remain off by default everywhere"
         )
+
+    workflows_dir = os.path.join(REPO_ROOT, ".github", "workflows")
+    assert os.path.isdir(workflows_dir), ".github/workflows missing"
+    for name in sorted(os.listdir(workflows_dir)):
+        if name.endswith((".yml", ".yaml")):
+            assert "ENABLE_CLAUDE_MEMO" not in _read(workflows_dir, name), (
+                f".github/workflows/{name} sets ENABLE_CLAUDE_MEMO — CI/CD must "
+                "not enable the Claude memo integration"
+            )

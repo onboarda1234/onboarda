@@ -93,8 +93,8 @@ Applicant submits via Portal
 └───────────┬───────────────────┘
             ▼
 ┌───────────────────────────────┐
-│  3. AI Memo Generation        │  Risk-based routing for memo generation:
-│     (10 agents, 11 sections)  │  Sonnet (LOW/MEDIUM), Opus (HIGH/VERY_HIGH)
+│  3. Memo Generation           │  Deterministic rule-based memo build —
+│     (11 sections, no LLM)     │  agents inform it; no LLM drafts it live
 └───────────┬───────────────────┘
             ▼
 ┌───────────────────────────────┐
@@ -113,7 +113,7 @@ Applicant submits via Portal
 2. **External Database Cross-Verification** — Registry lookups, corporate verification
 3. **FinCrime Screening Interpretation** — Sanctions/PEP analysis, false-positive reduction
 4. **Corporate Structure & UBO Mapping** — Ownership chains, nominee detection
-5. **Compliance Memo & Risk Recommendation** — Composite scoring, final memo generation
+5. **Compliance Memo & Risk Recommendation** — Composite scoring; the final memo is assembled by the deterministic memo builder
 
 **Monitoring Agents (6–10):**
 

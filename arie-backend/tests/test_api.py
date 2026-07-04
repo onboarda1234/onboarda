@@ -7777,6 +7777,17 @@ def test_h1_live_memo_route_is_deterministic(api_server, monkeypatch):
     from tests.conftest import insert_verified_required_documents
     from db import get_db
 
+    # Poison Claude construction for the duration of this test: the
+    # deterministic route must never build a ClaudeClient. This catches a
+    # future wiring that calls Claude directly while still stamping
+    # ai_source="deterministic" — the marker alone is producer-controlled.
+    import claude_client as claude_client_module
+
+    def _no_claude(*_args, **_kwargs):
+        raise AssertionError("ClaudeClient constructed during the deterministic memo route")
+
+    monkeypatch.setattr(claude_client_module.ClaudeClient, "__init__", _no_claude)
+
     app_id = "app_h1_deterministic_memo"
     conn = get_db()
     conn.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))

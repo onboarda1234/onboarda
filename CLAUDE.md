@@ -22,16 +22,16 @@ Onboarda is an AI-powered compliance onboarding platform for regulated financial
 
 ### AI Pipeline (4-layer deterministic)
 1. **Rule Engine** (`rule_engine.py`) — Risk scoring, regulatory rule checks
-2. **Memo Generation** (`memo_handler.py`) — Deterministic compliance memo builder (no LLM in the live path; memo metadata carries `ai_source: "deterministic"`)
+2. **Memo Generation** (`memo_handler.py`) — Deterministic compliance memo builder (no LLM in the live path; memo metadata carries `ai_source: "deterministic"`, or `"demo"` in demo mode)
 3. **Validation Engine** (`validation_engine.py`) — Cross-checks memo against rules
 4. **Supervisor** (`supervisor_engine.py`) — Final review, approve/reject/escalate
 
 ### Risk-Based Model Routing (Optional Claude Memo Integration — OFF by default)
 The live memo path is deterministic (`memo_handler.py`). A draft Claude memo
 integration exists (`claude_memo_integration.py`, gated by `ENABLE_CLAUDE_MEMO`,
-unset in all environments) that wraps `claude_client.generate_compliance_memo`,
-which routes LOW/MEDIUM risk → Claude Sonnet and HIGH/VERY_HIGH risk → Claude
-Opus (`claude_client.select_memo_model`). Do not enable it without wiring its
+unset in every repo-managed config surface) that wraps `claude_client.generate_compliance_memo`,
+which routes LOW/MEDIUM risk → Claude Sonnet and HIGH/VERY_HIGH risk (or risk
+score ≥ 55) → Claude Opus (`claude_client.select_memo_model`). Do not enable it without wiring its
 output through the validation and supervisor gates (see PC-4 in
 `docs/audits/pr661_remediation_production_conditions.md`).
 

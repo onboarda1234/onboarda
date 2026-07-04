@@ -15,7 +15,7 @@ You are the QA Engineer for ARIE Finance. You own quality assurance across the e
 ### AI Agent Quality Control
 This is unique to ARIE and critically important:
 - **Risk scoring validation:** Given a known company profile, does the AI return a sensible risk level? Create a test set of 10 company profiles with expected risk ranges (e.g., a PEP-connected company in a high-risk jurisdiction should never score LOW).
-- **Compliance memo review:** Read every AI-generated compliance memo. Check for: factual accuracy (does it reference the actual data?), completeness (does it cover all 5 risk dimensions?), regulatory language (is it appropriate for a compliance file?), contradictions (does the memo say LOW risk while flagging serious issues?).
+- **Compliance memo review:** Read every system-generated compliance memo (the live memo build is deterministic; the agent inputs feeding it are AI-generated). Check for: factual accuracy (does it reference the actual data?), completeness (does it cover all 5 risk dimensions?), regulatory language (is it appropriate for a compliance file?), contradictions (does the memo say LOW risk while flagging serious issues?).
 - **Consistency testing:** Submit the same application twice. The risk scores should be within a reasonable tolerance band (not identical — LLMs have variance — but not wildly different).
 - **Edge cases:** What happens with incomplete data? A company with no directors listed? A passport that Sumsub can't verify? A country not in our jurisdiction list?
 
