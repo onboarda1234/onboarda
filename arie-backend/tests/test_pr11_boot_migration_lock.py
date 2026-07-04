@@ -147,15 +147,25 @@ def test_boot_sequence_is_bracketed_by_the_lock():
     )
 
 
-def test_admin_reset_reseed_takes_the_same_lock():
+def test_admin_reset_takes_the_lock_before_the_wipe():
+    """The lock must bracket the WHOLE reset: acquired before the TRUNCATE
+    loop (a timeout after the wipe would strand an empty, never-re-seeded
+    database) and released only after the re-seed."""
     with open(os.path.join(BACKEND, "server.py"), encoding="utf-8") as fh:
         src = fh.read()
 
-    # The staging admin-reset re-seed mutates the same tables as boot and
-    # must take the same cross-task lock.
-    reseed = src.index("Re-seed directly")
-    window = src[reseed - 200: reseed + 1600]
-    assert "acquire_boot_migration_lock(timeout_seconds=60)" in window, (
-        "admin-reset re-seed no longer takes the boot-migration lock"
+    handler = src.index("class AdminResetDBHandler")
+    window = src[handler: handler + 8000]
+
+    acquire = window.index("acquire_boot_migration_lock(timeout_seconds=60)")
+    wipe = window.index("TRUNCATE TABLE")
+    reseed = window.index("Re-seed directly")
+    release = window.index("_reset_lease.release()")
+
+    assert acquire < wipe, (
+        "admin-reset acquires the boot lock AFTER the wipe — a lock timeout "
+        "would strand a wiped, never-re-seeded database"
     )
-    assert "_reset_lease.release()" in window
+    assert wipe < reseed < release, (
+        "boot lock must be released only after the re-seed completes"
+    )
