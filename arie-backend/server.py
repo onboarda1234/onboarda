@@ -39301,6 +39301,43 @@ def make_app():
     )
 
 
+def _singleton_tick(name):
+    """Cross-task singleton guard for scheduled ticks (audit H9 / PR-14).
+
+    Every ECS task registers the same PeriodicCallbacks, so an unguarded tick
+    runs once per task per interval — duplicate GDPR purges and duplicate
+    client notifications with 2+ tasks. The decorated tick first tries the
+    named PostgreSQL advisory lock (db.acquire_scheduler_lock, dedicated
+    non-pooled connection); if another task already holds it, this tick is
+    skipped. Without PostgreSQL (dev/test) the lease is always granted.
+
+    SEMANTICS — mutual exclusion, NOT once-per-interval: tasks whose timers
+    fire at different moments each acquire the then-free lock and run,
+    serialized. What this guard eliminates is the CONCURRENT read-before-mark
+    race (the H9 duplicate-notification mechanism). Jobs must therefore stay
+    idempotent / mark their own per-row state — all five do today — and any
+    future tick added under this guard must too.
+    """
+    def decorate(fn):
+        import functools
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            from db import acquire_scheduler_lock
+            lease = acquire_scheduler_lock(name)
+            if not lease.acquired:
+                logger.debug(
+                    "%s: another task holds the scheduler lock — skipping this tick", name
+                )
+                return None
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                lease.release()
+        return wrapper
+    return decorate
+
+
 if __name__ == "__main__":
     import time as _time
 
@@ -39460,6 +39497,7 @@ if __name__ == "__main__":
     # Only executes in non-testing environments to avoid touching test DBs.
     # Purge only affects categories with auto_purge=True in data_retention_policies.
     if HAS_GDPR_PURGE and ENVIRONMENT not in ("testing",):
+        @_singleton_tick("gdpr_purge")
         def _gdpr_purge_tick():
             try:
                 db = get_db()
@@ -39499,6 +39537,7 @@ if __name__ == "__main__":
                 _monitoring_initial_delay = 60
             _monitoring_initial_delay = max(0, _monitoring_initial_delay)
 
+            @_singleton_tick("monitoring_automation")
             def _monitoring_automation_tick():
                 db = None
                 try:
@@ -39555,6 +39594,7 @@ if __name__ == "__main__":
         if _document_health_scheduler.scheduler_enabled():
             _dhs_interval_ms = _document_health_scheduler.scheduler_interval_seconds() * 1000
 
+            @_singleton_tick("document_health")
             def _document_health_tick():
                 db = None
                 try:
@@ -39639,6 +39679,7 @@ if __name__ == "__main__":
                 _memo_recovery_initial_delay = 120
             _memo_recovery_initial_delay = max(0, _memo_recovery_initial_delay)
 
+            @_singleton_tick("memo_recovery")
             def _memo_recovery_tick():
                 db = None
                 try:
@@ -39714,6 +39755,7 @@ if __name__ == "__main__":
                 _prs6_initial_delay = 90
             _prs6_initial_delay = max(0, _prs6_initial_delay)
 
+            @_singleton_tick("prs6_notifications")
             def _periodic_review_notification_tick():
                 db = None
                 try:
