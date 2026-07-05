@@ -512,7 +512,7 @@ class TestPartE_Regression:
     """Verify existing EX-11 labeling and approval gates remain intact."""
 
     def test_advisory_banners_still_present(self, backoffice_html):
-        assert 'AI-Generated — Advisory Only' in backoffice_html
+        assert 'System-Generated — Advisory Only' in backoffice_html
         assert 'ai-advisory-banner' in backoffice_html
         assert 'ai-advisory-badge' in backoffice_html
 

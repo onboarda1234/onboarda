@@ -29648,7 +29648,7 @@ def _validate_officer_signoff(signoff, expected_scope):
     """
     if signoff is None:
         return (
-            "officer_signoff is required. Officers must acknowledge AI-generated advisory "
+            "officer_signoff is required. Officers must acknowledge system-generated advisory "
             "outputs before this action can proceed."
         )
     if not isinstance(signoff, dict):
@@ -29658,7 +29658,7 @@ def _validate_officer_signoff(signoff, expected_scope):
     if acknowledged is not True:
         return (
             "officer_signoff.acknowledged must be true. Officers must confirm they have "
-            "reviewed the AI-generated advisory content."
+            "reviewed the system-generated advisory content."
         )
 
     scope = signoff.get("scope", "")

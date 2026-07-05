@@ -2,12 +2,19 @@
 
 ## Overview
 
+> **Status note (H1 claim reconciliation, 2026-07):** `generate_compliance_memo`
+> exists in this module but is **not wired into the live memo path**. Live
+> compliance memos are built deterministically by `memo_handler.py`
+> (`ai_source: "deterministic"`); the Claude memo path is reachable only via
+> the off-by-default draft `claude_memo_integration.py` (`ENABLE_CLAUDE_MEMO`,
+> unset in every repo-managed config surface).
+
 The `claude_client.py` module provides AI-powered compliance assessment for the ARIE Finance platform, powering:
 
 - **Risk Scoring Engine**: Scores applications across 5 compliance dimensions
 - **Agent 2**: External DB Cross-Verification (client data vs registry)
 - **Agent 4**: Corporate Structure & UBO Mapping (ownership analysis)
-- **Agent 5**: Compliance Memo Generation (final narrative)
+- **Agent 5**: Compliance Memo Generation (final narrative) — **draft only**, off by default; the live memo path is deterministic (see status note)
 
 ## Quick Start
 
@@ -234,6 +241,7 @@ jurisdiction = "Mauritius"
 ### 4. generate_compliance_memo(application_data, agent_results)
 
 Generates a comprehensive, board-ready compliance assessment memo synthesizing all agent findings.
+**Not wired into the live memo route** — reachable only via the off-by-default draft (see status note at the top).
 
 **Model**: claude-opus-4-6 (thorough, detailed)
 
@@ -281,7 +289,7 @@ agent_results = {
 | Risk Scoring | claude-sonnet-4-6 | Fast + cost-effective for structured scoring |
 | Cross-Verification | claude-sonnet-4-6 | Fast pattern matching + comparison |
 | Structure Analysis | claude-sonnet-4-6 | Good at analyzing complex hierarchies |
-| Compliance Memo | claude-opus-4-6 | Superior narrative quality for final report |
+| Compliance Memo (off-by-default draft) | claude-opus-4-6 | Superior narrative quality for final report |
 
 **Pricing** (per 1M tokens, Feb 2025):
 - Sonnet input: $3.00 | Sonnet output: $15.00

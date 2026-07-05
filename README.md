@@ -2,7 +2,7 @@
 
 **AI-powered compliance onboarding for regulated financial institutions.**
 
-Onboarda automates KYC/AML due diligence for banks, EMIs, and payment providers using a deterministic multi-layer AI pipeline. It combines rule-based risk scoring, external screening APIs, and Claude AI–generated compliance memos into a single auditable workflow.
+Onboarda automates KYC/AML due diligence for banks, EMIs, and payment providers using a deterministic multi-layer AI pipeline. It combines rule-based risk scoring, external screening APIs, Claude AI–assisted document verification, and deterministic compliance-memo generation into a single auditable workflow.
 
 The platform ships as two branded surfaces:
 
@@ -17,7 +17,7 @@ The platform ships as two branded surfaces:
 |-------|-----------|
 | Backend | Python 3.11 / [Tornado](https://www.tornadoweb.org/) |
 | Database | PostgreSQL (production) · SQLite (local dev) |
-| AI | [Anthropic Claude](https://www.anthropic.com/) (risk-based Sonnet/Opus routing for memo generation) |
+| AI | [Anthropic Claude](https://www.anthropic.com/) (document verification & agent analysis; live memo generation is deterministic — an off-by-default Claude memo integration with risk-based Sonnet/Opus routing exists behind `ENABLE_CLAUDE_MEMO`) |
 | KYC Provider | [Sumsub](https://sumsub.com/) (individual identity verification) |
 | Screening Provider | ComplyAdvantage Mesh (AML sanctions, PEP/RCA, adverse media, customer/company screening, ongoing monitoring) |
 | Document Storage | AWS S3 |
@@ -93,8 +93,8 @@ Applicant submits via Portal
 └───────────┬───────────────────┘
             ▼
 ┌───────────────────────────────┐
-│  3. AI Memo Generation        │  Risk-based routing for memo generation:
-│     (10 agents, 11 sections)  │  Sonnet (LOW/MEDIUM), Opus (HIGH/VERY_HIGH)
+│  3. Memo Generation           │  Deterministic rule-based memo build —
+│     (11 sections, no LLM)     │  agents inform it; no LLM drafts it live
 └───────────┬───────────────────┘
             ▼
 ┌───────────────────────────────┐
@@ -113,7 +113,7 @@ Applicant submits via Portal
 2. **External Database Cross-Verification** — Registry lookups, corporate verification
 3. **FinCrime Screening Interpretation** — Sanctions/PEP analysis, false-positive reduction
 4. **Corporate Structure & UBO Mapping** — Ownership chains, nominee detection
-5. **Compliance Memo & Risk Recommendation** — Composite scoring, final memo generation
+5. **Compliance Memo & Risk Recommendation** — Composite scoring; the final memo is assembled by the deterministic memo builder
 
 **Monitoring Agents (6–10):**
 

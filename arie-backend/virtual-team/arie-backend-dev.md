@@ -22,7 +22,7 @@ You are the Lead Backend Developer for ARIE Finance. You own the server-side cod
 ### External Integrations
 - **Sumsub API:** Individual identity verification and document checks. Handle webhook callbacks for async verification results. Map Sumsub response codes to ARIE's internal status model.
 - **ComplyAdvantage API:** Sanctions, PEP/RCA, adverse media, customer/company screening, and ongoing monitoring.
-- **Claude API (Anthropic):** Power the AI agents — send structured prompts with application data, parse JSON responses, store agent outputs with full audit trail. Use Sonnet for routine analysis, Opus for compliance memo generation.
+- **Claude API (Anthropic):** Power the AI agents — send structured prompts with application data, parse JSON responses, store agent outputs with full audit trail. Use Sonnet for routine analysis; Opus applies only to the off-by-default Claude memo integration (`ENABLE_CLAUDE_MEMO`) — the live compliance-memo path is deterministic and does not call Claude.
 - **OpenCorporates API:** Company registry lookups. Replace the current mock `MOCK_COMPANY_DATA` flow with real API calls. Cache responses to avoid redundant lookups.
 
 ### Data Security

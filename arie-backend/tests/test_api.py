@@ -7762,3 +7762,100 @@ class TestAdminPilotMutationAuditabilityAndRBAC:
         assert before["role"] == "analyst"
         assert after["role"] == "co"
         assert after["status"] == "inactive"
+
+
+def test_h1_live_memo_route_is_deterministic(api_server, monkeypatch):
+    """H1 (PR-10): the live memo route must be deterministic — no Claude in the path.
+
+    With ENABLE_CLAUDE_MEMO unset, the memo produced by the real HTTP route must
+    carry the provenance marker ai_source == "deterministic" (not "demo", not any
+    LLM identifier), both in the response body and in the persisted memo row.
+    A 200 response alone is not sufficient evidence.
+    """
+    monkeypatch.delenv("ENABLE_CLAUDE_MEMO", raising=False)
+    from auth import create_token
+    from tests.conftest import insert_verified_required_documents
+    from db import get_db
+
+    # Poison Claude construction for the duration of this test: the
+    # deterministic route must never build a ClaudeClient. This catches a
+    # future wiring that calls Claude directly while still stamping
+    # ai_source="deterministic" — the marker alone is producer-controlled.
+    import claude_client as claude_client_module
+
+    def _no_claude(*_args, **_kwargs):
+        raise AssertionError("ClaudeClient constructed during the deterministic memo route")
+
+    monkeypatch.setattr(claude_client_module.ClaudeClient, "__init__", _no_claude)
+
+    app_id = "app_h1_deterministic_memo"
+    conn = get_db()
+    conn.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
+    conn.execute("DELETE FROM documents WHERE application_id = ?", (app_id,))
+    conn.execute("DELETE FROM directors WHERE application_id = ?", (app_id,))
+    conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+    prescreening = {
+        "registered_entity_name": "H1 Deterministic Ltd",
+        "source_of_funds": "Operating revenue",
+        "expected_volume": "50000",
+        "operating_countries": "Mauritius",
+        "business_activity": "Consulting",
+        "screening_report": {
+            "screening_mode": "live",
+            "company_screening": {
+                "sanctions": {
+                    "matched": False,
+                    "api_status": "live",
+                    "provider": "sumsub",
+                    "source": "sumsub",
+                }
+            },
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "total_hits": 0,
+        },
+    }
+    conn.execute(
+        """
+        INSERT INTO applications (
+            id, ref, client_id, company_name, country, sector, entity_type,
+            status, risk_level, risk_score, prescreening_data
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app_id,
+            "ARF-2026-H1-DET",
+            "client_h1_det",
+            "H1 Deterministic Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "kyc_submitted",
+            "LOW",
+            20,
+            json.dumps(prescreening),
+        ),
+    )
+    insert_verified_required_documents(conn, app_id)
+    conn.commit()
+    conn.close()
+
+    token = create_token("admin001", "admin", "Test Admin", "officer")
+    resp = http_requests.post(
+        f"{api_server}/api/applications/{app_id}/memo",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=10,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["metadata"]["ai_source"] == "deterministic"
+
+    conn = get_db()
+    row = conn.execute(
+        "SELECT memo_data FROM compliance_memos WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+        (app_id,),
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    persisted = json.loads(row["memo_data"])
+    assert persisted["metadata"]["ai_source"] == "deterministic"

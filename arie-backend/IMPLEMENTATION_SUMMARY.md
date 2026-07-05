@@ -53,7 +53,9 @@ Analyzes ownership layers, identifies beneficial owners, and flags structural ri
 **Returns**: Structure type, complexity score, UBO status, nominee indicators, jurisdiction flags, recommendations.
 
 ### 4. Agent 5: Compliance Memo Generation
-Produces comprehensive, board-ready compliance narrative using Claude Opus (thorough + detailed).
+Produces comprehensive, board-ready compliance narrative using Claude Opus (thorough + detailed) —
+available only via the off-by-default `ENABLE_CLAUDE_MEMO` draft integration; the live memo path is
+deterministic (`memo_handler.py`).
 
 **Features**:
 - HTML-formatted professional memo
@@ -89,7 +91,7 @@ Produces comprehensive, board-ready compliance narrative using Claude Opus (thor
 
 ### Model Selection
 - **Claude Sonnet 4.6**: Risk scoring, cross-verification, structure analysis (fast + cost-effective)
-- **Claude Opus 4.6**: Compliance memo generation (thorough narrative quality)
+- **Claude Opus 4.6**: Compliance memo generation — only via the off-by-default `ENABLE_CLAUDE_MEMO` integration; the live memo path is deterministic (`memo_handler.py`)
 
 ### Structured JSON Responses
 - All agent outputs guaranteed valid JSON
@@ -241,7 +243,7 @@ assert result['risk_level'] in ['LOW', 'MEDIUM', 'HIGH', 'VERY_HIGH']
 - Risk scoring: ~$0.10-0.20 per call (Sonnet)
 - Cross-verification: ~$0.10-0.15 per call (Sonnet)
 - Structure analysis: ~$0.15-0.25 per call (Sonnet)
-- Compliance memo: ~$0.30-0.50 per call (Opus)
+- Compliance memo: ~$0.30-0.50 per call (Opus; only incurred if the off-by-default Claude memo integration is enabled — the live deterministic memo path costs $0)
 - **Total per application**: ~$0.65-1.10
 
 With $50 monthly budget: ~45-75 applications analyzed per month.
