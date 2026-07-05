@@ -206,12 +206,19 @@ def acquire_scheduler_lock(name: str, dsn: str = None) -> SchedulerLockLease:
         return SchedulerLockLease(None, True)
     conn = None
     try:
+        # connect_timeout is deliberately short (3s, not the pool's 10s): this
+        # runs inline on the Tornado IOLoop from the PeriodicCallback wrapper,
+        # so a slow/unreachable PG must make the tick SKIP FAST (fail-closed)
+        # rather than stall the event loop — which matches the lease's
+        # skip-on-failure contract. Moving the whole tick (this connect AND the
+        # already-synchronous tick body's get_db/queries) off the IOLoop is the
+        # complete fix and belongs to B7/PR-12 (non-blocking I/O), not here.
         # TCP keepalives: the lock is only as strong as this session. If the
         # socket died silently (RDS failover/partition), PG would release the
         # lock server-side while the tick still runs — keepalives bound that
         # window to ~60s instead of the OS default of hours.
         conn = psycopg2.connect(
-            dsn, sslmode="require", connect_timeout=10,
+            dsn, sslmode="require", connect_timeout=3,
             keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
         )
         conn.autocommit = True
