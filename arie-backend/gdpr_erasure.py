@@ -30,6 +30,11 @@ approval step remain deferred follow-ups (production condition PC-4) — and,
 because ``documents`` (and other unimplemented tables) surface as *deferred* in
 the ledger, the live-path invariant structurally BLOCKS a "completed" erasure
 for any subject who has such rows until those follow-ups land.
+
+Also deferred (PC-4): the residual-PII guard verifies the taxonomy-*classified*
+columns (``party_utils.PII_FIELDS_*`` + registry originals); discovering an
+*unclassified* PII-shaped column via a live column-name probe, and erasing weak
+positional identifiers not classified as PII (e.g. ``person_key``), are follow-ups.
 """
 from __future__ import annotations
 
@@ -531,6 +536,34 @@ def _log_erasure(db, *, client_id, application_id, requested_by, action,
     )
 
 
+def _is_json_column(db, table: str, column: str) -> bool:
+    """Whether `column` is a JSON/JSONB type. Best-effort (False on probe error).
+
+    Used to choose the erased marker by ACTUAL column type rather than only the
+    hand-maintained json_columns set, so a taxonomy PII field that happens to be
+    JSONB but was never registered in json_columns cannot get a scalar
+    '[ERASED]' written to it (which would raise on PostgreSQL mid-erase — NIT-5).
+    """
+    try:
+        if getattr(db, "is_postgres", False):
+            row = db.execute(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_name = ? AND column_name = ?",
+                (table, column),
+            ).fetchone()
+            dtype = (row["data_type"] if row and not isinstance(row, tuple) else (row[0] if row else "")) or ""
+        else:
+            dtype = ""
+            for r in db.execute(f"PRAGMA table_info({table})").fetchall():
+                name = r["name"] if not isinstance(r, tuple) else r[1]
+                if name == column:
+                    dtype = (r["type"] if not isinstance(r, tuple) else r[2]) or ""
+                    break
+        return "json" in str(dtype).lower()
+    except Exception:
+        return False
+
+
 def _anonymise_application(db, application_id: str) -> List[str]:
     affected = []
     for table, spec in _ERASABLE_TABLES.items():
@@ -540,7 +573,13 @@ def _anonymise_application(db, application_id: str) -> List[str]:
         if not cols:
             continue
         assignments = ", ".join(f"{c} = ?" for c in cols)
-        values = [_ERASED_JSON if c in spec["json_columns"] else _REDACTION_TOKEN for c in cols]
+        # Choose the erased marker by actual type OR explicit json_columns intent,
+        # so a JSONB column never receives a scalar token (NIT-5, fail-safe).
+        values = [
+            _ERASED_JSON if (c in spec["json_columns"] or _is_json_column(db, table, c))
+            else _REDACTION_TOKEN
+            for c in cols
+        ]
         key = "id" if table == "applications" else "application_id"
         db.execute(f"UPDATE {table} SET {assignments} WHERE {key} = ?", (*values, application_id))
         affected.append(table)
@@ -560,22 +599,32 @@ _ERASED_SENTINEL_PARAMS = (_REDACTION_TOKEN, '%"erased"%', "erased+%@erased.inva
 
 
 def _residual_guard_columns(table: str) -> List[str]:
-    """Every column that MUST be tokenised after erasing `table`: the explicit
-    erasable columns UNIONed with the authoritative taxonomy and the
-    registry-originals JSON. Independent of the hand-maintained spec so a spec
-    gap is still caught (adversarial B1)."""
+    """Every column that MUST read as tokenised after erasing `table`: the same
+    taxonomy-driven set _erasable_columns() anonymises (plus the taxonomy and
+    registry-originals JSON, which are already subsets of it).
+
+    NOTE (scope, adversarial NB-1): because this equals the anonymised set, the
+    guard is a WRITE-VERIFICATION backstop — it proves the anonymise actually
+    cleared the KNOWN-PII columns (catching a no-op/failed UPDATE) and fails
+    closed on any column it cannot verify. It does NOT discover an *unknown*
+    (unclassified) PII column; that would need a live column-name probe and is a
+    documented follow-up (PC-4), deliberately deferred to avoid false-positives
+    on structural columns that would break every erasure.
+    """
     cols = set(_erasable_columns(table)) | set(_TAXONOMY_PII.get(table, ())) | {_REGISTRY_ORIGINAL_JSON}
     return sorted(cols)
 
 
 def _detect_residual_pii(db, erased_application_ids: List[str], client_erased: bool,
                          client_id: str) -> List[Dict[str, Any]]:
-    """After anonymisation, verify NO known-PII column still holds subject data.
+    """After anonymisation, verify every KNOWN-PII column actually reads erased.
 
-    This is the write-path analogue of the complete-ledger guarantee: the ledger
-    guarantees no subject TABLE is silently dropped; this guarantees no subject
-    PII COLUMN is silently left behind. Any residual (or an unverifiable column)
-    makes the run fail-closed — it can never be reported 'executed' (B1)."""
+    Write-path analogue of the complete-ledger guarantee: the ledger guarantees
+    no subject TABLE is silently dropped; this guarantees the anonymise of each
+    classified PII COLUMN actually took effect. Any surviving non-sentinel value
+    — or a column that cannot be verified — makes the run fail-closed, so it can
+    never be reported 'executed' (B1). (It verifies the classified set; catching
+    an *unclassified* column is a deferred follow-up — see _residual_guard_columns.)"""
     findings: List[Dict[str, Any]] = []
     for table, spec in _ERASABLE_TABLES.items():
         if spec["scope"] == "application":
@@ -732,7 +781,8 @@ def execute_subject_erasure(
                 "error": "erasure incomplete: known-PII columns survived anonymisation; "
                          "refusing to report completion (fail-closed — B1)"}
 
-    if not dry_run and fully_done:
+    # (dry_run already returned above, so reaching here implies a live run.)
+    if fully_done:
         _log_erasure(db, client_id=client_id, application_id=None, requested_by=requested_by,
                      action="erasure_completed", outcome="completed", dsar_request_id=dsar_request_id,
                      tables_affected=sorted(tables_touched),
