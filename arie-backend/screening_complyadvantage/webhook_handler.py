@@ -408,7 +408,12 @@ def _timestamp_tolerance_seconds():
 
 
 def _environment():
-    return os.environ.get("ENVIRONMENT", "development").strip().lower()
+    # Canonicalized (audit H8 / PR-13): a raw "prod" here previously missed
+    # the ("staging", "production") check above, silently downgrading webhook
+    # signature verification to disabled_non_production (fail-open) on a box
+    # that boots with full production gates.
+    from environment import canonicalize_environment
+    return canonicalize_environment(os.environ.get("ENVIRONMENT") or os.environ.get("ENV"))
 
 
 def _metric_signature_mode(signature_status):

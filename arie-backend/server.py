@@ -4330,11 +4330,17 @@ def _readiness_status_payload():
 
     # 3. Required config present (environment-specific)
     missing_config = []
-    if ENVIRONMENT in ("staging", "production", "prod"):
+    if ENVIRONMENT in ("staging", "production"):
         if not os.environ.get("PII_ENCRYPTION_KEY"):
             missing_config.append("PII_ENCRYPTION_KEY")
         if not SECRET_KEY:
             missing_config.append("SECRET_KEY/JWT_SECRET")
+        # Audit H8 / PR-13: staging/production must never run on the SQLite
+        # fallback (ephemeral container disk). validate_config() blocks this
+        # at boot; readiness mirrors it so a container that somehow booted
+        # without it is visibly not ready.
+        if not os.environ.get("DATABASE_URL"):
+            missing_config.append("DATABASE_URL")
     if missing_config:
         checks["config"] = {"status": "failed", "missing": missing_config}
         ready = False

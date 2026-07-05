@@ -111,7 +111,9 @@ def is_abstraction_enabled() -> bool:
     env_val = os.environ.get("ENABLE_SCREENING_ABSTRACTION")
     if env_val is not None:
         return env_val.lower() in ("true", "1", "yes", "on")
-    env = os.environ.get("ENVIRONMENT", "development").lower().strip()
+    # Canonicalized (audit H8 / PR-13) so alias values hit the right defaults.
+    from environment import canonicalize_environment
+    env = canonicalize_environment(os.environ.get("ENVIRONMENT") or os.environ.get("ENV"))
     return _ABSTRACTION_DEFAULTS.get(env, False)
 
 
@@ -126,7 +128,9 @@ def get_active_provider_name() -> str:
     env_val = os.environ.get("SCREENING_PROVIDER")
     if env_val is not None:
         return env_val.strip().lower()
-    env = os.environ.get("ENVIRONMENT", "development").lower().strip()
+    # Canonicalized (audit H8 / PR-13) so alias values hit the right defaults.
+    from environment import canonicalize_environment
+    env = canonicalize_environment(os.environ.get("ENVIRONMENT") or os.environ.get("ENV"))
     return _PROVIDER_DEFAULTS.get(env, "sumsub")
 
 
