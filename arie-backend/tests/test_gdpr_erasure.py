@@ -12,7 +12,26 @@ def _iso(days_ago):
     return (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def _ensure_policies(db):
+    """H2B is fail-closed on retention policy; guarantee the ones these tests
+    need (the shared conftest DB can lack them — see H2B test module)."""
+    try:
+        from db import _DEFAULT_RETENTION_POLICIES as pols
+    except Exception:
+        pols = [("client_pii", 2555, "AML", "", False, True),
+                ("application_data", 2555, "Regulatory", "", False, True)]
+    for pol in pols:
+        db.execute(
+            "INSERT OR IGNORE INTO data_retention_policies "
+            "(data_category, retention_days, legal_basis, description, auto_purge, requires_review) "
+            "VALUES (?,?,?,?,?,?)",
+            pol,
+        )
+    db.commit()
+
+
 def _seed(db, client_id, app_id, ref, decided_days_ago):
+    _ensure_policies(db)
     db.execute(
         "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name, status) VALUES (?, ?, ?, ?, 'active')",
         (client_id, f"{client_id}@example.com", "hash", "Acme Co"),

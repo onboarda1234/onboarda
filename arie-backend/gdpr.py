@@ -39,7 +39,65 @@ def _parse_retained_categories(value: Any) -> Any:
         return value
 
 
-def format_dsar_for_response(row: Optional[Dict]) -> Optional[Dict]:
+def _completed_erasure_marker_exists(db, *, client_id: Optional[str], dsar_request_id: Any = None,
+                                     require_correlation: bool = False) -> bool:
+    """Return whether a qualifying completed, non-dry-run erasure marker exists.
+
+    When require_correlation=True, the marker must match dsar_request_id as well
+    as client_id. Read formatting for legacy DSAR rows has no persisted
+    correlation id, so it can fall back to a client-bound marker; the sanctioned
+    write path (mark_dsar_erasure_executed) remains correlation-bound.
+    """
+    if client_id in (None, ""):
+        return False
+    params = [str(client_id)]
+    where = [
+        "client_id = ?",
+        "COALESCE(dry_run, FALSE) = FALSE",
+        "action = 'erasure_completed'",
+        "outcome = 'completed'",
+    ]
+    if dsar_request_id not in (None, ""):
+        where.append("dsar_request_id = ?")
+        params.append(str(dsar_request_id))
+    elif require_correlation:
+        return False
+    try:
+        row = db.execute(
+            "SELECT COUNT(*) AS c FROM gdpr_erasure_log WHERE " + " AND ".join(where),
+            tuple(params),
+        ).fetchone()
+    except Exception:
+        # No log table / query error ⇒ no evidence ⇒ not executed (fail-safe).
+        return False
+    count = int(row["c"] if not isinstance(row, tuple) else row[0]) if row else 0
+    return count > 0
+
+
+def _dsar_erasure_evidence_verified(db, payload: Dict) -> bool:
+    if db is None:
+        return False
+    client_id = payload.get("client_id")
+    dsar_request_id = (
+        payload.get("dsar_request_id")
+        or payload.get("erasure_request_id")
+        or payload.get("erasure_correlation_id")
+    )
+    if dsar_request_id not in (None, ""):
+        return _completed_erasure_marker_exists(
+            db,
+            client_id=client_id,
+            dsar_request_id=dsar_request_id,
+            require_correlation=True,
+        )
+    return _completed_erasure_marker_exists(
+        db,
+        client_id=client_id,
+        require_correlation=False,
+    )
+
+
+def format_dsar_for_response(row: Optional[Dict], db=None) -> Optional[Dict]:
     """Return a DSAR API payload with legally honest erasure status wording."""
     if row is None:
         return None
@@ -47,17 +105,38 @@ def format_dsar_for_response(row: Optional[Dict]) -> Optional[Dict]:
     payload = dict(row)
     request_type = str(payload.get("request_type") or "").lower()
     status = str(payload.get("status") or "").lower()
-    erasure_executed = _truthy_bool(payload.get("erasure_executed"))
+    stored_erasure_executed = _truthy_bool(payload.get("erasure_executed"))
+    erasure_evidence_missing = False
+    if request_type == "erasure" and stored_erasure_executed:
+        if _dsar_erasure_evidence_verified(db, payload):
+            erasure_executed = True
+        else:
+            erasure_executed = False
+            erasure_evidence_missing = True
+            logger.warning(
+                "DSAR %s has erasure_executed=true but no qualifying erasure evidence; "
+                "suppressing executed status in response",
+                payload.get("id"),
+            )
+    else:
+        erasure_executed = stored_erasure_executed
     retention_outcome = payload.get("retention_outcome")
     if retention_outcome == DSAR_ERASURE_OUTCOME_PARTIAL and not erasure_executed:
         retention_outcome = "partial_retention_outcome_unverified"
         payload["retention_outcome"] = retention_outcome
 
     payload["erasure_executed"] = erasure_executed
+    payload["erasure_evidence_missing"] = erasure_evidence_missing
     payload["retained_categories"] = _parse_retained_categories(payload.get("retained_categories"))
 
     if request_type == "erasure":
-        if retention_outcome == DSAR_ERASURE_OUTCOME_PARTIAL and erasure_executed:
+        if erasure_evidence_missing:
+            status_label = "Erasure evidence missing"
+            status_detail = (
+                "A stored erasure flag is not backed by qualifying execution "
+                "evidence. Treating erasure as not executed."
+            )
+        elif retention_outcome == DSAR_ERASURE_OUTCOME_PARTIAL and erasure_executed:
             status_label = "Partial erasure recorded; regulated data retained"
             status_detail = "The erasure executor recorded a partial outcome. Regulated categories remain retained as recorded."
         elif erasure_executed:
@@ -374,7 +453,7 @@ def create_dsar(
     ).fetchone()
 
     logger.info("DSAR created: type=%s, email=%s, due=%s", request_type, requester_email, due_at)
-    return format_dsar_for_response(dict(row)) if row else {
+    return format_dsar_for_response(dict(row), db=db) if row else {
         "status": "created",
         "due_at": due_at,
         "erasure_executed": False,
@@ -386,7 +465,7 @@ def get_pending_dsars(db) -> List[Dict]:
     rows = db.execute(
         "SELECT * FROM data_subject_requests WHERE status IN ('pending', 'in_progress') ORDER BY due_at ASC"
     ).fetchall()
-    return [format_dsar_for_response(dict(r)) for r in rows]
+    return [format_dsar_for_response(dict(r), db=db) for r in rows]
 
 
 def complete_dsar(
@@ -469,9 +548,58 @@ def complete_dsar(
         (dsar_id,),
     ).fetchone()
     logger.info("DSAR %d marked as %s by %s", dsar_id, new_status, handled_by)
-    return format_dsar_for_response(dict(row)) if row else {
+    return format_dsar_for_response(dict(row), db=db) if row else {
         "id": dsar_id,
         "status": new_status,
         "handled_by": handled_by,
         "erasure_executed": False,
     }
+
+
+def verify_dsar_erasure_evidence(db, dsar_request_id, client_id) -> bool:
+    """Return True only if a COMPLETED erasure for this subject is on record (H2B).
+
+    Caveats A+B: DSAR erasure status must be derived from evidence, not a
+    trusted flag. A qualifying record is a gdpr_erasure_log row that (a) is the
+    executor's ``erasure_completed`` marker — written ONLY on a fully-satisfied
+    erasure with nothing refused/deferred, so a dry-run, generic, or PARTIAL run
+    can never satisfy it (adversarial F4); (b) is not a dry run; AND (c) is bound
+    to BOTH the DSAR correlation id and the subject ``client_id`` — so a shared
+    or hostile correlation token cannot mark another subject's DSAR (F5).
+    ``complete_dsar`` cannot set ``erasure_executed``; only an executor that
+    wrote such a marker (via ``mark_dsar_erasure_executed``) may flip it.
+    """
+    return _completed_erasure_marker_exists(
+        db,
+        client_id=client_id,
+        dsar_request_id=dsar_request_id,
+        require_correlation=True,
+    )
+
+
+def mark_dsar_erasure_executed(db, dsar_id: int, dsar_request_id) -> bool:
+    """Set erasure_executed=TRUE on a DSAR — ONLY with qualifying log evidence.
+
+    The ONLY sanctioned path to flip erasure_executed. It binds the evidence
+    check to the DSAR's own ``client_id`` (looked up here, not caller-supplied),
+    and refuses unless ``verify_dsar_erasure_evidence`` confirms a completed,
+    non-dry-run, subject-bound execution. Intended for the future
+    executor→DSAR wiring; nothing in the live path calls it today (H2B OFF).
+    Returns whether it flipped.
+    """
+    dsar = db.execute(
+        "SELECT client_id FROM data_subject_requests WHERE id = ?", (dsar_id,)
+    ).fetchone()
+    dsar_client_id = (dsar["client_id"] if dsar and not isinstance(dsar, tuple) else (dsar[0] if dsar else None))
+    if not verify_dsar_erasure_evidence(db, dsar_request_id, dsar_client_id):
+        logger.warning(
+            "refusing to mark DSAR %s erasure_executed: no qualifying completed, "
+            "non-dry-run erasure evidence bound to client %s for correlation id %s",
+            dsar_id, dsar_client_id, dsar_request_id,
+        )
+        return False
+    db.execute(
+        "UPDATE data_subject_requests SET erasure_executed = TRUE WHERE id = ?",
+        (dsar_id,),
+    )
+    return True
