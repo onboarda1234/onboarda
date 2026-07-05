@@ -8241,6 +8241,79 @@ def ensure_qa_smoke_user(db: DBConnection) -> bool:
     return True
 
 
+# Default GDPR data-retention policies (Sprint 3; Mauritius Data Protection
+# Act 2017 + GDPR Article 5(1)(e)). Seeded by _ensure_retention_policies().
+# The auto_purge / requires_review values are Python booleans, NOT 0/1
+# integers: PostgreSQL rejects integer literals bound to BOOLEAN columns,
+# and this seed had never actually executed against PostgreSQL before PR-31
+# (see _ensure_retention_policies docstring).
+_DEFAULT_RETENTION_POLICIES = [
+    ("client_pii", 2555, "Regulatory obligation (AML/CFT Act 2020 s.17)", "Client personal data: names, addresses, DOB, nationality. 7 years post-relationship.", False, True),
+    ("kyc_documents", 2555, "Regulatory obligation (AML/CFT Act 2020 s.17)", "KYC/CDD documents: passports, proof of address, corporate registry. 7 years post-relationship.", False, True),
+    ("screening_results", 2555, "Regulatory obligation (AML/CFT Act 2020 s.17)", "Sanctions, PEP, adverse media screening results. 7 years retention.", False, True),
+    ("compliance_memos", 2555, "Regulatory obligation (AML/CFT Act 2020 s.17)", "Compliance memos and risk assessments. 7 years retention.", False, True),
+    ("audit_logs", 3650, "Legitimate interest + regulatory", "Audit trail records. 10 years retention for full accountability.", False, False),
+    ("application_data", 2555, "Regulatory obligation", "Onboarding application forms and submitted data. 7 years post-decision.", False, True),
+    ("sar_reports", 3650, "Regulatory obligation (FIU reporting)", "Suspicious Activity Reports. 10 years — never auto-purge.", False, False),
+    # auto_purge is False (audit finding B1): this policy previously carried
+    # auto_purge=1 while resolving to the audit_log table, so the daily
+    # scheduler was destroying the audit trail. Token cleanup is not wired to
+    # a real table here; the policy is retained for documentation only and
+    # must never auto-purge.
+    ("session_tokens", 1, "Legitimate interest", "Expired authentication tokens and session data. 24-hour retention (documentation only; not auto-purged).", False, False),
+    ("monitoring_alerts", 2555, "Regulatory obligation", "Ongoing monitoring alerts and risk drift records. 7 years.", False, True),
+]
+
+
+def _ensure_retention_policies(db: DBConnection) -> int:
+    """Insert any missing default data-retention policies (idempotent).
+
+    Audit follow-up PR-31: this seed used to live at the BOTTOM of
+    seed_initial_data(), after the "Database already seeded" early return —
+    so any database whose core tables were populated before the block was
+    added (staging) exited early on every boot and the
+    data_retention_policies table stayed empty. It now runs on BOTH seed
+    paths, like the other post-initial-seed ensures.
+
+    Inserts missing categories only (INSERT OR IGNORE against the UNIQUE
+    data_category); existing rows are never updated, so operator-modified
+    policies — and the session_tokens auto_purge=FALSE invariant from audit
+    finding B1 / migration 039 — survive re-seeding.
+
+    Returns the number of rows inserted.
+    """
+    def _count():
+        row = db.execute("SELECT COUNT(*) AS c FROM data_retention_policies").fetchone()
+        return int(dict(row).get("c") or 0) if row else 0
+
+    before = _count()
+    failures = 0
+    for policy in _DEFAULT_RETENTION_POLICIES:
+        try:
+            db.execute(
+                "INSERT OR IGNORE INTO data_retention_policies (data_category, retention_days, legal_basis, description, auto_purge, requires_review) VALUES (?,?,?,?,?,?)",
+                policy
+            )
+        except Exception as e:
+            failures += 1
+            logger.error(f"Data retention policy '{policy[0]}' ensure failed: {e}")
+    if failures == len(_DEFAULT_RETENTION_POLICIES):
+        # Every insert failed — the table is likely missing or misconfigured.
+        # Loud by design: a silently-empty policy table is the exact failure
+        # mode this function exists to prevent.
+        logger.error(
+            "All %d retention-policy inserts failed — data_retention_policies "
+            "may be missing or misconfigured; retention enforcement has no "
+            "policies to act on",
+            failures,
+        )
+    inserted = _count() - before
+    if inserted > 0:
+        db.commit()
+        logger.info(f"Retention policies ensured: {inserted} missing default(s) inserted")
+    return inserted
+
+
 def seed_initial_data(db: DBConnection):
     """Seed database with initial admin users, risk config, and AI agents."""
     import bcrypt
@@ -8261,6 +8334,9 @@ def seed_initial_data(db: DBConnection):
         # Still check if monitoring demo data needs seeding (added post-initial-seed)
         _seed_monitoring_demo_data(db)
         _ensure_document_health_monitor_agent(db)
+        # PR-31: retention policies were previously seeded only below the early
+        # return, so already-seeded databases (staging) never received them.
+        _ensure_retention_policies(db)
         return
 
     logger.info(f"Seed status: users={users_count}, agents={agents_count}, checks={checks_count}, risk={risk_count}")
@@ -8675,32 +8751,9 @@ def seed_initial_data(db: DBConnection):
     _ensure_document_health_monitor_agent(db)
 
     # Sprint 3: Seed default GDPR data retention policies
-    # Based on Mauritius Data Protection Act 2017 + GDPR Article 5(1)(e)
-    retention_policies = [
-        ("client_pii", 2555, "Regulatory obligation (AML/CFT Act 2020 s.17)", "Client personal data: names, addresses, DOB, nationality. 7 years post-relationship.", 0, 1),
-        ("kyc_documents", 2555, "Regulatory obligation (AML/CFT Act 2020 s.17)", "KYC/CDD documents: passports, proof of address, corporate registry. 7 years post-relationship.", 0, 1),
-        ("screening_results", 2555, "Regulatory obligation (AML/CFT Act 2020 s.17)", "Sanctions, PEP, adverse media screening results. 7 years retention.", 0, 1),
-        ("compliance_memos", 2555, "Regulatory obligation (AML/CFT Act 2020 s.17)", "Compliance memos and risk assessments. 7 years retention.", 0, 1),
-        ("audit_logs", 3650, "Legitimate interest + regulatory", "Audit trail records. 10 years retention for full accountability.", 0, 0),
-        ("application_data", 2555, "Regulatory obligation", "Onboarding application forms and submitted data. 7 years post-decision.", 0, 1),
-        ("sar_reports", 3650, "Regulatory obligation (FIU reporting)", "Suspicious Activity Reports. 10 years — never auto-purge.", 0, 0),
-        # auto_purge is 0 (audit finding B1): this policy previously carried
-        # auto_purge=1 while resolving to the audit_log table, so the daily
-        # scheduler was destroying the audit trail. Token cleanup is not wired to
-        # a real table here; the policy is retained for documentation only and
-        # must never auto-purge.
-        ("session_tokens", 1, "Legitimate interest", "Expired authentication tokens and session data. 24-hour retention (documentation only; not auto-purged).", 0, 0),
-        ("monitoring_alerts", 2555, "Regulatory obligation", "Ongoing monitoring alerts and risk drift records. 7 years.", 0, 1),
-    ]
-
-    for policy in retention_policies:
-        try:
-            db.execute(
-                "INSERT OR IGNORE INTO data_retention_policies (data_category, retention_days, legal_basis, description, auto_purge, requires_review) VALUES (?,?,?,?,?,?)",
-                policy
-            )
-        except Exception as e:
-            logger.debug(f"Data retention policy '{policy[0]}' already seeded or insert failed: {e}")
+    # (extracted to _ensure_retention_policies — PR-31 — so it also runs on the
+    # already-seeded early-return path above, which staging always takes)
+    _ensure_retention_policies(db)
 
     db.commit()
     logger.info("Database seeded with initial data")
