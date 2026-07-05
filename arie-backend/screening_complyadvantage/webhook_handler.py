@@ -384,12 +384,18 @@ def _header_value(headers, name):
 
 
 def _signature_status(body, headers):
-    secret = os.environ.get("COMPLYADVANTAGE_WEBHOOK_SECRET", "")
+    # Whitespace-canonicalized so the enforcer agrees with the reporter
+    # (current_signature_mode): a whitespace-only secret is treated as ABSENT
+    # here too, otherwise this gate would attempt verification while readiness
+    # reports "missing secret" — a reporter/enforcer divergence (CodeRabbit).
+    secret = (os.environ.get("COMPLYADVANTAGE_WEBHOOK_SECRET") or "").strip()
     if secret:
         if _has_standard_webhook_headers(headers):
             return _standard_webhook_signature_status(body, headers, secret)
         return "valid" if _verify_signature(body, headers) else "invalid"
-    if _environment() in ("staging", "production"):
+    if _environment() in ("staging", "production", "prod"):
+        # "prod" is a fail-safe alias: a raw un-canonicalized value must
+        # fail CLOSED here, never fall through to sandbox fail-open.
         return "deployed_secret_missing"
     return "disabled_non_production"
 
@@ -414,6 +420,22 @@ def _environment():
     # that boots with full production gates.
     from environment import canonicalize_environment
     return canonicalize_environment(os.environ.get("ENVIRONMENT") or os.environ.get("ENV"))
+
+
+def current_signature_mode():
+    """Webhook signature posture without needing a request body (B6/B5).
+
+    Single source of truth for status/readiness surfaces: this uses the SAME
+    _environment() the live webhook path uses, so the reported posture can
+    never overstate the actual verification behavior (an env-detection
+    divergence between reporter and enforcer would let readiness claim
+    fail-closed while unsigned webhooks were being accepted).
+    """
+    if (os.environ.get("COMPLYADVANTAGE_WEBHOOK_SECRET") or "").strip():
+        return "strict"
+    if _environment() in ("staging", "production", "prod"):
+        return "deployed_fail_closed_missing_secret"
+    return "sandbox_fail_open_signature_disabled"
 
 
 def _metric_signature_mode(signature_status):
