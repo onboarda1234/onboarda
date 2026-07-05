@@ -8415,6 +8415,32 @@ def _seed_account_secret(role: str, admin_password):
     return secrets.token_urlsafe(16), True
 
 
+def _seeded_credentials_target(generated: dict, env, is_demo: bool):
+    """Pure delivery decision (no side effects, unit-testable): returns
+    ('file', path) for dev/demo, ('warn', None) for staging/production, or
+    ('skip', None) when there is nothing to deliver. The pytest/test no-op guard
+    is applied by the caller, NOT here, so this branch logic stays covered."""
+    if not generated:
+        return ("skip", None)
+    env = (env or "").strip().lower()
+    if is_demo or env in ("development", "demo"):
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+        return ("file", os.path.join(base, ".seeded_credentials"))
+    return ("warn", None)
+
+
+def _write_seeded_credentials_file(generated: dict, path: str) -> None:
+    """Write the seed credentials to ``path`` (0600) — unit-testable side effect."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        for email, secret in generated.items():
+            fh.write(f"{email}\t{secret}\n")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def _deliver_seeded_credentials(generated: dict) -> None:
     """Deliver randomly-generated seed credentials WITHOUT logging the secrets (PR-25).
 
@@ -8432,26 +8458,18 @@ def _deliver_seeded_credentials(generated: dict) -> None:
         return
     try:
         import sys
-        env = (_CFG_ENVIRONMENT or "").lower()
+        env = (_CFG_ENVIRONMENT or "").strip().lower()
         if "pytest" in sys.modules or env in ("test", "testing"):
             return
-        if _CFG_IS_DEMO or env in ("development", "demo"):
-            base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
-            os.makedirs(base, exist_ok=True)
-            path = os.path.join(base, ".seeded_credentials")
-            with open(path, "w", encoding="utf-8") as fh:
-                for email, secret in generated.items():
-                    fh.write(f"{email}\t{secret}\n")
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
+        mode, path = _seeded_credentials_target(generated, _CFG_ENVIRONMENT, _CFG_IS_DEMO)
+        if mode == "file":
+            _write_seeded_credentials_file(generated, path)
             logger.warning(
                 "PR-25: %d seeded account(s) received distinct random secrets; written to "
                 "uploads/.seeded_credentials (gitignored, 0600) — rotate after first login.",
                 len(generated),
             )
-        else:
+        elif mode == "warn":
             logger.warning(
                 "PR-25: %d seeded account(s) were created with distinct random secrets "
                 "(no operator-provided password); reset them via the password-reset flow. "

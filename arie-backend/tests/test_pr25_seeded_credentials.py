@@ -82,6 +82,41 @@ def test_delivery_has_no_side_effects_under_pytest():
         assert not os.path.exists(path), "delivery must be a no-op under pytest"
 
 
+# ── delivery decision branches (covered independently of the pytest guard) ────
+
+def test_delivery_target_dev_and_demo_write_file():
+    import db as db_module
+    gen = {"a@example.com": "s1"}
+    mode, path = db_module._seeded_credentials_target(gen, "development", False)
+    assert mode == "file" and path.endswith(os.path.join("uploads", ".seeded_credentials"))
+    # whitespace/case tolerated
+    assert db_module._seeded_credentials_target(gen, " Development ", False)[0] == "file"
+    # IS_DEMO flag also selects the file path
+    assert db_module._seeded_credentials_target(gen, "production", True)[0] == "file"
+
+
+def test_delivery_target_staging_prod_warn_only():
+    import db as db_module
+    gen = {"a@example.com": "s1"}
+    assert db_module._seeded_credentials_target(gen, "production", False) == ("warn", None)
+    assert db_module._seeded_credentials_target(gen, "staging", False) == ("warn", None)
+
+
+def test_delivery_target_empty_is_skip():
+    import db as db_module
+    assert db_module._seeded_credentials_target({}, "development", True) == ("skip", None)
+
+
+def test_write_seeded_credentials_file(tmp_path):
+    import db as db_module
+    path = str(tmp_path / "nested" / ".seeded_credentials")
+    db_module._write_seeded_credentials_file({"a@example.com": "sekret", "b@example.com": "two"}, path)
+    content = open(path, encoding="utf-8").read()
+    assert "a@example.com\tsekret" in content
+    assert "b@example.com\ttwo" in content
+    assert (os.stat(path).st_mode & 0o777) == 0o600
+
+
 # ── live PostgreSQL: seeding produces distinct hashes there too ───────────────
 
 def _pg_dsn():
