@@ -4143,8 +4143,14 @@ def _complyadvantage_runtime_status(probe_auth=False):
         blockers.append(config_error)
     fallback_mode = "disabled" if active else ("provider_ready_but_inactive" if configured else status)
     provider_mode = _safe_provider_status_label(os.environ.get("COMPLYADVANTAGE_WORKSPACE_MODE"))
+    mode_source = "env" if provider_mode else "unknown"
     if not provider_mode:
-        provider_mode = "production" if ENV == "production" else "unknown"
+        # Audit B5 provider-truth rule: unknown evidence must stay unknown.
+        # This previously defaulted to "production" whenever ENV was
+        # production — an unset COMPLYADVANTAGE_WORKSPACE_MODE on a production
+        # box displayed sandbox credentials as production mode. Never infer
+        # workspace mode from the deployment environment.
+        provider_mode = "unknown"
     workspace_label = _safe_provider_status_label(os.environ.get("COMPLYADVANTAGE_WORKSPACE_LABEL")) or "unknown"
     screening_config_label = _safe_provider_status_label(os.environ.get("COMPLYADVANTAGE_SCREENING_CONFIG_LABEL")) or "unknown"
     screening_config_id = _safe_provider_status_label(os.environ.get("COMPLYADVANTAGE_SCREENING_CONFIG_ID")) or None
@@ -4163,6 +4169,8 @@ def _complyadvantage_runtime_status(probe_auth=False):
         "status": status,
         "active": active,
         "mode": provider_mode,
+        "mode_source": mode_source,
+        "webhook_signature_mode": _ca_webhook_signature_mode(),
         "workspace_label": workspace_label,
         "screening_configuration_identifier": screening_config_id,
         "screening_configuration_label": screening_config_label,
@@ -4183,6 +4191,23 @@ def _complyadvantage_runtime_status(probe_auth=False):
         "description": "ComplyAdvantage Mesh AML, sanctions, PEP/RCA, adverse-media, and monitoring integration",
         "blockers": blockers,
     }
+
+
+def _ca_webhook_signature_mode():
+    """Truthful webhook signature posture, derivable without a request body.
+
+    Mirrors screening_complyadvantage.webhook_handler semantics: a configured
+    secret means strict verification; a missing secret fails CLOSED in
+    staging/production (deployed_secret_missing) and is fail-open only in
+    non-deployed environments. Surfaced in provider status/readiness because
+    "active but signature-unverified" is part of the sandbox-vs-defensible
+    distinction (audit B5/B6).
+    """
+    if (os.environ.get("COMPLYADVANTAGE_WEBHOOK_SECRET") or "").strip():
+        return "strict"
+    if ENV in ("staging", "production"):
+        return "deployed_fail_closed_missing_secret"
+    return "sandbox_fail_open_signature_disabled"
 
 
 def _complyadvantage_auth_probe(config, configured, *, probe_auth=False):
@@ -4273,8 +4298,17 @@ class HealthHandler(BaseHandler):
         self.write(json.dumps(health, default=str))
 
 
-def _readiness_status_payload():
-    """Return deep readiness status without writing to a handler."""
+def _readiness_status_payload(probe_aml=False):
+    """Return deep readiness status without writing to a handler.
+
+    Audit B6 override policy: there is deliberately NO override — env var,
+    flag, or parameter — that can turn the aml_screening or retention_policies
+    checks green. Provider truth and database state are the only inputs.
+    Misconfiguration is a PERMANENT readiness failure (visible red on the
+    authenticated readiness surface — deliberately not a boot crash, so there
+    is no restart loop and liveness stays green); transient provider
+    unreachability is a DEGRADED state that self-heals.
+    """
     checks = {}
     ready = True
 
@@ -4329,6 +4363,16 @@ def _readiness_status_payload():
                 "status": "ok" if pol_count > 0 else "empty",
                 "count": pol_count,
             }
+            # B6-B5: gating in deployed environments (upgraded from the
+            # observability-only probe shipped in PR-31, as planned there).
+            # A compliance platform with zero retention policies must not
+            # report ready — retention enforcement would be theatre.
+            if pol_count == 0 and ENVIRONMENT in ("staging", "production", "prod"):
+                checks["retention_policies"]["detail"] = (
+                    "data_retention_policies is empty — retention enforcement "
+                    "has no policies to act on"
+                )
+                ready = False
         except Exception as pol_exc:
             checks["retention_policies"] = {"status": "unknown", "detail": str(pol_exc)}
     except Exception as e:
@@ -4359,6 +4403,64 @@ def _readiness_status_payload():
         ready = False
     else:
         checks["config"] = {"status": "ok"}
+
+    # 4. AML screening readiness (audit B6/B5). Config-truth only by default —
+    #    no external calls on an ordinary readiness poll. probe_aml=True adds
+    #    a live CA auth probe (deploy-verification use).
+    try:
+        ca = _complyadvantage_runtime_status(probe_auth=probe_aml)
+        aml = {
+            "provider": "complyadvantage",
+            "active": bool(ca.get("active")),
+            "mode": ca.get("mode"),
+            "mode_source": ca.get("mode_source"),
+            "webhook_signature_mode": ca.get("webhook_signature_mode"),
+        }
+        probe = ca.get("last_token_auth_probe_result") or {}
+        if ENVIRONMENT in ("production", "prod"):
+            if not ca.get("active"):
+                # MISCONFIGURATION: permanent readiness failure until config
+                # changes. Deliberately not a boot crash — no restart loop.
+                aml["status"] = "misconfigured"
+                aml["detail"] = "; ".join(ca.get("blockers") or []) or str(ca.get("status"))
+                ready = False
+            elif ca.get("mode") != "production":
+                # Sandbox or unverified workspace mode must NEVER present as
+                # AML-ready in production (audit B5).
+                aml["status"] = "mode_unverified" if ca.get("mode") == "unknown" else "sandbox"
+                aml["detail"] = (
+                    f"ComplyAdvantage workspace mode is '{ca.get('mode')}' — "
+                    "production requires a verified production workspace "
+                    "(set COMPLYADVANTAGE_WORKSPACE_MODE from validated evidence)"
+                )
+                ready = False
+            elif probe.get("status") == "unavailable":
+                # TRANSIENT: provider unreachable. Degrade visibly, stay up,
+                # self-heals when the provider recovers; approvals remain
+                # fail-closed via screening-state defensibility gates.
+                aml["status"] = "unreachable"
+                aml["detail"] = probe.get("error") or "provider auth endpoint unreachable"
+                ready = False
+            else:
+                aml["status"] = "ok"
+        elif ENVIRONMENT == "staging":
+            if ca.get("active") and ca.get("mode") == "production":
+                aml["status"] = "ok" if probe.get("status") != "unavailable" else "unreachable"
+            elif ca.get("active"):
+                # Explicitly sandbox — active-but-sandbox must never read as
+                # live (audit B5; staging's expected posture, non-gating).
+                aml["status"] = "sandbox" if ca.get("mode") != "unknown" else "mode_unverified"
+            else:
+                aml["status"] = "inactive"
+        else:
+            aml["status"] = "not_applicable" if not ca.get("active") else (
+                "ok" if ca.get("mode") == "production" else "sandbox"
+            )
+        checks["aml_screening"] = aml
+    except Exception as aml_exc:
+        checks["aml_screening"] = {"status": "unknown", "detail": str(aml_exc)}
+        if ENVIRONMENT in ("production", "prod"):
+            ready = False
 
     return ready, {
         "ready": ready,
@@ -4392,7 +4494,8 @@ class ReadinessHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco"])
         if not user:
             return
-        ready, payload = _readiness_status_payload()
+        probe_aml = str(self.get_argument("probe_aml", "false")).strip().lower() in {"1", "true", "yes"}
+        ready, payload = _readiness_status_payload(probe_aml=probe_aml)
         status_code = 200 if ready else 503
         self.set_status(status_code)
         self.write(json.dumps(payload, default=str))
