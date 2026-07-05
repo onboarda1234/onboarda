@@ -53,9 +53,13 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 10000
 
-# Health check — hit /api/readiness every 30s (deep readiness probe)
+# Health check — hit /api/liveness every 30s (audit H10 / PR-15).
+# /api/liveness is the public, hardened probe designed for ALB/ECS.
+# /api/readiness must NOT be used here: it requires admin/sco authentication,
+# so an unauthenticated container probe gets 401 and the container is
+# permanently reported unhealthy regardless of actual state.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import requests; r=requests.get('http://localhost:10000/api/readiness', timeout=3); exit(0 if r.status_code==200 else 1)"
+    CMD python -c "import requests; r=requests.get('http://localhost:10000/api/liveness', timeout=3); exit(0 if r.status_code==200 else 1)"
 
 # ── Entrypoint ──
 CMD ["python", "server.py"]
