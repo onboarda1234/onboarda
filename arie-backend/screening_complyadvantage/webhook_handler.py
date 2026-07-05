@@ -384,7 +384,11 @@ def _header_value(headers, name):
 
 
 def _signature_status(body, headers):
-    secret = os.environ.get("COMPLYADVANTAGE_WEBHOOK_SECRET", "")
+    # Whitespace-canonicalized so the enforcer agrees with the reporter
+    # (current_signature_mode): a whitespace-only secret is treated as ABSENT
+    # here too, otherwise this gate would attempt verification while readiness
+    # reports "missing secret" — a reporter/enforcer divergence (CodeRabbit).
+    secret = (os.environ.get("COMPLYADVANTAGE_WEBHOOK_SECRET") or "").strip()
     if secret:
         if _has_standard_webhook_headers(headers):
             return _standard_webhook_signature_status(body, headers, secret)

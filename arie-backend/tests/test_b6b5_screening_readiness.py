@@ -401,3 +401,23 @@ def test_prod_alias_fails_closed_on_webhook_signatures(monkeypatch, temp_db):
 
     assert wh._signature_status(b"{}", {}) == "deployed_secret_missing"
     assert wh.current_signature_mode() == "deployed_fail_closed_missing_secret"
+
+
+def test_whitespace_only_secret_agrees_reporter_and_enforcer(monkeypatch, temp_db):
+    """CodeRabbit finding: a whitespace-only secret must be treated as ABSENT by
+    BOTH the enforcer (_signature_status) and the reporter (current_signature_
+    mode). Before the fix the enforcer's truthy `if secret:` attempted
+    verification while the reporter (which strips) reported 'missing secret' —
+    a divergence where readiness claims fail-closed but the gate acts otherwise."""
+    from screening_complyadvantage import webhook_handler as wh
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.setenv("COMPLYADVANTAGE_WEBHOOK_SECRET", "   \t  ")
+
+    # Enforcer: whitespace secret is not a usable secret -> fail closed in prod.
+    assert wh._signature_status(b"{}", {}) == "deployed_secret_missing"
+    # Reporter: same posture.
+    assert wh.current_signature_mode() == "deployed_fail_closed_missing_secret"
+    # And they map to the SAME metric mode (no reporter/enforcer divergence).
+    assert wh._metric_signature_mode(wh._signature_status(b"{}", {})) == "deployed_fail_closed"
