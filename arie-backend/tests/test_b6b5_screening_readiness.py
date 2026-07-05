@@ -233,6 +233,7 @@ def test_empty_retention_table_fails_readiness_in_deployed_envs(monkeypatch, tem
     _set_valid_ca_env(monkeypatch, mode="sandbox")
 
     from db import get_db
+    import db as db_module
 
     db = get_db()
     try:
@@ -241,18 +242,19 @@ def test_empty_retention_table_fails_readiness_in_deployed_envs(monkeypatch, tem
     finally:
         db.close()
 
-    ready, payload = server._readiness_status_payload()
-    rp = payload["checks"]["retention_policies"]
-    assert rp["status"] == "empty"
-    assert ready is False, "empty retention-policy table must fail deployed readiness"
-
-    import db as db_module
-
-    db = get_db()
+    # try/finally: an assertion failure must not leak an empty retention
+    # table into later tests sharing the session temp_db (review finding).
     try:
-        db_module._ensure_retention_policies(db)
+        ready, payload = server._readiness_status_payload()
+        rp = payload["checks"]["retention_policies"]
+        assert rp["status"] == "empty"
+        assert ready is False, "empty retention-policy table must fail deployed readiness"
     finally:
-        db.close()
+        db = get_db()
+        try:
+            db_module._ensure_retention_policies(db)
+        finally:
+            db.close()
 
     ready_after, payload_after = server._readiness_status_payload()
     assert payload_after["checks"]["retention_policies"]["status"] == "ok"
@@ -263,6 +265,7 @@ def test_empty_retention_table_stays_nongating_outside_deployed_envs(temp_db):
     """PR-31's testing-environment behavior is unchanged (its test still holds)."""
     import server
     from db import get_db
+    import db as db_module
 
     db = get_db()
     try:
@@ -271,16 +274,15 @@ def test_empty_retention_table_stays_nongating_outside_deployed_envs(temp_db):
     finally:
         db.close()
 
-    ready_empty, payload = server._readiness_status_payload()
-    assert payload["checks"]["retention_policies"]["status"] == "empty"
-
-    import db as db_module
-
-    db = get_db()
     try:
-        db_module._ensure_retention_policies(db)
+        ready_empty, payload = server._readiness_status_payload()
+        assert payload["checks"]["retention_policies"]["status"] == "empty"
     finally:
-        db.close()
+        db = get_db()
+        try:
+            db_module._ensure_retention_policies(db)
+        finally:
+            db.close()
 
     ready_ok, _ = server._readiness_status_payload()
     assert ready_empty == ready_ok
@@ -301,6 +303,9 @@ def test_empty_retention_table_stays_nongating_outside_deployed_envs(temp_db):
 )
 def test_webhook_signature_mode_is_surfaced(monkeypatch, temp_db, env_name, secret, expected):
     server = _env(monkeypatch, env_name)
+    # The posture classifier lives in webhook_handler and reads the real
+    # ENVIRONMENT env var (the enforcer's own detection) — set it too.
+    monkeypatch.setenv("ENVIRONMENT", env_name)
     _clear_ca_env(monkeypatch)
     if secret:
         monkeypatch.setenv("COMPLYADVANTAGE_WEBHOOK_SECRET", secret)
@@ -312,3 +317,73 @@ def test_webhook_signature_mode_is_surfaced(monkeypatch, temp_db, env_name, secr
         monkeypatch.setenv("COMPLYADVANTAGE_WEBHOOK_SECRET", secret)
     _, payload = server._readiness_status_payload()
     assert _aml(payload)["webhook_signature_mode"] == expected
+
+
+# ---------------------------------------------------------------------------
+# Review-hardening coverage: probed-success, exception path, mode casing
+# ---------------------------------------------------------------------------
+
+def test_production_valid_and_probed_reachable_is_ok(monkeypatch, temp_db):
+    server = _env(monkeypatch, "production")
+    _clear_ca_env(monkeypatch)
+    _set_valid_ca_env(monkeypatch, mode="production")
+
+    from screening_complyadvantage.auth import ComplyAdvantageTokenClient
+
+    monkeypatch.setattr(ComplyAdvantageTokenClient, "force_refresh", lambda self: None)
+
+    ready, payload = server._readiness_status_payload(probe_aml=True)
+    aml = _aml(payload)
+    assert aml["status"] == "ok"
+    assert aml["mode_source"] == "attested_env"
+    assert ready is True
+
+
+def test_aml_check_exception_fails_closed_in_production(monkeypatch, temp_db):
+    server = _env(monkeypatch, "production")
+    _clear_ca_env(monkeypatch)
+
+    def _boom(probe_auth=False):
+        raise RuntimeError("status computation exploded")
+
+    monkeypatch.setattr(server, "_complyadvantage_runtime_status", _boom)
+
+    ready, payload = server._readiness_status_payload()
+    aml = _aml(payload)
+    assert aml["status"] == "unknown"
+    assert ready is False, "an aml-check crash must fail closed in production"
+
+
+def test_miscased_production_mode_is_unverified_not_sandbox(monkeypatch, temp_db):
+    """'Production' (miscased) must stay red but not be mislabelled sandbox."""
+    server = _env(monkeypatch, "production")
+    _clear_ca_env(monkeypatch)
+    _set_valid_ca_env(monkeypatch, mode="weird-label")
+
+    ready, payload = server._readiness_status_payload()
+    aml = _aml(payload)
+    assert aml["status"] == "mode_unverified"
+    assert ready is False
+
+    # Miscased "Production" is accepted case-insensitively (fail direction
+    # unchanged: only an explicit production attestation reaches ok).
+    monkeypatch.setenv("COMPLYADVANTAGE_WORKSPACE_MODE", "Production")
+    ready2, payload2 = server._readiness_status_payload()
+    assert _aml(payload2)["status"] == "ok"
+    assert ready2 is True
+
+
+def test_webhook_posture_reporter_matches_enforcer(monkeypatch, temp_db):
+    """The readiness-reported posture must come from the webhook handler's own
+    classifier — reporter/enforcer divergence would overstate security."""
+    from screening_complyadvantage import webhook_handler as wh
+    import server
+
+    # ENVIRONMENT unset but legacy ENV=production: the enforcer's raw
+    # _environment() sees 'development' (fail-open) — the reporter must say
+    # the same, not claim fail-closed.
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.delenv("COMPLYADVANTAGE_WEBHOOK_SECRET", raising=False)
+
+    assert server._ca_webhook_signature_mode() == wh.current_signature_mode()

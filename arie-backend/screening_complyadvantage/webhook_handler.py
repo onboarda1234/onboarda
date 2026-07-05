@@ -416,6 +416,22 @@ def _environment():
     return canonicalize_environment(os.environ.get("ENVIRONMENT") or os.environ.get("ENV"))
 
 
+def current_signature_mode():
+    """Webhook signature posture without needing a request body (B6/B5).
+
+    Single source of truth for status/readiness surfaces: this uses the SAME
+    _environment() the live webhook path uses, so the reported posture can
+    never overstate the actual verification behavior (an env-detection
+    divergence between reporter and enforcer would let readiness claim
+    fail-closed while unsigned webhooks were being accepted).
+    """
+    if (os.environ.get("COMPLYADVANTAGE_WEBHOOK_SECRET") or "").strip():
+        return "strict"
+    if _environment() in ("staging", "production"):
+        return "deployed_fail_closed_missing_secret"
+    return "sandbox_fail_open_signature_disabled"
+
+
 def _metric_signature_mode(signature_status):
     return {
         "valid": "strict",
