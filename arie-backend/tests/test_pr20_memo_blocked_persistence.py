@@ -96,17 +96,82 @@ def test_persisted_block_verdict_blocks_approval(db):
 
     can, err = ApprovalGateValidator.validate_approval(app, db)
     assert can is False
-    assert "blocked" in (err or "").lower()
+    # discriminating: the memo-block gate emits this specific message carrying
+    # the block_reason (not just any message containing the word "blocked")
+    assert "compliance memo is blocked" in (err or "").lower()
+    assert "INCONSISTENT supervisor" in (err or "")
 
-    # control: a non-blocked verdict does not raise the memo-blocked bar
+    # control: clearing the block removes the memo-block bar and the fixture is
+    # then approvable — proving the persisted block was THE discriminator
     val0, reason0 = server._memo_block_columns(db, {"metadata": {"blocked": False}})
     db.execute(
         "UPDATE compliance_memos SET blocked = ?, block_reason = ? WHERE application_id = ?",
         (val0, reason0, app_id),
     )
     db.commit()
-    row = db.execute("SELECT blocked FROM compliance_memos WHERE application_id = ?", (app_id,)).fetchone()
-    assert row["blocked"] in (0, False)
+    can2, err2 = ApprovalGateValidator.validate_approval(app, db)
+    assert "compliance memo is blocked" not in (err2 or "").lower()
+    assert can2 is True
+
+
+# ── legacy backfill: a block verdict living only in memo_data JSON is repaired ──
+
+def _stage_memo(conn, app_id, memo_metadata, false_v):
+    conn.execute(
+        "INSERT INTO applications (id, ref, company_name, status) "
+        "VALUES (?, ?, 'Co', 'submitted_to_compliance')",
+        (app_id, f"R-{app_id}"),
+    )
+    conn.execute(
+        "INSERT INTO compliance_memos (application_id, version, memo_data, review_status, "
+        "validation_status, supervisor_status, blocked, block_reason) "
+        "VALUES (?, 1, ?, 'approved', 'pass', 'INCONSISTENT', ?, NULL)",
+        (app_id, json.dumps({"metadata": memo_metadata}), false_v),
+    )
+
+
+def _exercise_backfill(conn):
+    """Stage a legacy (blocked-only-in-JSON) memo + a clean memo, run the
+    marker-gated backfill, and assert the column is repaired idempotently.
+    `conn` must be a DBConnection (the runtime type _run_migrations uses).
+    Minimal direct inserts (no heavy conftest fixtures) so it runs on SQLite and
+    PostgreSQL alike."""
+    import db as db_module
+    false_v = False if conn.is_postgres else 0
+    legacy_id = f"pr20-bf-legacy-{uuid.uuid4().hex[:8]}"
+    clean_id = f"pr20-bf-clean-{uuid.uuid4().hex[:8]}"
+
+    # LEGACY: the block verdict lives only in memo_data.metadata; the column the
+    # approval gate reads was never populated — gate-bypassable.
+    _stage_memo(conn, legacy_id, {"blocked": True, "block_reason": "legacy contradiction"}, false_v)
+    # CLEAN: no metadata.blocked — must be left untouched.
+    _stage_memo(conn, clean_id, {"blocked": False}, false_v)
+    # the backfill is marker-gated and ran (as a no-op) at DB init — reset so we
+    # can exercise it against the rows we just staged
+    conn.execute("DELETE FROM data_migration_markers WHERE marker_key = ?",
+                 (db_module._PR20_BLOCKED_BACKFILL_MARKER,))
+    conn.commit()
+
+    n = db_module._backfill_pr20_memo_blocked(conn)
+    assert n >= 1
+    lrow = conn.execute("SELECT blocked, block_reason FROM compliance_memos WHERE application_id = ?",
+                        (legacy_id,)).fetchone()
+    assert lrow["blocked"] in (1, True)
+    assert lrow["block_reason"] == "legacy contradiction"
+    crow = conn.execute("SELECT blocked FROM compliance_memos WHERE application_id = ?",
+                        (clean_id,)).fetchone()
+    assert crow["blocked"] in (0, False)
+    # idempotent: marker now recorded, a second run is a no-op
+    assert db_module._backfill_pr20_memo_blocked(conn) == 0
+
+
+def test_backfill_populates_blocked_from_legacy_json(temp_db):
+    import db as db_module
+    conn = db_module.get_db()
+    try:
+        _exercise_backfill(conn)
+    finally:
+        conn.close()
 
 
 # ── PostgreSQL round-trip: the column persists as a real BOOLEAN and reads back true ──
@@ -191,5 +256,13 @@ def test_pg_blocked_column_round_trips_as_real_boolean(fresh_pg):
         assert row["block_reason"] == "veto"
         # a reader that keys on the persisted column sees the block
         assert server._memo_final_status(dict(row)) == "blocked"
+    finally:
+        db.close()
+
+
+def test_pg_backfill_populates_blocked_from_legacy_json(fresh_pg):
+    db = fresh_pg.get_db()
+    try:
+        _exercise_backfill(db)
     finally:
         db.close()
