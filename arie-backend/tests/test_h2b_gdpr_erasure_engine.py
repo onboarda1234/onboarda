@@ -260,6 +260,142 @@ def test_application_id_only_row_is_counted(db):
     assert "client_sessions" in ledger["deferred_tables"]
 
 
+# ── Adversarial-review regressions (B1 / N2 / N4) ────────────────────────────
+
+def test_erase_columns_cover_the_authoritative_pii_taxonomy():
+    """Every field the app classifies+encrypts as PII (party_utils.PII_FIELDS_*)
+    must be in the engine's erase set AND its residual guard — the eraser cannot
+    silently drift from what the product treats as personal data (B1)."""
+    import gdpr_erasure as ge
+    assert ge._TAXONOMY_PII.get("intermediaries"), "taxonomy did not load"
+    for table, fields in ge._TAXONOMY_PII.items():
+        erasable = set(ge._erasable_columns(table))
+        guard = set(ge._residual_guard_columns(table))
+        for f in fields:
+            assert f in erasable, f"{table}.{f} (taxonomy PII) is not in the erase set"
+            assert f in guard, f"{table}.{f} (taxonomy PII) is not guarded"
+    # the registry-originals JSON must be erased+guarded on every party table
+    for table in ("directors", "ubos", "intermediaries"):
+        assert ge._REGISTRY_ORIGINAL_JSON in ge._erasable_columns(table)
+        assert ge._REGISTRY_ORIGINAL_JSON in ge._residual_guard_columns(table)
+
+
+def test_intermediary_and_registry_pii_are_erased(db):
+    """B1 positive: an intermediary's owned_or_controlled_by and a director's
+    source_metadata_json (registry originals) are actually anonymised, and the
+    run truthfully reports executed."""
+    import gdpr_erasure as ge
+    _seed_subject(db, "c-h2b-imeta", "a-h2b-imeta", 4000, with_director=True)
+    db.execute(
+        "INSERT INTO intermediaries (id, application_id, entity_name, registered_address, "
+        "registration_number, owned_or_controlled_by) VALUES (?, ?, ?, ?, ?, ?)",
+        ("int-imeta", "a-h2b-imeta", "HoldCo Ltd", "5 Reg St", "REG-9", "Jane Smith (controller)"),
+    )
+    has_smj = ge._has_column(db, "directors", "source_metadata_json")
+    if has_smj:
+        db.execute(
+            "UPDATE directors SET source_metadata_json = ? WHERE application_id = ?",
+            ('{"registry_originals": {"name": "John Doe", "dob": "1980-01-01"}}', "a-h2b-imeta"),
+        )
+    db.commit()
+
+    res = ge.execute_subject_erasure(db, "c-h2b-imeta", requested_by="admin", dry_run=False)
+    db.commit()
+    assert res["action"] == "executed", res.get("residual_pii")
+    assert res["erasure_executed"] is True
+    row = db.execute(
+        "SELECT owned_or_controlled_by, registration_number, registered_address, entity_name "
+        "FROM intermediaries WHERE id = 'int-imeta'"
+    ).fetchone()
+    assert row["owned_or_controlled_by"] == "[ERASED]"
+    assert row["registration_number"] == "[ERASED]"
+    if has_smj:
+        smj = db.execute(
+            "SELECT source_metadata_json FROM directors WHERE application_id = 'a-h2b-imeta'"
+        ).fetchone()["source_metadata_json"]
+        assert "John Doe" not in (smj or "")
+        assert '"erased"' in (smj or "")
+
+
+def test_residual_pii_guard_blocks_executed_when_a_column_is_missed(db, monkeypatch):
+    """B1 backstop: if the anonymisation column set misses a taxonomy-PII column,
+    the residual guard (which independently consults the taxonomy) catches the
+    surviving value and refuses — no 'executed' while PII survives."""
+    import gdpr_erasure as ge
+    _seed_subject(db, "c-h2b-resid", "a-h2b-resid", 4000, with_director=False)
+    db.execute(
+        "INSERT INTO intermediaries (id, application_id, entity_name, owned_or_controlled_by) "
+        "VALUES (?, ?, ?, ?)",
+        ("int-resid", "a-h2b-resid", "HoldCo", "Jane Smith (controller)"),
+    )
+    db.commit()
+
+    # Simulate a spec/anonymisation gap: drop owned_or_controlled_by from what
+    # gets erased, while the guard's taxonomy view still knows it is PII.
+    orig = ge._erasable_columns
+    monkeypatch.setattr(ge, "_erasable_columns",
+                        lambda t: [c for c in orig(t) if c != "owned_or_controlled_by"]
+                        if t == "intermediaries" else orig(t))
+
+    res = ge.execute_subject_erasure(db, "c-h2b-resid", requested_by="admin", dry_run=False)
+    db.commit()
+    assert res["action"] == "refused_incomplete"
+    assert res.get("erasure_executed") in (None, False)
+    assert any(f["table"] == "intermediaries" and f["column"] == "owned_or_controlled_by"
+               for f in res["residual_pii"])
+    # the surviving PII is reported, and no completion marker was written
+    assert db.execute(
+        "SELECT owned_or_controlled_by FROM intermediaries WHERE id = 'int-resid'"
+    ).fetchone()["owned_or_controlled_by"] == "Jane Smith (controller)"
+    assert db.execute(
+        "SELECT COUNT(*) AS c FROM gdpr_erasure_log "
+        "WHERE client_id = 'c-h2b-resid' AND action = 'erasure_completed'"
+    ).fetchone()["c"] == 0
+
+
+def test_client_user_id_link_is_recognised(db):
+    """N2: a table linking the subject via client_user_id (not client_id) — e.g.
+    company_intake_sessions — must be recognised as subject-linked and counted."""
+    import gdpr_erasure as ge
+    _seed_subject(db, "c-h2b-n2", "a-h2b-n2", 4000, with_director=False)
+    if not ge._has_column(db, "company_intake_sessions", "client_user_id"):
+        pytest.skip("company_intake_sessions not present in this schema")
+    assert "client_user_id" in ge._SUBJECT_CLIENT_FK_COLUMNS
+    db.execute(
+        "INSERT INTO company_intake_sessions (id, application_id, client_user_id) VALUES (?, ?, ?)",
+        ("cis-n2", "a-h2b-n2", "c-h2b-n2"),
+    )
+    db.commit()
+    # empty app_ids forces the count to rely on the client_user_id link
+    assert ge._subject_row_count(db, "company_intake_sessions", "c-h2b-n2", []) == 1
+    assert "company_intake_sessions" in ge._discover_subject_linked_tables(db)
+
+
+def test_plan_survives_missing_peripheral_policy_with_retained_row(db):
+    """N4: a subject who merely HAS a retained-required row (supervisor_audit_log)
+    must still be plannable even if the peripheral 'audit_logs' policy is absent —
+    the retained disposition is governed by the cited basis, not a numeric
+    window. Read-only planning must not crash."""
+    from datetime import datetime, timezone
+    import gdpr_erasure as ge
+    _seed_subject(db, "c-h2b-n4", "a-h2b-n4", 4000)
+    db.execute(
+        "INSERT INTO supervisor_audit_log (id, timestamp, event_type, action, application_id, entry_hash) "
+        "VALUES (?, ?, 'decision', 'approve', ?, 'h')",
+        ("sup-n4", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"), "a-h2b-n4"),
+    )
+    db.commit()
+    with _preserve_policies(db):
+        db.execute("DELETE FROM data_retention_policies WHERE data_category = 'audit_logs'")
+        db.commit()
+        plan = ge.plan_subject_erasure(db, "c-h2b-n4")  # must NOT raise
+        sup = next((e for e in plan["ledger"]["entries"] if e["table"] == "supervisor_audit_log"), None)
+        assert sup is not None
+        assert sup["disposition"] == "retained_under_legal_obligation"
+        assert sup.get("legal_basis")
+        assert sup["retention_days"] is None  # unknown window, not a crash
+
+
 # ── Preserved draft safety behaviours ────────────────────────────────────────
 
 def test_dry_run_makes_no_changes(db):
@@ -507,5 +643,45 @@ def test_pg_fail_closed_on_empty_policy(fresh_pg):
         db.commit()
         with pytest.raises(ge.RetentionPolicyError):
             ge.plan_subject_erasure(db, "pgc2")
+    finally:
+        db.close()
+
+
+def test_pg_intermediary_and_jsonb_pii_erased_with_clean_guard(fresh_pg):
+    """On real PostgreSQL: the residual guard must not false-positive on JSONB
+    columns (pep_declaration/prescreening_data cast to text), and the taxonomy
+    PII (intermediaries.owned_or_controlled_by, directors.pep_declaration) must
+    be erased so the run reports executed (adversarial B1 on PG)."""
+    import gdpr_erasure as ge
+    from datetime import datetime, timedelta, timezone
+    db = fresh_pg.get_db()
+    try:
+        decided = (datetime.now(timezone.utc) - timedelta(days=4000)).strftime("%Y-%m-%dT%H:%M:%S")
+        db.execute("INSERT INTO clients (id, email, password_hash, company_name, status) VALUES (?, ?, 'h', 'Co', 'active')",
+                   ("pgi", "pgi@example.com"))
+        db.execute("INSERT INTO applications (id, ref, client_id, company_name, status, decided_at) VALUES (?, ?, ?, 'Co', 'approved', ?)",
+                   ("pgia", "R-PGIA", "pgi", decided))
+        db.execute(
+            "INSERT INTO directors (id, application_id, full_name, nationality, residential_address, pep_declaration) "
+            "VALUES (?, ?, 'John Doe', 'GB', '1 High St', ?)",
+            ("pgia-d1", "pgia", '{"is_pep": true, "role": "minister"}'),
+        )
+        db.execute(
+            "INSERT INTO intermediaries (id, application_id, entity_name, registered_address, "
+            "registration_number, owned_or_controlled_by) VALUES (?, ?, 'HoldCo', '5 Reg St', 'REG-9', ?)",
+            ("pgia-i1", "pgia", "Jane Smith (controller)"),
+        )
+        db.commit()
+        res = ge.execute_subject_erasure(db, "pgi", requested_by="admin", dry_run=False)
+        db.commit()
+        assert res["action"] == "executed", res.get("residual_pii")
+        assert res["erasure_executed"] is True
+        assert res["residual_pii"] == []
+        row = db.execute("SELECT owned_or_controlled_by FROM intermediaries WHERE id = 'pgia-i1'").fetchone()
+        assert row["owned_or_controlled_by"] == "[ERASED]"
+        # JSONB pep_declaration was overwritten with the erased marker (cast-safe)
+        pep = db.execute("SELECT CAST(pep_declaration AS TEXT) AS t FROM directors WHERE id = 'pgia-d1'").fetchone()
+        assert '"erased"' in pep["t"]
+        assert "minister" not in pep["t"]
     finally:
         db.close()

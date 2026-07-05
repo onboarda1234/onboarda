@@ -50,41 +50,96 @@ class RetentionPolicyError(Exception):
 
 
 _REDACTION_TOKEN = "[ERASED]"
+_ERASED_JSON = json.dumps({"erased": True})
+# The verbatim registry record (name/DOB/address) is cached in this JSON column
+# on directors/ubos/intermediaries (party_utils.hydrate_party_record reads
+# source_metadata_json.registry_originals back out for display). It is PII and
+# MUST be erased even though the flat name columns are erased separately.
+_REGISTRY_ORIGINAL_JSON = "source_metadata_json"
 
 # ── Retention categories that govern a person-subject erasure ────────────────
 # Each is resolved from data_retention_policies and FAILS CLOSED if absent.
 # The effective retention window is the MOST CONSERVATIVE (longest) of these.
 _SUBJECT_RETENTION_CATEGORIES = ("client_pii", "application_data")
 
+# ── Authoritative PII taxonomy ───────────────────────────────────────────────
+# The erase-column set is driven by the SAME taxonomy the app uses to *encrypt*
+# PII on write (party_utils.PII_FIELDS_*), so the eraser cannot silently drift
+# out of sync with what the product classifies as personal data (adversarial
+# B1). A hardcoded snapshot is the fallback if the import is unavailable.
+try:  # pragma: no cover - exercised via the taxonomy-parity test
+    import party_utils as _party_utils
+    _TAXONOMY_PII: Dict[str, List[str]] = {
+        "directors": list(getattr(_party_utils, "PII_FIELDS_DIRECTORS", []) or []),
+        "ubos": list(getattr(_party_utils, "PII_FIELDS_UBOS", []) or []),
+        "intermediaries": list(getattr(_party_utils, "PII_FIELDS_INTERMEDIARIES", []) or []),
+        "applications": list(getattr(_party_utils, "PII_FIELDS_APPLICATIONS", []) or []),
+    }
+except Exception:  # pragma: no cover - defensive fallback
+    _TAXONOMY_PII = {
+        "directors": ["passport_number", "nationality", "id_number",
+                      "country_of_residence", "residential_address"],
+        "ubos": ["passport_number", "nationality", "country_of_residence",
+                 "residential_address"],
+        "intermediaries": ["owned_or_controlled_by"],
+        "applications": ["pep_flags"],
+    }
+
+# Columns that identify the subject account rather than a document/onboarding
+# record; discovery recognises any of these as a subject link (adversarial N2:
+# company_intake_sessions links via client_user_id, not client_id).
+_SUBJECT_CLIENT_FK_COLUMNS = ("client_id", "client_user_id")
+
+
+def _erasable_columns(table: str) -> List[str]:
+    """The full set of PII columns to anonymise for `table`: the explicit
+    structural/identity columns below UNIONed with the authoritative taxonomy
+    and the registry-originals JSON. Missing columns are filtered at write time
+    by _has_column, so listing a not-yet-migrated column is safe."""
+    base = _ERASABLE_TABLES.get(table, {}).get("columns", [])
+    extra = list(_TAXONOMY_PII.get(table, [])) + [_REGISTRY_ORIGINAL_JSON]
+    seen, out = set(), []
+    for col in list(base) + extra:
+        if col not in seen:
+            seen.add(col)
+            out.append(col)
+    return out
+
+
 # ── Erasable tables: PII columns anonymised per table. Structural/FK columns
 # (ids, application_id) are preserved so retained AML records that reference
-# them stay internally consistent. `category` is the retention policy that
-# governs the person/onboarding record.
+# them stay internally consistent. The `columns` here are the explicit
+# identity/onboarding fields; the authoritative taxonomy (party_utils) and the
+# registry-originals JSON are folded in by _erasable_columns() so no
+# taxonomy-classified PII column is ever missed (adversarial B1).
 _ERASABLE_TABLES: Dict[str, Dict[str, Any]] = {
     "applications": {
         "scope": "application",
-        "columns": ["company_name", "brn", "prescreening_data",
-                    "decision_notes", "pre_approval_notes"],
-        "json_columns": {"prescreening_data"},
+        "columns": ["company_name", "brn", "ownership_structure",
+                    "prescreening_data", "decision_notes", "pre_approval_notes",
+                    "pep_flags"],
+        "json_columns": {"prescreening_data", "pep_flags", _REGISTRY_ORIGINAL_JSON},
     },
     "directors": {
         "scope": "application",
         "columns": ["first_name", "last_name", "full_name", "nationality",
-                    "date_of_birth", "country_of_residence",
-                    "residential_address", "pep_declaration"],
-        "json_columns": {"pep_declaration"},
+                    "passport_number", "id_number", "date_of_birth",
+                    "country_of_residence", "residential_address",
+                    "pep_declaration"],
+        "json_columns": {"pep_declaration", _REGISTRY_ORIGINAL_JSON},
     },
     "ubos": {
         "scope": "application",
         "columns": ["first_name", "last_name", "full_name", "nationality",
-                    "date_of_birth", "country_of_residence",
+                    "passport_number", "date_of_birth", "country_of_residence",
                     "residential_address", "pep_declaration"],
-        "json_columns": {"pep_declaration"},
+        "json_columns": {"pep_declaration", _REGISTRY_ORIGINAL_JSON},
     },
     "intermediaries": {
         "scope": "application",
-        "columns": ["entity_name", "registered_address", "registration_number"],
-        "json_columns": set(),
+        "columns": ["entity_name", "registered_address", "registration_number",
+                    "owned_or_controlled_by"],
+        "json_columns": {_REGISTRY_ORIGINAL_JSON},
     },
     "clients": {
         "scope": "client",
@@ -178,6 +233,25 @@ def _list_tables(db) -> List[str]:
         return []
 
 
+def _columns_present(db, table: str, columns) -> List[str]:
+    """Strict variant of _has_column: return the subset of `columns` present on
+    `table`, and PROPAGATE any probe error instead of swallowing it. Used on the
+    fail-closed count/discovery paths so a schema-probe failure surfaces as a
+    _RowCountError (→ deferred) rather than silently undercounting to 0
+    (adversarial N1)."""
+    wanted = list(columns)
+    if getattr(db, "is_postgres", False):
+        rows = db.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+            (table,),
+        ).fetchall()
+        present = {(r["column_name"] if not isinstance(r, tuple) else r[0]) for r in rows}
+    else:
+        rows = db.execute(f"PRAGMA table_info({table})").fetchall()
+        present = {(r["name"] if not isinstance(r, tuple) else r[1]) for r in rows}
+    return [c for c in wanted if c in present]
+
+
 def _resolve_retention_days(db, category: str) -> int:
     """Fail-closed, category-keyed retention window (audit C5).
 
@@ -230,51 +304,62 @@ class _RowCountError(Exception):
 def _subject_row_count(db, table: str, client_id: str, app_ids: List[str]) -> int:
     """Rows in `table` belonging to this subject.
 
-    Counts via BOTH client_id and application_id when both columns exist — a row
-    linked only by application_id (client_id NULL) must not undercount to 0
-    (adversarial F2). Raises _RowCountError on any query failure so the ledger
-    can fail closed rather than silently treat the table as empty (F3).
+    ORs every subject link that exists — any of client_id / client_user_id
+    (adversarial N2) and application_id — so a row linked by only one of them
+    (e.g. client_id NULL but application_id set) is never undercounted to 0
+    (adversarial F2). Raises _RowCountError on ANY probe/query failure so the
+    ledger fails closed rather than silently treating the table as empty
+    (adversarial F3/N1: the strict _columns_present propagates probe errors).
     """
-    has_client = _has_column(db, table, "client_id")
-    has_app = _has_column(db, table, "application_id")
     try:
         if table == "clients":
             row = db.execute("SELECT COUNT(*) AS c FROM clients WHERE id = ?", (client_id,)).fetchone()
-        elif has_client and has_app:
-            if app_ids:
-                ph = ",".join("?" for _ in app_ids)
-                row = db.execute(
-                    f"SELECT COUNT(*) AS c FROM {table} WHERE client_id = ? OR application_id IN ({ph})",
-                    (client_id, *app_ids),
-                ).fetchone()
-            else:
-                row = db.execute(f"SELECT COUNT(*) AS c FROM {table} WHERE client_id = ?", (client_id,)).fetchone()
-        elif has_client:
-            row = db.execute(f"SELECT COUNT(*) AS c FROM {table} WHERE client_id = ?", (client_id,)).fetchone()
-        elif has_app:
-            if not app_ids:
-                return 0
+            return int(row["c"] if not isinstance(row, tuple) else row[0]) if row else 0
+        present = _columns_present(db, table, (*_SUBJECT_CLIENT_FK_COLUMNS, "application_id"))
+        preds: List[str] = []
+        params: List[Any] = []
+        for fk in _SUBJECT_CLIENT_FK_COLUMNS:
+            if fk in present:
+                preds.append(f"{fk} = ?")
+                params.append(client_id)
+        if "application_id" in present and app_ids:
             ph = ",".join("?" for _ in app_ids)
-            row = db.execute(f"SELECT COUNT(*) AS c FROM {table} WHERE application_id IN ({ph})", tuple(app_ids)).fetchone()
-        else:
+            preds.append(f"application_id IN ({ph})")
+            params.extend(app_ids)
+        if not preds:
             return 0
+        row = db.execute(
+            f"SELECT COUNT(*) AS c FROM {table} WHERE " + " OR ".join(preds),
+            tuple(params),
+        ).fetchone()
         return int(row["c"] if not isinstance(row, tuple) else row[0]) if row else 0
     except Exception as exc:
         raise _RowCountError(f"cannot count subject rows in {table}: {exc}") from exc
 
 
 def _discover_subject_linked_tables(db) -> List[str]:
-    """Every table carrying a subject identifier (client_id / application_id).
+    """Every table carrying a subject identifier (client_id / client_user_id /
+    application_id).
 
-    The ledger is complete-by-construction: a NEW table with application_id
+    The ledger is complete-by-construction: a NEW table with a subject FK
     automatically surfaces (as deferred until given an explicit rule), so
-    silently-retained subject data is structurally impossible.
+    silently-retained subject data is structurally impossible. A table whose
+    columns cannot be probed is INCLUDED (fail-closed) so the count step
+    evaluates it (and, if that also fails, marks it deferred).
     """
     linked = []
     for table in _list_tables(db):
         if table in _NON_SUBJECT_TABLES:
             continue
-        if table == "clients" or _has_column(db, table, "client_id") or _has_column(db, table, "application_id"):
+        if table == "clients":
+            linked.append(table)
+            continue
+        try:
+            present = _columns_present(db, table, (*_SUBJECT_CLIENT_FK_COLUMNS, "application_id"))
+        except Exception:
+            linked.append(table)  # fail-closed: cannot probe ⇒ evaluate downstream
+            continue
+        if present:
             linked.append(table)
     return sorted(set(linked))
 
@@ -313,13 +398,21 @@ def build_erasure_ledger(db, client_id: str) -> Dict[str, Any]:
             })
         elif table in _RETAINED_REQUIRED_TABLES:
             meta = _RETAINED_REQUIRED_TABLES[table]
+            # The retained disposition is governed by the cited LEGAL BASIS, not
+            # a numeric window; a missing peripheral-category policy must NOT
+            # abort read-only planning for any subject who merely has a SAR or an
+            # audited row (adversarial N4). Window is reported as None (unknown).
+            try:
+                retention_days = resolved_categories.get(meta["category"]) \
+                    or _resolve_retention_days(db, meta["category"])
+            except RetentionPolicyError:
+                retention_days = None
             entries.append({
                 "table": table, "rows": count,
                 "disposition": "retained_under_legal_obligation",
                 "category": meta["category"],
                 "legal_basis": meta["legal_basis"],
-                "retention_days": resolved_categories.get(meta["category"])
-                or _resolve_retention_days(db, meta["category"]),
+                "retention_days": retention_days,
             })
         else:
             # Subject-linked but no erase/retain rule yet → honest gap.
@@ -443,15 +536,77 @@ def _anonymise_application(db, application_id: str) -> List[str]:
     for table, spec in _ERASABLE_TABLES.items():
         if spec["scope"] != "application":
             continue
-        cols = [c for c in spec["columns"] if _has_column(db, table, c)]
+        cols = [c for c in _erasable_columns(table) if _has_column(db, table, c)]
         if not cols:
             continue
         assignments = ", ".join(f"{c} = ?" for c in cols)
-        values = [json.dumps({"erased": True}) if c in spec["json_columns"] else _REDACTION_TOKEN for c in cols]
+        values = [_ERASED_JSON if c in spec["json_columns"] else _REDACTION_TOKEN for c in cols]
         key = "id" if table == "applications" else "application_id"
         db.execute(f"UPDATE {table} SET {assignments} WHERE {key} = ?", (*values, application_id))
         affected.append(table)
     return affected
+
+
+# Values an already-erased PII column may legitimately hold. A residual is any
+# subject value that is NONE of these. Columns are CAST to text so the guard
+# works uniformly across scalar TEXT and PG JSONB/JSON columns (e.g.
+# pep_declaration, prescreening_data) — a bare `jsonb = ''`/`jsonb LIKE ?` would
+# raise on PostgreSQL and make the guard false-positive on every erasure.
+_ERASED_SENTINEL_SQL = (
+    "(CAST({col} AS TEXT) IS NULL OR CAST({col} AS TEXT) = '' "
+    "OR CAST({col} AS TEXT) = ? OR CAST({col} AS TEXT) LIKE ? OR CAST({col} AS TEXT) LIKE ?)"
+)
+_ERASED_SENTINEL_PARAMS = (_REDACTION_TOKEN, '%"erased"%', "erased+%@erased.invalid")
+
+
+def _residual_guard_columns(table: str) -> List[str]:
+    """Every column that MUST be tokenised after erasing `table`: the explicit
+    erasable columns UNIONed with the authoritative taxonomy and the
+    registry-originals JSON. Independent of the hand-maintained spec so a spec
+    gap is still caught (adversarial B1)."""
+    cols = set(_erasable_columns(table)) | set(_TAXONOMY_PII.get(table, ())) | {_REGISTRY_ORIGINAL_JSON}
+    return sorted(cols)
+
+
+def _detect_residual_pii(db, erased_application_ids: List[str], client_erased: bool,
+                         client_id: str) -> List[Dict[str, Any]]:
+    """After anonymisation, verify NO known-PII column still holds subject data.
+
+    This is the write-path analogue of the complete-ledger guarantee: the ledger
+    guarantees no subject TABLE is silently dropped; this guarantees no subject
+    PII COLUMN is silently left behind. Any residual (or an unverifiable column)
+    makes the run fail-closed — it can never be reported 'executed' (B1)."""
+    findings: List[Dict[str, Any]] = []
+    for table, spec in _ERASABLE_TABLES.items():
+        if spec["scope"] == "application":
+            if not erased_application_ids:
+                continue
+            key = "id" if table == "applications" else "application_id"
+            id_scope = erased_application_ids
+        else:  # client scope
+            if not client_erased:
+                continue
+            key, id_scope = "id", [client_id]
+        ph = ",".join("?" for _ in id_scope)
+        for col in _residual_guard_columns(table):
+            if not _has_column(db, table, col):
+                continue
+            predicate = _ERASED_SENTINEL_SQL.format(col=col)
+            try:
+                row = db.execute(
+                    f"SELECT COUNT(*) AS c FROM {table} "
+                    f"WHERE {key} IN ({ph}) AND NOT {predicate}",
+                    (*id_scope, *_ERASED_SENTINEL_PARAMS),
+                ).fetchone()
+            except Exception as exc:
+                # Cannot verify ⇒ fail-closed: treat as residual.
+                findings.append({"table": table, "column": col, "rows": None,
+                                 "detail": f"residual check failed: {exc}"})
+                continue
+            n = int(row["c"] if not isinstance(row, tuple) else row[0]) if row else 0
+            if n > 0:
+                findings.append({"table": table, "column": col, "rows": n})
+    return findings
 
 
 def execute_subject_erasure(
@@ -528,8 +683,13 @@ def execute_subject_erasure(
     client_erased = False
     if not retained_refused:
         if _has_column(db, "clients", "email"):
+            # Null any password-reset token/expiry too, so no reset artefact
+            # survives an "erasure" (adversarial N5).
+            reset_cols = [c for c in ("password_reset_token", "password_reset_expires")
+                          if _has_column(db, "clients", c)]
+            extra_set = "".join(f", {c} = NULL" for c in reset_cols)
             db.execute(
-                "UPDATE clients SET email = ?, company_name = ?, password_hash = ? WHERE id = ?",
+                f"UPDATE clients SET email = ?, company_name = ?, password_hash = ?{extra_set} WHERE id = ?",
                 (f"erased+{client_id}@erased.invalid", _REDACTION_TOKEN, secrets.token_hex(32), client_id),
             )
             tables_touched.add("clients")
@@ -540,18 +700,43 @@ def execute_subject_erasure(
                      dsar_request_id=dsar_request_id,
                      tables_affected=["clients"] if client_erased else [])
 
-    # Only a fully-satisfied request (nothing refused/deferred) counts as
-    # executed. A distinct completion marker is written ONLY here, carrying the
-    # subject client_id — it is the SOLE evidence gdpr.verify_dsar_erasure_
-    # evidence accepts, so a partial run (which never reaches this) can never be
-    # mistaken for a completed erasure (adversarial F4), and the client_id bind
-    # prevents a shared correlation id from marking another subject (F5).
-    fully_done = not retained_refused and (bool(erased_apps) or client_erased)
+    # RESIDUAL-PII GUARD (adversarial B1): 'executed' must imply no known-PII
+    # column survived. Re-read every taxonomy/erasable column on the rows we just
+    # anonymised; any residual (or unverifiable column) fails the run closed.
+    residual = _detect_residual_pii(db, erased_apps, client_erased, client_id)
+
+    # Only a fully-satisfied request (nothing refused/deferred, no residual PII)
+    # counts as executed. A distinct completion marker is written ONLY here,
+    # carrying the subject client_id — it is the SOLE evidence gdpr.verify_dsar_
+    # erasure_evidence accepts, so a partial run (which never reaches this) can
+    # never be mistaken for a completed erasure (adversarial F4), and the
+    # client_id bind prevents a shared correlation id from marking another
+    # subject (F5).
+    fully_done = (not retained_refused) and (not residual) and (bool(erased_apps) or client_erased)
+
+    if residual:
+        _log_erasure(db, client_id=client_id, application_id=None, requested_by=requested_by,
+                     action="refused_residual_pii", outcome="refused",
+                     dsar_request_id=dsar_request_id, disposition=residual,
+                     tables_affected=sorted(tables_touched),
+                     note="known-PII columns survived anonymisation: "
+                          + ",".join(f"{f['table']}.{f['column']}" for f in residual))
+        return {**plan, "action": "refused_incomplete",
+                "changes_made": bool(erased_apps or client_erased),
+                "erased_application_ids": erased_apps,
+                "retained_refused_application_ids": retained_refused,
+                "client_account_erased": client_erased,
+                "tables_affected": sorted(tables_touched),
+                "residual_pii": residual,
+                "erasure_executed": False,
+                "error": "erasure incomplete: known-PII columns survived anonymisation; "
+                         "refusing to report completion (fail-closed — B1)"}
+
     if not dry_run and fully_done:
         _log_erasure(db, client_id=client_id, application_id=None, requested_by=requested_by,
                      action="erasure_completed", outcome="completed", dsar_request_id=dsar_request_id,
                      tables_affected=sorted(tables_touched),
-                     note="all subject applications erased; no records refused or deferred")
+                     note="all subject applications erased; no records refused, deferred, or residual")
     return {
         **plan,
         "action": "executed" if fully_done else "partial",
@@ -559,6 +744,7 @@ def execute_subject_erasure(
         "erased_application_ids": erased_apps,
         "retained_refused_application_ids": retained_refused,
         "client_account_erased": client_erased,
+        "residual_pii": residual,
         "tables_affected": sorted(tables_touched),
         "erasure_executed": bool(fully_done),
     }
