@@ -112,12 +112,18 @@ _RETAINED_REQUIRED_TABLES: Dict[str, Dict[str, str]] = {
 }
 
 # Infrastructure/reference tables that are never subject PII (excluded from the
-# deferred bucket so they do not spuriously block a live erasure).
+# deferred bucket so they do not spuriously block a live erasure). This list is
+# deliberately CONSERVATIVE: a table is excluded only if it genuinely holds no
+# subject personal data. Anything holding subject PII must NOT be here — it must
+# surface (as erasable or deferred) so the live-path invariant can act on it.
+# NOTE: client_sessions is intentionally NOT excluded — its form_data blob holds
+# save-and-resume PII (contact email, names, DOB, nationality, ownership), so it
+# must surface as deferred and block a "completed" erasure (adversarial F1).
 _NON_SUBJECT_TABLES = frozenset({
     "schema_version", "schema_migrations", "data_migration_markers",
-    "data_retention_policies", "supervisor_audit_migrations", "rate_limits",
+    "data_retention_policies", "supervisor_audit_migrations",
     "risk_config", "ai_agents", "ai_checks", "system_settings",
-    "revoked_tokens", "client_sessions", "enhanced_requirement_rules",
+    "revoked_tokens", "enhanced_requirement_rules",
     "country_risk_entries", "country_risk_snapshots",
 })
 
@@ -217,26 +223,44 @@ def _subject_app_ids(db, client_id: str) -> List[str]:
     ]
 
 
+class _RowCountError(Exception):
+    """A subject-row count could not be computed — must fail CLOSED, not to 0."""
+
+
 def _subject_row_count(db, table: str, client_id: str, app_ids: List[str]) -> int:
-    """Rows in `table` belonging to this subject (via client_id or application_id)."""
+    """Rows in `table` belonging to this subject.
+
+    Counts via BOTH client_id and application_id when both columns exist — a row
+    linked only by application_id (client_id NULL) must not undercount to 0
+    (adversarial F2). Raises _RowCountError on any query failure so the ledger
+    can fail closed rather than silently treat the table as empty (F3).
+    """
+    has_client = _has_column(db, table, "client_id")
+    has_app = _has_column(db, table, "application_id")
     try:
         if table == "clients":
             row = db.execute("SELECT COUNT(*) AS c FROM clients WHERE id = ?", (client_id,)).fetchone()
-        elif _has_column(db, table, "client_id"):
+        elif has_client and has_app:
+            if app_ids:
+                ph = ",".join("?" for _ in app_ids)
+                row = db.execute(
+                    f"SELECT COUNT(*) AS c FROM {table} WHERE client_id = ? OR application_id IN ({ph})",
+                    (client_id, *app_ids),
+                ).fetchone()
+            else:
+                row = db.execute(f"SELECT COUNT(*) AS c FROM {table} WHERE client_id = ?", (client_id,)).fetchone()
+        elif has_client:
             row = db.execute(f"SELECT COUNT(*) AS c FROM {table} WHERE client_id = ?", (client_id,)).fetchone()
-        elif _has_column(db, table, "application_id"):
+        elif has_app:
             if not app_ids:
                 return 0
-            placeholders = ",".join("?" for _ in app_ids)
-            row = db.execute(
-                f"SELECT COUNT(*) AS c FROM {table} WHERE application_id IN ({placeholders})",
-                tuple(app_ids),
-            ).fetchone()
+            ph = ",".join("?" for _ in app_ids)
+            row = db.execute(f"SELECT COUNT(*) AS c FROM {table} WHERE application_id IN ({ph})", tuple(app_ids)).fetchone()
         else:
             return 0
         return int(row["c"] if not isinstance(row, tuple) else row[0]) if row else 0
-    except Exception:
-        return 0
+    except Exception as exc:
+        raise _RowCountError(f"cannot count subject rows in {table}: {exc}") from exc
 
 
 def _discover_subject_linked_tables(db) -> List[str]:
@@ -269,7 +293,16 @@ def build_erasure_ledger(db, client_id: str) -> Dict[str, Any]:
     entries: List[Dict[str, Any]] = []
 
     for table in _discover_subject_linked_tables(db):
-        count = _subject_row_count(db, table, client_id, app_ids)
+        try:
+            count = _subject_row_count(db, table, client_id, app_ids)
+        except _RowCountError as exc:
+            # Fail-closed: a table whose subject-row count cannot be computed
+            # BLOCKS a live completion rather than vanishing to not_applicable.
+            entries.append({
+                "table": table, "rows": None, "disposition": "deferred_not_implemented",
+                "detail": f"subject-row count unavailable ({exc}) — fail-closed",
+            })
+            continue
         if count == 0:
             entries.append({"table": table, "rows": 0, "disposition": "not_applicable"})
             continue
@@ -507,8 +540,18 @@ def execute_subject_erasure(
                      dsar_request_id=dsar_request_id,
                      tables_affected=["clients"] if client_erased else [])
 
-    # Only a fully-satisfied request (nothing refused/deferred) counts as executed.
-    fully_done = not retained_refused
+    # Only a fully-satisfied request (nothing refused/deferred) counts as
+    # executed. A distinct completion marker is written ONLY here, carrying the
+    # subject client_id — it is the SOLE evidence gdpr.verify_dsar_erasure_
+    # evidence accepts, so a partial run (which never reaches this) can never be
+    # mistaken for a completed erasure (adversarial F4), and the client_id bind
+    # prevents a shared correlation id from marking another subject (F5).
+    fully_done = not retained_refused and (bool(erased_apps) or client_erased)
+    if not dry_run and fully_done:
+        _log_erasure(db, client_id=client_id, application_id=None, requested_by=requested_by,
+                     action="erasure_completed", outcome="completed", dsar_request_id=dsar_request_id,
+                     tables_affected=sorted(tables_touched),
+                     note="all subject applications erased; no records refused or deferred")
     return {
         **plan,
         "action": "executed" if fully_done else "partial",
@@ -517,5 +560,5 @@ def execute_subject_erasure(
         "retained_refused_application_ids": retained_refused,
         "client_account_erased": client_erased,
         "tables_affected": sorted(tables_touched),
-        "erasure_executed": bool(fully_done and (erased_apps or client_erased)),
+        "erasure_executed": bool(fully_done),
     }

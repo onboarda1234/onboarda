@@ -477,27 +477,30 @@ def complete_dsar(
     }
 
 
-def verify_dsar_erasure_evidence(db, dsar_request_id) -> bool:
-    """Return True only if a QUALIFYING erasure execution is on record (H2B).
+def verify_dsar_erasure_evidence(db, dsar_request_id, client_id) -> bool:
+    """Return True only if a COMPLETED erasure for this subject is on record (H2B).
 
     Caveats A+B: DSAR erasure status must be derived from evidence, not a
-    trusted flag. A qualifying record is a gdpr_erasure_log row correlated to
-    this DSAR that (a) is NOT a dry run and (b) records a real erasure outcome
-    — so a dry-run row, a generic client row, or a planning-only row can never
-    satisfy the check. ``complete_dsar`` cannot set ``erasure_executed``; only
-    an executor that wrote such a row (and, when wired, calls
-    ``mark_dsar_erasure_executed``) may flip it.
+    trusted flag. A qualifying record is a gdpr_erasure_log row that (a) is the
+    executor's ``erasure_completed`` marker — written ONLY on a fully-satisfied
+    erasure with nothing refused/deferred, so a dry-run, generic, or PARTIAL run
+    can never satisfy it (adversarial F4); (b) is not a dry run; AND (c) is bound
+    to BOTH the DSAR correlation id and the subject ``client_id`` — so a shared
+    or hostile correlation token cannot mark another subject's DSAR (F5).
+    ``complete_dsar`` cannot set ``erasure_executed``; only an executor that
+    wrote such a marker (via ``mark_dsar_erasure_executed``) may flip it.
     """
-    if dsar_request_id in (None, ""):
+    if dsar_request_id in (None, "") or client_id in (None, ""):
         return False
     try:
         row = db.execute(
             "SELECT COUNT(*) AS c FROM gdpr_erasure_log "
             "WHERE dsar_request_id = ? "
+            "  AND client_id = ? "
             "  AND COALESCE(dry_run, FALSE) = FALSE "
-            "  AND action IN ('erased', 'client_account_erased') "
-            "  AND outcome = 'erased'",
-            (str(dsar_request_id),),
+            "  AND action = 'erasure_completed' "
+            "  AND outcome = 'completed'",
+            (str(dsar_request_id), str(client_id)),
         ).fetchone()
     except Exception:
         # No log table / query error ⇒ no evidence ⇒ not executed (fail-safe).
@@ -509,15 +512,22 @@ def verify_dsar_erasure_evidence(db, dsar_request_id) -> bool:
 def mark_dsar_erasure_executed(db, dsar_id: int, dsar_request_id) -> bool:
     """Set erasure_executed=TRUE on a DSAR — ONLY with qualifying log evidence.
 
-    This is the ONLY sanctioned path to flip erasure_executed, and it refuses
-    unless ``verify_dsar_erasure_evidence`` confirms a real, non-dry-run
-    execution. It is intended for the future executor→DSAR wiring; nothing in
-    the live path calls it today (H2B stays OFF). Returns whether it flipped.
+    The ONLY sanctioned path to flip erasure_executed. It binds the evidence
+    check to the DSAR's own ``client_id`` (looked up here, not caller-supplied),
+    and refuses unless ``verify_dsar_erasure_evidence`` confirms a completed,
+    non-dry-run, subject-bound execution. Intended for the future
+    executor→DSAR wiring; nothing in the live path calls it today (H2B OFF).
+    Returns whether it flipped.
     """
-    if not verify_dsar_erasure_evidence(db, dsar_request_id):
+    dsar = db.execute(
+        "SELECT client_id FROM data_subject_requests WHERE id = ?", (dsar_id,)
+    ).fetchone()
+    dsar_client_id = (dsar["client_id"] if dsar and not isinstance(dsar, tuple) else (dsar[0] if dsar else None))
+    if not verify_dsar_erasure_evidence(db, dsar_request_id, dsar_client_id):
         logger.warning(
-            "refusing to mark DSAR %s erasure_executed: no qualifying non-dry-run "
-            "erasure evidence for correlation id %s", dsar_id, dsar_request_id
+            "refusing to mark DSAR %s erasure_executed: no qualifying completed, "
+            "non-dry-run erasure evidence bound to client %s for correlation id %s",
+            dsar_id, dsar_client_id, dsar_request_id,
         )
         return False
     db.execute(

@@ -153,22 +153,27 @@ def test_ledger_accounts_every_subject_table(db):
 
 
 def test_ledger_retained_entries_cite_a_basis(db):
+    from datetime import datetime, timezone
     import gdpr_erasure as ge
     _seed_subject(db, "c-h2b-ret", "a-h2b-ret", 4000)
-    # give the subject a supervisor_audit_log row (retained-required, app-linked)
-    try:
-        db.execute(
-            "INSERT INTO supervisor_audit_log (application_id, entry_hash) VALUES (?, ?)",
-            ("a-h2b-ret", "deadbeef"),
-        )
-        db.commit()
-        ledger = ge.build_erasure_ledger(db, "c-h2b-ret")
-        sup = next((e for e in ledger["entries"] if e["table"] == "supervisor_audit_log"), None)
-        if sup and sup["rows"] > 0:
-            assert sup["disposition"] == "retained_under_legal_obligation"
-            assert sup.get("legal_basis")  # must cite a basis, never bare "required"
-    except Exception:
-        pytest.skip("supervisor_audit_log insert shape differs in this schema")
+    # give the subject a supervisor_audit_log row (retained-required, app-linked).
+    # supervisor_audit_log NOT NULL cols: id, timestamp, event_type, action.
+    db.execute(
+        "INSERT INTO supervisor_audit_log "
+        "(id, timestamp, event_type, action, application_id, entry_hash) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        ("sup-h2b-ret", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+         "decision", "approve", "a-h2b-ret", "deadbeef"),
+    )
+    db.commit()
+    ledger = ge.build_erasure_ledger(db, "c-h2b-ret")
+    sup = next((e for e in ledger["entries"] if e["table"] == "supervisor_audit_log"), None)
+    assert sup is not None, "supervisor_audit_log must appear in the ledger"
+    assert sup["rows"] > 0
+    assert sup["disposition"] == "retained_under_legal_obligation"
+    # must cite an actual basis, never a bare "required"
+    assert sup.get("legal_basis")
+    assert sup["legal_basis"].strip().lower() != "required"
 
 
 # ── Live-path invariant (audit) ──────────────────────────────────────────────
@@ -196,6 +201,63 @@ def test_live_execute_erases_when_no_deferred_rows(db):
     assert res["erasure_executed"] is True
     d = db.execute("SELECT full_name FROM directors WHERE application_id = 'a-h2b-ok'").fetchone()
     assert d["full_name"] == "[ERASED]"
+
+
+# ── Adversarial-review regressions (F1 / F2) ─────────────────────────────────
+
+def test_client_sessions_draft_pii_blocks_live_completion(db):
+    """A save-and-resume client_sessions row holds draft PII (contact email,
+    names, DOB, nationality, ownership). It must NOT be excluded from discovery;
+    it must surface as deferred and BLOCK a live erasure from reporting
+    'executed' while that PII survives (adversarial F1)."""
+    import gdpr_erasure as ge
+    _seed_subject(db, "c-h2b-cs", "a-h2b-cs", 4000)  # out of retention
+    db.execute(
+        "INSERT INTO client_sessions (id, client_id, application_id, form_data) VALUES (?, ?, ?, ?)",
+        ("cs-h2b-1", "c-h2b-cs", "a-h2b-cs",
+         '{"contact_email": "jane@doe.com", "director_name": "Jane Doe", '
+         '"dob": "1980-01-01", "nationality": "GB"}'),
+    )
+    db.commit()
+
+    ledger = ge.build_erasure_ledger(db, "c-h2b-cs")
+    cs = next((e for e in ledger["entries"] if e["table"] == "client_sessions"), None)
+    assert cs is not None, "client_sessions must not be excluded from discovery"
+    assert cs["disposition"] == "deferred_not_implemented"
+    assert "client_sessions" in ledger["deferred_tables"]
+
+    res = ge.execute_subject_erasure(db, "c-h2b-cs", requested_by="admin", dry_run=False)
+    db.commit()
+    assert res["action"] == "refused_incomplete"
+    assert res["changes_made"] is False
+    assert res.get("erasure_executed") in (None, False)
+    # draft PII and the director PII must both remain intact
+    fd = db.execute("SELECT form_data FROM client_sessions WHERE id = 'cs-h2b-1'").fetchone()
+    assert "Jane Doe" in fd["form_data"]
+    d = db.execute("SELECT full_name FROM directors WHERE application_id = 'a-h2b-cs'").fetchone()
+    assert d["full_name"] == "John Doe"
+
+
+def test_application_id_only_row_is_counted(db):
+    """A subject row linked ONLY by application_id (client_id NULL) must be
+    counted. The old elif made the application_id branch unreachable whenever a
+    client_id column existed, undercounting to 0 and letting a live erasure
+    falsely 'complete' (adversarial F2)."""
+    import gdpr_erasure as ge
+    _seed_subject(db, "c-h2b-aid", "a-h2b-aid", 4000)
+    # client_sessions has BOTH client_id and application_id; insert a row whose
+    # client_id is NULL but whose application_id points at the subject's app.
+    db.execute(
+        "INSERT INTO client_sessions (id, client_id, application_id, form_data) VALUES (?, NULL, ?, ?)",
+        ("cs-h2b-aid", "a-h2b-aid", '{"director_name": "Anon Linked"}'),
+    )
+    db.commit()
+    app_ids = ge._subject_app_ids(db, "c-h2b-aid")
+    n = ge._subject_row_count(db, "client_sessions", "c-h2b-aid", app_ids)
+    assert n == 1, "application_id-only row must be counted, not undercounted to 0"
+    # and it therefore surfaces in the ledger (as deferred), blocking completion
+    ledger = ge.build_erasure_ledger(db, "c-h2b-aid")
+    assert "client_sessions" in ledger["deferred_tables"]
 
 
 # ── Preserved draft safety behaviours ────────────────────────────────────────
@@ -244,43 +306,105 @@ def test_verify_evidence_rejects_dry_run_and_generic_rows(db):
     import gdpr_erasure as ge
     ge._ensure_erasure_log_table(db)
     corr = "dsar-corr-1"
+    cid = "c-h2b-ev"
 
-    # A dry-run row must NOT satisfy verification.
-    ge._log_erasure(db, client_id="c1", application_id="a1", requested_by="admin",
-                    action="erased", outcome="erased", dry_run=True, dsar_request_id=corr)
+    # A dry-run completion marker must NOT satisfy verification.
+    ge._log_erasure(db, client_id=cid, application_id="a1", requested_by="admin",
+                    action="erasure_completed", outcome="completed", dry_run=True, dsar_request_id=corr)
     db.commit()
-    assert gdpr.verify_dsar_erasure_evidence(db, corr) is False
+    assert gdpr.verify_dsar_erasure_evidence(db, corr, cid) is False
 
-    # A generic (non-erased) row must NOT satisfy it.
-    ge._log_erasure(db, client_id="c1", application_id="a1", requested_by="admin",
-                    action="retained_refused", outcome="retained", dry_run=False, dsar_request_id=corr)
-    db.commit()
-    assert gdpr.verify_dsar_erasure_evidence(db, corr) is False
-
-    # A qualifying non-dry-run erased row satisfies it.
-    ge._log_erasure(db, client_id="c1", application_id="a1", requested_by="admin",
+    # A per-application 'erased' row (not the completion marker) must NOT satisfy
+    # it — a partial run writes these but never truly completes (F4).
+    ge._log_erasure(db, client_id=cid, application_id="a1", requested_by="admin",
                     action="erased", outcome="erased", dry_run=False, dsar_request_id=corr)
     db.commit()
-    assert gdpr.verify_dsar_erasure_evidence(db, corr) is True
+    assert gdpr.verify_dsar_erasure_evidence(db, corr, cid) is False
+
+    # A qualifying non-dry-run completion marker satisfies it — but ONLY for the
+    # bound client_id; a different subject sharing the corr id must stay False (F5).
+    ge._log_erasure(db, client_id=cid, application_id="a1", requested_by="admin",
+                    action="erasure_completed", outcome="completed", dry_run=False, dsar_request_id=corr)
+    db.commit()
+    assert gdpr.verify_dsar_erasure_evidence(db, corr, cid) is True
+    assert gdpr.verify_dsar_erasure_evidence(db, corr, "c-h2b-other") is False
+    assert gdpr.verify_dsar_erasure_evidence(db, corr, None) is False
 
 
 def test_mark_dsar_refuses_without_evidence(db):
     import gdpr
     import gdpr_erasure as ge
     ge._ensure_erasure_log_table(db)
-    created = gdpr.create_dsar(db, "erasure", "m@example.com", "M", None, "erase")
+    cid = "c-h2b-mark"
+    created = gdpr.create_dsar(db, "erasure", "m@example.com", "M", cid, "erase")
     dsar_id = created["id"]
 
+    # No evidence at all → refuse.
     assert gdpr.mark_dsar_erasure_executed(db, dsar_id, "no-such-corr") is False
     assert db.execute("SELECT erasure_executed FROM data_subject_requests WHERE id = ?", (dsar_id,)).fetchone()["erasure_executed"] in (False, 0, None)
 
+    # A per-app 'erased' row (no completion marker) is NOT enough → still refuse.
     corr = f"corr-{dsar_id}"
-    ge._log_erasure(db, client_id="c9", application_id="a9", requested_by="admin",
+    ge._log_erasure(db, client_id=cid, application_id="a9", requested_by="admin",
                     action="erased", outcome="erased", dry_run=False, dsar_request_id=corr)
+    db.commit()
+    assert gdpr.mark_dsar_erasure_executed(db, dsar_id, corr) is False
+
+    # The completion marker bound to this subject flips it.
+    ge._log_erasure(db, client_id=cid, application_id="a9", requested_by="admin",
+                    action="erasure_completed", outcome="completed", dry_run=False, dsar_request_id=corr)
     db.commit()
     assert gdpr.mark_dsar_erasure_executed(db, dsar_id, corr) is True
     db.commit()
     assert db.execute("SELECT erasure_executed FROM data_subject_requests WHERE id = ?", (dsar_id,)).fetchone()["erasure_executed"] in (True, 1)
+
+
+def test_partial_erasure_does_not_satisfy_verification(db):
+    """A subject with one erasable + one retained application yields a PARTIAL
+    run: per-app 'erased' rows are written but NO 'erasure_completed' marker, so
+    DSAR verification must stay False — a partial run can never be mistaken for a
+    completed erasure (adversarial F4)."""
+    import gdpr
+    import gdpr_erasure as ge
+    _seed_subject(db, "c-h2b-part", "a-h2b-part-old", 4000)   # out of retention -> erasable
+    _seed_subject(db, "c-h2b-part", "a-h2b-part-new", 30)     # in window -> retained
+    corr = "corr-partial"
+    res = ge.execute_subject_erasure(db, "c-h2b-part", requested_by="admin",
+                                     dry_run=False, dsar_request_id=corr)
+    db.commit()
+    assert res["action"] == "partial"
+    assert res["erasure_executed"] is False
+    assert "a-h2b-part-new" in res["retained_refused_application_ids"]
+    # a per-app 'erased' row exists for the out-of-retention app...
+    erased = db.execute(
+        "SELECT COUNT(*) AS c FROM gdpr_erasure_log WHERE dsar_request_id = ? AND action = 'erased'",
+        (corr,),
+    ).fetchone()
+    assert (erased["c"] if not isinstance(erased, tuple) else erased[0]) >= 1
+    # ...but NO completion marker, so verification stays False.
+    assert gdpr.verify_dsar_erasure_evidence(db, corr, "c-h2b-part") is False
+    # the retained app's PII is intact
+    d = db.execute("SELECT full_name FROM directors WHERE application_id = 'a-h2b-part-new'").fetchone()
+    assert d["full_name"] == "John Doe"
+
+
+def test_cross_subject_correlation_cannot_mark_another_dsar(db):
+    """A completion marker bound to subject A must not let subject B's DSAR that
+    happens to reference the same correlation id be marked executed. The evidence
+    check binds on the DSAR's OWN client_id, looked up server-side (F5)."""
+    import gdpr
+    import gdpr_erasure as ge
+    ge._ensure_erasure_log_table(db)
+    shared = "shared-corr-xsub"
+    # Subject A's genuine completion marker under the shared correlation id.
+    ge._log_erasure(db, client_id="c-h2b-xA", application_id="a-xA", requested_by="admin",
+                    action="erasure_completed", outcome="completed", dry_run=False, dsar_request_id=shared)
+    db.commit()
+    # Subject B's DSAR references the SAME correlation id but is a different client.
+    created = gdpr.create_dsar(db, "erasure", "b@example.com", "B", "c-h2b-xB", "erase")
+    dsar_b = created["id"]
+    assert gdpr.mark_dsar_erasure_executed(db, dsar_b, shared) is False
+    assert db.execute("SELECT erasure_executed FROM data_subject_requests WHERE id = ?", (dsar_b,)).fetchone()["erasure_executed"] in (False, 0, None)
 
 
 # ── Stays OFF (unwired) ──────────────────────────────────────────────────────
