@@ -475,3 +475,53 @@ def complete_dsar(
         "handled_by": handled_by,
         "erasure_executed": False,
     }
+
+
+def verify_dsar_erasure_evidence(db, dsar_request_id) -> bool:
+    """Return True only if a QUALIFYING erasure execution is on record (H2B).
+
+    Caveats A+B: DSAR erasure status must be derived from evidence, not a
+    trusted flag. A qualifying record is a gdpr_erasure_log row correlated to
+    this DSAR that (a) is NOT a dry run and (b) records a real erasure outcome
+    — so a dry-run row, a generic client row, or a planning-only row can never
+    satisfy the check. ``complete_dsar`` cannot set ``erasure_executed``; only
+    an executor that wrote such a row (and, when wired, calls
+    ``mark_dsar_erasure_executed``) may flip it.
+    """
+    if dsar_request_id in (None, ""):
+        return False
+    try:
+        row = db.execute(
+            "SELECT COUNT(*) AS c FROM gdpr_erasure_log "
+            "WHERE dsar_request_id = ? "
+            "  AND COALESCE(dry_run, FALSE) = FALSE "
+            "  AND action IN ('erased', 'client_account_erased') "
+            "  AND outcome = 'erased'",
+            (str(dsar_request_id),),
+        ).fetchone()
+    except Exception:
+        # No log table / query error ⇒ no evidence ⇒ not executed (fail-safe).
+        return False
+    count = int(row["c"] if not isinstance(row, tuple) else row[0]) if row else 0
+    return count > 0
+
+
+def mark_dsar_erasure_executed(db, dsar_id: int, dsar_request_id) -> bool:
+    """Set erasure_executed=TRUE on a DSAR — ONLY with qualifying log evidence.
+
+    This is the ONLY sanctioned path to flip erasure_executed, and it refuses
+    unless ``verify_dsar_erasure_evidence`` confirms a real, non-dry-run
+    execution. It is intended for the future executor→DSAR wiring; nothing in
+    the live path calls it today (H2B stays OFF). Returns whether it flipped.
+    """
+    if not verify_dsar_erasure_evidence(db, dsar_request_id):
+        logger.warning(
+            "refusing to mark DSAR %s erasure_executed: no qualifying non-dry-run "
+            "erasure evidence for correlation id %s", dsar_id, dsar_request_id
+        )
+        return False
+    db.execute(
+        "UPDATE data_subject_requests SET erasure_executed = TRUE WHERE id = ?",
+        (dsar_id,),
+    )
+    return True
