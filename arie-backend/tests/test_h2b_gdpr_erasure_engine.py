@@ -176,6 +176,78 @@ def test_ledger_retained_entries_cite_a_basis(db):
     assert sup["legal_basis"].strip().lower() != "required"
 
 
+def test_audit_log_target_linked_rows_are_retained_exactly(db):
+    """audit_log links to applications via target, not a FK. Count only exact
+    target matches on the subject's application ref/id; never detail text."""
+    import gdpr_erasure as ge
+    _seed_subject(db, "c-h2b-audit", "a-h2b-audit", 4000)
+    app_ref = "REF-a-h2b-audit"
+    db.execute(
+        "INSERT INTO audit_log (action, target, detail) VALUES (?, ?, ?)",
+        ("Create", app_ref, "New application created: Audit Subject Co"),
+    )
+    db.execute(
+        "INSERT INTO audit_log (action, target, detail) VALUES (?, ?, ?)",
+        ("Review", "a-h2b-audit", "Reviewed application id directly"),
+    )
+    db.execute(
+        "INSERT INTO audit_log (action, target, detail) VALUES (?, ?, ?)",
+        ("Noise", "unrelated-target", f"mentions {app_ref} and Audit Subject Co only in detail"),
+    )
+    db.commit()
+
+    ledger = ge.build_erasure_ledger(db, "c-h2b-audit")
+    audit = next((e for e in ledger["entries"] if e["table"] == "audit_log"), None)
+    assert audit is not None
+    assert audit["rows"] == 2
+    assert audit["disposition"] == "retained_under_legal_obligation"
+    assert audit["legal_basis"] == "regulatory accountability / audit trail integrity"
+
+
+def test_audit_log_target_count_failure_fails_closed(db, monkeypatch):
+    import gdpr_erasure as ge
+    _seed_subject(db, "c-h2b-auditerr", "a-h2b-auditerr", 4000)
+    db.execute(
+        "INSERT INTO audit_log (action, target, detail) VALUES (?, ?, ?)",
+        ("Create", "REF-a-h2b-auditerr", "audit target row"),
+    )
+    db.commit()
+
+    def boom(_db, _app_ids, _app_refs):
+        raise ge._RowCountError("simulated audit_log target count failure")
+
+    monkeypatch.setattr(ge, "_target_linked_audit_log_row_count", boom)
+    ledger = ge.build_erasure_ledger(db, "c-h2b-auditerr")
+    audit = next((e for e in ledger["entries"] if e["table"] == "audit_log"), None)
+    assert audit is not None
+    assert audit["disposition"] == "deferred_not_implemented"
+    assert "audit_log" in ledger["deferred_tables"]
+
+    res = ge.execute_subject_erasure(db, "c-h2b-auditerr", requested_by="admin", dry_run=False)
+    assert res["action"] == "refused_incomplete"
+    assert res.get("erasure_executed") in (None, False)
+
+
+def test_application_ref_linked_tables_surface_from_schema_sweep(db):
+    """decision_records is application_ref-linked rather than application_id-linked;
+    it must surface exactly instead of being silently omitted."""
+    from datetime import datetime, timezone
+    import gdpr_erasure as ge
+    _seed_subject(db, "c-h2b-appref", "a-h2b-appref", 4000)
+    db.execute(
+        "INSERT INTO decision_records "
+        "(id, application_ref, decision_type, source, timestamp) VALUES (?, ?, ?, ?, ?)",
+        ("dec-h2b-appref", "REF-a-h2b-appref", "approve", "manual",
+         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")),
+    )
+    db.commit()
+    ledger = ge.build_erasure_ledger(db, "c-h2b-appref")
+    dec = next((e for e in ledger["entries"] if e["table"] == "decision_records"), None)
+    assert dec is not None
+    assert dec["rows"] == 1
+    assert dec["disposition"] == "deferred_not_implemented"
+
+
 # ── Live-path invariant (audit) ──────────────────────────────────────────────
 
 def test_live_execute_refuses_incomplete_when_deferred_rows_present(db):
@@ -201,6 +273,12 @@ def test_live_execute_erases_when_no_deferred_rows(db):
     assert res["erasure_executed"] is True
     d = db.execute("SELECT full_name FROM directors WHERE application_id = 'a-h2b-ok'").fetchone()
     assert d["full_name"] == "[ERASED]"
+    marker = db.execute(
+        "SELECT COUNT(*) AS c FROM gdpr_erasure_log "
+        "WHERE client_id = ? AND action = 'erasure_completed' AND outcome = 'completed'",
+        ("c-h2b-ok",),
+    ).fetchone()
+    assert marker["c"] == 1
 
 
 # ── Adversarial-review regressions (F1 / F2) ─────────────────────────────────
@@ -343,14 +421,37 @@ def test_residual_pii_guard_blocks_executed_when_a_column_is_missed(db, monkeypa
     assert res.get("erasure_executed") in (None, False)
     assert any(f["table"] == "intermediaries" and f["column"] == "owned_or_controlled_by"
                for f in res["residual_pii"])
-    # the surviving PII is reported, and no completion marker was written
-    assert db.execute(
-        "SELECT owned_or_controlled_by FROM intermediaries WHERE id = 'int-resid'"
-    ).fetchone()["owned_or_controlled_by"] == "Jane Smith (controller)"
+    # The mutation savepoint rolled back: both the missed column and columns that
+    # were redacted before the guard ran remain intact after the caller commits.
+    row = db.execute(
+        "SELECT entity_name, owned_or_controlled_by FROM intermediaries WHERE id = 'int-resid'"
+    ).fetchone()
+    assert row["entity_name"] == "HoldCo"
+    assert row["owned_or_controlled_by"] == "Jane Smith (controller)"
     assert db.execute(
         "SELECT COUNT(*) AS c FROM gdpr_erasure_log "
         "WHERE client_id = 'c-h2b-resid' AND action = 'erasure_completed'"
     ).fetchone()["c"] == 0
+    refusal = db.execute(
+        "SELECT outcome, dry_run, note FROM gdpr_erasure_log "
+        "WHERE client_id = 'c-h2b-resid' AND action = 'refused_residual_pii'"
+    ).fetchone()
+    assert refusal is not None
+    assert refusal["outcome"] == "refused_incomplete"
+    assert refusal["dry_run"] in (False, 0)
+    assert "Jane Smith" not in (refusal["note"] or "")
+
+
+def test_savepoint_helpers_work_on_sqlite(db):
+    import gdpr_erasure as ge
+    db.execute("CREATE TABLE IF NOT EXISTS h2b_savepoint_probe (v TEXT)")
+    db.execute("DELETE FROM h2b_savepoint_probe")
+    ge._savepoint(db, "h2b_sp")
+    db.execute("INSERT INTO h2b_savepoint_probe (v) VALUES ('rolled-back')")
+    ge._rollback_to_savepoint(db, "h2b_sp")
+    ge._release_savepoint(db, "h2b_sp")
+    row = db.execute("SELECT COUNT(*) AS c FROM h2b_savepoint_probe").fetchone()
+    assert row["c"] == 0
 
 
 def test_client_user_id_link_is_recognised(db):
@@ -435,6 +536,52 @@ def test_complete_dsar_never_sets_erasure_executed(db):
     assert done.get("erasure_executed") in (False, 0)
     row = db.execute("SELECT erasure_executed FROM data_subject_requests WHERE id = ?", (dsar_id,)).fetchone()
     assert row["erasure_executed"] in (False, 0, None)
+
+
+def test_dsar_formatter_suppresses_bare_or_wrong_erasure_flag(db):
+    import gdpr
+    import gdpr_erasure as ge
+    ge._ensure_erasure_log_table(db)
+    cid = "c-h2b-dsar-read"
+    db.execute(
+        "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name, status) "
+        "VALUES (?, ?, 'h', 'DSAR Co', 'active')",
+        (cid, "dsar-read@example.com"),
+    )
+    db.commit()
+    row = {
+        "id": 9901,
+        "request_type": "erasure",
+        "status": "completed",
+        "client_id": cid,
+        "erasure_executed": True,
+    }
+
+    bare = gdpr.format_dsar_for_response(row, db=db)
+    assert bare["erasure_executed"] is False
+    assert bare["status_label"] == "Erasure evidence missing"
+
+    ge._log_erasure(db, client_id="wrong-client", application_id=None, requested_by="admin",
+                    action="erasure_completed", outcome="completed", dry_run=False,
+                    dsar_request_id="wrong-client-marker")
+    ge._log_erasure(db, client_id=cid, application_id=None, requested_by="admin",
+                    action="erasure_completed", outcome="completed", dry_run=True,
+                    dsar_request_id="dry-run-marker")
+    ge._log_erasure(db, client_id=cid, application_id="app", requested_by="admin",
+                    action="erased", outcome="erased", dry_run=False,
+                    dsar_request_id="partial-marker")
+    db.commit()
+    still_missing = gdpr.format_dsar_for_response(row, db=db)
+    assert still_missing["erasure_executed"] is False
+    assert still_missing["status_label"] == "Erasure evidence missing"
+
+    ge._log_erasure(db, client_id=cid, application_id=None, requested_by="admin",
+                    action="erasure_completed", outcome="completed", dry_run=False,
+                    dsar_request_id="completed-marker")
+    db.commit()
+    backed = gdpr.format_dsar_for_response(row, db=db)
+    assert backed["erasure_executed"] is True
+    assert backed["status_label"] == "Erasure executed"
 
 
 def test_verify_evidence_rejects_dry_run_and_generic_rows(db):
@@ -683,5 +830,80 @@ def test_pg_intermediary_and_jsonb_pii_erased_with_clean_guard(fresh_pg):
         pep = db.execute("SELECT CAST(pep_declaration AS TEXT) AS t FROM directors WHERE id = 'pgia-d1'").fetchone()
         assert '"erased"' in pep["t"]
         assert "minister" not in pep["t"]
+    finally:
+        db.close()
+
+
+def test_pg_audit_log_target_linked_rows_are_retained_exactly(fresh_pg):
+    import gdpr_erasure as ge
+    from datetime import datetime, timedelta, timezone
+    db = fresh_pg.get_db()
+    try:
+        decided = (datetime.now(timezone.utc) - timedelta(days=4000)).strftime("%Y-%m-%dT%H:%M:%S")
+        db.execute("INSERT INTO clients (id, email, password_hash, company_name, status) VALUES (?, ?, 'h', 'Co', 'active')",
+                   ("pgauditc", "pgauditc@example.com"))
+        db.execute("INSERT INTO applications (id, ref, client_id, company_name, status, decided_at) VALUES (?, ?, ?, 'Co', 'approved', ?)",
+                   ("pgaudita", "REF-PG-AUDIT", "pgauditc", decided))
+        db.execute("INSERT INTO audit_log (action, target, detail) VALUES (?, ?, ?)",
+                   ("Create", "REF-PG-AUDIT", "company context lives in detail"))
+        db.execute("INSERT INTO audit_log (action, target, detail) VALUES (?, ?, ?)",
+                   ("Review", "pgaudita", "application-id target"))
+        db.execute("INSERT INTO audit_log (action, target, detail) VALUES (?, ?, ?)",
+                   ("Noise", "unrelated", "mentions REF-PG-AUDIT in detail only"))
+        db.commit()
+
+        ledger = ge.build_erasure_ledger(db, "pgauditc")
+        audit = next((e for e in ledger["entries"] if e["table"] == "audit_log"), None)
+        assert audit is not None
+        assert audit["rows"] == 2
+        assert audit["disposition"] == "retained_under_legal_obligation"
+        assert audit["legal_basis"] == "regulatory accountability / audit trail integrity"
+    finally:
+        db.close()
+
+
+def test_pg_residual_failure_rolls_back_mutation_savepoint(fresh_pg, monkeypatch):
+    import gdpr_erasure as ge
+    from datetime import datetime, timedelta, timezone
+    db = fresh_pg.get_db()
+    try:
+        decided = (datetime.now(timezone.utc) - timedelta(days=4000)).strftime("%Y-%m-%dT%H:%M:%S")
+        db.execute("INSERT INTO clients (id, email, password_hash, company_name, status) VALUES (?, ?, 'h', 'Co', 'active')",
+                   ("pgresidc", "pgresidc@example.com"))
+        db.execute("INSERT INTO applications (id, ref, client_id, company_name, status, decided_at) VALUES (?, ?, ?, 'Co', 'approved', ?)",
+                   ("pgresida", "REF-PG-RESID", "pgresidc", decided))
+        db.execute(
+            "INSERT INTO intermediaries (id, application_id, entity_name, owned_or_controlled_by) "
+            "VALUES (?, ?, 'HoldCo', ?)",
+            ("pgresid-i1", "pgresida", "Jane Smith (controller)"),
+        )
+        db.commit()
+
+        orig = ge._erasable_columns
+        monkeypatch.setattr(ge, "_erasable_columns",
+                            lambda t: [c for c in orig(t) if c != "owned_or_controlled_by"]
+                            if t == "intermediaries" else orig(t))
+
+        res = ge.execute_subject_erasure(db, "pgresidc", requested_by="admin", dry_run=False)
+        db.commit()
+        assert res["action"] == "refused_incomplete"
+        assert res["changes_made"] is False
+        row = db.execute(
+            "SELECT entity_name, owned_or_controlled_by FROM intermediaries WHERE id = 'pgresid-i1'"
+        ).fetchone()
+        assert row["entity_name"] == "HoldCo"
+        assert row["owned_or_controlled_by"] == "Jane Smith (controller)"
+        assert db.execute(
+            "SELECT COUNT(*) AS c FROM gdpr_erasure_log "
+            "WHERE client_id = 'pgresidc' AND action = 'erasure_completed'"
+        ).fetchone()["c"] == 0
+        refusal = db.execute(
+            "SELECT outcome, dry_run, note FROM gdpr_erasure_log "
+            "WHERE client_id = 'pgresidc' AND action = 'refused_residual_pii'"
+        ).fetchone()
+        assert refusal is not None
+        assert refusal["outcome"] == "refused_incomplete"
+        assert refusal["dry_run"] is False
+        assert "Jane Smith" not in (refusal["note"] or "")
     finally:
         db.close()

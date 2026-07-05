@@ -94,6 +94,13 @@ except Exception:  # pragma: no cover - defensive fallback
 # record; discovery recognises any of these as a subject link (adversarial N2:
 # company_intake_sessions links via client_user_id, not client_id).
 _SUBJECT_CLIENT_FK_COLUMNS = ("client_id", "client_user_id")
+_SUBJECT_APPLICATION_FK_COLUMNS = ("application_id",)
+_SUBJECT_APPLICATION_REF_COLUMNS = ("application_ref",)
+
+# Non-FK, target-oriented subject linkage discovered by schema sweep. These
+# must be counted with exact target matches only; free-text detail/narrative is
+# PII content, not a safe join key.
+_TARGET_LINKED_RETAINED_TABLES = frozenset({"audit_log"})
 
 
 def _erasable_columns(table: str) -> List[str]:
@@ -160,7 +167,7 @@ _RETAINED_REQUIRED_TABLES: Dict[str, Dict[str, str]] = {
     "sar_reports": {"category": "sar_reports",
                     "legal_basis": "Regulatory obligation (FIU reporting) — SARs are never erasable"},
     "audit_log": {"category": "audit_logs",
-                  "legal_basis": "Legitimate interest + regulatory accountability (audit trail)"},
+                  "legal_basis": "regulatory accountability / audit trail integrity"},
     "supervisor_audit_log": {"category": "audit_logs",
                              "legal_basis": "AML decision hash-chain integrity — erasure would break the chain"},
     "data_subject_requests": {"category": "audit_logs",
@@ -302,11 +309,49 @@ def _subject_app_ids(db, client_id: str) -> List[str]:
     ]
 
 
+def _subject_app_refs(db, client_id: str) -> List[str]:
+    if not _has_column(db, "applications", "ref"):
+        return []
+    return [
+        (r["ref"] if not isinstance(r, tuple) else r[0])
+        for r in db.execute(
+            "SELECT ref FROM applications WHERE client_id = ? AND ref IS NOT NULL",
+            (client_id,),
+        ).fetchall()
+    ]
+
+
 class _RowCountError(Exception):
     """A subject-row count could not be computed — must fail CLOSED, not to 0."""
 
 
-def _subject_row_count(db, table: str, client_id: str, app_ids: List[str]) -> int:
+def _target_linked_audit_log_row_count(db, app_ids: List[str], app_refs: List[str]) -> int:
+    """Rows in audit_log linked to this subject by exact target.
+
+    audit_log is target-oriented, not FK-oriented. Live code writes application
+    refs and sometimes ids into audit_log.target; audit_log.detail is free text
+    and must NEVER be used as a linkage key because substring matching can pull
+    in another subject's records.
+    """
+    try:
+        present = _columns_present(db, "audit_log", ("target",))
+        if "target" not in present:
+            return 0
+        targets = list(dict.fromkeys([*app_refs, *app_ids]))
+        if not targets:
+            return 0
+        ph = ",".join("?" for _ in targets)
+        row = db.execute(
+            f"SELECT COUNT(*) AS c FROM audit_log WHERE target IN ({ph})",
+            tuple(targets),
+        ).fetchone()
+        return int(row["c"] if not isinstance(row, tuple) else row[0]) if row else 0
+    except Exception as exc:
+        raise _RowCountError(f"cannot count exact target-linked audit_log rows: {exc}") from exc
+
+
+def _subject_row_count(db, table: str, client_id: str, app_ids: List[str],
+                       app_refs: Optional[List[str]] = None) -> int:
     """Rows in `table` belonging to this subject.
 
     ORs every subject link that exists — any of client_id / client_user_id
@@ -317,10 +362,18 @@ def _subject_row_count(db, table: str, client_id: str, app_ids: List[str]) -> in
     (adversarial F3/N1: the strict _columns_present propagates probe errors).
     """
     try:
+        app_refs = app_refs or []
+        if table == "audit_log":
+            return _target_linked_audit_log_row_count(db, app_ids, app_refs)
         if table == "clients":
             row = db.execute("SELECT COUNT(*) AS c FROM clients WHERE id = ?", (client_id,)).fetchone()
             return int(row["c"] if not isinstance(row, tuple) else row[0]) if row else 0
-        present = _columns_present(db, table, (*_SUBJECT_CLIENT_FK_COLUMNS, "application_id"))
+        present = _columns_present(
+            db,
+            table,
+            (*_SUBJECT_CLIENT_FK_COLUMNS, *_SUBJECT_APPLICATION_FK_COLUMNS,
+             *_SUBJECT_APPLICATION_REF_COLUMNS),
+        )
         preds: List[str] = []
         params: List[Any] = []
         for fk in _SUBJECT_CLIENT_FK_COLUMNS:
@@ -331,6 +384,10 @@ def _subject_row_count(db, table: str, client_id: str, app_ids: List[str]) -> in
             ph = ",".join("?" for _ in app_ids)
             preds.append(f"application_id IN ({ph})")
             params.extend(app_ids)
+        if "application_ref" in present and app_refs:
+            ph = ",".join("?" for _ in app_refs)
+            preds.append(f"application_ref IN ({ph})")
+            params.extend(app_refs)
         if not preds:
             return 0
         row = db.execute(
@@ -359,8 +416,16 @@ def _discover_subject_linked_tables(db) -> List[str]:
         if table == "clients":
             linked.append(table)
             continue
+        if table in _TARGET_LINKED_RETAINED_TABLES:
+            linked.append(table)
+            continue
         try:
-            present = _columns_present(db, table, (*_SUBJECT_CLIENT_FK_COLUMNS, "application_id"))
+            present = _columns_present(
+                db,
+                table,
+                (*_SUBJECT_CLIENT_FK_COLUMNS, *_SUBJECT_APPLICATION_FK_COLUMNS,
+                 *_SUBJECT_APPLICATION_REF_COLUMNS),
+            )
         except Exception:
             linked.append(table)  # fail-closed: cannot probe ⇒ evaluate downstream
             continue
@@ -380,11 +445,12 @@ def build_erasure_ledger(db, client_id: str) -> Dict[str, Any]:
     """
     effective_days, resolved_categories = _effective_retention(db)
     app_ids = _subject_app_ids(db, client_id)
+    app_refs = _subject_app_refs(db, client_id)
     entries: List[Dict[str, Any]] = []
 
     for table in _discover_subject_linked_tables(db):
         try:
-            count = _subject_row_count(db, table, client_id, app_ids)
+            count = _subject_row_count(db, table, client_id, app_ids, app_refs)
         except _RowCountError as exc:
             # Fail-closed: a table whose subject-row count cannot be computed
             # BLOCKS a live completion rather than vanishing to not_applicable.
@@ -534,6 +600,18 @@ def _log_erasure(db, *, client_id, application_id, requested_by, action,
             bool(dry_run), bool(retention_overridden), retention_basis, override_reason, note,
         ),
     )
+
+
+def _savepoint(db, name: str) -> None:
+    db.execute(f"SAVEPOINT {name}")
+
+
+def _rollback_to_savepoint(db, name: str) -> None:
+    db.execute(f"ROLLBACK TO SAVEPOINT {name}")
+
+
+def _release_savepoint(db, name: str) -> None:
+    db.execute(f"RELEASE SAVEPOINT {name}")
 
 
 def _is_json_column(db, table: str, column: str) -> bool:
@@ -709,50 +787,82 @@ def execute_subject_erasure(
                          "tables (physical file/S3 deletion and narrative redaction are "
                          "deferred follow-ups — PC-4)"}
 
+    savepoint_name = "gdpr_erasure_mutation"
+    _savepoint(db, savepoint_name)
     erased_apps, retained_refused, tables_touched = [], [], set()
-    for entry in plan["applications"]:
-        app_id = entry["application_id"]
-        if entry["retained"] and not override_retention:
-            retained_refused.append(app_id)
-            _log_erasure(db, client_id=client_id, application_id=app_id, requested_by=requested_by,
-                         action="retained_refused", outcome="retained",
-                         dsar_request_id=dsar_request_id, category="client_pii",
-                         retention_basis="AML/CFT record-retention obligation", note=entry["reason"])
-            continue
-        affected = _anonymise_application(db, app_id)
-        tables_touched.update(affected)
-        erased_apps.append(app_id)
-        _log_erasure(db, client_id=client_id, application_id=app_id, requested_by=requested_by,
-                     action="erased", outcome="erased", dsar_request_id=dsar_request_id,
-                     tables_affected=affected,
-                     retention_overridden=bool(entry["retained"] and override_retention),
-                     override_reason=override_reason if entry["retained"] else None,
-                     note=entry["reason"])
-
     client_erased = False
-    if not retained_refused:
-        if _has_column(db, "clients", "email"):
-            # Null any password-reset token/expiry too, so no reset artefact
-            # survives an "erasure" (adversarial N5).
-            reset_cols = [c for c in ("password_reset_token", "password_reset_expires")
-                          if _has_column(db, "clients", c)]
-            extra_set = "".join(f", {c} = NULL" for c in reset_cols)
-            db.execute(
-                f"UPDATE clients SET email = ?, company_name = ?, password_hash = ?{extra_set} WHERE id = ?",
-                (f"erased+{client_id}@erased.invalid", _REDACTION_TOKEN, secrets.token_hex(32), client_id),
-            )
-            tables_touched.add("clients")
-            client_erased = True
-        _log_erasure(db, client_id=client_id, application_id=None, requested_by=requested_by,
-                     action="client_account_erased" if client_erased else "client_account_skipped",
-                     outcome="erased" if client_erased else "skipped",
-                     dsar_request_id=dsar_request_id,
-                     tables_affected=["clients"] if client_erased else [])
+    residual: List[Dict[str, Any]] = []
+    try:
+        for entry in plan["applications"]:
+            app_id = entry["application_id"]
+            if entry["retained"] and not override_retention:
+                retained_refused.append(app_id)
+                _log_erasure(db, client_id=client_id, application_id=app_id, requested_by=requested_by,
+                             action="retained_refused", outcome="retained",
+                             dsar_request_id=dsar_request_id, category="client_pii",
+                             retention_basis="AML/CFT record-retention obligation", note=entry["reason"])
+                continue
+            affected = _anonymise_application(db, app_id)
+            tables_touched.update(affected)
+            erased_apps.append(app_id)
+            _log_erasure(db, client_id=client_id, application_id=app_id, requested_by=requested_by,
+                         action="erased", outcome="erased", dsar_request_id=dsar_request_id,
+                         tables_affected=affected,
+                         retention_overridden=bool(entry["retained"] and override_retention),
+                         override_reason=override_reason if entry["retained"] else None,
+                         note=entry["reason"])
 
-    # RESIDUAL-PII GUARD (adversarial B1): 'executed' must imply no known-PII
-    # column survived. Re-read every taxonomy/erasable column on the rows we just
-    # anonymised; any residual (or unverifiable column) fails the run closed.
-    residual = _detect_residual_pii(db, erased_apps, client_erased, client_id)
+        if not retained_refused:
+            if _has_column(db, "clients", "email"):
+                # Null any password-reset token/expiry too, so no reset artefact
+                # survives an "erasure" (adversarial N5).
+                reset_cols = [c for c in ("password_reset_token", "password_reset_expires")
+                              if _has_column(db, "clients", c)]
+                extra_set = "".join(f", {c} = NULL" for c in reset_cols)
+                db.execute(
+                    f"UPDATE clients SET email = ?, company_name = ?, password_hash = ?{extra_set} WHERE id = ?",
+                    (f"erased+{client_id}@erased.invalid", _REDACTION_TOKEN, secrets.token_hex(32), client_id),
+                )
+                tables_touched.add("clients")
+                client_erased = True
+            _log_erasure(db, client_id=client_id, application_id=None, requested_by=requested_by,
+                         action="client_account_erased" if client_erased else "client_account_skipped",
+                         outcome="erased" if client_erased else "skipped",
+                         dsar_request_id=dsar_request_id,
+                         tables_affected=["clients"] if client_erased else [])
+
+        # RESIDUAL-PII GUARD (adversarial B1): 'executed' must imply no known-PII
+        # column survived. Re-read every taxonomy/erasable column on the rows we
+        # just anonymised; any residual (or unverifiable column) fails the run
+        # closed and rolls back the mutation savepoint.
+        residual = _detect_residual_pii(db, erased_apps, client_erased, client_id)
+        if residual:
+            _rollback_to_savepoint(db, savepoint_name)
+            _release_savepoint(db, savepoint_name)
+            _log_erasure(db, client_id=client_id, application_id=None, requested_by=requested_by,
+                         action="refused_residual_pii", outcome="refused_incomplete",
+                         dry_run=False, dsar_request_id=dsar_request_id,
+                         disposition=residual, tables_affected=[],
+                         note="known-PII columns survived anonymisation: "
+                              + ",".join(f"{f['table']}.{f['column']}" for f in residual))
+            return {**plan, "action": "refused_incomplete",
+                    "changes_made": False,
+                    "erased_application_ids": [],
+                    "retained_refused_application_ids": [],
+                    "client_account_erased": False,
+                    "tables_affected": [],
+                    "residual_pii": residual,
+                    "erasure_executed": False,
+                    "error": "erasure incomplete: known-PII columns survived anonymisation; "
+                             "mutation rolled back and completion refused (fail-closed — B1)"}
+        _release_savepoint(db, savepoint_name)
+    except Exception:
+        try:
+            _rollback_to_savepoint(db, savepoint_name)
+            _release_savepoint(db, savepoint_name)
+        except Exception:
+            pass
+        raise
 
     # Only a fully-satisfied request (nothing refused/deferred, no residual PII)
     # counts as executed. A distinct completion marker is written ONLY here,
@@ -762,24 +872,6 @@ def execute_subject_erasure(
     # client_id bind prevents a shared correlation id from marking another
     # subject (F5).
     fully_done = (not retained_refused) and (not residual) and (bool(erased_apps) or client_erased)
-
-    if residual:
-        _log_erasure(db, client_id=client_id, application_id=None, requested_by=requested_by,
-                     action="refused_residual_pii", outcome="refused",
-                     dsar_request_id=dsar_request_id, disposition=residual,
-                     tables_affected=sorted(tables_touched),
-                     note="known-PII columns survived anonymisation: "
-                          + ",".join(f"{f['table']}.{f['column']}" for f in residual))
-        return {**plan, "action": "refused_incomplete",
-                "changes_made": bool(erased_apps or client_erased),
-                "erased_application_ids": erased_apps,
-                "retained_refused_application_ids": retained_refused,
-                "client_account_erased": client_erased,
-                "tables_affected": sorted(tables_touched),
-                "residual_pii": residual,
-                "erasure_executed": False,
-                "error": "erasure incomplete: known-PII columns survived anonymisation; "
-                         "refusing to report completion (fail-closed — B1)"}
 
     # (dry_run already returned above, so reaching here implies a live run.)
     if fully_done:
