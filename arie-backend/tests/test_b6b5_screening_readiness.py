@@ -124,7 +124,7 @@ def test_production_unreachable_provider_degrades_but_stays_up(monkeypatch, temp
 
     # Ordinary readiness polls make NO external call: with the token client
     # poisoned, an unprobed poll must still complete and report config truth.
-    ready2, payload2 = server._readiness_status_payload(probe_aml=False)
+    _ready2, payload2 = server._readiness_status_payload(probe_aml=False)
     assert _aml(payload2)["status"] == "ok"
 
 
@@ -387,3 +387,17 @@ def test_webhook_posture_reporter_matches_enforcer(monkeypatch, temp_db):
     monkeypatch.delenv("COMPLYADVANTAGE_WEBHOOK_SECRET", raising=False)
 
     assert server._ca_webhook_signature_mode() == wh.current_signature_mode()
+
+
+def test_prod_alias_fails_closed_on_webhook_signatures(monkeypatch, temp_db):
+    """CodeRabbit finding: a raw ENVIRONMENT=prod must fail CLOSED on webhook
+    signatures in BOTH the enforcing path and the reporter (composes with
+    #673's canonicalization, where this literal becomes unreachable)."""
+    from screening_complyadvantage import webhook_handler as wh
+
+    monkeypatch.setenv("ENVIRONMENT", "prod")
+    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.delenv("COMPLYADVANTAGE_WEBHOOK_SECRET", raising=False)
+
+    assert wh._signature_status(b"{}", {}) == "deployed_secret_missing"
+    assert wh.current_signature_mode() == "deployed_fail_closed_missing_secret"

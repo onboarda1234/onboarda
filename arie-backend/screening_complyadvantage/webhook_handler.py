@@ -389,7 +389,9 @@ def _signature_status(body, headers):
         if _has_standard_webhook_headers(headers):
             return _standard_webhook_signature_status(body, headers, secret)
         return "valid" if _verify_signature(body, headers) else "invalid"
-    if _environment() in ("staging", "production"):
+    if _environment() in ("staging", "production", "prod"):
+        # "prod" is a fail-safe alias: a raw un-canonicalized value must
+        # fail CLOSED here, never fall through to sandbox fail-open.
         return "deployed_secret_missing"
     return "disabled_non_production"
 
@@ -427,7 +429,7 @@ def current_signature_mode():
     """
     if (os.environ.get("COMPLYADVANTAGE_WEBHOOK_SECRET") or "").strip():
         return "strict"
-    if _environment() in ("staging", "production"):
+    if _environment() in ("staging", "production", "prod"):
         return "deployed_fail_closed_missing_secret"
     return "sandbox_fail_open_signature_disabled"
 
