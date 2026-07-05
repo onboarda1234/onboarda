@@ -68,10 +68,22 @@ def acquire_boot_migration_lock(timeout_seconds: int = 300, dsn: str = None) -> 
 
     import psycopg2
 
-    conn = None
+    # Connection step: DB/auth/SSL failures must surface as connectivity
+    # errors, NOT as a "lock timeout" — mislabeling a boot-time database
+    # outage as lock contention sends on-call down the wrong path.
     try:
         conn = psycopg2.connect(dsn, sslmode="require", connect_timeout=10)
         conn.autocommit = True
+    except Exception as e:
+        raise RuntimeError(
+            "boot-migration lock: could not connect to the database to "
+            "serialize the schema mutation phase; failing startup loudly "
+            f"(audit B3 / PC-3): {e}"
+        ) from e
+
+    # Lock-acquisition step: only a genuine wait past statement_timeout (or a
+    # lock-query error) reaches here, so the timeout message is accurate.
+    try:
         with conn.cursor() as cur:
             # Bound the advisory-lock wait on this dedicated session only.
             # (SET does not accept bound parameters; set_config does.)
@@ -83,11 +95,10 @@ def acquire_boot_migration_lock(timeout_seconds: int = 300, dsn: str = None) -> 
             cur.execute("SELECT set_config('statement_timeout', '0', false)")
         return BootLockLease(conn)
     except Exception as e:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        try:
+            conn.close()
+        except Exception:
+            pass
         raise RuntimeError(
             f"boot-migration lock not acquired within {timeout_seconds}s — "
             "another task may be mid-migration or stuck; failing startup "
