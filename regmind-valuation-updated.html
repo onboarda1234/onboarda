@@ -653,19 +653,19 @@
 <div class="cover">
   <div class="cover-eyebrow">Confidential — Due Diligence Material · Revised</div>
   <h1>RegMind<br><strong>Investor Valuation Analysis</strong></h1>
-  <p class="cover-sub">Pre-Seed RegTech SaaS — Compliance Operating System for Regulated Financial Institutions. Revised to reflect verified commercial status: contracted (not yet recognised) pilot revenue and an unsigned second pilot.</p>
+  <p class="cover-sub">Pre-Seed RegTech SaaS — Compliance Operating System for Regulated Financial Institutions. Revised against current <code>main</code> (6 Jul 2026) and verified commercial status: one contracted, not-yet-billing pilot and one unsigned second pilot.</p>
   <div class="cover-meta">
     <div class="cover-meta-item">
       <div class="label">Report date</div>
-      <div class="value">June 2026 (Rev. 2)</div>
+      <div class="value">July 2026 (Rev. 3)</div>
     </div>
     <div class="cover-meta-item">
       <div class="label">Stage</div>
       <div class="value">Pre-revenue → first billing imminent</div>
     </div>
     <div class="cover-meta-item">
-      <div class="label">Source evidence</div>
-      <div class="value">Product audit + founder-confirmed commercial status</div>
+      <div class="label">Code basis</div>
+      <div class="value">main @ 6 Jul 2026 (measured, not asserted)</div>
     </div>
     <div class="cover-meta-item">
       <div class="label">Classification</div>
@@ -683,14 +683,14 @@
     <p class="estimate-sub">Blended forward ARR multiple (35%), comparable early-stage rounds (30%), differentiated-IP replication floor (25%), scorecard cross-check (10%). All risk factors applied.</p>
   </div>
   <div class="stat-col">
-    <div class="estimate-label">Contracted ARR (booked)</div>
-    <div class="stat-number">USD <strong>60K</strong></div>
-    <div class="stat-desc">Pilot 1 — FSC-licensed PIS, Mauritius. Signed; billing commences ~July 2026. Not yet recognised revenue.</div>
+    <div class="estimate-label">Contracted ARR / Year-1 TCV</div>
+    <div class="stat-number">USD <strong>60K</strong> / 100K</div>
+    <div class="stat-desc">Pilot 1 — the only signed customer. USD 60K recurring + USD 40K one-time implementation. Billing ~July 2026; not yet recognised.</div>
   </div>
   <div class="stat-col">
     <div class="estimate-label">Contingent near-term ARR</div>
     <div class="stat-number">USD <strong>120K</strong></div>
-    <div class="stat-desc">Adds Pilot 2 (~USD 60K) — unsigned, expected start Jan 2027. Conditional, not contracted.</div>
+    <div class="stat-desc">Adds Pilot 2 (~USD 60K ARR + 40K impl) — unsigned, expected ~Jan 2027. Conditional, not contracted.</div>
   </div>
 </div>
 
@@ -698,11 +698,11 @@
 
   <!-- BASIS / CORRECTIONS NOTE -->
   <div class="basis-note">
-    <div class="label">Basis of revision — what changed from the prior draft</div>
-    <p><strong>Pilot 1 ARR corrected to USD 60K</strong> (was USD 42K) and reclassified from "active / confirmed ARR" to <strong>booked / contracted, billing from ~July 2026</strong>. No revenue has yet been recognised — the prior "active" framing was not supportable and is the kind of claim that fails diligence.</p>
-    <p><strong>Pilot 2 corrected to ~USD 60K and reclassified as unsigned pipeline</strong> (was an assumed USD 90K "2× Pilot 1"), with expected start <strong>Jan 2027</strong> — roughly seven months out, not "60–90 days." Near-term ARR is therefore USD 60K contracted / USD 120K only if Pilot 2 signs.</p>
-    <p><strong>Cost-to-replicate de-weighted to a floor sanity-check</strong> and limited to genuinely differentiated IP, reconciled against the monolith refactoring liability (no lines-of-code double-count). The prior draft let this single method carry the headline; it should not.</p>
-    <p><strong>Consistency with the product audit:</strong> the companion product audit states "no production customers; not validated in production regulatory environments." This valuation is aligned to that fact.</p>
+    <div class="label">Basis of revision — what changed in this draft (Rev. 3)</div>
+    <p><strong>One pilot only.</strong> Pilot 1 is the sole signed customer at <strong>USD 60K ARR + USD 40K one-time implementation (Year-1 TCV ≈ USD 100K)</strong>, billing from ~July 2026 — booked, not yet recognised. Pilot 2 is <strong>unsigned</strong>, expected in roughly six months (~Jan 2027) at the <strong>same price</strong>. Near-term ARR is USD 60K contracted / USD 120K only if Pilot 2 signs.</p>
+    <p><strong>Metrics refreshed against current <code>main</code> (6 Jul 2026), measured not asserted.</strong> The codebase has roughly doubled since the June audit: <code>server.py</code> ≈ 39,960 lines (was 13,765), ≈294K Python lines across 531 files (was 142K / 303), back-office HTML ≈ 2.0MB (was 829KB), ≈6,000+ test functions. ~326 commits merged to <code>main</code> in five weeks.</p>
+    <p><strong>Net effect of the code churn is roughly neutral on value.</strong> Genuine hardening landed (multi-task boot/scheduler locking, AML screening readiness honesty, a wired-but-off GDPR erasure engine, a persisted memo hard-block so the approval gate can't be bypassed, config discipline, a rollback runbook) — which de-risks production posture. But the monolith and front-end bloat grew, enlarging the refactoring liability. The two largely offset.</p>
+    <p><strong>Valuation is gated by commercial traction, not code volume.</strong> With still one unstarted pilot, more code does not move the headline; a live, reference-able customer would.</p>
   </div>
 
   <!-- 1. METHODOLOGY -->
@@ -755,7 +755,7 @@
         </tr>
       </tbody>
     </table>
-    <p style="font-size:13px; color: var(--ink-3);">Note on lines-of-code: codebase size (≈142K lines) is treated as <strong>scope evidence, not value</strong>. A large monolithic <code>server.py</code> is a liability to a technical acquirer, not asset mass — it cannot be counted as value on one page and as technical debt on another.</p>
+    <p style="font-size:13px; color: var(--ink-3);">Note on lines-of-code: codebase size (now ≈294K Python lines, up from ≈142K in June) is treated as <strong>scope evidence, not value</strong>. The near-3× growth of <code>server.py</code> to ≈39,960 lines is a liability to a technical acquirer, not asset mass — it cannot be counted as value on one page and as technical debt on another.</p>
   </div>
 
   <!-- 2. ARR BASELINE -->
@@ -767,27 +767,27 @@
 
     <div class="arr-grid">
       <div class="arr-card">
-        <div class="arr-card-label">Contracted ARR — Pilot 1</div>
-        <div class="arr-card-value">USD 60,000</div>
-        <div class="arr-card-note">FSC-licensed Payment Intermediary, Mauritius. Signed contract at USD 5,000/month. <strong>Billing commences ~July 2026</strong> — booked but not yet recognised. This is the only contracted revenue today.</div>
+        <div class="arr-card-label">Contracted — Pilot 1 (only signed customer)</div>
+        <div class="arr-card-value">USD 60K ARR</div>
+        <div class="arr-card-note">FSC-licensed institution, Mauritius. USD 60K recurring + <strong>USD 40K one-time implementation</strong> = Year-1 TCV ≈ USD 100K. <strong>Billing commences ~July 2026</strong> — booked, not yet recognised. Only the USD 60K recurring counts toward ARR.</div>
       </div>
       <div class="arr-card warn">
-        <div class="arr-card-label">Pipeline ACV — Pilot 2 (unsigned)</div>
-        <div class="arr-card-value">~USD 60,000</div>
-        <div class="arr-card-note"><strong>Not signed.</strong> Expected to be of similar scale to Pilot 1. Expected start <strong>Jan 2027</strong>. Treated as pipeline, not as near-term contracted ARR.</div>
+        <div class="arr-card-label">Pipeline — Pilot 2 (unsigned)</div>
+        <div class="arr-card-value">~USD 60K ARR</div>
+        <div class="arr-card-note"><strong>Not signed.</strong> Same price as Pilot 1 (USD 60K ARR + ~USD 40K impl). Expected to start in ~six months (<strong>~Jan 2027</strong>). Treated as pipeline, not near-term contracted ARR.</div>
       </div>
       <div class="arr-card accent">
         <div class="arr-card-label">Contingent near-term ARR (Pilot 1 + 2)</div>
-        <div class="arr-card-value">USD 120,000</div>
-        <div class="arr-card-note">Realised only if Pilot 2 signs and goes live. Used for the upper half of the ARR-multiple range, explicitly flagged as conditional.</div>
+        <div class="arr-card-value">USD 120K</div>
+        <div class="arr-card-note">Realised only if Pilot 2 signs and goes live (~Jan 2027). Used for the upper half of the ARR-multiple range, explicitly flagged as conditional. Excludes one-time implementation fees.</div>
       </div>
       <div class="arr-card">
-        <div class="arr-card-label">Illustrative Year-1 exit ARR</div>
-        <div class="arr-card-value">USD 120–180K</div>
-        <div class="arr-card-note">If both pilots are live and one further pilot converts. Illustrative only; not used as a primary valuation input given no conversions are yet evidenced.</div>
+        <div class="arr-card-label">One-time implementation (non-recurring)</div>
+        <div class="arr-card-value">USD 40–80K</div>
+        <div class="arr-card-note">USD 40K per pilot. Cash-positive and useful for runway, but <strong>excluded from ARR and from the multiple base</strong> — it is services revenue, not recurring, and should not be capitalised into an ARR multiple.</div>
       </div>
     </div>
-    <p style="font-size:13px; color: var(--ink-3);">The honest operative base for multiple calculations is <strong>USD 60K contracted today, rising toward USD 120K only on Pilot 2 signature</strong>. The prior USD 132K "near-term" figure overstated both the amount and the timing.</p>
+    <p style="font-size:13px; color: var(--ink-3);">The honest operative base for multiple calculations is <strong>USD 60K recurring contracted today, rising toward USD 120K only on Pilot 2 signature</strong>. Implementation fees add cash (Year-1 TCV ≈ USD 100K for Pilot 1) but are not ARR.</p>
   </div>
 
   <!-- 3. COMPARABLES -->
@@ -866,14 +866,14 @@
         </tr>
         <tr>
           <td>Deterministic 4-layer pipeline + agent design</td>
-          <td>Rules → memo → validation → supervisor gating with Pydantic-validated agent outputs. The design insight (deterministic gate-keeping around probabilistic AI) is the differentiator; the engine modules themselves are compact (e.g. <strong>supervisor_engine.py ≈ 351 lines</strong>; the wider <code>supervisor/</code> directory ≈ 14,542 lines across 12 files).</td>
-          <td>USD 300K–500K</td>
+          <td>Rules → memo → validation → supervisor gating with Pydantic-validated agent outputs, now with a persisted memo hard-block so the approval gate cannot be bypassed. The design insight (deterministic gate-keeping around probabilistic AI) is the differentiator; the engine modules are compact (<strong>supervisor_engine.py ≈ 585 lines</strong>; the wider <code>supervisor/</code> directory ≈ 12,922 lines across 18 files).</td>
+          <td>USD 350K–550K</td>
         </tr>
         <tr class="sub"><td colspan="3">Liability a buyer absorbs</td></tr>
         <tr>
           <td>Monolith refactor + frontend modernisation</td>
-          <td>13,765-line <code>server.py</code> and large single-file frontends must be decomposed before scaling. This is a deduction, not an asset.</td>
-          <td>− USD 300K–500K</td>
+          <td><strong>≈39,960-line <code>server.py</code></strong> (nearly 3× the June audit's 13,765) and a <strong>≈2.0MB single-file back-office</strong> must be decomposed before scaling — a materially larger liability than the prior draft. Deduction, not an asset.</td>
+          <td>− USD 450K–750K</td>
         </tr>
         <tr class="total">
           <td>Net differentiated-IP floor</td>
@@ -936,14 +936,14 @@
       <div class="risk-card">
         <div class="risk-card-id">(d) Screening core not provider-validated</div>
         <div class="risk-card-title">AML provider path incomplete</div>
-        <div class="risk-card-body">For an AML product, screening is the core. Sumsub is single-provider behind a feature-flagged abstraction; ComplyAdvantage production-workspace validation is incomplete. The most important subsystem is the least production-proven.</div>
+        <div class="risk-card-body">For an AML product, screening is the core. Sumsub is single-provider behind a feature-flagged abstraction; ComplyAdvantage production-workspace validation is incomplete. Recent "screening readiness truthfulness / provider-provenance" work (Jul 2026) makes the system <em>honest</em> about this gap — good governance, but the underlying validation gap remains.</div>
         <span class="badge badge-amber">−8–10% base case</span>
       </div>
       <div class="risk-card">
         <div class="risk-card-id">(e) No certifications / production posture</div>
         <div class="risk-card-title">No SOC 2 / ISO 27001; single-task infra</div>
-        <div class="risk-card-body">No SOC 2 limits the enterprise buyer universe (achievable in 3–6 months, USD 30–80K). Staging is single ECS task, no autoscaling/HA/DR. No customer validated through an FSC examination cycle.</div>
-        <span class="badge badge-amber">−10–12% base case</span>
+        <div class="risk-card-body">No SOC 2 limits the enterprise buyer universe (achievable in 3–6 months, USD 30–80K). Correctness-level multi-task safety improved (boot advisory lock, cross-task scheduler singleton), but infra is still single ECS task with no autoscaling/HA/DR. No customer validated through an FSC examination cycle.</div>
+        <span class="badge badge-amber">−9–11% base case</span>
       </div>
       <div class="risk-card">
         <div class="risk-card-id">(f) Sector taxonomy defect (open)</div>
@@ -977,7 +977,7 @@
           <div class="attr-pct">30%</div>
         </div>
         <div class="attr-track"><div class="attr-fill" style="width: 30%; background: #7F77DD;"></div></div>
-        <div class="attr-note">4-layer deterministic pipeline (rules → memo → validation → supervisor) with 10 agents and Pydantic-validated outputs. The differentiator is the <em>design</em> — deterministic gate-keeping around probabilistic AI — rather than module size (the supervisor engine itself is ≈351 lines; the supervisor directory ≈14,542 lines across 12 files). Deterministic guardrails are a known pattern, so the moat is the compliance-specific implementation, not the concept.</div>
+        <div class="attr-note">4-layer deterministic pipeline (rules → memo → validation → supervisor) with 10 agents and Pydantic-validated outputs, now with a persisted memo hard-block that closes an approval-gate bypass. The differentiator is the <em>design</em> — deterministic gate-keeping around probabilistic AI — rather than module size (the supervisor engine itself is ≈585 lines; the supervisor directory ≈12,922 lines across 18 files). Deterministic guardrails are a known pattern, so the moat is the compliance-specific implementation, not the concept.</div>
       </div>
       <div class="attr-item">
         <div class="attr-header">
@@ -1134,9 +1134,9 @@
 
 <!-- FOOTER -->
 <div class="footer">
-  <span>RegMind — Investor Valuation Analysis — June 2026 (Rev. 2)</span>
+  <span>RegMind — Investor Valuation Analysis — July 2026 (Rev. 3)</span>
   <span>Confidential — Due Diligence Material</span>
-  <span>Evidence: product audit of onboarda1234/onboarda + founder-confirmed commercial status</span>
+  <span>Evidence: measured against main @ 6 Jul 2026 + founder-confirmed commercial status</span>
 </div>
 
 </body>
