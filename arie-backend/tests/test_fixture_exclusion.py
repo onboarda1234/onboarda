@@ -350,6 +350,23 @@ class TestFixtureFilterModule(unittest.TestCase):
         from fixture_filter import should_show_fixtures
         self.assertFalse(should_show_fixtures(None, "true"))
 
+    def test_should_show_fixtures_analyst_silently_ignored(self):
+        """analyst is an officer role but NOT a fixture-opt-in role — the opt-in
+        must be silently ignored (fixtures stay hidden), never 403."""
+        from fixture_filter import should_show_fixtures
+        user = {"role": "analyst", "sub": "u4"}
+        self.assertFalse(should_show_fixtures(user, "true"))
+
+    def test_should_show_fixtures_type_only_fallback_non_privileged(self):
+        """When `role` is absent the check falls back to `type`; a client token
+        (type=client, no role) must NOT be able to opt in."""
+        from fixture_filter import should_show_fixtures
+        client_user = {"type": "client", "sub": "c1"}
+        self.assertFalse(should_show_fixtures(client_user, "true"))
+        # a bare officer token with neither role nor a privileged type is also out
+        officer_no_role = {"type": "officer", "sub": "o1"}
+        self.assertFalse(should_show_fixtures(officer_no_role, "1"))
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Lifecycle Queue exclusion tests

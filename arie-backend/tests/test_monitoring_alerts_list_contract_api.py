@@ -329,3 +329,23 @@ def test_fixture_opt_in_is_authorized_and_read_only(monitoring_list_server):
         conn.close()
     assert after_alert_count == before_alert_count
     assert after_audit_count == before_audit_count
+
+
+def test_include_internal_types_and_unmapped_are_role_gated(monitoring_list_server):
+    """include_internal_types / include_unmapped are a DISTINCT inline gate from
+    the fixture opt-in: honoured only for admin/sco, silently ignored for co
+    (the echoed filters flags must read False), never a 403."""
+    base_url, _db_module = monitoring_list_server
+    admin_token = _token("admin_gate", "admin", "Admin Gate")
+    co_token = _token("co_gate", "co", "CO Gate")
+
+    qs = "?include_internal_types=1&include_unmapped=1&page_size=50"
+    admin_body = _get(base_url, admin_token, qs)
+    co_body = _get(base_url, co_token, qs)
+
+    # admin: the operator's opt-in is honoured
+    assert admin_body["filters"]["include_internal_types"] is True
+    assert admin_body["filters"]["include_unmapped"] is True
+    # co: same query string, but the flags are silently forced off (still 200)
+    assert co_body["filters"]["include_internal_types"] is False
+    assert co_body["filters"]["include_unmapped"] is False
