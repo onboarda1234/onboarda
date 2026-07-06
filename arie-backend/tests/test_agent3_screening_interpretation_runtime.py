@@ -715,7 +715,10 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert panel_body.count("agent3ProviderHitsHtml(output)") == 1
     assert panel_body.count("agent3HitStatusCountsHtml(output.hit_row_status_counts)") == 1
     assert "Show full detail" in panel_body
-    assert "Stored provider result contains zero reportable hit rows." in panel_body
+    # Clean terminal 0-hit collapses to a single caveat line; an incomplete 0-hit
+    # keeps the amber "not a terminal clean result" notice (never soft-green).
+    assert "absence of hits is not proof of no compliance risk" in panel_body
+    assert "Screening is not a terminal clean result." in panel_body
 
     # PR-AGENT3-HIT-LEVEL-UI-1: hit-level rendering binds to the backend output
     # (hit_rows / hit_row_status_counts) and stays advisory + display-only.
@@ -951,11 +954,12 @@ def test_backoffice_agent3_panel_render_dedupes_recommendation_and_advisory():
               screening_result_terminal: true
             };
             const noHitHtml = renderAgent3ScreeningInterpretationPanel({id: 'app-clean', output: noHitOutput});
+            // Clean terminal state = minimal: recommendation once + a single caveat line;
+            // no all-zeros counts row, no green box, no "Show full detail", no audit trace.
             assertEquals('no-hit recommendation once', count(noHitHtml, 'No reportable provider hit recorded'), 1);
-            assertEquals('no-hit advisory once', count(noHitHtml, advisory), 1);
-            assertEquals('no-hit provider counts once', count(noHitHtml, 'Provider result rows: 0 total'), 1);
-            assertIncludes('no-hit compact line', noHitHtml, 'Stored provider result contains zero reportable hit rows.');
-            assertIncludes('no-hit full detail toggle', noHitHtml, 'Show full detail');
+            assertIncludes('no-hit caveat line', noHitHtml, 'absence of hits is not proof of no compliance risk');
+            assertEquals('no-hit provider counts suppressed', count(noHitHtml, 'Provider result rows: 0 total'), 0);
+            assertExcludes('no-hit clean has no full-detail toggle', noHitHtml, 'Show full detail');
             assertExcludes('no-hit empty hit table omitted', noHitHtml, 'hit rows 0');
 
             const pendingNoHitOutput = Object.assign({}, noHitOutput, {
@@ -963,7 +967,9 @@ def test_backoffice_agent3_panel_render_dedupes_recommendation_and_advisory():
               screening_result_state: 'pending_provider'
             });
             const pendingNoHitHtml = renderAgent3ScreeningInterpretationPanel({id: 'app-pending', output: pendingNoHitOutput});
-            assertIncludes('pending no-hit warning', pendingNoHitHtml, 'Stored provider result is not a terminal clean result');
+            // 0 hits but NOT terminal-clean → amber notice + full-detail, never green.
+            assertIncludes('pending no-hit warning', pendingNoHitHtml, 'Screening is not a terminal clean result.');
+            assertIncludes('pending no-hit keeps detail', pendingNoHitHtml, 'Show full detail');
             assertExcludes('pending no-hit not green', pendingNoHitHtml, '#ecfdf5');
             if (failures.length) {
               console.error(failures.join('\\n'));
