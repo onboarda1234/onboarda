@@ -303,7 +303,8 @@ class TestDSAR:
             "status": "completed",
             "erasure_executed": True,
         })
-        assert "Erasure executed" in executed["status_label"]
+        assert executed["erasure_executed"] is False
+        assert executed["status_label"] == "Erasure evidence missing"
 
         partial = format_dsar_for_response({
             "id": 4,
@@ -313,10 +314,9 @@ class TestDSAR:
             "retention_outcome": "partially_erased",
             "retained_categories": json.dumps(["kyc_documents"]),
         })
-        assert partial["retention_outcome"] == "partially_erased"
+        assert partial["retention_outcome"] == "partial_retention_outcome_unverified"
         assert partial["retained_categories"] == ["kyc_documents"]
-        assert partial["status_label"] == "Partial erasure recorded; regulated data retained"
-        assert "Regulated categories remain retained" in partial["status_detail"]
+        assert partial["status_label"] == "Erasure evidence missing"
 
         inconsistent = format_dsar_for_response({
             "id": 3,
