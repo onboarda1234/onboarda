@@ -545,6 +545,55 @@ def test_agent3_does_not_render_raw_provider_score_as_percentage():
 
 
 # ---------------------------------------------------------------------------
+# PR-A: false-green terminal derivation (incomplete screens must NOT be terminal)
+# ---------------------------------------------------------------------------
+
+def test_screening_report_state_terminal_for_clean_completed_report():
+    st = server._agent3_screening_report_state({"company_screening_state": "completed_clear"})
+    assert st["terminal"] is True
+    assert st["pending_degraded_reason"] == ""
+
+
+def test_screening_report_state_not_terminal_when_company_state_pending():
+    st = server._agent3_screening_report_state({"company_screening_state": "pending_provider"})
+    assert st["terminal"] is False
+
+
+def test_screening_report_state_not_terminal_when_company_state_not_started():
+    st = server._agent3_screening_report_state({"company_screening_state": "not_started"})
+    assert st["terminal"] is False
+
+
+def test_screening_report_state_not_terminal_when_any_subject_non_terminal():
+    st = server._agent3_screening_report_state({
+        "company_screening_state": "completed_clear",
+        "any_non_terminal_subject": True,
+    })
+    assert st["terminal"] is False
+
+
+def test_screening_report_state_terminal_when_state_key_absent():
+    # No state signal at all -> nothing says "in progress" -> terminal (unchanged legacy behaviour).
+    st = server._agent3_screening_report_state({})
+    assert st["terminal"] is True
+
+
+def test_screening_report_state_surfaces_nested_company_pending_reason():
+    st = server._agent3_screening_report_state({
+        "company_screening": {"pending_reason": "workflow_errored"},
+    })
+    assert st["pending_degraded_reason"] == "workflow_errored"
+    assert st["terminal"] is False
+
+
+def test_screening_report_state_surfaces_nested_subject_pending_reason():
+    st = server._agent3_screening_report_state({
+        "director_screenings": [{"screening": {"pending_reason": "workflow_poll_timeout"}}],
+    })
+    assert st["pending_degraded_reason"] == "workflow_poll_timeout"
+    assert st["terminal"] is False
+
+
 # PR-C: watchlist is a first-class category/count (not "other/uncategorized")
 # ---------------------------------------------------------------------------
 

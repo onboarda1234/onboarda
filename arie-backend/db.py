@@ -8487,6 +8487,83 @@ def _ensure_retention_policies(db: DBConnection) -> int:
     return inserted
 
 
+def _seed_account_secret(role: str, admin_password):
+    """Pick the seed secret for one account (PR-25).
+
+    The admin account honours an operator-provided ADMIN_INITIAL_PASSWORD; every
+    other account, and the admin when that value is empty, gets a DISTINCT random
+    secret. Returns (secret, is_generated) — is_generated is True only for the
+    random ones, which must be delivered out-of-band (never logged)."""
+    if role == "admin" and admin_password:
+        return admin_password, False
+    return secrets.token_urlsafe(16), True
+
+
+def _seeded_credentials_target(generated: dict, env, is_demo: bool):
+    """Pure delivery decision (no side effects, unit-testable): returns
+    ('file', path) for dev/demo, ('warn', None) for staging/production, or
+    ('skip', None) when there is nothing to deliver. The pytest/test no-op guard
+    is applied by the caller, NOT here, so this branch logic stays covered."""
+    if not generated:
+        return ("skip", None)
+    env = (env or "").strip().lower()
+    if is_demo or env in ("development", "demo"):
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+        return ("file", os.path.join(base, ".seeded_credentials"))
+    return ("warn", None)
+
+
+def _write_seeded_credentials_file(generated: dict, path: str) -> None:
+    """Write the seed credentials to ``path`` (0600) — unit-testable side effect."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        for email, secret in generated.items():
+            fh.write(f"{email}\t{secret}\n")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _deliver_seeded_credentials(generated: dict) -> None:
+    """Deliver randomly-generated seed credentials WITHOUT logging the secrets (PR-25).
+
+    - Under pytest (or ENVIRONMENT=test/testing): no side effects at all — the
+      ~40 tests that call seed_initial_data must not write files or emit noise.
+    - dev/demo: write ``uploads/.seeded_credentials`` (that directory is
+      gitignored) with 0600 perms so a local operator can log in, and log a
+      pointer to the file — never the secrets themselves.
+    - staging/production: log only a warning that accounts have distinct random
+      secrets needing a reset; never write plaintext, never log the secrets.
+
+    Best-effort: a delivery failure must never break seeding.
+    """
+    if not generated:
+        return
+    try:
+        import sys
+        env = (_CFG_ENVIRONMENT or "").strip().lower()
+        if "pytest" in sys.modules or env in ("test", "testing"):
+            return
+        mode, path = _seeded_credentials_target(generated, _CFG_ENVIRONMENT, _CFG_IS_DEMO)
+        if mode == "file":
+            _write_seeded_credentials_file(generated, path)
+            logger.warning(
+                "PR-25: %d seeded account(s) received distinct random secrets; written to "
+                "uploads/.seeded_credentials (gitignored, 0600) — rotate after first login.",
+                len(generated),
+            )
+        elif mode == "warn":
+            logger.warning(
+                "PR-25: %d seeded account(s) were created with distinct random secrets "
+                "(no operator-provided password); reset them via the password-reset flow. "
+                "Secrets are NOT logged.",
+                len(generated),
+            )
+    except Exception as exc:
+        logger.warning("PR-25: could not deliver seeded credentials: %s", exc)
+
+
 def seed_initial_data(db: DBConnection):
     """Seed database with initial admin users, risk config, and AI agents."""
     import bcrypt
@@ -8516,31 +8593,32 @@ def seed_initial_data(db: DBConnection):
 
     # === USERS ===
     if users_count == 0:
-        init_password = _CFG_ADMIN_INITIAL_PASSWORD
-        if not init_password:
-            init_password = secrets.token_urlsafe(16)
-            print(f"\n  ⚠️  INITIAL ADMIN PASSWORD (save this now): {init_password}")
-            print(f"  ⚠️  Change it immediately after first login.\n")
-
-        pw_hash = bcrypt.hashpw(init_password.encode(), bcrypt.gensalt()).decode()
-        db.execute(
-            "INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, ?)",
-            ("admin001", "asudally@onboarda.com", pw_hash, "Aisha Sudally", "admin", "active")
-        )
-        db.execute(
-            "INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, ?)",
-            ("sco001", "raj.patel@onboarda.com", pw_hash, "Raj Patel", "sco", "active")
-        )
-        db.execute(
-            "INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, ?)",
-            ("co001", "m.dubois@onboarda.com", pw_hash, "Marie Dubois", "co", "active")
-        )
-        db.execute(
-            "INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, ?)",
-            ("analyst001", "l.wei@onboarda.com", pw_hash, "Li Wei", "analyst", "active")
-        )
+        # PR-25 (M14): each seeded account gets its OWN secret and bcrypt hash —
+        # never a single shared privileged bootstrap credential — and generated
+        # secrets are NEVER printed to stdout/logs (CloudWatch would retain
+        # them). The admin account honours ADMIN_INITIAL_PASSWORD when set; every
+        # other account (and the admin when that env var is unset) gets a
+        # distinct random secret, delivered out-of-band by
+        # _deliver_seeded_credentials.
+        _seeded_accounts = [
+            ("admin001", "asudally@onboarda.com", "Aisha Sudally", "admin"),
+            ("sco001", "raj.patel@onboarda.com", "Raj Patel", "sco"),
+            ("co001", "m.dubois@onboarda.com", "Marie Dubois", "co"),
+            ("analyst001", "l.wei@onboarda.com", "Li Wei", "analyst"),
+        ]
+        _generated_credentials = {}  # email -> secret, only for randomly generated ones
+        for _uid, _email, _name, _role in _seeded_accounts:
+            _secret, _is_generated = _seed_account_secret(_role, _CFG_ADMIN_INITIAL_PASSWORD)
+            if _is_generated:
+                _generated_credentials[_email] = _secret
+            _acct_hash = bcrypt.hashpw(_secret.encode(), bcrypt.gensalt()).decode()
+            db.execute(
+                "INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, ?)",
+                (_uid, _email, _acct_hash, _name, _role, "active"),
+            )
         db.commit()
-        logger.info("Users seeded")
+        _deliver_seeded_credentials(_generated_credentials)
+        logger.info("Users seeded (%d accounts, distinct per-account secrets)", len(_seeded_accounts))
     ensure_qa_smoke_user(db)
 
     # === RISK CONFIG ===
