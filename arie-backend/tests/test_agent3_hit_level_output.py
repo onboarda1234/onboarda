@@ -310,8 +310,11 @@ def test_existing_hit_counts_regression():
     assert counts["sanctions"] == 1
     assert counts["pep"] == 1
     assert counts["adverse_media"] == 1
-    assert counts["other"] == 1
-    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["other"] == counts["total"]
+    # The fixture's 4th hit is category="watchlist" — it now counts as watchlist
+    # (a first-class bucket), not "other/uncategorized".
+    assert counts["watchlist"] == 1
+    assert counts["other"] == 0
+    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["watchlist"] + counts["other"] == counts["total"]
 
 
 def test_multicategory_sanctions_pep_row_uses_sanctions_primary_bucket():
@@ -341,10 +344,10 @@ def test_multicategory_sanctions_pep_row_uses_sanctions_primary_bucket():
     assert counts["pep"] == 0
     assert counts["adverse_media"] == 0
     assert counts["other"] == 0
-    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["other"] == counts["total"]
+    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["watchlist"] + counts["other"] == counts["total"]
     assert set(out["hit_rows"][0]["categories"]) == {"sanctions", "pep"}
     assert out["severity"] == "Critical"
-    assert "1 provider result row(s): 1 sanctions, 0 PEP, 0 provider screening adverse-media row(s), and 0 other/uncategorized row(s)" in out["summary"]
+    assert "1 provider result row(s): 1 sanctions, 0 PEP, 0 provider screening adverse-media row(s), 0 watchlist, and 0 other/uncategorized row(s)" in out["summary"]
 
 
 def test_multicategory_pep_adverse_media_row_uses_pep_primary_bucket():
@@ -374,10 +377,10 @@ def test_multicategory_pep_adverse_media_row_uses_pep_primary_bucket():
     assert counts["pep"] == 1
     assert counts["adverse_media"] == 0
     assert counts["other"] == 0
-    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["other"] == counts["total"]
+    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["watchlist"] + counts["other"] == counts["total"]
     assert set(out["hit_rows"][0]["categories"]) == {"pep", "adverse_media"}
     assert out["severity"] == "High"
-    assert "1 provider result row(s): 0 sanctions, 1 PEP, 0 provider screening adverse-media row(s), and 0 other/uncategorized row(s)" in out["summary"]
+    assert "1 provider result row(s): 0 sanctions, 1 PEP, 0 provider screening adverse-media row(s), 0 watchlist, and 0 other/uncategorized row(s)" in out["summary"]
     assert "higher-priority headline buckets" in out["adverse_media_relevance"]
 
 
@@ -390,15 +393,15 @@ def test_multisubject_counts_reconcile_and_intermediary_rows_are_not_adverse_med
     assert counts["pep"] == 12
     assert counts["adverse_media"] == 0
     assert counts["other"] == 76
-    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["other"] == counts["total"]
+    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["watchlist"] + counts["other"] == counts["total"]
 
     intermediary_rows = [row for row in out["hit_rows"] if row["matched_entity"].startswith("Warwick intermediary")]
     assert len(intermediary_rows) == 2
     assert all("adverse_media" not in row["categories"] for row in intermediary_rows)
-    assert all(row["type"] == "watchlist" for row in intermediary_rows)
+    assert all(row["type"] == "other" for row in intermediary_rows)
 
     assert "88 provider result row(s)" in out["summary"]
-    assert "0 sanctions, 12 PEP, 0 provider screening adverse-media row(s), and 76 other/uncategorized row(s)" in out["summary"]
+    assert "0 sanctions, 12 PEP, 0 provider screening adverse-media row(s), 0 watchlist, and 76 other/uncategorized row(s)" in out["summary"]
     assert "76 other/uncategorized provider result row(s) need identity disambiguation." in out["key_concerns"]
     assert not any("adverse media hit" in concern.lower() for concern in out["key_concerns"])
     assert out["adverse_media_relevance"] == "No provider screening adverse-media rows found in stored screening results."
@@ -414,7 +417,7 @@ def test_total_hits_slack_is_absorbed_by_other_bucket_without_negative_counts():
     assert counts["adverse_media"] == 0
     assert counts["other"] == 78
     assert counts["other"] >= 0
-    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["other"] == counts["total"]
+    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["watchlist"] + counts["other"] == counts["total"]
     assert "78 other/uncategorized provider result row(s) need identity disambiguation." in out["key_concerns"]
 
 
@@ -589,3 +592,50 @@ def test_screening_report_state_surfaces_nested_subject_pending_reason():
     })
     assert st["pending_degraded_reason"] == "workflow_poll_timeout"
     assert st["terminal"] is False
+
+
+# PR-C: watchlist is a first-class category/count (not "other/uncategorized")
+# ---------------------------------------------------------------------------
+
+def _single_category_prescreening(results):
+    return {
+        "screening_report": {
+            "provider": "complyadvantage",
+            "screening_provider": "complyadvantage",
+            "screening_mode": "live",
+            "total_hits": len(results),
+            "company_screening": {
+                "company_name": "WL Co",
+                "matched": bool(results),
+                "results": results,
+            },
+            "director_screenings": [],
+            "ubo_screenings": [],
+        },
+    }
+
+
+def test_watchlist_category_is_first_class_not_other():
+    out = _build(prescreening=_single_category_prescreening([
+        {"name": "WL Match", "category": "watchlist"},
+        {"name": "Warn Match", "category": "warning"},
+    ]))
+    counts = out["hit_counts"]
+    assert counts["watchlist"] == 2
+    assert counts["other"] == 0
+    assert counts["sanctions"] + counts["pep"] + counts["adverse_media"] + counts["watchlist"] + counts["other"] == counts["total"]
+    for row in out["hit_rows"]:
+        assert "watchlist" in row["categories"]
+        assert row["type"] == "watchlist"
+    assert "2 watchlist" in out["summary"]
+
+
+def test_uncategorized_hit_is_other_not_watchlist():
+    out = _build(prescreening=_single_category_prescreening([
+        {"name": "No category provided"},
+    ]))
+    counts = out["hit_counts"]
+    assert counts["other"] == 1
+    assert counts["watchlist"] == 0
+    assert all(row["type"] == "other" for row in out["hit_rows"])
+    assert all("watchlist" not in row["categories"] for row in out["hit_rows"])

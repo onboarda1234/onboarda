@@ -23688,6 +23688,20 @@ def _agent3_adverse_media_text(text):
     )
 
 
+def _agent3_watchlist_text(value):
+    """Watchlist / warning / fitness-probity taxonomy → 'watchlist' category.
+    Token-based (no loose substring) so 'warning' matches but unrelated words don't."""
+    tokens, raw = _agent3_category_tokens(value)
+    if not raw:
+        return False
+    return (
+        "watchlist" in tokens
+        or "warning" in tokens
+        or "fitness" in tokens
+        or "probity" in tokens
+    )
+
+
 def _agent3_categories(hit, source_hint=""):
     categories = set()
     source_tokens, source_raw = _agent3_category_tokens(source_hint)
@@ -23697,6 +23711,8 @@ def _agent3_categories(hit, source_hint=""):
         categories.add("pep")
     if _agent3_adverse_media_text(source_raw):
         categories.add("adverse_media")
+    if _agent3_watchlist_text(source_raw):
+        categories.add("watchlist")
 
     if not isinstance(hit, dict):
         return sorted(categories)
@@ -23725,6 +23741,8 @@ def _agent3_categories(hit, source_hint=""):
                 categories.add("pep")
             if _agent3_adverse_media_text(raw):
                 categories.add("adverse_media")
+            if _agent3_watchlist_text(raw):
+                categories.add("watchlist")
 
     for indicator in _agent3_list(hit.get("indicators")):
         if not isinstance(indicator, dict):
@@ -23762,6 +23780,7 @@ def _agent3_categories(hit, source_hint=""):
         ("has_adverse_media_hit", "adverse_media"),
         ("adverse_media", "adverse_media"),
         ("adverse", "adverse_media"),
+        ("is_watchlist", "watchlist"),
     ):
         if _agent3_bool(hit.get(key)):
             categories.add(category)
@@ -23777,6 +23796,8 @@ def _agent3_primary_count_bucket(categories):
         return "pep"
     if "adverse_media" in category_set:
         return "adverse_media"
+    if "watchlist" in category_set:
+        return "watchlist"
     return "other"
 
 
@@ -24136,7 +24157,7 @@ def _agent3_collect_hits(screening_report, app):
             "subject_type": subject_type,
             "subject_name": subject_name or "Unknown subject",
             "matched_name": _agent3_text(matched_name, "Stored hit"),
-            "categories": categories or ["watchlist"],
+            "categories": categories or ["other"],
             "match_score": match_score,
             "match_score_raw": match_score_raw,
             "surfaced_by_pass": surfaced_by_pass,
@@ -24230,7 +24251,7 @@ def _agent3_hit_primary_type(categories):
     for category in ("sanctions", "pep", "adverse_media", "watchlist"):
         if category in (categories or []):
             return category
-    return "watchlist"
+    return "other"
 
 
 def _agent3_hit_status_and_reason(primary_type, score, surfaced_by_pass=""):
@@ -24353,10 +24374,12 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
     risk_sanctions_count = sum(1 for hit in hits if "sanctions" in hit.get("categories", []))
     risk_pep_count = sum(1 for hit in hits if "pep" in hit.get("categories", []))
     risk_adverse_media_count = sum(1 for hit in hits if "adverse_media" in hit.get("categories", []))
+    risk_watchlist_count = sum(1 for hit in hits if "watchlist" in hit.get("categories", []))
     primary_counts = {
         "sanctions": 0,
         "pep": 0,
         "adverse_media": 0,
+        "watchlist": 0,
         "other": 0,
     }
     for hit in hits:
@@ -24365,6 +24388,7 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
     sanctions_count = primary_counts["sanctions"]
     pep_count = primary_counts["pep"]
     adverse_media_count = primary_counts["adverse_media"]
+    watchlist_count = primary_counts["watchlist"]
     other_count = primary_counts["other"] + row_count_slack
     declared_pep_count = len(declared_pep_subjects)
     unresolved_review_count = _agent3_unresolved_screening_review_count(screening_reviews)
@@ -24406,6 +24430,8 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         key_concerns.append(AGENT3_DECLARED_PEP_NOTICE)
     if adverse_media_count:
         key_concerns.append(f"{adverse_media_count} stored provider screening adverse-media row(s) require relevance and materiality review.")
+    if watchlist_count:
+        key_concerns.append(f"{watchlist_count} stored watchlist/warning row(s) require officer review.")
     if other_count:
         key_concerns.append(f"{other_count} other/uncategorized provider result row(s) need identity disambiguation.")
     if unresolved_review_count:
@@ -24463,6 +24489,7 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         hit_summary = (
             f"show {total_hits} provider result row(s): {sanctions_count} sanctions, "
             f"{pep_count} PEP, {adverse_media_count} provider screening adverse-media row(s), "
+            f"{watchlist_count} watchlist, "
             f"and {other_count} other/uncategorized row(s) requiring identity disambiguation"
         )
     else:
@@ -24558,6 +24585,7 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
             "pep": pep_count,
             "declared_pep": declared_pep_count,
             "adverse_media": adverse_media_count,
+            "watchlist": watchlist_count,
             "other": other_count,
             "low_confidence": low_confidence_hit_count,
             "unresolved_screening_reviews": unresolved_review_count,
