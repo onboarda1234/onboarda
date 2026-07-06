@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RegMind — Indicative Valuation Overview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --ink: #0d0f12;
+    --ink-2: #3a3d44;
+    --ink-3: #7a7e89;
+    --ink-4: #b0b4be;
+    --surface: #f7f8fa;
+    --surface-2: #edeef2;
+    --white: #ffffff;
+    --accent: #1a3de0;
+    --accent-dim: #e8ecfc;
+    --accent-mid: #3d5fef;
+    --amber: #c46b00;
+    --amber-bg: #fff4e0;
+    --green: #1a6e3e;
+    --green-bg: #e6f5ec;
+    --red: #b52b2b;
+    --red-bg: #fceaea;
+    --rule: #e2e4ea;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'Inter', system-ui, sans-serif;
+  }
+
+  html { font-size: 16px; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--surface);
+    color: var(--ink);
+    line-height: 1.7;
+    min-height: 100vh;
+  }
+
+  /* ── COVER ── */
+  .cover {
+    background: var(--ink);
+    color: var(--white);
+    padding: 72px 48px 64px;
+    position: relative;
+    overflow: hidden;
+  }
+  .cover::before {
+    content: '';
+    position: absolute;
+    top: -80px; right: -120px;
+    width: 520px; height: 520px;
+    border-radius: 50%;
+    background: var(--accent);
+    opacity: 0.08;
+    pointer-events: none;
+  }
+  .cover-eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--ink-4);
+    text-transform: uppercase;
+    margin-bottom: 28px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .cover-eyebrow::before {
+    content: '';
+    display: block;
+    width: 24px;
+    height: 1px;
+    background: var(--accent-mid);
+  }
+  .cover h1 {
+    font-size: clamp(32px, 5vw, 52px);
+    font-weight: 300;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    margin-bottom: 12px;
+    max-width: 640px;
+  }
+  .cover h1 strong { font-weight: 600; color: #fff; }
+  .cover-sub {
+    font-size: 16px;
+    color: var(--ink-4);
+    font-weight: 300;
+    margin-bottom: 48px;
+    max-width: 560px;
+  }
+  .cover-meta {
+    display: flex;
+    gap: 40px;
+    flex-wrap: wrap;
+    border-top: 1px solid rgba(255,255,255,0.1);
+    padding-top: 28px;
+  }
+  .cover-meta-item .label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    margin-bottom: 4px;
+  }
+  .cover-meta-item .value {
+    font-size: 14px;
+    color: rgba(255,255,255,0.85);
+    font-weight: 400;
+  }
+
+  /* ── HERO ── */
+  .estimate-hero {
+    background: var(--white);
+    border-bottom: 1px solid var(--rule);
+    padding: 48px;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0;
+  }
+  .estimate-main {
+    grid-column: 1 / 2;
+    border-right: 1px solid var(--rule);
+    padding-right: 40px;
+  }
+  .estimate-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-bottom: 10px;
+  }
+  .estimate-figure {
+    font-size: clamp(32px, 4.4vw, 50px);
+    font-weight: 300;
+    letter-spacing: -0.03em;
+    color: var(--ink);
+    line-height: 1;
+    margin-bottom: 8px;
+  }
+  .estimate-figure span { color: var(--accent); font-weight: 600; }
+  .estimate-range {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-3);
+    margin-top: 8px;
+  }
+  .estimate-sub {
+    font-size: 13px;
+    color: var(--ink-3);
+    margin-top: 10px;
+    max-width: 280px;
+    line-height: 1.5;
+  }
+  .stat-col { padding: 0 36px; border-right: 1px solid var(--rule); }
+  .stat-col:last-child { border-right: none; padding-right: 0; }
+  .stat-number {
+    font-size: 26px;
+    font-weight: 300;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    margin-bottom: 4px;
+    margin-top: 32px;
+  }
+  .stat-number strong { font-weight: 600; color: var(--accent); }
+  .stat-desc { font-size: 12px; color: var(--ink-3); line-height: 1.4; max-width: 200px; }
+
+  /* ── LAYOUT ── */
+  .page { max-width: 960px; margin: 0 auto; padding: 56px 48px 72px; }
+
+  /* ── HIGHLIGHTS ── */
+  .highlights {
+    background: var(--accent-dim);
+    border-radius: 10px;
+    padding: 28px 32px;
+    margin-bottom: 44px;
+  }
+  .highlights h3 {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 16px;
+    font-weight: 500;
+  }
+  .highlights ul { list-style: none; display: grid; grid-template-columns: 1fr 1fr; gap: 12px 32px; }
+  .highlights li {
+    font-size: 14px;
+    color: var(--ink-2);
+    line-height: 1.5;
+    display: flex;
+    gap: 10px;
+  }
+  .highlights li::before { content: '→'; color: var(--accent); font-family: var(--mono); flex-shrink: 0; }
+  .highlights li strong { color: var(--ink); font-weight: 600; }
+
+  /* ── SECTION HEADERS ── */
+  .section { margin-bottom: 52px; }
+  .section-header {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 22px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .section-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.06em;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .section-title {
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+
+  /* ── PROSE ── */
+  p { font-size: 15px; color: var(--ink-2); line-height: 1.75; margin-bottom: 14px; }
+  p:last-child { margin-bottom: 0; }
+  strong { font-weight: 500; color: var(--ink); }
+
+  /* ── SNAPSHOT GRID ── */
+  .snapshot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 20px 0; }
+  .snapshot-card { background: var(--white); border: 1px solid var(--rule); border-radius: 8px; padding: 18px 20px; }
+  .snapshot-card .k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+  .snapshot-card .v { font-size: 14px; color: var(--ink); line-height: 1.5; }
+
+  /* ── METHOD / APPLIED TABLES ── */
+  .method-table, .applied-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+  .method-table th, .applied-table th {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 400;
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--rule);
+  }
+  .method-table td, .applied-table td {
+    padding: 12px;
+    font-size: 14px;
+    color: var(--ink-2);
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+    line-height: 1.45;
+  }
+  .method-table tr:last-child td, .applied-table tr:last-child td { border-bottom: none; }
+  .method-table td:first-child, .applied-table td:first-child { font-weight: 500; color: var(--ink); }
+  .applied-table td:last-child { font-family: var(--mono); font-size: 12px; color: var(--accent); text-align: right; font-weight: 500; }
+  .weight-badge {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 7px;
+    background: var(--accent-dim);
+    color: var(--accent);
+    border-radius: 3px;
+    margin-left: 6px;
+    letter-spacing: 0.04em;
+  }
+
+  /* ── ARR CARDS ── */
+  .arr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 20px 0; }
+  .arr-card { background: var(--white); border: 1px solid var(--rule); border-radius: 8px; padding: 20px 22px; }
+  .arr-card.accent { border-color: var(--accent); background: var(--accent-dim); }
+  .arr-card-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px; }
+  .arr-card.accent .arr-card-label { color: var(--accent); }
+  .arr-card-value { font-size: 24px; font-weight: 500; letter-spacing: -0.02em; color: var(--ink); margin-bottom: 4px; }
+  .arr-card.accent .arr-card-value { color: var(--accent); }
+  .arr-card-note { font-size: 12px; color: var(--ink-3); line-height: 1.45; }
+
+  /* ── RANGE BARS ── */
+  .range-bars { margin: 24px 0; }
+  .range-row { display: grid; grid-template-columns: 60px 1fr 100px; align-items: center; gap: 16px; margin-bottom: 14px; }
+  .range-scenario { font-family: var(--mono); font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; }
+  .range-track { height: 32px; background: var(--surface-2); border-radius: 4px; overflow: hidden; position: relative; }
+  .range-fill { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 12px; font-size: 12px; font-weight: 500; }
+  .range-fill.low { background: #fceaea; color: var(--red); width: 41%; }
+  .range-fill.base { background: #fff4e0; color: var(--amber); width: 64%; }
+  .range-fill.high { background: var(--green-bg); color: var(--green); width: 100%; }
+  .range-value { font-family: var(--mono); font-size: 13px; font-weight: 500; text-align: right; color: var(--ink); }
+
+  /* ── RISK / MITIGANT CARDS ── */
+  .risk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 20px 0; }
+  .risk-card { background: var(--white); border: 1px solid var(--rule); border-radius: 8px; padding: 18px 20px; }
+  .risk-card-title { font-size: 14px; font-weight: 500; color: var(--ink); margin-bottom: 8px; }
+  .risk-card-body { font-size: 12.5px; color: var(--ink-3); line-height: 1.55; margin-bottom: 10px; }
+  .risk-card-mit { font-size: 12.5px; color: var(--ink-2); line-height: 1.55; border-top: 1px solid var(--rule); padding-top: 10px; }
+  .risk-card-mit strong { color: var(--green); font-weight: 600; }
+
+  /* ── ATTRIBUTION ── */
+  .attr-list { margin: 20px 0; }
+  .attr-item { margin-bottom: 22px; }
+  .attr-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .attr-name { font-size: 14px; font-weight: 500; color: var(--ink); }
+  .attr-pct { font-family: var(--mono); font-size: 16px; font-weight: 500; color: var(--accent); }
+  .attr-track { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; margin-bottom: 8px; }
+  .attr-fill { height: 100%; border-radius: 3px; }
+  .attr-note { font-size: 12px; color: var(--ink-3); line-height: 1.5; }
+
+  /* ── CATALYSTS ── */
+  .catalyst-list { margin: 20px 0; }
+  .catalyst-item { display: grid; grid-template-columns: 32px 1fr auto; gap: 16px; align-items: start; padding: 20px 0; border-bottom: 1px solid var(--rule); }
+  .catalyst-item:last-child { border-bottom: none; }
+  .catalyst-num { font-family: var(--mono); font-size: 20px; font-weight: 500; color: var(--surface-2); line-height: 1.2; margin-top: 2px; }
+  .catalyst-title { font-size: 14px; font-weight: 500; color: var(--ink); margin-bottom: 4px; }
+  .catalyst-body { font-size: 13px; color: var(--ink-3); line-height: 1.5; }
+  .catalyst-uplift { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--green); background: var(--green-bg); padding: 4px 10px; border-radius: 4px; white-space: nowrap; align-self: start; margin-top: 2px; }
+
+  /* ── BUYER GRID ── */
+  .buyer-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin: 20px 0; }
+  .buyer-card { background: var(--white); border: 1px solid var(--rule); border-radius: 8px; padding: 22px; }
+  .buyer-card.featured { border-color: var(--accent); }
+  .buyer-card.illustrative { border-style: dashed; }
+  .buyer-type { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 10px; }
+  .buyer-card.featured .buyer-type { color: var(--accent); }
+  .buyer-price { font-size: 22px; font-weight: 500; letter-spacing: -0.02em; color: var(--ink); margin-bottom: 6px; }
+  .buyer-card.featured .buyer-price { color: var(--accent); }
+  .buyer-driver { font-size: 12px; color: var(--ink-3); line-height: 1.5; }
+  .buyer-tag { display: inline-block; margin-top: 10px; font-family: var(--mono); font-size: 10px; padding: 3px 8px; border-radius: 3px; background: var(--accent-dim); color: var(--accent); }
+  .buyer-tag.muted { background: var(--surface-2); color: var(--ink-3); }
+
+  /* ── COMPS ── */
+  .comp-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--rule); gap: 12px; }
+  .comp-row:last-child { border-bottom: none; }
+  .comp-name { font-size: 14px; font-weight: 500; color: var(--ink); }
+  .comp-detail { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+  .comp-multiple { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--accent); white-space: nowrap; }
+
+  /* ── SUMMARY BOX ── */
+  .summary-box { background: var(--ink); color: var(--white); border-radius: 10px; padding: 36px 40px; margin: 24px 0; }
+  .summary-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-4); margin-bottom: 12px; }
+  .summary-figure { font-size: 44px; font-weight: 300; letter-spacing: -0.03em; color: var(--white); margin-bottom: 4px; }
+  .summary-figure strong { font-weight: 600; color: #7b97ff; }
+  .summary-interval { font-family: var(--mono); font-size: 13px; color: var(--ink-4); margin-bottom: 8px; }
+  .summary-box p { color: rgba(255,255,255,0.72); }
+
+  /* ── CLASSIFICATION ── */
+  .classification { background: var(--accent-dim); border-left: 3px solid var(--accent); padding: 16px 20px; border-radius: 0 6px 6px 0; margin: 20px 0; }
+  .classification p { color: var(--accent); font-size: 14px; margin-bottom: 0; }
+
+  /* ── DISCLAIMER ── */
+  .disclaimer { margin: 48px 0 0; padding: 24px 26px; background: var(--surface-2); border-radius: 8px; }
+  .disclaimer h4 { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 12px; }
+  .disclaimer p { font-size: 11.5px; color: var(--ink-3); line-height: 1.6; margin-bottom: 10px; }
+
+  /* ── FOOTER ── */
+  .footer { border-top: 1px solid var(--rule); padding: 28px 48px; background: var(--white); font-family: var(--mono); font-size: 10px; color: var(--ink-4); letter-spacing: 0.04em; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+
+  @media (max-width: 700px) {
+    .cover { padding: 40px 24px; }
+    .estimate-hero { grid-template-columns: 1fr; padding: 32px 24px; gap: 24px; }
+    .estimate-main { border-right: none; padding-right: 0; border-bottom: 1px solid var(--rule); padding-bottom: 24px; }
+    .stat-col { border-right: none; padding: 0; }
+    .page { padding: 40px 24px 56px; }
+    .highlights ul, .snapshot-grid, .arr-grid, .risk-grid, .buyer-grid { grid-template-columns: 1fr; }
+    .range-row { grid-template-columns: 56px 1fr 80px; gap: 10px; }
+    .catalyst-item { grid-template-columns: 24px 1fr; }
+    .catalyst-uplift { display: none; }
+    .footer { flex-direction: column; padding: 20px 24px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-eyebrow">Confidential — For Discussion with Prospective Investors</div>
+  <h1>RegMind<br><strong>Indicative Valuation Overview</strong></h1>
+  <p class="cover-sub">Pre-Seed RegTech — an AI-native Compliance Operating System for regulated financial institutions, with a live first pilot and a deep, defensible compliance IP base.</p>
+  <div class="cover-meta">
+    <div class="cover-meta-item">
+      <div class="label">Prepared</div>
+      <div class="value">July 2026</div>
+    </div>
+    <div class="cover-meta-item">
+      <div class="label">Stage</div>
+      <div class="value">Pre-seed / first commercial pilot</div>
+    </div>
+    <div class="cover-meta-item">
+      <div class="label">Sector</div>
+      <div class="value">RegTech · Compliance Automation</div>
+    </div>
+    <div class="cover-meta-item">
+      <div class="label">Initial market</div>
+      <div class="value">Mauritius (FSC) · architecture expandable</div>
+    </div>
+  </div>
+</div>
+
+<!-- HERO -->
+<div class="estimate-hero">
+  <div class="estimate-main">
+    <div class="estimate-label">Indicative pre-money valuation</div>
+    <div class="estimate-figure">USD <span>1.4M</span></div>
+    <div class="estimate-range">Indicative range: USD 0.9M — 2.2M</div>
+    <p class="estimate-sub">Blended across forward ARR multiple, comparable early-stage rounds, and a differentiated-IP replication floor, adjusted for stage.</p>
+  </div>
+  <div class="stat-col">
+    <div class="estimate-label">Contracted — Pilot 1</div>
+    <div class="stat-number">USD <strong>60K</strong> ARR</div>
+    <div class="stat-desc">First signed customer, FSC-regulated institution. USD 60K recurring + USD 40K one-time implementation (Year-1 value ≈ USD 100K). Billing from H2 2026.</div>
+  </div>
+  <div class="stat-col">
+    <div class="estimate-label">Pipeline — Pilot 2</div>
+    <div class="stat-number">~USD <strong>60K</strong> ARR</div>
+    <div class="stat-desc">Second pilot expected within ~6 months at comparable pricing. Would take contracted ARR to ≈ USD 120K.</div>
+  </div>
+</div>
+
+<div class="page">
+
+  <!-- HIGHLIGHTS -->
+  <div class="highlights">
+    <h3>Investment Highlights</h3>
+    <ul>
+      <li><strong>Deep, defensible compliance IP</strong> — an encoded verification matrix, FATF-aligned risk model, and deterministic memo pipeline that represent months of regulatory domain expertise in software.</li>
+      <li><strong>First customer signed</strong> — a licensed, FSC-regulated institution on a paid pilot; billing commences H2 2026, with a second pilot in active pipeline.</li>
+      <li><strong>Architecturally differentiated</strong> — a 4-layer deterministic AI pipeline that keeps probabilistic AI out of the final compliance decision, addressing the core objection regulators raise about AI.</li>
+      <li><strong>Full lifecycle, not a point tool</strong> — onboarding through screening, memo generation, monitoring, and periodic review, evidenced by ~6,000 automated tests.</li>
+      <li><strong>Capital-efficient path to re-rating</strong> — clear near-term milestones (live reference customer, second pilot, SOC 2) that materially lift value with modest spend.</li>
+      <li><strong>Large, underserved market</strong> — compliance automation for regulated FIs, with a configurable architecture designed to extend beyond the initial jurisdiction.</li>
+    </ul>
+  </div>
+
+  <!-- 1. SNAPSHOT -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">01</span><span class="section-title">Company &amp; Product Snapshot</span></div>
+    <p>RegMind is an AI-native <strong>compliance operating system</strong> for regulated financial institutions — banks, EMIs, and payment providers. It automates KYC/AML due diligence end-to-end through a deterministic, auditable pipeline, replacing manual, spreadsheet-and-Word compliance workflows with a structured, machine-enforced decision framework. The platform spans two surfaces: a client-facing onboarding portal and an internal compliance back-office.</p>
+
+    <div class="snapshot-grid">
+      <div class="snapshot-card"><div class="k">Product</div><div class="v">Compliance OS — intake → screening → risk scoring → document verification → memo generation → supervisor review → ongoing monitoring</div></div>
+      <div class="snapshot-card"><div class="k">Core differentiator</div><div class="v">4-layer deterministic AI pipeline (rules → memo → validation → supervisor) with human approval gates and a cryptographic audit trail</div></div>
+      <div class="snapshot-card"><div class="k">Commercial status</div><div class="v">One signed pilot (USD 60K ARR + USD 40K implementation); second pilot expected within ~6 months at comparable pricing</div></div>
+      <div class="snapshot-card"><div class="k">Platform depth</div><div class="v">10 specialised AI agents · 35+ relational data domains · ~6,000 automated tests · validated AWS staging deployment</div></div>
+    </div>
+  </div>
+
+  <!-- 2. TRACTION -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">02</span><span class="section-title">Commercial Traction</span></div>
+    <p>RegMind has converted product depth into its first paid commercial relationship, with a second in active pipeline. The revenue model is recurring SaaS ARR plus a one-time implementation fee per customer.</p>
+
+    <div class="arr-grid">
+      <div class="arr-card accent">
+        <div class="arr-card-label">Contracted — Pilot 1</div>
+        <div class="arr-card-value">USD 60K ARR + 40K impl.</div>
+        <div class="arr-card-note">Signed with a licensed, FSC-regulated institution in Mauritius. USD 60K recurring plus a USD 40K one-time implementation fee — Year-1 total contract value ≈ USD 100K. Billing commences H2 2026.</div>
+      </div>
+      <div class="arr-card">
+        <div class="arr-card-label">Pipeline — Pilot 2</div>
+        <div class="arr-card-value">~USD 60K ARR + 40K impl.</div>
+        <div class="arr-card-note">Second pilot expected within approximately six months at comparable pricing. On signature, contracted ARR would rise to ≈ USD 120K with ≈ USD 80K of cumulative implementation revenue.</div>
+      </div>
+    </div>
+    <p style="font-size:13px; color: var(--ink-3);">Pilots are intentionally structured as focused, lower-cost engagements that validate product-market fit and generate regulatory reference value. Implementation fees provide near-term cash while the recurring ARR base compounds with each additional customer. For valuation, only recurring ARR is applied to revenue multiples; implementation fees are treated as non-recurring.</p>
+  </div>
+
+  <!-- 3. METHODOLOGY -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">03</span><span class="section-title">Valuation Approach</span></div>
+    <p>At the pre-seed stage — with strong product and IP, a first signed customer, and revenue not yet recognised — valuation is best anchored on a blend of forward revenue, market comparables, and the cost to reconstruct the differentiated IP, rather than on any single method. A discounted cash-flow approach is not meaningful at this stage.</p>
+
+    <table class="method-table">
+      <thead><tr><th>Method</th><th>Role</th><th>Weight</th><th>Rationale</th></tr></thead>
+      <tbody>
+        <tr><td>Forward ARR multiple</td><td>Primary</td><td><span class="weight-badge">35%</span></td><td>Applied to contracted and contingent ARR at a stage-appropriate 8–15× range for early RegTech SaaS.</td></tr>
+        <tr><td>Comparable early-stage rounds</td><td>External anchor</td><td><span class="weight-badge">30%</span></td><td>Seed / pre-seed RegTech with IP and a design-partner customer, stage-adjusted.</td></tr>
+        <tr><td>Differentiated-IP replication floor</td><td>Downside anchor</td><td><span class="weight-badge">25%</span></td><td>The cost and time to independently rebuild the compliance IP and pipeline — the level below which a strategic buyer would not rationally price the asset.</td></tr>
+        <tr><td>Scorecard / Berkus</td><td>Cross-check</td><td><span class="weight-badge">10%</span></td><td>Sanity-check on team, product, and market.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 4. COMPARABLES -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">04</span><span class="section-title">Market Comparables</span></div>
+    <p>KYC/AML and compliance-automation peers establish a directional market bracket. As these operate at materially larger scale, their revenue multiples are applied to RegMind only after a stage discount, and are treated as corroborating signals rather than direct inputs.</p>
+
+    <div style="margin: 20px 0;">
+      <div class="comp-row"><div><div class="comp-name">Sumsub (Series B, 2022)</div><div class="comp-detail">KYC/AML screening platform; multi-million ARR at round</div></div><div class="comp-multiple">12–18× ARR</div></div>
+      <div class="comp-row"><div><div class="comp-name">Flagright (Series A, 2023)</div><div class="comp-detail">Real-time AML compliance platform</div></div><div class="comp-multiple">8–12× ARR</div></div>
+      <div class="comp-row"><div><div class="comp-name">Early-stage RegTech seed rounds</div><div class="comp-detail">IP + design-partner customer, pre-Series A</div></div><div class="comp-multiple">USD 1.5–4M post</div></div>
+      <div class="comp-row"><div><div class="comp-name">Compliance-SaaS M&amp;A (sub-scale)</div><div class="comp-detail">Build-vs-buy driven; IP- and team-led pricing</div></div><div class="comp-multiple">IP / team driven</div></div>
+    </div>
+
+    <table class="applied-table">
+      <thead><tr><th>ARR base</th><th>Multiple</th><th>Implied value</th></tr></thead>
+      <tbody>
+        <tr><td>USD 60K contracted (Pilot 1)</td><td>8–15×</td><td>USD 0.48–0.90M</td></tr>
+        <tr><td>USD 120K contingent (Pilot 1 + 2)</td><td>8–15×</td><td>USD 0.96–1.80M</td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:13px; color: var(--ink-3);">The revenue-multiple method is blended with comparable early-stage rounds and the IP replication floor to reach the indicative estimate; at this ARR scale it primarily informs the lower half of the range.</p>
+  </div>
+
+  <!-- 5. TECHNOLOGY & IP -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">05</span><span class="section-title">Technology &amp; IP Value</span></div>
+    <p>RegMind's core value is the encoded compliance domain expertise and the pipeline design that surrounds it — assets that cannot be bought off the shelf and take substantial specialist time to reconstruct. The commodity layers (infrastructure, standard application scaffolding, front-end) carry little independent value; a strategic buyer would retain the compliance IP and re-platform the rest.</p>
+
+    <div class="classification">
+      <p><strong>Differentiated-IP replication floor: ≈ USD 1.0M.</strong> The estimated cost and 12–18 month timeline to independently rebuild the verification matrix, FATF-aligned risk model, deterministic memo/validation/supervisor pipeline, and jurisdiction-specific regulatory encoding — inclusive of compliance-consultant time — net of the engineering effort a buyer would invest to modernise the platform for scale.</p>
+    </div>
+  </div>
+
+  <!-- 6. VALUE ATTRIBUTION -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">06</span><span class="section-title">Where the Value Sits</span></div>
+    <p>Value concentrates in the compliance IP and the pipeline architecture. Commercial traction, while early, is the component that re-rates fastest with each additional reference customer.</p>
+
+    <div class="attr-list">
+      <div class="attr-item">
+        <div class="attr-header"><div class="attr-name">Compliance IP &amp; domain encoding</div><div class="attr-pct">42%</div></div>
+        <div class="attr-track"><div class="attr-fill" style="width: 42%; background: #1D9E75;"></div></div>
+        <div class="attr-note">Verification matrix, FATF-aligned risk model, structured memo templates, validation ruleset, supervisor logic, and jurisdiction-specific regulatory encoding. The hardest element to replicate.</div>
+      </div>
+      <div class="attr-item">
+        <div class="attr-header"><div class="attr-name">AI pipeline architecture</div><div class="attr-pct">30%</div></div>
+        <div class="attr-track"><div class="attr-fill" style="width: 30%; background: #7F77DD;"></div></div>
+        <div class="attr-note">4-layer deterministic pipeline with 10 specialised agents and validated outputs, gating every AI output behind deterministic checks and human approval. The design — not the code volume — is the differentiator.</div>
+      </div>
+      <div class="attr-item">
+        <div class="attr-header"><div class="attr-name">Platform completeness</div><div class="attr-pct">18%</div></div>
+        <div class="attr-track"><div class="attr-fill" style="width: 18%; background: #378ADD;"></div></div>
+        <div class="attr-note">End-to-end lifecycle coverage — registration through monitoring, change management, and periodic review — that distinguishes RegMind from single-function point solutions.</div>
+      </div>
+      <div class="attr-item">
+        <div class="attr-header"><div class="attr-name">Commercial traction</div><div class="attr-pct">5%</div></div>
+        <div class="attr-track"><div class="attr-fill" style="width: 5%; background: #EF9F27;"></div></div>
+        <div class="attr-note">One signed pilot and one in pipeline. Early today — but each live, reference-able customer disproportionately re-rates this component by proving regulatory acceptance and switching costs.</div>
+      </div>
+      <div class="attr-item">
+        <div class="attr-header"><div class="attr-name">Security &amp; audit infrastructure</div><div class="attr-pct">5%</div></div>
+        <div class="attr-track"><div class="attr-fill" style="width: 5%; background: #D85A30;"></div></div>
+        <div class="attr-note">Cryptographic audit trail, sequential approval gates, field-level PII encryption, and immutable document hashing — the baseline expected of compliance software, with upside on formal certification.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7. CATALYSTS -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">07</span><span class="section-title">Value-Creation Roadmap</span></div>
+    <p>Near-term, capital-efficient milestones that would each re-rate the business, in realistic sequence.</p>
+
+    <div class="catalyst-list">
+      <div class="catalyst-item"><div class="catalyst-num">01</div><div><div class="catalyst-title">Pilot 1 live, billing, and reference-able</div><div class="catalyst-body">Converting the first pilot to a live, collecting, referenceable customer turns booked ARR into recognised revenue and unlocks the credibility every subsequent sale depends on.</div></div><div class="catalyst-uplift">+USD 200–400K</div></div>
+      <div class="catalyst-item"><div class="catalyst-num">02</div><div><div class="catalyst-title">Second pilot signed</div><div class="catalyst-body">A second signed customer roughly doubles contracted ARR and demonstrates repeatability across institution types — the key signal for a seed round.</div></div><div class="catalyst-uplift">+USD 300–500K</div></div>
+      <div class="catalyst-item"><div class="catalyst-num">03</div><div><div class="catalyst-title">First regulator-examined deployment</div><div class="catalyst-body">A customer that clears an FSC examination cycle using RegMind's outputs moves the platform from "pilot-ready" to "regulator-validated" — the single strongest credential for financial-institution buyers.</div></div><div class="catalyst-uplift">+USD 0.6–1.2M</div></div>
+      <div class="catalyst-item"><div class="catalyst-num">04</div><div><div class="catalyst-title">SOC 2 Type I</div><div class="catalyst-body">Achievable in 3–6 months at modest cost; unlocks enterprise procurement in the UK, EU, and MENA where it is a hard prerequisite, and signals operational maturity to investors.</div></div><div class="catalyst-uplift">+USD 300–600K</div></div>
+      <div class="catalyst-item"><div class="catalyst-num">05</div><div><div class="catalyst-title">Second-jurisdiction launch</div><div class="catalyst-body">The configurable risk model is designed to extend to new jurisdictions (e.g. UK FCA, UAE DFSA, EU AMLD6), converting single-market concentration into a diversification premium and expanding the addressable market several-fold.</div></div><div class="catalyst-uplift">+USD 0.8–2.0M</div></div>
+    </div>
+  </div>
+
+  <!-- 8. BUYER & INVESTOR PERSPECTIVES -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">08</span><span class="section-title">Investor &amp; Acquirer Perspectives</span></div>
+    <p>Financial investors and strategic acquirers value the same asset through different lenses. At the current stage both anchor primarily on IP, product, and team; strategic premia scale with commercial and regulatory validation.</p>
+
+    <div class="buyer-grid">
+      <div class="buyer-card featured">
+        <div class="buyer-type">Financial investor (pre-seed / seed)</div>
+        <div class="buyer-price">USD 1.0–2.0M</div>
+        <div class="buyer-driver">Team, IP, and market driven. Anchored on a signed pilot and differentiated product, adjusted for stage. Upper end supported by a live first customer and a second pilot signed.</div>
+        <span class="buyer-tag">pre-money</span>
+      </div>
+      <div class="buyer-card">
+        <div class="buyer-type">Strategic acquirer (global RegTech)</div>
+        <div class="buyer-price">USD 1.3–2.5M</div>
+        <div class="buyer-driver">Build-vs-buy driven. Pays the IP replication floor plus a premium for time-to-market and jurisdiction-specific compliance encoding, retaining the compliance logic and modernising the platform.</div>
+        <span class="buyer-tag">acquisition</span>
+      </div>
+      <div class="buyer-card illustrative">
+        <div class="buyer-type">Regional strategic — future</div>
+        <div class="buyer-price">USD 3.5–5.0M+</div>
+        <div class="buyer-driver">A geographic-expansion premium for regulatory relationships and IP, realistic once multiple customers are live and reference-able. Illustrative of the post-traction opportunity.</div>
+        <span class="buyer-tag muted">post-traction</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9. RISKS & MITIGANTS -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">09</span><span class="section-title">Key Risks &amp; Mitigants</span></div>
+    <p>The principal risks at this stage are those typical of a pre-seed enterprise-software company, together with their mitigants and roadmap.</p>
+
+    <div class="risk-grid">
+      <div class="risk-card">
+        <div class="risk-card-title">Early commercial stage</div>
+        <div class="risk-card-body">One signed pilot with billing not yet commenced; revenue is contracted rather than recognised.</div>
+        <div class="risk-card-mit"><strong>Mitigant:</strong> customer is signed and billing begins H2 2026; a second pilot is in active pipeline; low-cost pilot structure de-risks conversion.</div>
+      </div>
+      <div class="risk-card">
+        <div class="risk-card-title">Single-jurisdiction concentration</div>
+        <div class="risk-card-body">Initial focus on the Mauritius FSC market, which is sizeable but finite.</div>
+        <div class="risk-card-mit"><strong>Mitigant:</strong> the risk model and architecture are configurable and jurisdiction-agnostic by design; multi-jurisdiction expansion is on the near-term roadmap.</div>
+      </div>
+      <div class="risk-card">
+        <div class="risk-card-title">Screening-provider validation</div>
+        <div class="risk-card-body">AML screening currently integrates a primary provider; production validation of the secondary provider path is in progress.</div>
+        <div class="risk-card-mit"><strong>Mitigant:</strong> a provider-abstraction layer is built to support multiple screening providers; production validation is an active, scoped workstream.</div>
+      </div>
+      <div class="risk-card">
+        <div class="risk-card-title">Certifications</div>
+        <div class="risk-card-body">SOC 2 / ISO 27001 not yet obtained, which some enterprise buyers require.</div>
+        <div class="risk-card-mit"><strong>Mitigant:</strong> SOC 2 Type I is achievable within 3–6 months at modest cost and is a prioritised roadmap item.</div>
+      </div>
+      <div class="risk-card">
+        <div class="risk-card-title">Architecture scale-up</div>
+        <div class="risk-card-body">The platform is functional and well-tested, but portions of the codebase will benefit from modularisation to support horizontal scale and team growth.</div>
+        <div class="risk-card-mit"><strong>Mitigant:</strong> ~6,000 automated tests provide a strong refactoring safety net; a service-layer decomposition is planned as part of the scale-up.</div>
+      </div>
+      <div class="risk-card">
+        <div class="risk-card-title">Team &amp; execution</div>
+        <div class="risk-card-body">Continued delivery depends on a small core team, as is typical at this stage.</div>
+        <div class="risk-card-mit"><strong>Mitigant:</strong> capital raised is intended in part to broaden the team across engineering and compliance functions.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 10. SUMMARY -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">10</span><span class="section-title">Indicative Valuation Summary</span></div>
+
+    <div class="summary-box">
+      <div class="summary-label">Indicative pre-money valuation — blended methodology</div>
+      <div class="summary-figure">USD <strong>1.4M</strong></div>
+      <div class="summary-interval">Indicative range: USD 0.9M — 2.2M</div>
+      <p style="font-size: 14px; max-width: 620px; margin-top: 8px;">Anchored above the differentiated-IP replication floor and within the pre-seed RegTech round bracket. The estimate advances toward the upper range as the first pilot goes live and reference-able and the second pilot signs; a regulator-validated deployment would support a further step-change (see roadmap).</p>
+    </div>
+
+    <div class="range-bars">
+      <div class="range-row"><div class="range-scenario">Low</div><div class="range-track"><div class="range-fill low">USD 0.9M</div></div><div class="range-value">USD 0.9M</div></div>
+      <div class="range-row"><div class="range-scenario">Base</div><div class="range-track"><div class="range-fill base">USD 1.4M</div></div><div class="range-value">USD 1.4M</div></div>
+      <div class="range-row"><div class="range-scenario">High</div><div class="range-track"><div class="range-fill high">USD 2.2M</div></div><div class="range-value">USD 2.2M</div></div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 20px;">
+      <div style="background: var(--white); border: 1px solid var(--rule); border-radius: 8px; padding: 20px;">
+        <div style="font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px;">Lower range</div>
+        <p style="font-size: 13px; color: var(--ink-3); line-height: 1.5; margin-bottom: 0;">Reflects the current position: one signed pilot pre-billing, single-market focus, anchored on the IP replication floor.</p>
+      </div>
+      <div style="background: var(--white); border: 1px solid var(--rule); border-radius: 8px; padding: 20px;">
+        <div style="font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px;">Upper range</div>
+        <p style="font-size: 13px; color: var(--ink-3); line-height: 1.5; margin-bottom: 0;">Reflects Pilot 1 live and collecting, Pilot 2 signed, and progress on SOC 2 or a second jurisdiction — each an achievable near-term milestone.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- DISCLAIMER -->
+  <div class="disclaimer">
+    <h4>Important Notice &amp; Disclaimer</h4>
+    <p>This document has been prepared by RegMind for information purposes only and is strictly confidential. It is intended solely for the recipient and may not be reproduced, distributed, or disclosed, in whole or in part, to any other party without RegMind's prior written consent.</p>
+    <p>This document does not constitute, and should not be construed as, an offer to sell or a solicitation of an offer to buy any securities or interests, or any form of investment, financial, legal, tax, or accounting advice. Any investment decision should be made solely on the basis of independent due diligence and, where a transaction is contemplated, the relevant definitive legal documentation.</p>
+    <p>The valuation figures and ranges herein are <strong>indicative estimates only</strong>, based on assumptions and methodologies that are inherently subjective and subject to change. They do not represent a formal, independent valuation and do not guarantee any transaction price. Valuation is ultimately determined by the terms agreed between the company and an investor or acquirer.</p>
+    <p>This document contains forward-looking statements — including regarding pipeline, roadmap milestones, and market expansion — that involve known and unknown risks and uncertainties. Actual outcomes may differ materially. Certain commercial figures reflect contracted but not yet recognised revenue and pipeline opportunities that are not yet contracted. RegMind undertakes no obligation to update this document.</p>
+  </div>
+
+</div>
+
+<!-- FOOTER -->
+<div class="footer">
+  <span>RegMind — Indicative Valuation Overview — July 2026</span>
+  <span>Strictly Private &amp; Confidential</span>
+  <span>Not an offer or solicitation · Indicative estimates only</span>
+</div>
+
+</body>
+</html>
