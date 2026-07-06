@@ -5006,6 +5006,78 @@ def repair_document_current_versions(db: DBConnection):
     _ensure_document_current_slot_unique_index(db)
 
 
+_PR20_BLOCKED_BACKFILL_MARKER = "pr20_backfill_compliance_memos_blocked"
+
+
+def _backfill_pr20_memo_blocked(db) -> int:
+    """One-time backfill of compliance_memos.blocked / block_reason from the
+    persisted memo_data JSON (PR-20).
+
+    The hard-block verdict was historically written only into
+    memo_data.metadata, never into the columns the approval gate reads, so a
+    pre-existing block-verdict memo stayed gate-bypassable until regenerated.
+    Row-by-row in Python so a malformed memo_data can never abort the migration
+    (no SQL JSON cast); marker-gated so it runs at most once per database.
+    Returns the number of rows backfilled.
+    """
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS data_migration_markers ("
+        "marker_key TEXT PRIMARY KEY, description TEXT, "
+        "applied_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+    )
+    if db.execute(
+        "SELECT marker_key FROM data_migration_markers WHERE marker_key=?",
+        (_PR20_BLOCKED_BACKFILL_MARKER,),
+    ).fetchone():
+        return 0
+    if not (_safe_column_exists(db, "compliance_memos", "blocked")
+            and _safe_column_exists(db, "compliance_memos", "memo_data")):
+        return 0
+
+    rows = db.execute(
+        "SELECT id, memo_data, block_reason FROM compliance_memos "
+        "WHERE blocked IS NULL OR blocked = ?",
+        (False if db.is_postgres else 0,),
+    ).fetchall()
+    backfilled = 0
+    for r in rows:
+        raw = r["memo_data"] if not isinstance(r, tuple) else r[1]
+        if not raw:
+            continue
+        try:
+            meta = (json.loads(raw) or {}).get("metadata", {}) or {}
+        except (ValueError, TypeError):
+            continue
+        if not meta.get("blocked"):
+            continue
+        rid = r["id"] if not isinstance(r, tuple) else r[0]
+        existing_reason = r["block_reason"] if not isinstance(r, tuple) else r[2]
+        db.execute(
+            "UPDATE compliance_memos SET blocked = ?, block_reason = ? WHERE id = ?",
+            (True if db.is_postgres else 1, existing_reason or meta.get("block_reason"), rid),
+        )
+        backfilled += 1
+
+    if db.is_postgres:
+        db.execute(
+            "INSERT INTO data_migration_markers (marker_key, description) VALUES (?, ?) "
+            "ON CONFLICT (marker_key) DO NOTHING",
+            (_PR20_BLOCKED_BACKFILL_MARKER, "PR-20 backfill blocked column from memo_data.metadata"),
+        )
+    else:
+        db.execute(
+            "INSERT OR IGNORE INTO data_migration_markers (marker_key, description) VALUES (?, ?)",
+            (_PR20_BLOCKED_BACKFILL_MARKER, "PR-20 backfill blocked column from memo_data.metadata"),
+        )
+    db.commit()
+    if backfilled:
+        logger.info(
+            "Migration v2.31b (PR-20): backfilled blocked column for %d legacy memo(s)",
+            backfilled,
+        )
+    return backfilled
+
+
 def _run_migrations(db: DBConnection):
     """Run incremental schema migrations for existing databases."""
     _ensure_country_risk_governance(db)
@@ -6954,6 +7026,18 @@ def _run_migrations(db: DBConnection):
             logger.info("Migration v2.31: Ensured compliance_memos memo-integrity columns")
     except Exception as e:
         logger.error("Migration v2.31 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.31b (PR-20): one-time backfill of compliance_memos.blocked /
+    # block_reason from the persisted memo_data JSON (see
+    # _backfill_pr20_memo_blocked).
+    try:
+        _backfill_pr20_memo_blocked(db)
+    except Exception as e:
+        logger.error("Migration v2.31b (PR-20) blocked backfill failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

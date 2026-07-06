@@ -1095,7 +1095,6 @@ class ApprovalGateValidator:
                 is_simulated = api_status in ("simulated", "mocked") or source in ("simulated", "mocked")
                 is_error = api_status in ("error", "blocked")
                 is_pending = api_status == "pending"
-                is_not_configured = api_status == "not_configured"
 
                 if not item.get("is_required", True):
                     if is_simulated:
@@ -1105,13 +1104,11 @@ class ApprovalGateValidator:
                         )
                     continue
 
-                if is_not_configured and item.get("name") == "company_watchlist":
-                    logger.warning(
-                        "company_watchlist screening is not configured "
-                        "(no Sumsub company KYB level) — approval proceeds with warning."
-                    )
-                    continue
-
+                # NOTE: a required company_watchlist in `not_configured` is blocked
+                # upstream by the screening truth gate (build_screening_truth_summary
+                # / UNSAFE_PROVIDER_STATES) before this tail runs; the old
+                # "approval proceeds with warning" fast-path here was dead, fail-open
+                # code and has been removed (PR-40).
                 if is_simulated:
                     return (
                         False,
@@ -1736,8 +1733,8 @@ class ApprovalGateValidator:
             #    provider truth is expected to come from ComplyAdvantage Mesh
             #    when the screening cutover is active.
             #    Enrichment checks (company_registry, ip_geolocation) warn but do not block.
-            #    company_watchlist with api_status="not_configured" warns but does not block
-            #    (no Sumsub company/KYB level provisioned).
+            #    A required company_watchlist in "not_configured" is blocked upstream by
+            #    the screening truth gate (see PR-40); no fast-path warn/allow here.
             screening_evidence = _collect_screening_provider_evidence(screening_report)
             if screening_evidence:
                 for item in screening_evidence:
@@ -1746,7 +1743,6 @@ class ApprovalGateValidator:
                     is_simulated = api_status in ("simulated", "mocked") or source in ("simulated", "mocked")
                     is_error = api_status in ("error", "blocked")
                     is_pending = api_status == "pending"
-                    is_not_configured = api_status == "not_configured"
 
                     if not item.get("is_required", True):
                         # Enrichment source — log warning but do not block approval
@@ -1757,16 +1753,10 @@ class ApprovalGateValidator:
                             )
                         continue
 
-                    # company_watchlist with not_configured — Sumsub company/KYB level
-                    # is not provisioned.  Warn but allow approval to proceed.
-                    if is_not_configured and item.get("name") == "company_watchlist":
-                        logger.warning(
-                            "company_watchlist screening is not configured "
-                            "(no Sumsub company KYB level) — approval proceeds with warning."
-                        )
-                        continue
-
-                    # Required screening — block if simulated or errored
+                    # Required screening — block if simulated or errored. (A required
+                    # company_watchlist in "not_configured" is already blocked upstream
+                    # by the screening truth gate; the old warn-and-proceed fast-path
+                    # here was dead fail-open code, removed in PR-40.)
                     if is_simulated:
                         return (
                             False,
