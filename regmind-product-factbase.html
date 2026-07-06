@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RegMind — Product &amp; Business Fact Base</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --ink:#0d0f12; --ink-2:#3a3d44; --ink-3:#7a7e89; --ink-4:#b0b4be;
+    --surface:#f7f8fa; --surface-2:#edeef2; --white:#fff;
+    --accent:#1a3de0; --accent-dim:#e8ecfc; --accent-mid:#3d5fef;
+    --amber:#c46b00; --amber-bg:#fff4e0; --green:#1a6e3e; --green-bg:#e6f5ec;
+    --red:#b52b2b; --red-bg:#fceaea; --rule:#e2e4ea;
+    --mono:'IBM Plex Mono',monospace; --sans:'Inter',system-ui,sans-serif;
+  }
+  html { font-size:16px; }
+  body { font-family:var(--sans); background:var(--surface); color:var(--ink); line-height:1.7; }
+
+  /* COVER */
+  .cover { background:var(--ink); color:var(--white); padding:72px 48px 64px; position:relative; overflow:hidden; }
+  .cover::before { content:''; position:absolute; top:-80px; right:-120px; width:520px; height:520px; border-radius:50%; background:var(--accent); opacity:.08; }
+  .cover-eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.12em; color:var(--ink-4); text-transform:uppercase; margin-bottom:28px; display:flex; align-items:center; gap:12px; }
+  .cover-eyebrow::before { content:''; display:block; width:24px; height:1px; background:var(--accent-mid); }
+  .cover h1 { font-size:clamp(30px,4.6vw,48px); font-weight:300; line-height:1.15; letter-spacing:-.02em; margin-bottom:12px; max-width:660px; }
+  .cover h1 strong { font-weight:600; color:#fff; }
+  .cover-sub { font-size:16px; color:var(--ink-4); font-weight:300; margin-bottom:48px; max-width:580px; }
+  .cover-meta { display:flex; gap:40px; flex-wrap:wrap; border-top:1px solid rgba(255,255,255,.1); padding-top:28px; }
+  .cover-meta-item .label { font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-4); margin-bottom:4px; }
+  .cover-meta-item .value { font-size:14px; color:rgba(255,255,255,.85); }
+
+  /* LAYOUT */
+  .page { max-width:960px; margin:0 auto; padding:52px 48px 72px; }
+  .section { margin-bottom:48px; }
+  .section-header { display:flex; align-items:baseline; gap:16px; margin-bottom:20px; padding-bottom:12px; border-bottom:1px solid var(--rule); }
+  .section-num { font-family:var(--mono); font-size:11px; color:var(--accent); letter-spacing:.06em; flex-shrink:0; margin-top:2px; }
+  .section-title { font-size:18px; font-weight:500; letter-spacing:-.01em; }
+
+  p { font-size:15px; color:var(--ink-2); line-height:1.75; margin-bottom:14px; }
+  p:last-child { margin-bottom:0; }
+  strong { font-weight:500; color:var(--ink); }
+  ul.plain { list-style:none; margin:14px 0; }
+  ul.plain li { font-size:14.5px; color:var(--ink-2); line-height:1.6; padding:6px 0 6px 20px; position:relative; }
+  ul.plain li::before { content:'—'; position:absolute; left:0; color:var(--accent); font-family:var(--mono); }
+
+  /* PURPOSE NOTE */
+  .note { border-left:3px solid var(--accent); background:var(--accent-dim); border-radius:0 6px 6px 0; padding:18px 22px; margin-bottom:40px; }
+  .note .label { font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); margin-bottom:8px; }
+  .note p { font-size:13.5px; color:#22357a; margin-bottom:8px; }
+  .note p:last-child { margin-bottom:0; }
+
+  /* TABLES */
+  table.fb { width:100%; border-collapse:collapse; margin:18px 0; font-size:14px; }
+  table.fb th { font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3); font-weight:400; padding:9px 12px; text-align:left; border-bottom:1px solid var(--rule); }
+  table.fb td { padding:11px 12px; color:var(--ink-2); border-bottom:1px solid var(--rule); vertical-align:top; line-height:1.5; }
+  table.fb tr:last-child td { border-bottom:none; }
+  table.fb td:first-child { font-weight:500; color:var(--ink); width:32%; }
+  table.fb.metrics td:last-child { font-family:var(--mono); font-size:12.5px; color:var(--accent); text-align:right; font-weight:500; width:34%; }
+
+  /* SNAPSHOT CARDS */
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:18px 0; }
+  .card { background:var(--white); border:1px solid var(--rule); border-radius:8px; padding:18px 20px; }
+  .card .k { font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); margin-bottom:6px; }
+  .card .v { font-size:14px; color:var(--ink); line-height:1.5; }
+
+  /* PLACEHOLDER */
+  .placeholder { border:1px dashed #c7a86a; background:var(--amber-bg); border-radius:8px; padding:18px 22px; margin:16px 0; }
+  .placeholder .tag { font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--amber); margin-bottom:8px; }
+  .placeholder p { font-size:13.5px; color:#6b4a00; margin-bottom:6px; }
+  .placeholder ul { list-style:none; margin-top:8px; }
+  .placeholder li { font-size:13px; color:#6b4a00; padding:3px 0 3px 18px; position:relative; }
+  .placeholder li::before { content:'▢'; position:absolute; left:0; color:#c7a86a; font-size:11px; }
+
+  /* STATUS BADGES */
+  .badge { display:inline-block; font-family:var(--mono); font-size:10px; font-weight:500; padding:2px 8px; border-radius:3px; letter-spacing:.03em; }
+  .b-green { background:var(--green-bg); color:var(--green); }
+  .b-amber { background:var(--amber-bg); color:var(--amber); }
+  .b-red { background:var(--red-bg); color:var(--red); }
+  .b-grey { background:var(--surface-2); color:var(--ink-3); }
+
+  /* DISCLAIMER + FOOTER */
+  .disclaimer { margin:44px 0 0; padding:24px 26px; background:var(--surface-2); border-radius:8px; }
+  .disclaimer h4 { font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); margin-bottom:12px; }
+  .disclaimer p { font-size:11.5px; color:var(--ink-3); line-height:1.6; margin-bottom:10px; }
+  .footer { border-top:1px solid var(--rule); padding:28px 48px; background:var(--white); font-family:var(--mono); font-size:10px; color:var(--ink-4); letter-spacing:.04em; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+
+  @media (max-width:700px){
+    .cover{padding:40px 24px;} .page{padding:40px 24px 56px;}
+    .grid2{grid-template-columns:1fr;} table.fb td:first-child{width:40%;}
+    .footer{flex-direction:column; padding:20px 24px;}
+  }
+</style>
+</head>
+<body>
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-eyebrow">Confidential — Information for Valuation Purposes</div>
+  <h1>RegMind<br><strong>Product &amp; Business Fact Base</strong></h1>
+  <p class="cover-sub">A neutral, factual information pack describing the product, technology, IP, commercial status, and market — intended to enable a third party to conduct an independent valuation.</p>
+  <div class="cover-meta">
+    <div class="cover-meta-item"><div class="label">Prepared</div><div class="value">July 2026</div></div>
+    <div class="cover-meta-item"><div class="label">Prepared by</div><div class="value">RegMind (company)</div></div>
+    <div class="cover-meta-item"><div class="label">Product stage</div><div class="value">First commercial pilot</div></div>
+    <div class="cover-meta-item"><div class="label">Document type</div><div class="value">Factual pack — not a valuation</div></div>
+  </div>
+</div>
+
+<div class="page">
+
+  <!-- PURPOSE -->
+  <div class="note">
+    <div class="label">About this document</div>
+    <p>This pack sets out the factual basis a third party (investor, acquirer, or valuation adviser) would need to form their own view of value. It <strong>deliberately does not state or imply a valuation</strong>, multiple, or price.</p>
+    <p>Product and technology facts are drawn from the company's source repository and internal product audit; commercial facts are as confirmed by the company. Sections marked <span class="badge b-amber">Company to complete</span> require company-supplied information (team, historical financials, cost structure, cap table, funding requirement) that is not derivable from the product and should be provided in the data room.</p>
+  </div>
+
+  <!-- 1. EXECUTIVE OVERVIEW -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">01</span><span class="section-title">Executive Overview</span></div>
+    <p>RegMind is an AI-native <strong>compliance operating system</strong> for regulated financial institutions — banks, electronic money institutions (EMIs), and payment service providers. It automates KYC/AML customer due diligence end-to-end, from client intake through screening, risk scoring, document verification, compliance memo generation, supervisory review, and ongoing monitoring.</p>
+    <p>The platform is delivered as two branded surfaces: a client-facing onboarding portal ("Onboarda") and an internal compliance back-office ("RegMind"). It is currently deployed for a first paid pilot with an FSC-regulated institution in Mauritius, with a second pilot in the sales pipeline.</p>
+    <div class="grid2">
+      <div class="card"><div class="k">Category</div><div class="v">B2B SaaS · RegTech · KYC/AML compliance automation</div></div>
+      <div class="card"><div class="k">Business model</div><div class="v">Recurring SaaS subscription (ARR) + one-time implementation fee per customer</div></div>
+      <div class="card"><div class="k">Initial market</div><div class="v">Mauritius (FSC-regulated financial institutions); architecture designed to extend to further jurisdictions</div></div>
+      <div class="card"><div class="k">Commercial status</div><div class="v">1 pilot signed (billing H2 2026); 1 pilot in pipeline</div></div>
+    </div>
+  </div>
+
+  <!-- 2. PRODUCT DESCRIPTION -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">02</span><span class="section-title">Product Description</span></div>
+    <p>RegMind replaces manual, document- and spreadsheet-based compliance workflows with a structured, auditable, machine-enforced decision framework. It covers the full compliance lifecycle rather than a single function:</p>
+    <ul class="plain">
+      <li><strong>Client onboarding portal</strong> — applicant registration, company details capture, ownership/UBO structure, document upload, and real-time prescreening.</li>
+      <li><strong>Screening &amp; risk</strong> — sanctions / PEP / adverse-media screening, a configurable multi-dimensional risk-scoring model, and a screening review queue with disposition tracking.</li>
+      <li><strong>Document verification</strong> — a multi-layer verification pipeline combining deterministic rule checks with AI interpretation across defined document types.</li>
+      <li><strong>Compliance decisioning</strong> — structured compliance memo generation, automated validation, a supervisory contradiction-detection layer, and a multi-point human approval gate.</li>
+      <li><strong>Ongoing lifecycle</strong> — enhanced due diligence (EDD), ongoing monitoring agents, materiality-tiered change management, and scheduled periodic reviews.</li>
+      <li><strong>Audit &amp; governance</strong> — a cryptographically hash-chained supervisor audit trail, a comprehensive action audit log, immutable PDF outputs, and role-based access control.</li>
+    </ul>
+  </div>
+
+  <!-- 3. HOW IT WORKS -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">03</span><span class="section-title">How It Works — AI Pipeline &amp; Agents</span></div>
+    <p>The core architectural feature is a <strong>4-layer deterministic AI pipeline</strong>: rule engine → memo generation → validation engine → supervisor. AI is used for interpretation and narrative within the pipeline, but no probabilistic AI output can reach a final compliance decision without passing through deterministic validation and a human approval gate. This design directly addresses the primary objection regulators raise about AI in compliance.</p>
+    <table class="fb">
+      <thead><tr><th>Layer</th><th>Function</th></tr></thead>
+      <tbody>
+        <tr><td>Rule engine</td><td>Deterministic 5-dimension risk scoring with configurable weights, floor rules (e.g. sanctioned-jurisdiction forced high-risk), and escalation logic.</td></tr>
+        <tr><td>Memo generation</td><td>Template-driven, rule-enforced compliance memo assembly; reproducible for a given input set.</td></tr>
+        <tr><td>Validation engine</td><td>Automated multi-point quality audit of the memo, producing a score and pass/fail verdict.</td></tr>
+        <tr><td>Supervisor</td><td>Contradiction detection across all prior stages; produces a consistency verdict and an "approvable" control flag.</td></tr>
+      </tbody>
+    </table>
+    <p>The pipeline is supported by a catalogue of <strong>10 specialised AI agents</strong> (of which 8–9 are active, one reserved for a future phase) covering identity/document checks, screening interpretation, corporate-structure analysis, memo/risk, and three ongoing-monitoring agents (periodic review, adverse media/PEP, behaviour/risk drift). Agents carry defined authority levels (authoritative vs. decision-support), and AI outputs are schema-validated.</p>
+  </div>
+
+  <!-- 4. CAPABILITIES / MODULES -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">04</span><span class="section-title">Capability Inventory</span></div>
+    <table class="fb">
+      <thead><tr><th>Module</th><th>Function</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Onboarding &amp; applications</td><td>Multi-status application lifecycle, party/UBO management, document association</td><td><span class="badge b-green">Live</span></td></tr>
+        <tr><td>Risk scoring model</td><td>Configurable 5-dimension weighted scoring with floor/elevation rules</td><td><span class="badge b-green">Live</span></td></tr>
+        <tr><td>Document verification</td><td>Multi-layer (gate → rule → hybrid → AI → aggregation) verification matrix</td><td><span class="badge b-green">Live</span></td></tr>
+        <tr><td>Compliance memo pipeline</td><td>Generation + validation + supervisor + human approval gate + PDF output</td><td><span class="badge b-green">Live</span></td></tr>
+        <tr><td>Screening &amp; queue</td><td>Sanctions/PEP/adverse-media screening, review queue, disposition tracking</td><td><span class="badge b-amber">Live · provider validation in progress</span></td></tr>
+        <tr><td>EDD pipeline</td><td>Enhanced due diligence, dual-control, staged lifecycle</td><td><span class="badge b-green">Live</span></td></tr>
+        <tr><td>Ongoing monitoring</td><td>Three monitoring agents, alerting, scheduled periodic reviews</td><td><span class="badge b-green">Live</span></td></tr>
+        <tr><td>Change management</td><td>Materiality-tiered change lifecycle with profile versioning</td><td><span class="badge b-green">Live</span></td></tr>
+        <tr><td>Audit &amp; governance</td><td>Hash-chained supervisor audit, action log, RBAC, GDPR tooling</td><td><span class="badge b-green">Live</span></td></tr>
+        <tr><td>Reporting / analytics</td><td>Operational and compliance reporting, CSV export</td><td><span class="badge b-amber">Core in place</span></td></tr>
+        <tr><td>Regulatory reporting (SAR)</td><td>SAR data structure present; no automated regulatory submission API</td><td><span class="badge b-grey">Partial</span></td></tr>
+        <tr><td>Enterprise integration</td><td>Core-banking / CRM / data-warehouse connectors</td><td><span class="badge b-grey">Not implemented</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 5. TECHNOLOGY & ARCHITECTURE -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">05</span><span class="section-title">Technology &amp; Architecture</span></div>
+    <table class="fb">
+      <thead><tr><th>Dimension</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr><td>Backend</td><td>Python 3.11, Tornado 6.5 (async web framework); ~85 API endpoints</td></tr>
+        <tr><td>Database</td><td>PostgreSQL (production) / SQLite (development); 35+ core relational entities</td></tr>
+        <tr><td>AI</td><td>Anthropic Claude API with risk-based model routing (lighter model for low/medium risk, stronger model for high/very-high); Pydantic-validated outputs</td></tr>
+        <tr><td>Frontend</td><td>Two single-file browser applications (no build step): back-office ≈2.0MB, client portal ≈0.75MB</td></tr>
+        <tr><td>Codebase scale</td><td>≈294,000 lines of Python across 531 files; ≈6,000 automated test functions; CI enforced</td></tr>
+        <tr><td>Key integrations</td><td>Sumsub (KYC/IDV), ComplyAdvantage (AML screening, when configured), OpenCorporates (registry enrichment), AWS S3 (document storage), WeasyPrint (PDF)</td></tr>
+        <tr><td>Deployment</td><td>Docker; AWS ECS Fargate staging (af-south-1); GitHub Actions CI/CD; AWS Secrets Manager</td></tr>
+        <tr><td>Security</td><td>Field-level PII encryption, sequential approval gates, cryptographic audit chaining, HMAC-verified webhooks, role-based access control, prompt-injection defences</td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:13px; color:var(--ink-3);">Note for diligence: the primary backend service is a large single module (≈40,000 lines) and the front-ends are large single files. These are functional and covered by the test suite, but a service-layer decomposition and front-end modularisation are planned to support horizontal scale and team growth.</p>
+  </div>
+
+  <!-- 6. IP & DEFENSIBILITY -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">06</span><span class="section-title">Intellectual Property &amp; Defensibility</span></div>
+    <p>The company's principal proprietary assets are the encoded compliance domain expertise and the pipeline design:</p>
+    <ul class="plain">
+      <li><strong>Compliance encoding</strong> — the document verification matrix, FATF-aligned country/sector risk model, structured memo templates, validation ruleset, and supervisor contradiction framework.</li>
+      <li><strong>Jurisdiction-specific regulatory logic</strong> — encoding aligned to the initial (Mauritius) regulatory environment, designed to be configurable for further jurisdictions.</li>
+      <li><strong>Deterministic AI-control architecture</strong> — the design pattern of gating probabilistic AI behind deterministic checks and human approval.</li>
+      <li><strong>Test corpus</strong> — ≈6,000 automated tests providing a regression safety net that a competitor rebuilding from scratch would need to reproduce.</li>
+    </ul>
+    <div class="placeholder">
+      <div class="tag">Company to complete — formal IP</div>
+      <p>To support IP valuation, please confirm in the data room:</p>
+      <ul>
+        <li>Ownership of all code and IP (employee/contractor IP assignment agreements)</li>
+        <li>Any registered IP (trademarks e.g. "RegMind"/"Onboarda", patents, if any)</li>
+        <li>Open-source licence inventory and compliance</li>
+        <li>Third-party/provider contractual terms (Sumsub, ComplyAdvantage, Anthropic, AWS)</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 7. COMMERCIAL MODEL -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">07</span><span class="section-title">Commercial Model &amp; Pricing</span></div>
+    <p>Revenue comprises a recurring annual SaaS subscription plus a one-time implementation fee per customer.</p>
+    <table class="fb">
+      <thead><tr><th>Component</th><th>Basis</th><th>Pilot 1 (signed)</th></tr></thead>
+      <tbody>
+        <tr><td>Recurring subscription (ARR)</td><td>Annual, per institution</td><td>USD 60,000</td></tr>
+        <tr><td>Implementation fee</td><td>One-time, at onboarding (non-recurring)</td><td>USD 40,000</td></tr>
+        <tr><td>Year-1 total contract value</td><td>ARR + implementation</td><td>USD 100,000</td></tr>
+      </tbody>
+    </table>
+    <div class="placeholder">
+      <div class="tag">Company to complete — unit economics</div>
+      <p>For a revenue-based valuation the following are recommended:</p>
+      <ul>
+        <li>Contract length and renewal terms; billing schedule</li>
+        <li>Gross margin per customer (hosting + AI/API + screening-provider pass-through costs)</li>
+        <li>Customer acquisition cost and implied payback</li>
+        <li>Expected net revenue retention / expansion assumptions</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 8. TRACTION & PIPELINE -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">08</span><span class="section-title">Traction &amp; Pipeline</span></div>
+    <table class="fb">
+      <thead><tr><th>Customer</th><th>Profile</th><th>Commercials</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Pilot 1</td><td>FSC-regulated financial institution, Mauritius</td><td>USD 60K ARR + USD 40K impl.</td><td><span class="badge b-green">Signed · billing H2 2026</span></td></tr>
+        <tr><td>Pilot 2</td><td>Regulated financial institution (comparable profile)</td><td>~USD 60K ARR + impl. (expected)</td><td><span class="badge b-amber">Pipeline · ~6 months · unsigned</span></td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:13px; color:var(--ink-3);">Pilot 1 revenue is contracted but not yet recognised (billing commences H2 2026). Pilot 2 is an expected opportunity that is not yet contracted.</p>
+    <div class="placeholder">
+      <div class="tag">Company to complete — pipeline detail</div>
+      <p>If available, provide the broader sales pipeline (prospects, stage, expected ACV, probability) and any letters of intent, to support forward-revenue assumptions.</p>
+    </div>
+  </div>
+
+  <!-- 9. MARKET -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">09</span><span class="section-title">Market &amp; Competitive Landscape</span></div>
+    <p>RegMind operates in KYC/AML compliance automation for regulated financial institutions. The initial served market is Mauritius FSC-regulated entities; the architecture is designed to extend to further jurisdictions (e.g. UK FCA, UAE DFSA, EU AMLD6).</p>
+    <ul class="plain">
+      <li><strong>Reference peers</strong> (larger scale, for orientation): Sumsub, ComplyAdvantage, Flagright and similar KYC/AML platforms.</li>
+      <li><strong>Positioning</strong>: full-lifecycle compliance OS with deterministic AI controls, versus point tools (screening-only or verification-only) and versus AI-only tools that lack deterministic gating.</li>
+    </ul>
+    <div class="placeholder">
+      <div class="tag">Company to complete — market sizing</div>
+      <p>Provide, with sources, the company's estimate of: number of addressable regulated entities in the initial jurisdiction; average achievable ACV; and the expansion-jurisdiction TAM. (A prior internal estimate of ~300–500 addressable Mauritius entities should be confirmed and evidenced.)</p>
+    </div>
+  </div>
+
+  <!-- 10. MATURITY & READINESS -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">10</span><span class="section-title">Product Maturity &amp; Readiness</span></div>
+    <p>Independent internal product audit classifies RegMind as <strong>production-pilot-ready for controlled deployment</strong> — suitable for a limited, supervised pilot, but not yet enterprise-grade. Current status:</p>
+    <table class="fb">
+      <thead><tr><th>Area</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Core compliance subsystems (risk, memo, validation, supervisor, audit)</td><td><span class="badge b-green">Mature / tested</span></td></tr>
+        <tr><td>AWS staging deployment &amp; CI</td><td><span class="badge b-green">Validated</span></td></tr>
+        <tr><td>AML screening provider (production validation)</td><td><span class="badge b-amber">In progress</span></td></tr>
+        <tr><td>High availability / autoscaling / DR</td><td><span class="badge b-red">Not yet (single-task pilot posture)</span></td></tr>
+        <tr><td>SOC 2 / ISO 27001</td><td><span class="badge b-red">Not yet obtained</span></td></tr>
+        <tr><td>SSO/SAML, multi-tenancy</td><td><span class="badge b-red">Not yet implemented</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 11. ROADMAP -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">11</span><span class="section-title">Roadmap</span></div>
+    <ul class="plain">
+      <li>Take Pilot 1 live, billing, and reference-able (H2 2026)</li>
+      <li>Sign and deploy Pilot 2 (~6 months)</li>
+      <li>Complete AML screening provider production validation</li>
+      <li>SOC 2 Type I certification (est. 3–6 months)</li>
+      <li>Architecture hardening — service-layer decomposition and front-end modularisation</li>
+      <li>Second-jurisdiction configuration to expand addressable market</li>
+    </ul>
+  </div>
+
+  <!-- 12. TEAM -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">12</span><span class="section-title">Team &amp; Organisation</span></div>
+    <div class="placeholder">
+      <div class="tag">Company to complete</div>
+      <p>Team is a primary valuation input at this stage and cannot be derived from the product. Please provide:</p>
+      <ul>
+        <li>Founders — names, roles, background, time commitment, equity</li>
+        <li>Headcount by function (engineering, compliance, commercial); full-time vs. contractor</li>
+        <li>Key compliance/regulatory expertise and any advisers</li>
+        <li>Corporate structure and domicile of the operating entity</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 13. FINANCIALS -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">13</span><span class="section-title">Financial Information</span></div>
+    <div class="placeholder">
+      <div class="tag">Company to complete</div>
+      <p>Required for any income- or cost-based valuation and for round structuring:</p>
+      <ul>
+        <li>Historical revenue and P&amp;L to date</li>
+        <li>Current monthly operating cost / burn rate and cash runway</li>
+        <li>Capitalisation table and prior funding history (SAFEs, notes, equity)</li>
+        <li>Existing debt or liabilities</li>
+        <li>Funding requirement, intended use of proceeds, and target round structure</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 14. KEY METRICS -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">14</span><span class="section-title">Key Metrics Summary</span></div>
+    <table class="fb metrics">
+      <tbody>
+        <tr><td>Contracted ARR</td><td>USD 60,000</td></tr>
+        <tr><td>Implementation fee (Pilot 1, one-time)</td><td>USD 40,000</td></tr>
+        <tr><td>Year-1 contracted TCV</td><td>USD 100,000</td></tr>
+        <tr><td>Contingent near-term ARR (Pilot 1 + 2)</td><td>USD 120,000</td></tr>
+        <tr><td>Signed customers</td><td>1</td></tr>
+        <tr><td>Pipeline pilots</td><td>1 (~6 months)</td></tr>
+        <tr><td>Revenue recognised to date</td><td>Nil (billing H2 2026)</td></tr>
+        <tr><td>Codebase</td><td>≈294K LOC / 531 files</td></tr>
+        <tr><td>Automated tests</td><td>≈6,000</td></tr>
+        <tr><td>AI agents (active / total)</td><td>8–9 / 10</td></tr>
+        <tr><td>Initial jurisdiction</td><td>Mauritius (FSC)</td></tr>
+        <tr><td>SOC 2 / ISO 27001</td><td>Not yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 15. RISK FACTORS -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">15</span><span class="section-title">Risk Factors</span></div>
+    <ul class="plain">
+      <li><strong>Early commercial stage</strong> — one signed pilot, revenue not yet recognised.</li>
+      <li><strong>Pipeline conversion</strong> — Pilot 2 and further pipeline are not yet contracted.</li>
+      <li><strong>Single-jurisdiction concentration</strong> — initial market is Mauritius; expansion is planned but unproven.</li>
+      <li><strong>Screening-provider validation</strong> — AML provider production validation is in progress; the abstraction supporting multiple providers is not yet the live path.</li>
+      <li><strong>Certifications</strong> — SOC 2 / ISO 27001 not yet obtained, which some enterprise buyers require.</li>
+      <li><strong>Architecture scale-up</strong> — large single-module backend and single-file front-ends require modularisation for horizontal scale.</li>
+      <li><strong>Key-person / team scale</strong> — delivery depends on a small core team (see Section 12).</li>
+      <li><strong>Provider dependency</strong> — reliance on third-party KYC/AML/AI providers (Sumsub, ComplyAdvantage, Anthropic, AWS).</li>
+    </ul>
+  </div>
+
+  <!-- 16. DILIGENCE INDEX -->
+  <div class="section">
+    <div class="section-header"><span class="section-num">16</span><span class="section-title">Suggested Diligence / Data-Room Index</span></div>
+    <div class="grid2">
+      <div class="card"><div class="k">Commercial</div><div class="v">Pilot 1 signed contract; Pilot 2 term sheet/LOI (if any); pipeline; pricing</div></div>
+      <div class="card"><div class="k">Financial</div><div class="v">Historical P&amp;L; burn/runway; cap table; funding history; use of funds</div></div>
+      <div class="card"><div class="k">Legal / IP</div><div class="v">IP assignment; corporate structure; provider contracts; open-source inventory</div></div>
+      <div class="card"><div class="k">Technical</div><div class="v">Product audit; test/CI evidence; staging deployment; security posture</div></div>
+      <div class="card"><div class="k">Compliance</div><div class="v">Regulatory positioning; certification roadmap; data-protection (GDPR) posture</div></div>
+      <div class="card"><div class="k">Team</div><div class="v">Founder/employee CVs; org chart; advisers; employment agreements</div></div>
+    </div>
+  </div>
+
+  <!-- DISCLAIMER -->
+  <div class="disclaimer">
+    <h4>Important Notice &amp; Disclaimer</h4>
+    <p>This document has been prepared by RegMind and is strictly private and confidential. It is provided for information purposes only, to assist the recipient in forming their own independent assessment, and may not be reproduced or distributed without RegMind's prior written consent.</p>
+    <p>This document does not state, imply, or recommend any valuation, price, or multiple, and does not constitute an offer to sell or a solicitation of an offer to buy any securities or interests, nor any investment, financial, legal, tax, or accounting advice. It is not a substitute for independent due diligence.</p>
+    <p>Information described as company-confirmed reflects management representations; product and technology descriptions are drawn from the company's source repository and internal product audit and have not been independently verified by any third party. Certain figures reflect contracted-but-not-yet-recognised revenue and non-contracted pipeline opportunities.</p>
+    <p>This document contains forward-looking statements regarding pipeline, roadmap, and market expansion that involve risks and uncertainties; actual outcomes may differ materially. RegMind undertakes no obligation to update this document.</p>
+  </div>
+
+</div>
+
+<!-- FOOTER -->
+<div class="footer">
+  <span>RegMind — Product &amp; Business Fact Base — July 2026</span>
+  <span>Strictly Private &amp; Confidential</span>
+  <span>Factual information pack · Not a valuation · Not an offer</span>
+</div>
+
+</body>
+</html>
