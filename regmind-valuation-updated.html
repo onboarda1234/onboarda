@@ -657,7 +657,7 @@
   <div class="cover-meta">
     <div class="cover-meta-item">
       <div class="label">Report date</div>
-      <div class="value">July 2026 (Rev. 4)</div>
+      <div class="value">July 2026 (Rev. 5)</div>
     </div>
     <div class="cover-meta-item">
       <div class="label">Stage</div>
@@ -678,9 +678,9 @@
 <div class="estimate-hero">
   <div class="estimate-main">
     <div class="estimate-label">Point estimate — financing pre-money</div>
-    <div class="estimate-figure">USD <span>1.8M</span></div>
-    <div class="estimate-range">Scenario range: USD 1.1M — 2.8M · strategic-acquirer value USD 2.5–3.5M</div>
-    <p class="estimate-sub">Blended build-vs-buy / IP anchor (35%), comparable early-stage rounds (30%), forward ARR multiple (25%), scorecard cross-check (10%). Revised up from Rev. 3 — see basis note.</p>
+    <div class="estimate-figure">USD <span>2.3M</span></div>
+    <div class="estimate-range">Scenario range: USD 1.5M — 3.2M · strategic-acquirer value USD 2.5–3.5M</div>
+    <p class="estimate-sub">Blended build-vs-buy / IP anchor (35%), comparable early-stage rounds (30%), forward ARR multiple (25%), scorecard incl. founder quality (10%). Revised up on a domain-expert founder — see basis note.</p>
   </div>
   <div class="stat-col">
     <div class="estimate-label">Contracted ARR / Year-1 TCV</div>
@@ -698,8 +698,10 @@
 
   <!-- BASIS / CORRECTIONS NOTE -->
   <div class="basis-note">
-    <div class="label">Basis of revision — what changed in this draft (Rev. 4)</div>
-    <p><strong>Revised up from USD 1.4M to USD 1.8M (financing pre-money).</strong> Rev. 3 leaned too hard on the thin ARR multiple (punishing at a USD 60K base) and over-discounted the IP by taking only the differentiated slice, netting the <em>full</em> refactor liability, and <em>also</em> applying stage discounts — three haircuts on one asset. Rev. 4 gives more weight to a fairer <strong>build-vs-buy / IP anchor</strong> (crediting time-to-market) and to <strong>comparable seed rounds</strong> (RegTech with IP + a design-partner pilot typically raises USD 1.5–4M post). See §10 for the reconciliation with the ChatGPT (USD 4.2M) and Manus (USD 5.2M) analyses.</p>
+    <div class="label">Basis of revision — what changed in this draft (Rev. 5)</div>
+    <p><strong>Revised up from USD 1.8M to USD 2.3M (financing pre-money) on the founder profile.</strong> The single biggest missing input — the team — is now evidenced and strong: a 20+ year regulated-fintech/payments executive who scaled ARIE Finance to USD 500M+ transaction volume, personally holds an FSC Payment Intermediary Services Licence, built the e-KYC/screening/monitoring stack RegMind productizes, sits on the Bank of Mauritius National Fintech Committee, and has prior fundraising (led USD 1M seed; FCA/ADGM RegLab experience). Management quality is the heaviest factor in scorecard/Berkus at pre-seed; this removes the "unknown-team" discount and lifts the comparable-rounds anchor toward the upper half of the USD 1.5–4M-post bracket. The range also narrows (USD 1.1–2.8M → USD 1.5–3.2M) because the largest uncertainty is resolved.</p>
+    <p><strong>Two questions the founder profile raises, which cap the upside:</strong> (1) <strong>Is Pilot 1 arm's-length or the founder's own ARIE Finance entity?</strong> The codebase is <code>arie-*</code> and Pilot 1 is "an FSC-licensed PIS" — exactly what ARIE holds. If related-party, the "signed customer" is a credible design partner but not an arm's-length sale, and earns less commercial-validation credit. (2) <strong>Who leads engineering?</strong> The CV is compliance/commercial/finance; no technical co-founder/CTO is evidenced for a ~294K-line platform, leaving build-continuity/key-person risk. These are why the base moves to USD 2.3M, not toward the USD 4–5M external headlines.</p>
+    <p><strong>Prior revision (Rev. 4) rationale still holds:</strong> Rev. 3 over-weighted the thin ARR multiple and over-discounted the IP (three haircuts on one asset). Rev. 4/5 weight a fairer <strong>build-vs-buy / IP anchor</strong> (crediting time-to-market) and <strong>comparable seed rounds</strong>. See §10 for the reconciliation with the ChatGPT (USD 4.2M) and Manus (USD 5.2M) analyses.</p>
     <p><strong>Two lenses, kept distinct.</strong> A <strong>financing pre-money</strong> (what a financial investor pays into a round) sits at ~USD 1.8M. A <strong>strategic-acquirer value</strong> (build-vs-buy + regulatory wedge) is higher at ~USD 2.5–3.5M. Conflating the two inflates the headline — much of the gap to the other analyses is exactly this.</p>
     <p><strong>Commercial facts unchanged.</strong> One signed pilot (USD 60K ARR + USD 40K implementation ≈ USD 100K Year-1 TCV), billing from ~July 2026, not yet recognised. Pilot 2 unsigned, expected ~Jan 2027 at the same price. Metrics measured against <code>main</code> @ 6 Jul 2026.</p>
     <p><strong>Valuation is still gated by commercial traction, not code volume.</strong> The revision reflects a corrected <em>weighting</em>, not new traction. A live, reference-able customer — or a signed Pilot 2 — is what moves the number materially from here.</p>
@@ -742,10 +744,10 @@
           <td>Applied to contracted USD 60K and contingent USD 120K at an 8–15× pre-seed range. Punishing at this ARR scale, so it caps the lower half of the range rather than setting the headline.</td>
         </tr>
         <tr>
-          <td>Scorecard / Berkus</td>
-          <td>✓ Cross-check only</td>
+          <td>Scorecard / Berkus (incl. founder)</td>
+          <td>✓ Cross-check</td>
           <td><span class="weight-badge">10%</span></td>
-          <td>Sanity-check on team, product and market; limited precision given niche jurisdiction and unproven commercial traction.</td>
+          <td>Management quality is the heaviest scorecard factor; the founder scores well above average for this specific product (see §5(g)), lifting the cross-check. Tempered by niche jurisdiction and unproven arm's-length traction.</td>
         </tr>
         <tr>
           <td>DCF</td>
@@ -899,18 +901,18 @@
     <div class="range-bars">
       <div class="range-row">
         <div class="range-scenario">Low</div>
-        <div class="range-track"><div class="range-fill low" style="width:39%;">USD 1.1M</div></div>
-        <div class="range-value">USD 1.1M</div>
+        <div class="range-track"><div class="range-fill low" style="width:47%;">USD 1.5M</div></div>
+        <div class="range-value">USD 1.5M</div>
       </div>
       <div class="range-row">
         <div class="range-scenario">Base</div>
-        <div class="range-track"><div class="range-fill base" style="width:64%;">USD 1.8M</div></div>
-        <div class="range-value">USD 1.8M</div>
+        <div class="range-track"><div class="range-fill base" style="width:72%;">USD 2.3M</div></div>
+        <div class="range-value">USD 2.3M</div>
       </div>
       <div class="range-row">
         <div class="range-scenario">High</div>
-        <div class="range-track"><div class="range-fill high">USD 2.8M</div></div>
-        <div class="range-value">USD 2.8M</div>
+        <div class="range-track"><div class="range-fill high">USD 3.2M</div></div>
+        <div class="range-value">USD 3.2M</div>
       </div>
     </div>
 
@@ -950,6 +952,18 @@
         <div class="risk-card-title">Screening false-negative risk, paused</div>
         <div class="risk-card-body">The product audit flags a non-canonical sector taxonomy creating a synonym false-negative risk in the risk/screening pipeline — paused pending compliance policy. A reproducible pipeline that can mis-score a sector tempers the "regulator-defensible" claim until closed.</div>
         <span class="badge badge-amber">watch item</span>
+      </div>
+      <div class="risk-card">
+        <div class="risk-card-id">(g) Founder / team — strength</div>
+        <div class="risk-card-title">Domain-expert, regulator-connected founder</div>
+        <div class="risk-card-body">20+ yr regulated fintech/payments exec; scaled ARIE Finance to USD 500M+ volume; holds an FSC PIS licence; built the compliance stack RegMind productizes; Bank of Mauritius Fintech Committee; prior fundraiser (USD 1M seed led; FCA/ADGM RegLab). Removes the unknown-team discount and lifts the base.</div>
+        <span class="badge badge-green">+ base uplift</span>
+      </div>
+      <div class="risk-card" style="grid-column: 1 / -1;">
+        <div class="risk-card-id">(h) Open diligence questions (from founder profile)</div>
+        <div class="risk-card-title">Related-party pilot? · engineering leadership?</div>
+        <div class="risk-card-body"><strong>Pilot 1 arm's-length vs. ARIE Finance:</strong> the codebase is <code>arie-*</code> and Pilot 1 is "an FSC-licensed PIS" — the licence class ARIE holds. If related-party, it is a credible design partner but not an arm's-length sale (less validation credit). <strong>Engineering leadership:</strong> the CV is compliance/commercial; no technical co-founder/CTO is evidenced for a ~294K-line platform. Both cap the upside until clarified.</div>
+        <span class="badge badge-amber">clarify in diligence</span>
       </div>
     </div>
   </div>
@@ -1099,34 +1113,34 @@
 
     <div class="confidence-box">
       <div class="confidence-label">Point estimate — financing pre-money, blended methodology</div>
-      <div class="confidence-figure">USD <strong>1.8M</strong></div>
-      <div class="confidence-interval">Scenario range: USD 1.1M — 2.8M · strategic-acquirer value USD 2.5–3.5M (reasoned spread, not a statistical interval)</div>
-      <p style="color: rgba(255,255,255,0.65); font-size: 14px; max-width: 600px; margin-top: 8px;">Sits above the net build-vs-buy IP value (≈USD 1.5M) and within the pre-seed RegTech round bracket. The level at which a rational financial investor is not overpaying for unproven traction, nor underpaying for the compliance IP. A strategic acquirer who wants the regulatory wedge would pay more (§8).</p>
+      <div class="confidence-figure">USD <strong>2.3M</strong></div>
+      <div class="confidence-interval">Scenario range: USD 1.5M — 3.2M · strategic-acquirer value USD 2.5–3.5M (reasoned spread, not a statistical interval)</div>
+      <p style="color: rgba(255,255,255,0.65); font-size: 14px; max-width: 600px; margin-top: 8px;">Sits above the net build-vs-buy IP value (≈USD 1.5M) and in the upper half of the pre-seed RegTech round bracket — supported by a domain-expert, regulator-connected founder. Contingent on Pilot 1 being an arm's-length reference; a related-party pilot would push the base toward the lower half.</p>
 
       <div style="margin-top: 20px;">
         <div style="font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-4); margin-bottom: 10px;">Evidence gaps driving range width</div>
         <ul class="confidence-gap-list">
-          <li>Pilot 2 is unsigned. If it closes (~USD 60K), contingent ARR reaches USD 120K and the estimate moves toward USD 1.8–2.2M. If it slips or is lost, the estimate compresses toward USD 0.9–1.1M.</li>
-          <li>No revenue is yet recognised. Once Pilot 1 is live, billing, and collecting cleanly, contract-execution risk falls and the base estimate firms toward the upper half.</li>
-          <li>Team composition and equity structure are not evidenced. A solo or 2-person team carries a higher execution discount than a 4–6 person team with a dedicated compliance officer.</li>
-          <li>Regulatory validation is binary. A first FSC examination cycle completed using RegMind would revise the estimate to USD 2.0–2.8M with no other change.</li>
+          <li>Pilot 1 relationship. If arm's-length, the USD 2.3M base holds; if it is the founder's own ARIE Finance entity (related-party), commercial-validation credit falls and the base moves toward USD 1.5–1.8M.</li>
+          <li>Pilot 2 is unsigned. If it closes (~USD 60K), contingent ARR reaches USD 120K and the estimate moves toward the USD 2.8–3.2M upper range. If it slips or is lost, it compresses toward USD 1.5M.</li>
+          <li>Engineering leadership and cap table not evidenced. The founder's domain profile is strong; a named technical co-founder/CTO and a clean cap table would firm the base further.</li>
+          <li>Regulatory validation is binary. A first FSC examination cycle completed using RegMind would revise the estimate toward USD 3.0–3.5M with no other change.</li>
         </ul>
       </div>
     </div>
 
     <div style="margin-top: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
       <div style="background: var(--white); border: 1px solid var(--rule); border-radius: 8px; padding: 20px;">
-        <div style="font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px;">Floor condition (USD 1.1M)</div>
-        <p style="font-size: 13px; color: var(--ink-3); line-height: 1.5; margin-bottom: 0;">Pilot 2 does not sign; Pilot 1 alone, valued near the net build-vs-buy IP value. Maximum jurisdiction-concentration and small-team discount applied. Below this, the asset is mispriced relative to its IP.</p>
+        <div style="font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px;">Floor condition (USD 1.5M)</div>
+        <p style="font-size: 13px; color: var(--ink-3); line-height: 1.5; margin-bottom: 0;">Pilot 2 does not sign and/or Pilot 1 proves related-party; valued near the net build-vs-buy IP value, with founder strength offsetting the jurisdiction-concentration discount. Below this the asset is mispriced relative to its IP + team.</p>
       </div>
       <div style="background: var(--white); border: 1px solid var(--rule); border-radius: 8px; padding: 20px;">
-        <div style="font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px;">Ceiling condition (USD 2.8M)</div>
-        <p style="font-size: 13px; color: var(--ink-3); line-height: 1.5; margin-bottom: 0;">Pilot 1 live and collecting, Pilot 2 signed, and either SOC 2 Type I underway or a second-jurisdiction configuration in progress. Beyond this (into strategic-acquirer territory) requires a regulator-validated production customer (see §07).</p>
+        <div style="font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px;">Ceiling condition (USD 3.2M)</div>
+        <p style="font-size: 13px; color: var(--ink-3); line-height: 1.5; margin-bottom: 0;">Pilot 1 confirmed arm's-length and live, Pilot 2 signed, and either SOC 2 Type I underway or a second-jurisdiction configuration in progress. Beyond this (into strategic-acquirer territory) requires a regulator-validated production customer (see §07).</p>
       </div>
     </div>
 
     <div style="margin-top: 16px; background: var(--amber-bg); border-left: 3px solid var(--amber); border-radius: 0 6px 6px 0; padding: 14px 18px;">
-      <p style="font-size: 13px; color: var(--amber); margin-bottom: 0;"><strong>Most actionable near-term levers:</strong> (1) get Pilot 1 live, billing, and stable — converting booked ARR into a live reference; (2) convert Pilot 2 from pipeline to signature. Together these move the estimate from ~USD 1.8M toward the USD 2.8M ceiling (and into strategic-acquirer territory) with no capital deployment.</p>
+      <p style="font-size: 13px; color: var(--amber); margin-bottom: 0;"><strong>Most actionable near-term levers:</strong> (1) get Pilot 1 live, billing, and stable — converting booked ARR into a live reference; (2) convert Pilot 2 from pipeline to signature. Together these move the estimate from ~USD 2.3M toward the USD 3.2M ceiling (and into strategic-acquirer territory) with no capital deployment. Confirming Pilot 1 is arm's-length is the cheapest single credibility lever.</p>
     </div>
   </div>
 
@@ -1150,14 +1164,14 @@
 
     <p style="font-size:13px; color: var(--ink-3);"><strong>On the two documents specifically.</strong> The ChatGPT analysis is the more disciplined — it names the technical discount and rejects USD 8–10M — but it stacks rebuild cost + option value + commercial floor and lands on what is really an <em>acquisition</em> number. The Manus analysis is weaker: it anchors on an unexplained "prior USD 4.5M," adds invented point-deltas, and its exit table (expected USD 150–250M, 30–50×) and USD 5M Series A at 49% are not grounded in a pre-revenue single-pilot reality.</p>
 
-    <p style="font-size:13px; color: var(--ink-3);"><strong>The honest meta-point:</strong> none of the three figures can be precise, because the largest pre-seed input — the <em>team</em> — plus cap table, burn, and evidenced TAM are unknown to all of us. The full spread across the three analyses (≈USD 1.1M–6.8M) reflects that missing information more than any deep analytical disagreement. Filling those blanks would narrow the range far more than re-arguing method.</p>
+    <p style="font-size:13px; color: var(--ink-3);"><strong>The honest meta-point:</strong> the largest pre-seed input — the <em>team</em> — was unknown when the three analyses were written. It is now partly filled: a strong, domain-expert, regulator-connected founder, which is precisely why this estimate rose (USD 1.8M → 2.3M) — for a substantiated reason, not to chase the higher headlines. What remains open (arm's-length status of Pilot 1, engineering leadership, cap table, burn, evidenced TAM) still drives most of the residual spread. Filling those narrows the range far more than re-arguing method — and would legitimately support the upper range or above if Pilot 1 is arm's-length and Pilot 2 signs.</p>
   </div>
 
 </div>
 
 <!-- FOOTER -->
 <div class="footer">
-  <span>RegMind — Investor Valuation Analysis — July 2026 (Rev. 4)</span>
+  <span>RegMind — Investor Valuation Analysis — July 2026 (Rev. 5)</span>
   <span>Confidential — Due Diligence Material</span>
   <span>Evidence: measured against main @ 6 Jul 2026 + founder-confirmed commercial status</span>
 </div>
