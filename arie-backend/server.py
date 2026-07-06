@@ -23990,6 +23990,26 @@ def _agent3_screening_report_available(screening_report):
     return any(key in screening_report for key in screening_keys)
 
 
+def _agent3_nested_pending_reason(screening_report):
+    """A pending/degraded reason can live on the company block or a per-subject
+    screening row (the orchestrator stores it there for timeout/errored passes),
+    not only at the report top level. Surface the first one found."""
+    company = screening_report.get("company_screening")
+    if isinstance(company, dict):
+        reason = _agent3_text(company.get("pending_reason"))
+        if reason:
+            return reason
+    for collection_key in ("director_screenings", "ubo_screenings", "intermediary_screenings"):
+        for subject in _agent3_list(screening_report.get(collection_key)):
+            if not isinstance(subject, dict):
+                continue
+            screening = subject.get("screening") if isinstance(subject.get("screening"), dict) else subject
+            reason = _agent3_text(screening.get("pending_reason"))
+            if reason:
+                return reason
+    return ""
+
+
 def _agent3_screening_report_state(screening_report):
     screening_report = screening_report if isinstance(screening_report, dict) else {}
     state = _agent3_text(_agent3_first_non_empty(
@@ -24007,6 +24027,7 @@ def _agent3_screening_report_state(screening_report):
         screening_report.get("pending_provider_reason"),
         screening_report.get("provider_status_reason"),
         screening_report.get("error_message"),
+        _agent3_nested_pending_reason(screening_report),
     ))
     degraded_sources = _agent3_list(screening_report.get("degraded_sources"))
     non_terminal_states = {
@@ -24023,7 +24044,22 @@ def _agent3_screening_report_state(screening_report):
         "timeout",
     }
     state_norm = state.strip().lower()
-    terminal = not pending_degraded_reason and not degraded_sources and state_norm not in non_terminal_states
+    # A screen is terminal only when NOTHING signals it is still in progress.
+    # Besides the top-level state / degraded_sources, the generic normalizer can
+    # flag an incomplete screen ONLY via company_screening_state /
+    # any_non_terminal_subject (e.g. a director still pending) without setting a
+    # top-level state or degraded_sources. Ignoring those produced a false-green
+    # "No reportable provider hit recorded" clear state for an unfinished screen.
+    company_state = _agent3_text(screening_report.get("company_screening_state")).strip().lower()
+    company_incomplete = bool(company_state) and company_state not in {"completed_clear", "completed_match"}
+    any_non_terminal_subject = bool(screening_report.get("any_non_terminal_subject"))
+    terminal = (
+        not pending_degraded_reason
+        and not degraded_sources
+        and state_norm not in non_terminal_states
+        and not company_incomplete
+        and not any_non_terminal_subject
+    )
     return {
         "state": state,
         "terminal": terminal,
