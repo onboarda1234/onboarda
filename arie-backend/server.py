@@ -6388,6 +6388,50 @@ CLIENT_APPLICATION_DETAIL_FORBIDDEN_KEYS = {
     "edd_cases",
 }
 
+# Canonical ALLOW-LIST for the client portal's application-detail projection.
+#
+# The shared /api/applications/<id> endpoint serves both Back Office (officer)
+# and the client portal from the same enriched `result` dict. A denylist
+# (CLIENT_APPLICATION_DETAIL_FORBIDDEN_KEYS above) fails OPEN: any new internal
+# control field added to `result` leaks to clients until someone remembers to
+# add it to the denylist. That already happened — submission/compliance-handoff
+# columns and screening_adverse_truth_summary were internal but never denylisted,
+# so clients could read them.
+#
+# This allow-list inverts the default: only these keys reach a client. Every
+# raw column is a field the applicant themselves supplied or a non-sensitive
+# lifecycle timestamp; every computed key is a portal-rendered surface. Anything
+# not listed here — including any field added in future — is hidden by default
+# (fail-closed). Verified against arie-portal.html: the portal reads only these
+# top-level keys. Keep the denylist as a living cross-check (the two must never
+# intersect — see tests) but the allow-list is the operative filter.
+CLIENT_APPLICATION_DETAIL_ALLOWED_KEYS = {
+    # ── raw applicant-supplied / lifecycle columns ──
+    "id",
+    "ref",
+    "client_id",
+    "company_name",
+    "brn",
+    "country",
+    "sector",
+    "entity_type",
+    "ownership_structure",
+    "prescreening_data",
+    "status",
+    "submitted_at",
+    "created_at",
+    "updated_at",
+    "inputs_updated_at",
+    # ── computed / decorated client-safe surfaces ──
+    "status_label",
+    "directors",
+    "ubos",
+    "intermediaries",
+    "documents",
+    "rmi_requests",
+    "change_requests",
+}
+
 CLIENT_DOCUMENT_FORBIDDEN_KEYS = {
     "application_id",
     "evidence_class",
@@ -6407,6 +6451,15 @@ CLIENT_DOCUMENT_FORBIDDEN_KEYS = {
     "workflow_test_accepted",
     "workflow_test_accepted_at",
     "workflow_test_accepted_by",
+    # Internal storage locators — physical file pointers and supersession
+    # bookkeeping that must never reach a client. Verified unused by
+    # arie-portal.html (slot_key / storage_key ARE portal-rendered and are
+    # deliberately NOT hidden).
+    "file_path",
+    "s3_key",
+    "file_sha256",
+    "replaced_by_user_id",
+    "superseded_by_document_id",
 }
 
 CLIENT_PRESCREENING_FORBIDDEN_KEYS = {
@@ -6514,8 +6567,12 @@ def _client_safe_application_detail(result):
     clients need only their onboarding state, documents, RMI tasks, and
     client-safe pricing data. Keep this projection explicit so new internal
     control fields fail closed for client-authenticated detail loads.
+
+    Uses a positive ALLOW-LIST (fail-closed): only keys the portal is known to
+    render survive, so any new internal field added to the shared `result` is
+    hidden from clients by default rather than leaking until denylisted.
     """
-    safe = {k: v for k, v in result.items() if k not in CLIENT_APPLICATION_DETAIL_FORBIDDEN_KEYS}
+    safe = {k: v for k, v in result.items() if k in CLIENT_APPLICATION_DETAIL_ALLOWED_KEYS}
     safe["change_requests"] = []
 
     prescreening = safe.get("prescreening_data")
@@ -7433,22 +7490,28 @@ class ApplicationDetailHandler(BaseHandler):
             },
             screening_reviews,
         )
-        screening_adverse_prescreening = {
-            **(result["prescreening_data"] if isinstance(result["prescreening_data"], dict) else {}),
-            "screening_input_updated_at": (
-                result.get("screening_input_updated_at")
-                or result.get("risk_inputs_updated_at")
-                or (result.get("inputs_updated_at") if result.get("submitted_at") else None)
-                or result.get("submitted_at")
-            ),
-        }
-        result["screening_adverse_truth_summary"] = _application_screening_adverse_truth_summary(
-            db,
-            result,
-            prescreening=screening_adverse_prescreening,
-            screening_report=screening_report if isinstance(screening_report, dict) else {},
-            screening_reviews=screening_reviews,
-        )
+        # screening_adverse_truth_summary is officer-only internal evidence. It
+        # is stripped for clients by the allow-list projection, but gate it at
+        # the set-site too (mirroring screening_reviews above) so it fails closed
+        # on any future client-reachable read path rather than relying solely on
+        # the projection.
+        if user["type"] != "client":
+            screening_adverse_prescreening = {
+                **(result["prescreening_data"] if isinstance(result["prescreening_data"], dict) else {}),
+                "screening_input_updated_at": (
+                    result.get("screening_input_updated_at")
+                    or result.get("risk_inputs_updated_at")
+                    or (result.get("inputs_updated_at") if result.get("submitted_at") else None)
+                    or result.get("submitted_at")
+                ),
+            }
+            result["screening_adverse_truth_summary"] = _application_screening_adverse_truth_summary(
+                db,
+                result,
+                prescreening=screening_adverse_prescreening,
+                screening_report=screening_report if isinstance(screening_report, dict) else {},
+                screening_reviews=screening_reviews,
+            )
         if user["type"] != "client":
             result["sumsub_idv_statuses"] = _build_application_sumsub_idv_payload(
                 db,

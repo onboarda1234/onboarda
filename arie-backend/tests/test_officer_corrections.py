@@ -799,6 +799,30 @@ def test_pr410b_client_application_detail_is_safe_for_portal_resume(officer_corr
         "UPDATE applications SET prescreening_data = ? WHERE id = ?",
         (json.dumps(prescreening), case["app_id"]),
     )
+    # Populate the internal compliance-handoff columns with NON-NULL sentinels so
+    # the allow-list absence assertions below are discriminating: these columns
+    # are NULL by default, which is exactly why the leak was previously untested.
+    conn.execute(
+        """
+        UPDATE applications SET
+            submitted_to_compliance_at = ?,
+            submitted_to_compliance_by = ?,
+            submission_blocker_snapshot = ?,
+            submission_basis = ?,
+            submission_kind = ?,
+            submission_note = ?
+        WHERE id = ?
+        """,
+        (
+            "2026-01-02T03:04:05+00:00",
+            "officer-sentinel-id",
+            json.dumps({"blockers": ["INTERNAL_ONLY_SENTINEL"]}),
+            "INTERNAL_SUBMISSION_BASIS_SENTINEL",
+            "INTERNAL_SUBMISSION_KIND_SENTINEL",
+            "INTERNAL_SUBMISSION_NOTE_SENTINEL",
+            case["app_id"],
+        ),
+    )
     conn.commit()
     client_id = row["client_id"]
     conn.close()
@@ -843,6 +867,39 @@ def test_pr410b_client_application_detail_is_safe_for_portal_resume(officer_corr
         "periodic_review_baseline_status",
     }
     assert forbidden_keys.isdisjoint(app.keys())
+
+    # PR-18: the allow-list projection must hide the internal compliance-handoff
+    # columns (which the old denylist never listed, so they leaked). These were
+    # set to non-null sentinels above, so their ABSENCE is now discriminating.
+    internal_leak_keys = {
+        "submitted_to_compliance_at",
+        "submitted_to_compliance_by",
+        "submission_blocker_snapshot",
+        "submission_basis",
+        "submission_kind",
+        "submission_note",
+        "is_fixture",
+        "screening_adverse_truth_summary",
+    }
+    leaked = internal_leak_keys.intersection(app.keys())
+    assert not leaked, f"internal fields leaked to client portal: {sorted(leaked)}"
+    for sentinel in (
+        "INTERNAL_SUBMISSION_BASIS_SENTINEL",
+        "INTERNAL_SUBMISSION_KIND_SENTINEL",
+        "INTERNAL_SUBMISSION_NOTE_SENTINEL",
+        "INTERNAL_ONLY_SENTINEL",
+        "officer-sentinel-id",
+    ):
+        assert sentinel not in json.dumps(app), f"internal sentinel {sentinel} leaked to client"
+
+    # Completeness guard: the allow-list must NOT drop fields the portal renders.
+    # If a real client field were accidentally omitted from the allow-list, this
+    # fails (the portal would break silently otherwise).
+    for required in ("id", "ref", "company_name", "sector", "status",
+                     "prescreening_data", "directors", "ubos", "intermediaries",
+                     "documents", "created_at", "updated_at"):
+        assert required in app, f"allow-list dropped a portal-required field: {required}"
+
     pricing = (app.get("prescreening_data") or {}).get("pricing") or {}
     assert {"risk_score", "risk_level", "risk_dimensions"}.isdisjoint(pricing.keys())
 
@@ -1723,3 +1780,83 @@ def test_backoffice_html_simplifies_correction_history_copy():
     assert "<strong>Date:</strong>" in src
     assert "<strong>Reason / Evidence:</strong>" in src
     assert "escapeHtml((item.materiality || '').toUpperCase())" not in src
+
+
+# ── PR-18: allow-list projection unit tests (no server fixture needed) ──
+
+def test_client_safe_application_detail_hides_unknown_fields_by_default():
+    """The projection must be a positive allow-list: a field the code has never
+    seen (e.g. a future internal control column) is hidden by default, while
+    known client fields survive. This is the fail-closed guarantee."""
+    import server
+
+    result = {
+        # known client-safe fields — must survive
+        "id": "app-1",
+        "ref": "ARF-1",
+        "client_id": "c-1",
+        "company_name": "Acme Ltd",
+        "sector": "Technology",
+        "status": "under_review",
+        "prescreening_data": {"pricing": {"monthly_fee": 100}},
+        "directors": [{"full_name": "A"}],
+        "documents": [{"doc_type": "passport"}],
+        # internal / future fields — must be hidden
+        "__future_internal_field__": "SECRET",
+        "risk_score": 99,
+        "decision_notes": "internal",
+        "submission_basis": "INTERNAL",
+        "screening_adverse_truth_summary": {"x": 1},
+    }
+    safe = server._client_safe_application_detail(result)
+
+    assert "__future_internal_field__" not in safe, \
+        "unknown field leaked — projection is not fail-closed"
+    for hidden in ("risk_score", "decision_notes", "submission_basis",
+                   "screening_adverse_truth_summary"):
+        assert hidden not in safe
+    for kept in ("id", "ref", "client_id", "company_name", "sector", "status",
+                 "prescreening_data", "directors", "documents"):
+        assert kept in safe
+
+
+def test_client_application_allow_list_is_disjoint_from_forbidden_list():
+    """Living invariant: the allow-list and the (retained) denylist must never
+    intersect, and none of the known-leaked internal columns may appear in the
+    allow-list."""
+    import server
+
+    allow = server.CLIENT_APPLICATION_DETAIL_ALLOWED_KEYS
+    forbid = server.CLIENT_APPLICATION_DETAIL_FORBIDDEN_KEYS
+    assert allow.isdisjoint(forbid), \
+        f"allow-list and denylist overlap: {sorted(allow & forbid)}"
+    for leaked in ("submitted_to_compliance_at", "submitted_to_compliance_by",
+                   "submission_blocker_snapshot", "submission_basis",
+                   "submission_kind", "submission_note", "is_fixture",
+                   "screening_adverse_truth_summary"):
+        assert leaked not in allow, f"leaked internal column {leaked} is in the allow-list"
+
+
+def test_client_safe_document_record_hides_storage_locators():
+    """Nested document projection must strip internal storage pointers while
+    keeping portal-rendered fields (slot_key / storage_key stay)."""
+    import server
+
+    doc = {
+        "id": "doc-1",
+        "doc_type": "passport",
+        "slot_key": "section_b_passport",
+        "storage_key": "sk-1",
+        "verification_status": "verified",
+        "file_path": "/uploads/secret.pdf",
+        "s3_key": "s3://bucket/secret.pdf",
+        "file_sha256": "deadbeef",
+        "replaced_by_user_id": "officer-9",
+        "superseded_by_document_id": "doc-0",
+    }
+    safe = server._client_safe_document_record(doc)
+    for hidden in ("file_path", "s3_key", "file_sha256",
+                   "replaced_by_user_id", "superseded_by_document_id"):
+        assert hidden not in safe, f"storage locator {hidden} leaked to client"
+    for kept in ("id", "doc_type", "slot_key", "storage_key", "verification_status"):
+        assert kept in safe, f"portal-rendered field {kept} was dropped"

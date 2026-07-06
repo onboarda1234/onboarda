@@ -265,6 +265,16 @@ class PR1ClientApiBoundaryTest(AsyncHTTPTestCase):
             "screening_reviews",
             "screening_truth_summary",
             "sumsub_idv_statuses",
+            # PR-18: internal compliance-handoff columns now hidden by the
+            # top-level allow-list (previously leaked through the denylist).
+            "submitted_to_compliance_at",
+            "submitted_to_compliance_by",
+            "submission_blocker_snapshot",
+            "submission_basis",
+            "submission_kind",
+            "submission_note",
+            "is_fixture",
+            "screening_adverse_truth_summary",
         }
         assert forbidden_top_level.isdisjoint(body.keys())
 
@@ -289,6 +299,13 @@ class PR1ClientApiBoundaryTest(AsyncHTTPTestCase):
             "reviewed_by",
             "reviewed_by_name",
             "verification_results",
+            # PR-18: internal storage locators now hidden from the nested
+            # document projection.
+            "file_path",
+            "s3_key",
+            "file_sha256",
+            "replaced_by_user_id",
+            "superseded_by_document_id",
         }
         assert forbidden_document_fields.isdisjoint(document.keys())
         assert document["verification_status"] == "verified"
