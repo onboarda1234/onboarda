@@ -3442,6 +3442,43 @@ class TestSecurityHeaders:
         csp = resp.headers.get("Content-Security-Policy", "")
         assert "default-src" in csp
 
+    def test_csp_report_only_header_is_stricter_and_does_not_touch_enforcing(self, api_server):
+        """PR-22a: a Report-Only CSP measures the inline surface WITHOUT enforcing.
+
+        Guarantees: (1) the report-only header is present and is the stricter,
+        measuring policy — it drops 'unsafe-inline' from script-src/style-src;
+        (2) the enforcing header is UNCHANGED — still present and still permissive
+        (still carries 'unsafe-inline'), i.e. the app cannot break; (3) the two
+        are distinct headers (report-only is not a replacement of the enforcing
+        one)."""
+        resp = http_requests.get(f"{api_server}/api/health", timeout=3)
+        enforcing = resp.headers.get("Content-Security-Policy", "")
+        report_only = resp.headers.get("Content-Security-Policy-Report-Only", "")
+
+        # (1) report-only present and stricter: no 'unsafe-inline' anywhere in it
+        assert report_only, "Content-Security-Policy-Report-Only header must be set"
+        assert "default-src 'self'" in report_only
+        assert "'unsafe-inline'" not in report_only, \
+            "report-only policy must be the stricter measuring policy (no unsafe-inline)"
+        assert "script-src 'self' https://cdnjs.cloudflare.com" in report_only
+
+        # (2) enforcing header untouched — still permissive so nothing breaks
+        assert enforcing, "enforcing Content-Security-Policy must still be present"
+        assert "'unsafe-inline'" in enforcing, \
+            "enforcing CSP must NOT have been tightened (no-break guarantee)"
+
+        # (3) distinct headers — report-only did not replace the enforcing one
+        assert enforcing != report_only
+
+    def test_csp_report_only_present_on_portal_and_backoffice(self, api_server):
+        """The measuring policy must land on the HTML surfaces (the only ones with
+        inline scripts/styles), delivered via BaseHandler subclasses."""
+        for path in ("/portal", "/backoffice"):
+            resp = http_requests.get(f"{api_server}{path}", timeout=3)
+            assert resp.status_code == 200
+            ro = resp.headers.get("Content-Security-Policy-Report-Only", "")
+            assert ro and "'unsafe-inline'" not in ro, f"missing/weak report-only CSP on {path}"
+
 
 def _seed_document_verification_case(app_id, ref, doc_id, doc_type="cert_inc"):
     from db import get_db
