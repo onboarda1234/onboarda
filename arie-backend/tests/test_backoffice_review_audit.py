@@ -461,6 +461,25 @@ class TestStatusModelHardening:
         assert "applicationStatusMeta(s)" in body
         assert "return meta ? meta.label : (s || 'Unknown')" in body
 
+    def test_idv_fixture_party_names_render_display_name(self):
+        """Synthetic fixture party names must not expose raw application status tokens."""
+        html = self._read_backoffice()
+        panel = self._extract_js_function(html, "function renderSumsubIdvPanel(")
+        modal = self._extract_js_function(html, "function openIdvResolutionModal(")
+        sanitizer = self._extract_js_function(html, "function caseCommandSanitizeText(")
+
+        assert "function sumsubIdvDisplayName(" in html
+        assert "function applicationFixtureSafePartyName(" in html
+        assert "name: applicationFixtureSafePartyName(d.full_name, 'director')" in html
+        assert "name: applicationFixtureSafePartyName(u.full_name, 'ubo')" in html
+        assert "name: applicationFixtureSafePartyName(d.full_name || d.name || '', 'director')" in html
+        assert "name: applicationFixtureSafePartyName(u.full_name || u.name || '', 'ubo')" in html
+        assert "escapeHtml(sumsubIdvDisplayName(item))" in panel
+        assert "sumsubIdvDisplayName(item) + ' - ' + sumsubIdvRoleLabel(item.person_type)" in modal
+        assert "person_name: item.person_name || ''" in html
+        assert "submitted_to_compliance\\s+Director" in sanitizer
+        assert "officer_submitted_to_compliance" in sanitizer
+
 
 # ═══════════════════════════════════════════════════════════
 # B. ACTIVITY LOG — Real backend audit trail

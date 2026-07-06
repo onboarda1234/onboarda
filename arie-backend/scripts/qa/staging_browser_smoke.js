@@ -115,6 +115,12 @@ const report = {
   knownRoleDeniedResponses: [],
   unexpectedBadResponses: [],
   providerLabelFindings: [],
+  applicationStatusTokenFindings: {
+    officerStatusSurfaces: [],
+    fixturePartyNames: [],
+    visibleInternalMachineCodes: [],
+    storageMachineCodes: [],
+  },
 };
 
 const removedProviderPatterns = [
@@ -122,6 +128,11 @@ const removedProviderPatterns = [
   "open" + "[-_]?sanctions",
   "open" + "\\s*sanction",
   "open" + "[-_]?sanction",
+];
+
+const applicationStatusTokenPatterns = [
+  "submitted_to_compliance",
+  "officer_submitted_to_compliance",
 ];
 
 function ensureOutDir() {
@@ -205,8 +216,85 @@ async function scanRemovedProviderLabels(page, surface) {
   report.providerLabelFindings.push(...findings);
 }
 
+async function scanApplicationStatusTokens(page, surface) {
+  const findings = await page.evaluate(({ patterns, surfaceName }) => {
+    const regexes = patterns.map((pattern) => new RegExp(pattern, "i"));
+    const visible = (el) => {
+      if (!el || !el.innerText) return false;
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
+    const selectorFor = (el) => {
+      if (!el) return "";
+      if (el.id) return `#${el.id}`;
+      const parts = [];
+      let node = el;
+      while (node && node.nodeType === Node.ELEMENT_NODE && parts.length < 5) {
+        let part = node.tagName.toLowerCase();
+        if (node.classList && node.classList.length) {
+          part += "." + Array.from(node.classList).slice(0, 3).join(".");
+        }
+        parts.unshift(part);
+        node = node.parentElement;
+      }
+      return parts.join(" > ");
+    };
+    const categoryForVisibleText = (text, selector) => {
+      if (/officer_submitted_to_compliance/i.test(text)) return "visibleInternalMachineCodes";
+      if (/submitted_to_compliance\s+(director|owner|ubo|beneficial owner|fixture)/i.test(text)) return "fixturePartyNames";
+      if (/(status|badge|filter-status|detail-badges|applications-body|case-command|decision)/i.test(selector)) {
+        return "officerStatusSurfaces";
+      }
+      return "officerStatusSurfaces";
+    };
+    const matches = [];
+    for (const el of Array.from(document.querySelectorAll("body *"))) {
+      if (!visible(el)) continue;
+      const ownText = el.innerText.trim().replace(/\s+/g, " ");
+      if (!ownText) continue;
+      if (regexes.some((regex) => regex.test(ownText))) {
+        const selector = selectorFor(el);
+        matches.push({
+          surface: surfaceName,
+          source: "visible_dom",
+          category: categoryForVisibleText(ownText, selector),
+          selector,
+          text: ownText.slice(0, 240),
+        });
+      }
+    }
+    for (const storageName of ["localStorage", "sessionStorage"]) {
+      const storage = window[storageName];
+      for (let i = 0; i < storage.length; i += 1) {
+        const key = storage.key(i);
+        const value = storage.getItem(key) || "";
+        if (regexes.some((regex) => regex.test(`${key} ${value}`))) {
+          matches.push({
+            surface: surfaceName,
+            source: storageName,
+            category: "storageMachineCodes",
+            selector: key,
+            text: value.slice(0, 240),
+          });
+        }
+      }
+    }
+    return matches;
+  }, { patterns: applicationStatusTokenPatterns, surfaceName: surface });
+  for (const finding of findings) {
+    const category = finding.category || "officerStatusSurfaces";
+    if (!report.applicationStatusTokenFindings[category]) {
+      report.applicationStatusTokenFindings[category] = [];
+    }
+    report.applicationStatusTokenFindings[category].push(finding);
+  }
+}
+
 async function captureSurface(page, name, surface) {
   await scanRemovedProviderLabels(page, surface);
+  await scanApplicationStatusTokens(page, surface);
   await screenshot(page, name);
 }
 
@@ -519,6 +607,12 @@ async function main() {
     report.checks.noUnexpectedBadApiResponses = report.unexpectedBadResponses.length === 0;
     report.checks.noFailedRequests = report.failedRequests.length === 0;
     report.checks.noRemovedProviderLabels = report.providerLabelFindings.length === 0;
+    report.checks.noRawApplicationStatusTokenStatusSurfaces =
+      report.applicationStatusTokenFindings.officerStatusSurfaces.length === 0;
+    report.checks.noRawApplicationStatusTokenFixtureNames =
+      report.applicationStatusTokenFindings.fixturePartyNames.length === 0;
+    report.checks.noVisibleInternalApplicationStatusReasonCodes =
+      report.applicationStatusTokenFindings.visibleInternalMachineCodes.length === 0;
 
     report.observations.knownOfficerRoleDeniedResponses = report.knownRoleDeniedResponses.length;
   } finally {

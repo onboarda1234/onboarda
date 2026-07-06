@@ -911,6 +911,39 @@ def test_screening_second_review_blocker_payload_is_officer_readable(db):
     assert blocker["action_key"] == "screening.resolve"
 
 
+def test_submitted_to_compliance_route_reason_is_humanized_for_officers(db):
+    from security_hardening import (
+        can_decide_application,
+        classify_approval_route,
+        collect_approval_gate_blockers,
+    )
+
+    app = _insert_application_and_memo(db, status="submitted_to_compliance", risk_level="MEDIUM")
+    route = classify_approval_route(app, db)
+
+    blocker = next(
+        item
+        for item in collect_approval_gate_blockers(app, db)
+        if item.get("id") == "risk_escalation_required"
+    )
+    assert "Submitted to Compliance" in blocker["description"]
+    assert "officer_submitted_to_compliance" not in blocker["description"]
+    assert blocker["metadata"]["escalation_reasons"] == ["officer_submitted_to_compliance"]
+
+    allowed, code, reason, meta = can_decide_application(
+        {"sub": "co001", "role": "co"},
+        app,
+        "approve",
+        risk_level="MEDIUM",
+        approval_route=route,
+    )
+    assert allowed is False
+    assert code == 403
+    assert "Submitted to Compliance" in reason
+    assert "officer_submitted_to_compliance" not in reason
+    assert meta["approval_route_escalation_reasons"] == ["officer_submitted_to_compliance"]
+
+
 def test_same_user_first_and_second_screening_review_blocks_approval(db):
     from security_hardening import ApprovalGateValidator
 
