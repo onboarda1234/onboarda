@@ -233,6 +233,88 @@ class TestInactiveTokenEnforcement:
         _run_tornado_case(_App, "test_stale_role")
 
 
+class TestPasswordChangeSessionRevocation:
+    """PR-23: a client password change must kill EVERY active session through
+    the real HTTP handler — not just the token that made the request.
+
+    This is the handler-wiring guarantee the unit tests can't give: it drives
+    POST /api/auth/client/change-password over HTTP and asserts a SEPARATE,
+    pre-existing session (a token minted for another device) can no longer
+    authenticate afterwards. If the handler's revoke-ALL call were removed,
+    only the calling token would be revoked and the other session would keep
+    working — so this test fails on that regression.
+    """
+
+    def test_change_password_revokes_a_different_device_session(self, db, app):
+        import secrets
+        from tornado.testing import AsyncHTTPTestCase
+        from server import make_app, create_token
+
+        client_id = f"client-pwchange-{secrets.token_hex(4)}"
+        email = f"{client_id}@example.com"
+        old_password = "OldClientPass123!"
+        new_password = "NewClientPass456!"
+        db.execute(
+            "INSERT INTO clients (id, email, password_hash, company_name, status) VALUES (?, ?, ?, ?, ?)",
+            (
+                client_id,
+                email,
+                bcrypt.hashpw(old_password.encode(), bcrypt.gensalt()).decode(),
+                "Password Change Client Ltd",
+                "active",
+            ),
+        )
+        db.commit()
+
+        class _App(AsyncHTTPTestCase):
+            def get_app(self_inner):
+                return make_app()
+
+            def test_flow(self_inner):
+                # Device A: a real login session that will perform the change.
+                login = self_inner.fetch(
+                    "/api/auth/client/login",
+                    method="POST",
+                    body=json.dumps({"email": email, "password": old_password}),
+                    headers={"Content-Type": "application/json"},
+                )
+                assert login.code == 200, login.body.decode()
+                token_a = json.loads(login.body)["token"]
+                # Device B: an independent, pre-existing session for the same
+                # client (e.g. a second device / a stolen token).
+                token_b = create_token(client_id, "client", "Device B", "client")
+
+                headers_a = {"Authorization": f"Bearer {token_a}"}
+                headers_b = {"Authorization": f"Bearer {token_b}"}
+                # Baseline: BOTH sessions authenticate before the change.
+                assert self_inner.fetch("/api/auth/me", headers=headers_a).code == 200
+                assert self_inner.fetch("/api/auth/me", headers=headers_b).code == 200
+
+                change = self_inner.fetch(
+                    "/api/auth/client/change-password",
+                    method="POST",
+                    body=json.dumps(
+                        {"current_password": old_password, "new_password": new_password}
+                    ),
+                    headers={**headers_a, "Content-Type": "application/json"},
+                )
+                assert change.code == 200, change.body.decode()
+
+                # THE load-bearing assertion: Device B — which never made the
+                # request — is now locked out. This is what breaks if the
+                # handler revokes only the calling JTI.
+                me_b = self_inner.fetch("/api/auth/me", headers=headers_b)
+                assert me_b.code in (401, 403), (
+                    "Other-device session survived a password change — "
+                    "PR-23 revoke-all regressed"
+                )
+                # And Device A (the caller) is also invalidated.
+                me_a = self_inner.fetch("/api/auth/me", headers=headers_a)
+                assert me_a.code in (401, 403), me_a.body.decode()
+
+        _run_tornado_case(_App, "test_flow")
+
+
 class TestRateLimiting:
     def test_rate_limiter_allows_initial_attempts(self, temp_db):
         from server import RateLimiter

@@ -17,6 +17,7 @@ import re
 import sys
 import time
 import unittest
+import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -230,6 +231,68 @@ class TestChangePasswordRevokesAllSessions(unittest.TestCase):
             self.assertIsNotNone(auth.decode_token(tok_bystander),
                                  "An unrelated client's session must survive another client's "
                                  "password change")
+
+
+# ── DB-backed regressions for the PR-23 review folds (multi-worker realism) ──
+# These are pytest functions (not unittest.TestCase) so they can use the
+# temp_db fixture: they exercise the real revoked_tokens table rather than the
+# hermetic in-memory stubs, covering the cross-worker paths the review flagged.
+
+def test_user_level_cutoff_refreshes_across_rotations(temp_db):
+    """Stale-cache fail-open regression: a worker that cached an EARLIER
+    password-change cutoff must pick up a LATER rotation's cutoff, or it would
+    admit a token minted between the two rotations that the second change was
+    meant to kill. Simulates two workers sharing one revoked_tokens table."""
+    import time as _t
+    from security_hardening import TokenRevocationList
+
+    worker_a = TokenRevocationList()  # performs the rotations
+    worker_b = TokenRevocationList()  # validates tokens, caches aggressively
+    user_jti = f"user:{uuid.uuid4().hex[:12]}"
+
+    now = _t.time()
+    cutoff1 = now + 3600
+    cutoff2 = now + 7200  # a later, second rotation moves the cutoff forward
+
+    # Rotation #1 on worker A → persisted to the shared DB.
+    assert worker_a.revoke(user_jti, cutoff1) is True
+    # Worker B validates something → caches rotation #1's cutoff.
+    assert worker_b.is_revoked(user_jti) is True
+    assert worker_b.get_expiry(user_jti) == cutoff1
+
+    # Rotation #2 on worker A (ON CONFLICT DO UPDATE moves the DB cutoff forward).
+    assert worker_a.revoke(user_jti, cutoff2) is True
+
+    # Worker B must now see the LATER cutoff, not the stale cached one.
+    assert worker_b.get_expiry(user_jti) == cutoff2, \
+        "worker B kept a stale user-level cutoff — a 2nd rotation would be missed (fail-open)"
+    assert worker_b.is_revoked(user_jti) is True
+
+
+def test_revoke_reports_durable_persistence(temp_db):
+    """revoke()/_revoke_all_client_sessions must report whether the revocation
+    durably persisted, so the change-password handler never logs 'all sessions
+    revoked' on a transient DB write failure (truthfulness)."""
+    import server
+    from security_hardening import TokenRevocationList
+
+    rl = TokenRevocationList()
+    # Happy path against the real temp_db → durable.
+    assert rl.revoke(f"user:{uuid.uuid4().hex[:8]}", time.time() + 100) is True
+
+    # Persistence failure → False, but the in-memory entry is still set (this
+    # worker's own sessions are revoked; other workers may not be).
+    rl_fail = TokenRevocationList()
+    rl_fail._db_persist = lambda *a, **k: False
+    jti = f"user:{uuid.uuid4().hex[:8]}"
+    assert rl_fail.revoke(jti, time.time() + 100) is False
+    assert jti in rl_fail._revoked
+
+    # server._revoke_all_client_sessions surfaces the same signal to the handler.
+    with patch.object(server, "token_revocation_list", rl):
+        assert server._revoke_all_client_sessions(None, "durable-user") is True
+    with patch.object(server, "token_revocation_list", rl_fail):
+        assert server._revoke_all_client_sessions(None, "nondurable-user") is False
 
 
 class TestForgotPasswordPerEmailRateLimit(unittest.TestCase):

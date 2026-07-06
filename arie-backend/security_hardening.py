@@ -3559,7 +3559,10 @@ class TokenRevocationList:
             return 0
 
     def _db_persist(self, jti: str, expires_at: float) -> None:
-        """Persist a revocation to DB."""
+        """Persist a revocation to DB. Returns True iff the row was durably
+        committed — callers that must attest a revocation actually happened
+        (e.g. a password-change "all sessions revoked" log) rely on this so
+        they never claim a revocation that only exists in one worker's memory."""
         try:
             from db import get_db as _db_get
             db = _db_get()
@@ -3571,8 +3574,10 @@ class TokenRevocationList:
             )
             db.commit()
             db.close()
+            return True
         except Exception as e:
-            logger.debug(f"Could not persist revoked token to DB: {e}")
+            logger.warning(f"Could not persist revoked token to DB: {e}")
+            return False
 
     def _db_remove_expired(self) -> None:
         """Remove expired entries from DB."""
@@ -3585,21 +3590,28 @@ class TokenRevocationList:
         except Exception:
             pass
 
-    def revoke(self, jti: str, expires_at: float) -> None:
+    def revoke(self, jti: str, expires_at: float) -> bool:
         """
         Add a token to the revocation list.
 
         Args:
             jti: JWT ID (from token's 'jti' claim)
             expires_at: Token expiry timestamp (Unix time)
+
+        Returns:
+            True iff the revocation was durably persisted to the DB (so it
+            propagates to other workers). The in-memory entry is always set on
+            this worker regardless; the return value lets a caller distinguish
+            "revoked everywhere" from "revoked only on this instance".
         """
         self._revoked[jti] = expires_at
-        self._db_persist(jti, expires_at)
+        persisted = self._db_persist(jti, expires_at)
         logger.debug(f"Token {jti[:8]}... revoked (expires at {expires_at})")
 
         # Cleanup if interval exceeded
         if time.time() - self._last_cleanup > self._cleanup_interval:
             self.cleanup()
+        return persisted
 
     def is_revoked(self, jti: str) -> bool:
         """
@@ -3613,6 +3625,19 @@ class TokenRevocationList:
         """
         # Lazy-load from DB on first access
         self._db_load_all()
+
+        # User-level revocation cutoffs (jti == "user:{id}") can move FORWARD on
+        # a later credential rotation — revoke() uses ON CONFLICT DO UPDATE, so
+        # the DB row is authoritative and a cached hit from an EARLIER rotation
+        # is stale. Without this refresh a worker holding rotation-#1's cutoff
+        # would admit a token minted between rotation #1 and #2 that rotation #2
+        # was meant to kill (a fail-open in the incident "rotate again to lock
+        # out" flow). Only refresh when we ALREADY hold a cached value (an
+        # uncached key falls through to the lookup below, so this adds no cost to
+        # the common non-revoked path); _db_lookup_active overwrites the cache
+        # with the current committed cutoff.
+        if isinstance(jti, str) and jti.startswith("user:") and jti in self._revoked:
+            self._db_lookup_active(jti)
 
         if jti not in self._revoked:
             if not self._db_lookup_active(jti):
@@ -3667,6 +3692,12 @@ class TokenRevocationList:
             Expiry timestamp (Unix time), or 0 if not found
         """
         self._db_load_all()
+        # Keep user-level cutoffs fresh: decode_token derives the revocation
+        # time from this expiry, so a stale cached value would compute an
+        # earlier cutoff and miss a later rotation (see is_revoked). Only refresh
+        # an already-cached key; an uncached one is looked up just below.
+        if isinstance(jti, str) and jti.startswith("user:") and jti in self._revoked:
+            self._db_lookup_active(jti)
         if jti not in self._revoked:
             self._db_lookup_active(jti)
         return self._revoked.get(jti, 0)
