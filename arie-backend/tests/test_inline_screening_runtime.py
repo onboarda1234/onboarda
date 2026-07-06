@@ -1036,9 +1036,15 @@ class TestInlineScreeningRuntime:
         assert "Escalate" in result["unresolvedHtml"]
         assert "Follow-Up Required" not in result["unresolvedHtml"]
         assert "Request More Information" in result["unresolvedHtml"]
-        assert "Save disposition" in result["unresolvedHtml"]
-        assert "required for escalation" in result["unresolvedHtml"]
-        assert "Upload supporting evidence (optional)" in result["unresolvedHtml"]
+        # Progressive disclosure: the evidence/rationale/save form is hidden until an
+        # action is chosen; the default state shows the action buttons + a hint.
+        assert "Select a screening action above to continue" in result["unresolvedHtml"]
+        assert "Save disposition" not in result["unresolvedHtml"]
+        assert "Upload supporting evidence (optional)" not in result["unresolvedHtml"]
+        # Selecting an action reveals the full form.
+        assert "Save disposition" in result["validClearHtml"]
+        assert "Upload supporting evidence (optional)" in result["validClearHtml"]
+        assert "Rationale" in result["validClearHtml"]
 
     def test_rationale_is_mandatory_and_permission_message_is_present(self):
         html = _read_backoffice()
@@ -1096,9 +1102,11 @@ class TestInlineScreeningRuntime:
                 },
             )
         )
-        assert "Save disposition" in result["unresolvedHtml"]
-        assert "disabled" in result["unresolvedHtml"]
-        assert "Select a screening action to enable save." in result["unresolvedHtml"]
+        # No action selected -> form/save hidden, hint shown.
+        assert "Save disposition" not in result["unresolvedHtml"]
+        assert "Select a screening action above to continue" in result["unresolvedHtml"]
+        # Action selected but rationale invalid -> save disabled; valid -> enabled.
+        assert "Save disposition" in result["invalidClearHtml"]
         assert "disabled" in result["invalidClearHtml"]
         assert "Please enter a rationale" not in result["validClearHtml"]
         assert "disabled" not in result["validClearHtml"]
@@ -1235,8 +1243,11 @@ class TestInlineScreeningRuntime:
         assert 'data-screening-subject-card="clear"' in result["triageCockpitHtml"]
         assert 'data-screening-decision-summary="true"' in result["triageCockpitHtml"]
         assert "Decision summary" in result["triageCockpitHtml"]
-        assert result["triageCockpitHtml"].index("Decision summary") < result["triageCockpitHtml"].index("Save disposition")
-        assert result["triageCockpitHtml"].index("Save disposition") < result["triageCockpitHtml"].index("Evidence groups")
+        # Disposition controls (action buttons) sit between the decision summary and the
+        # evidence groups. Anchor on an always-present action button, since the save/form
+        # is now revealed only after an action is selected (progressive disclosure).
+        assert result["triageCockpitHtml"].index("Decision summary") < result["triageCockpitHtml"].index("Clear as False Positive")
+        assert result["triageCockpitHtml"].index("Clear as False Positive") < result["triageCockpitHtml"].index("Evidence groups")
         assert "Jane Director" in result["triageCockpitHtml"]
         assert "John Harbor" in result["triageCockpitHtml"]
         assert "Triage Holdings Ltd" in result["triageCockpitHtml"]
@@ -1245,7 +1256,9 @@ class TestInlineScreeningRuntime:
         assert "ENT" in result["triageCockpitHtml"]
         assert "Declared vs Provider Match" in result["triageCockpitHtml"]
         assert "Evidence groups" in result["triageCockpitHtml"]
-        assert "Save disposition" in result["triageCockpitHtml"]
+        # Unresolved focused subject shows the disposition action buttons + hint (form
+        # reveals after an action is chosen); resolved shows read-only, no form.
+        assert "Select a screening action above to continue" in result["triageCockpitHtml"]
         assert "Triage Holdings Ltd" in result["resolvedCockpitHtml"]
         assert "read-only" in result["resolvedCockpitHtml"]
         assert "Save disposition" not in result["resolvedCockpitHtml"]
@@ -1275,7 +1288,9 @@ class TestInlineScreeningRuntime:
         assert "Confirm True Match" in result["directDetailWithoutQueueHtml"]
         assert "Escalate" in result["directDetailWithoutQueueHtml"]
         assert "Request More Information" in result["directDetailWithoutQueueHtml"]
-        assert "Save disposition" in result["directDetailWithoutQueueHtml"]
+        # Panel renders directly (not queue-cache dependent). Save/form appears after an
+        # action is chosen; the default shows the action buttons + hint.
+        assert "Select a screening action above to continue" in result["directDetailWithoutQueueHtml"]
         assert "Follow-Up Required</button>" not in result["directDetailWithoutQueueHtml"]
         fallback_calls = result["fallbackSubmitResult"]["calls"]
         review_call = next(call for call in fallback_calls if call[0] == "POST" and call[1] == "/screening/review")
