@@ -5427,6 +5427,27 @@ def cleanup_application_delete_artifacts(db, application_id, application_ref):
     delete_normalized_reports_for_application(db, application_id)
 
 
+def _memo_block_columns(db, memo):
+    """Persisted (blocked, block_reason) for a compliance memo's computed
+    hard-block verdict (PR-20).
+
+    memo_handler sets metadata.blocked / block_reason for contradiction and
+    mandatory-escalation cases. Those columns are read by the approval gate
+    (security_hardening.ApprovalGateValidator) from the PERSISTED row, so the
+    write path MUST populate them or the gate is silently bypassed. `blocked`
+    uses the backend's boolean idiom (real BOOLEAN on PostgreSQL, 0/1 on
+    SQLite) to match the compliance_memos.blocked column type.
+    """
+    meta = (memo or {}).get("metadata", {}) or {}
+    is_blocked = bool(meta.get("blocked"))
+    blocked_value = (
+        (True if getattr(db, "is_postgres", False) else 1)
+        if is_blocked else
+        (False if getattr(db, "is_postgres", False) else 0)
+    )
+    return blocked_value, meta.get("block_reason")
+
+
 def _memo_final_status(memo_row):
     """Return a canonical final memo status for UI and API consumers."""
     if not memo_row:
@@ -28444,12 +28465,18 @@ class ComplianceMemoHandler(BaseHandler):
                 _json_dumps_strict(rule_violations, sort_keys=True) if rule_violations else None
             )
             memo_json = _json_dumps_strict(memo)
+            # Persist the computed hard-block verdict (PR-20). The columns
+            # already exist in both schemas, so this is purely additive; without
+            # it blocked/block_reason default to FALSE/NULL and the approval gate
+            # (which reads the PERSISTED memo_row['blocked']) is silently bypassed.
+            _memo_blocked_val, _memo_block_reason = _memo_block_columns(db, memo)
             db.execute(
-                "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations, memo_version, raw_output_hash, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations, memo_version, raw_output_hash, version, blocked, block_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
                  validation_result["quality_score"], validation_result["validation_status"],
                  supervisor_result["verdict"], supervisor_result["recommendation"], rule_violations_json,
-                 memo.get("metadata", {}).get("memo_version", "v" + str(next_version)), memo_input_hash, next_version)
+                 memo.get("metadata", {}).get("memo_version", "v" + str(next_version)), memo_input_hash, next_version,
+                 _memo_blocked_val, _memo_block_reason)
             )
             db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                        (user.get("sub",""), user.get("name",""), user.get("role",""), "Generate Memo", app["ref"],
@@ -30527,9 +30554,15 @@ class MemoSupervisorHandler(BaseHandler):
                         )
             except Exception as _re:
                 logger.error("Failed to re-evaluate EDD routing for %s: %s", app_id, _re)
+            # Keep the persisted blocked/block_reason columns in lock-step with
+            # the rewritten memo_data JSON so the approval gate can never read a
+            # stale block verdict (PR-20 — column must mirror metadata.blocked
+            # wherever memo_data is rewritten).
+            _sup_blocked_val, _sup_block_reason = _memo_block_columns(db, memo_data)
             db.execute(
-                "UPDATE compliance_memos SET memo_data = ?, supervisor_status = ?, supervisor_summary = ? WHERE id = ?",
-                (json.dumps(memo_data), supervisor_result["verdict"], supervisor_result["recommendation"], memo_row["id"])
+                "UPDATE compliance_memos SET memo_data = ?, supervisor_status = ?, supervisor_summary = ?, blocked = ?, block_reason = ? WHERE id = ?",
+                (json.dumps(memo_data), supervisor_result["verdict"], supervisor_result["recommendation"],
+                 _sup_blocked_val, _sup_block_reason, memo_row["id"])
             )
             db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                        (user.get("sub",""), user.get("name",""), user.get("role",""), "Run Memo Supervisor", app_id,
