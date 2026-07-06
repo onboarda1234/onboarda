@@ -295,22 +295,98 @@ class TestNotificationValidTypes:
 class TestStatusModelHardening:
     """Verify single-source-of-truth status model across DB, backend, frontend."""
 
+    REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     BACKOFFICE_PATH = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        REPO_ROOT,
         "arie-backoffice.html",
     )
-
-    # All valid DB statuses (canonical list from db.py CHECK constraint)
-    VALID_STATUSES = [
-        "draft", "submitted", "prescreening_submitted", "pricing_review",
-        "pricing_accepted", "pre_approval_review", "pre_approved",
-        "kyc_documents", "kyc_submitted", "compliance_review", "in_review",
-        "under_review", "edd_required", "approved", "rejected", "rmi_sent", "withdrawn",
-    ]
+    DB_PATH = os.path.join(REPO_ROOT, "arie-backend", "db.py")
 
     def _read_backoffice(self):
         with open(self.BACKOFFICE_PATH, "r", encoding="utf-8") as f:
             return f.read()
+
+    def _read_db_source(self):
+        with open(self.DB_PATH, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def _canonical_application_statuses(self):
+        db_source = self._read_db_source()
+        application_tables = re.findall(
+            r"CREATE TABLE IF NOT EXISTS applications\s*\((.*?)\);",
+            db_source,
+            re.DOTALL,
+        )
+        for table_sql in application_tables:
+            status_check = re.search(
+                r"status\s+TEXT\s+DEFAULT\s+'draft'\s+CHECK\(status\s+IN\s+\((.*?)\)\)",
+                table_sql,
+                re.DOTALL,
+            )
+            if status_check:
+                return re.findall(r"'([^']+)'", status_check.group(1))
+        raise AssertionError("Could not locate canonical applications.status CHECK constraint")
+
+    def _extract_js_object(self, html, name):
+        token = f"var {name} = "
+        start = html.index(token) + len(token)
+        if html[start] != "{":
+            raise AssertionError(f"{name} is not an object literal")
+        depth = 0
+        in_string = None
+        escape = False
+        for idx in range(start, len(html)):
+            ch = html[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == in_string:
+                    in_string = None
+                continue
+            if ch in ("'", '"'):
+                in_string = ch
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return html[start:idx + 1]
+        raise AssertionError(f"Could not parse {name} object literal")
+
+    def _extract_js_array(self, html, name):
+        token = f"var {name} = "
+        start = html.index(token) + len(token)
+        end = html.index("];", start) + 1
+        return re.findall(r"'([^']+)'", html[start:end])
+
+    def _extract_js_function(self, html, signature):
+        start = html.index(signature)
+        after = html[start + len(signature):]
+        match = re.search(r"\n(?:async function |function |var [A-Z0-9_]+ = )", after)
+        return after[:match.start()] if match else after
+
+    def _application_status_meta(self):
+        html = self._read_backoffice()
+        source = self._extract_js_object(html, "APPLICATION_STATUS_META")
+        entries = {}
+        pattern = re.compile(
+            r"(?P<status>[a-z_]+):\s*\{\s*"
+            r"label:\s*'(?P<label>(?:\\'|[^'])*)',\s*"
+            r"filterLabel:\s*'(?P<filter_label>(?:\\'|[^'])*)',\s*"
+            r"badgeClass:\s*'(?P<badge_class>[^']+)'\s*"
+            r"\}",
+            re.DOTALL,
+        )
+        for match in pattern.finditer(source):
+            entries[match.group("status")] = {
+                "label": match.group("label"),
+                "filter_label": match.group("filter_label"),
+                "badge_class": match.group("badge_class"),
+            }
+        return entries
 
     def test_branding_status_labels_includes_under_review(self):
         """STATUS_LABELS must include under_review."""
@@ -321,37 +397,69 @@ class TestStatusModelHardening:
     def test_all_db_statuses_have_backend_labels(self):
         """Every valid DB status must have a label in STATUS_LABELS."""
         from branding import STATUS_LABELS
-        for status in self.VALID_STATUSES:
+        for status in self._canonical_application_statuses():
             assert status in STATUS_LABELS, f"Missing label for status: {status}"
 
-    def test_frontend_filter_uses_raw_db_keys(self):
-        """Filter dropdown option values must be raw DB status keys, not display labels."""
-        html = self._read_backoffice()
-        for status in self.VALID_STATUSES:
-            assert f'value="{status}"' in html, f"Filter dropdown missing raw key: {status}"
+    def test_backoffice_status_metadata_covers_backend_canonical_statuses(self):
+        """Every backend-emittable application status must have local UI metadata."""
+        canonical_statuses = self._canonical_application_statuses()
+        status_meta = self._application_status_meta()
+        status_order = self._extract_js_array(self._read_backoffice(), "APPLICATION_STATUS_ORDER")
+        missing = [status for status in canonical_statuses if status not in status_meta]
+        assert missing == [], f"Missing back-office application status metadata: {missing}"
+        missing_from_order = [status for status in canonical_statuses if status not in status_order]
+        assert missing_from_order == [], f"Missing status filter/render order coverage: {missing_from_order}"
 
-    def test_frontend_filter_uses_statusRaw(self):
-        """Filter comparison must use statusRaw (raw DB key), not status (display label)."""
+    def test_backoffice_status_metadata_has_human_labels_and_badge_handling(self):
+        """Canonical statuses must render from metadata, not raw-code fallback."""
+        status_meta = self._application_status_meta()
         html = self._read_backoffice()
-        assert "statusRaw" in html
-        assert "app.statusRaw" in html
+        for status in self._canonical_application_statuses():
+            meta = status_meta[status]
+            assert meta["label"], f"Missing human label for {status}"
+            assert meta["label"] != status, f"{status} renders as raw status code"
+            assert meta["label"] != status.replace("_", " "), f"{status} renders as raw-code words"
+            assert meta["badge_class"], f"Missing badge class for {status}"
+            assert f".badge.{meta['badge_class']}" in html, f"Missing badge CSS class for {status}"
+
+    def test_submitted_to_compliance_backoffice_label_filter_and_badge(self):
+        """Senior-review queue status must be labelled, filterable, and badged."""
+        status_meta = self._application_status_meta()
+        submitted = status_meta["submitted_to_compliance"]
+        assert submitted["label"] == "Submitted to Compliance"
+        assert submitted["filter_label"] == "Submitted to Compliance"
+        assert submitted["badge_class"]
+        assert "submitted_to_compliance" in self._extract_js_array(
+            self._read_backoffice(),
+            "APPLICATION_STATUS_ORDER",
+        )
+
+    def test_applications_filter_renders_from_status_metadata_with_machine_values(self):
+        """Status filter options are generated from the shared status metadata."""
+        html = self._read_backoffice()
+        body = self._extract_js_function(html, "function populateApplicationStatusFilter(")
+        assert "APPLICATION_STATUS_ORDER.forEach(function(status)" in body
+        assert "var meta = APPLICATION_STATUS_META[status]" in body
+        assert "opt.value = status" in body
+        assert "opt.textContent = meta.filterLabel || meta.label" in body
 
     def test_frontend_status_badge_distinguishes_under_review(self):
         """statusBadge must map under_review to a distinct CSS class from in_review."""
-        html = self._read_backoffice()
-        assert "'under_review':'under-review'" in html or "'under_review': 'under-review'" in html
+        status_meta = self._application_status_meta()
+        assert status_meta["under_review"]["badge_class"] == "under-review"
+        assert status_meta["under_review"]["badge_class"] != status_meta["in_review"]["badge_class"]
 
     def test_under_review_badge_css_exists(self):
         """CSS class .badge.under-review must exist."""
         html = self._read_backoffice()
         assert ".badge.under-review" in html
 
-    def test_format_status_includes_all_statuses(self):
-        """formatStatus() must have entries for all valid statuses."""
+    def test_format_status_uses_application_status_metadata(self):
+        """formatStatus may fall back for unknown future statuses, not current canonical ones."""
         html = self._read_backoffice()
-        for status in self.VALID_STATUSES:
-            assert f"'{status}'" in html or f'"{status}"' in html, \
-                f"formatStatus missing entry for: {status}"
+        body = self._extract_js_function(html, "function formatStatus(")
+        assert "applicationStatusMeta(s)" in body
+        assert "return meta ? meta.label : (s || 'Unknown')" in body
 
 
 # ═══════════════════════════════════════════════════════════
@@ -976,14 +1084,18 @@ class TestDayFourDashboardCountAlignment:
 
     def test_dashboard_pending_statuses_no_longer_duplicate_backend_tuple(self):
         html = self._read_backoffice()
-        status_start = html.index("function normalizeStatusKey(status)")
-        status_end = html.index("// ═══════════════════════════════════════════════════════════\n// DATA ARRAYS", status_start)
-        status_region = html[status_start:status_end]
-        assert "DASHBOARD_PENDING_STATUSES" not in status_region
-        assert "'pricing_review'" not in status_region
-        assert "'kyc_documents'" not in status_region
-        assert "pendingStatuses: []" in status_region
-        assert "eddRoutedStatuses: []" in status_region
+        pending_start = html.index("function getDashboardPendingStatuses()")
+        pending_end = html.index("function getDashboardEddRoutedStatuses()", pending_start)
+        pending_helper_start = html.index("function isDashboardPendingApplication(app)")
+        pending_helper_region = (
+            html[pending_start:pending_end] +
+            html[pending_helper_start:pending_helper_start + 260]
+        )
+        assert "DASHBOARD_PENDING_STATUSES" not in pending_helper_region
+        assert "'pricing_review'" not in pending_helper_region
+        assert "'kyc_documents'" not in pending_helper_region
+        assert "DASHBOARD_STATUS_CONTRACT.pendingStatuses" in pending_helper_region
+        assert "var DASHBOARD_STATUS_CONTRACT = { pendingStatuses: [], eddRoutedStatuses: [], canonicalView: '' };" in html
 
     def test_empty_dashboard_status_contract_renders_unavailable_not_zero(self):
         html = self._read_backoffice()

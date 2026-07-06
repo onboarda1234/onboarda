@@ -1430,23 +1430,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     </select>
     <select class="form-select" style="width:auto;" id="filter-status" onchange="filterApplications()">
       <option value="">All Statuses</option>
-      <option value="draft">Application Started</option>
-      <option value="submitted">Application Submitted</option>
-      <option value="prescreening_submitted">Pre-Screening in Progress</option>
-      <option value="pricing_review">Pricing Under Review</option>
-      <option value="pricing_accepted">Pricing Accepted</option>
-      <option value="pre_approval_review">Pre-Approval Under Review</option>
-      <option value="pre_approved">Pre-Approved</option>
-      <option value="kyc_documents">KYC Documents Required</option>
-      <option value="kyc_submitted">KYC Documents Submitted</option>
-      <option value="compliance_review">Compliance Review in Progress</option>
-      <option value="in_review">Verification Ongoing</option>
-      <option value="under_review">Under Compliance Review</option>
-      <option value="edd_required">Enhanced Due Diligence Required</option>
-      <option value="approved">Approved</option>
-      <option value="rejected">Declined</option>
-      <option value="rmi_sent">Further Info Requested</option>
-      <option value="withdrawn">Withdrawn</option>
     </select>
     <select class="form-select" style="width:auto;" id="filter-assigned" onchange="filterApplications()">
       <option value="">All Officers</option>
@@ -5960,20 +5943,121 @@ async function refreshDashboardData() {
   }
 }
 
-function formatStatus(s) {
-  var map = { draft:'Application Started', submitted:'Application Submitted', prescreening_submitted:'Pre-Screening in Progress',
-              pricing_review:'Pricing Under Review', pricing_accepted:'Pricing Accepted',
-              pre_approval_review:'Pre-Approval Under Review', pre_approved:'Pre-Approved',
-              kyc_documents:'KYC Documents Required', kyc_submitted:'KYC Documents Submitted',
-              compliance_review:'Compliance Review in Progress', in_review:'Verification Ongoing',
-              under_review:'Under Compliance Review',
-              edd_required:'Enhanced Due Diligence Required', approved:'Approved \u2013 Ready for Activation',
-              rejected:'Application Declined', rmi_sent:'Further Information Requested', withdrawn:'Application Withdrawn' };
-  return map[s] || s || 'Unknown';
-}
-
 function normalizeStatusKey(status) {
   return String(status || '').toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+var APPLICATION_STATUS_ORDER = [
+  'draft',
+  'submitted',
+  'prescreening_submitted',
+  'pricing_review',
+  'pricing_accepted',
+  'pre_approval_review',
+  'pre_approved',
+  'kyc_documents',
+  'kyc_submitted',
+  'compliance_review',
+  'submitted_to_compliance',
+  'in_review',
+  'under_review',
+  'edd_required',
+  'approved',
+  'rejected',
+  'rmi_sent',
+  'withdrawn'
+];
+
+var APPLICATION_STATUS_META = {
+  draft: { label: 'Application Started', filterLabel: 'Application Started', badgeClass: 'draft' },
+  submitted: { label: 'Application Submitted', filterLabel: 'Application Submitted', badgeClass: 'pending' },
+  prescreening_submitted: { label: 'Pre-Screening in Progress', filterLabel: 'Pre-Screening in Progress', badgeClass: 'prescreening-submitted' },
+  pricing_review: { label: 'Pricing Under Review', filterLabel: 'Pricing Under Review', badgeClass: 'pricing-review' },
+  pricing_accepted: { label: 'Pricing Accepted', filterLabel: 'Pricing Accepted', badgeClass: 'pricing-accepted' },
+  pre_approval_review: { label: 'Pre-Approval Under Review', filterLabel: 'Pre-Approval Under Review', badgeClass: 'pre-approval-review' },
+  pre_approved: { label: 'Pre-Approved', filterLabel: 'Pre-Approved', badgeClass: 'pre-approved' },
+  kyc_documents: { label: 'KYC Documents Required', filterLabel: 'KYC Documents Required', badgeClass: 'kyc-documents' },
+  kyc_submitted: { label: 'KYC Documents Submitted', filterLabel: 'KYC Documents Submitted', badgeClass: 'kyc-submitted' },
+  compliance_review: { label: 'Compliance Review in Progress', filterLabel: 'Compliance Review in Progress', badgeClass: 'compliance-review' },
+  submitted_to_compliance: { label: 'Submitted to Compliance', filterLabel: 'Submitted to Compliance', badgeClass: 'compliance-review' },
+  in_review: { label: 'Verification Ongoing', filterLabel: 'Verification Ongoing', badgeClass: 'in-review' },
+  under_review: { label: 'Under Compliance Review', filterLabel: 'Under Compliance Review', badgeClass: 'under-review' },
+  edd_required: { label: 'Enhanced Due Diligence Required', filterLabel: 'Enhanced Due Diligence Required', badgeClass: 'edd-required' },
+  approved: { label: 'Approved \u2013 Ready for Activation', filterLabel: 'Approved', badgeClass: 'approved' },
+  rejected: { label: 'Application Declined', filterLabel: 'Declined', badgeClass: 'rejected' },
+  rmi_sent: { label: 'Further Information Requested', filterLabel: 'Further Info Requested', badgeClass: 'rmi-sent' },
+  withdrawn: { label: 'Application Withdrawn', filterLabel: 'Withdrawn', badgeClass: 'withdrawn' }
+};
+
+var APPLICATION_STATUS_LEGACY_KEYS = {
+  'pre-screening submitted': 'prescreening_submitted',
+  'pre-approval review': 'pre_approval_review',
+  'pricing review': 'pricing_review',
+  'kyc & documents': 'kyc_documents',
+  'kyc submitted': 'kyc_submitted',
+  'compliance review': 'compliance_review',
+  'in review': 'in_review',
+  'under review': 'under_review',
+  'under compliance review': 'under_review',
+  'edd required': 'edd_required',
+  'enhanced due diligence required': 'edd_required',
+  'approved - ready for activation': 'approved',
+  'approved \u2013 ready for activation': 'approved',
+  'approved': 'approved',
+  'rejected': 'rejected',
+  'declined': 'rejected',
+  'application declined': 'rejected',
+  'rmi sent': 'rmi_sent',
+  'further info requested': 'rmi_sent',
+  'withdrawn': 'withdrawn',
+  'application withdrawn': 'withdrawn'
+};
+
+function applicationStatusKey(status) {
+  var normalized = normalizeStatusKey(status);
+  if (APPLICATION_STATUS_META[normalized]) return normalized;
+  var text = String(status || '').trim().toLowerCase();
+  if (APPLICATION_STATUS_LEGACY_KEYS[text]) return APPLICATION_STATUS_LEGACY_KEYS[text];
+  for (var i = 0; i < APPLICATION_STATUS_ORDER.length; i += 1) {
+    var key = APPLICATION_STATUS_ORDER[i];
+    var meta = APPLICATION_STATUS_META[key] || {};
+    if (String(meta.label || '').toLowerCase() === text ||
+        String(meta.filterLabel || '').toLowerCase() === text) {
+      return key;
+    }
+  }
+  return normalized;
+}
+
+function applicationStatusMeta(status) {
+  return APPLICATION_STATUS_META[applicationStatusKey(status)] || null;
+}
+
+function formatStatus(s) {
+  var meta = applicationStatusMeta(s);
+  return meta ? meta.label : (s || 'Unknown');
+}
+
+function populateApplicationStatusFilter() {
+  var filter = document.getElementById('filter-status');
+  if (!filter) return;
+  var selected = filter.value;
+  filter.innerHTML = '';
+  var allOpt = document.createElement('option');
+  allOpt.value = '';
+  allOpt.textContent = 'All Statuses';
+  filter.appendChild(allOpt);
+  APPLICATION_STATUS_ORDER.forEach(function(status) {
+    var meta = APPLICATION_STATUS_META[status];
+    if (!meta) return;
+    var opt = document.createElement('option');
+    opt.value = status;
+    opt.textContent = meta.filterLabel || meta.label;
+    filter.appendChild(opt);
+  });
+  if (selected && APPLICATION_STATUS_META[selected]) {
+    filter.value = selected;
+  }
 }
 
 var DASHBOARD_STATUS_CONTRACT = { pendingStatuses: [], eddRoutedStatuses: [], canonicalView: '' };
@@ -6975,26 +7059,12 @@ function renderRiskIntegrityWarning(record) {
 }
 
 function statusBadge(status) {
-  var map = {
-    'Draft':'draft', 'draft':'draft',
-    'Pre-Screening Submitted':'prescreening-submitted', 'prescreening_submitted':'prescreening-submitted',
-    'Pre-Approval Review':'pre-approval-review', 'pre_approval_review':'pre-approval-review',
-    'Pre-Approved':'pre-approved', 'pre_approved':'pre-approved',
-    'Pricing Review':'pricing-review', 'pricing_review':'pricing-review',
-    'Pricing Accepted':'pricing-accepted', 'pricing_accepted':'pricing-accepted',
-    'KYC & Documents':'kyc-documents', 'kyc_documents':'kyc-documents',
-    'KYC Submitted':'kyc-submitted', 'kyc_submitted':'kyc-submitted',
-    'Compliance Review':'compliance-review', 'compliance_review':'compliance-review',
-    'In Review':'in-review', 'in_review':'in-review',
-    'Under Review':'under-review', 'under_review':'under-review',
-    'Under Compliance Review':'under-review',
-    'EDD Required':'edd-required', 'edd_required':'edd-required',
-    'Approved':'approved', 'approved':'approved',
-    'Rejected':'rejected', 'rejected':'rejected',
-    'RMI Sent':'rmi-sent', 'rmi_sent':'rmi-sent',
-    'Withdrawn':'withdrawn', 'withdrawn':'withdrawn'
-  };
-  return '<span class="badge ' + (map[status]||'pending') + '">' + escapeHtml(status) + '</span>';
+  var key = applicationStatusKey(status);
+  var meta = APPLICATION_STATUS_META[key];
+  var label = meta ? meta.label : (status || 'Unknown');
+  var cls = meta ? meta.badgeClass : 'pending';
+  var statusAttr = meta ? ' data-status-key="' + escapeHtml(key) + '"' : '';
+  return '<span class="badge ' + cls + '"' + statusAttr + '>' + escapeHtml(label) + '</span>';
 }
 
 function renderDashboardRecent() {
@@ -34261,6 +34331,8 @@ async function boLogin(email, password) {
 // INIT
 // ═══════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', async function() {
+  populateApplicationStatusFilter();
+
   // Load environment config early
   await loadEnvironment();
 
