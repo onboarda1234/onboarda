@@ -6453,13 +6453,32 @@ CLIENT_DOCUMENT_FORBIDDEN_KEYS = {
     "workflow_test_accepted_by",
     # Internal storage locators — physical file pointers and supersession
     # bookkeeping that must never reach a client. Verified unused by
-    # arie-portal.html (slot_key / storage_key ARE portal-rendered and are
-    # deliberately NOT hidden).
+    # arie-portal.html (slot_key IS portal-rendered and is deliberately NOT
+    # hidden; `storage_key` is not a real document column).
     "file_path",
     "s3_key",
     "file_sha256",
     "replaced_by_user_id",
     "superseded_by_document_id",
+    "replaced_reason",
+    # Derived officer-only fields the denylist previously failed OPEN on — the
+    # human-readable twins of denied raw columns (evidence class label/name),
+    # officer reliance verdicts, verification method, and uploader identity.
+    # All verified unused by arie-portal.html. document_reliance_state is KEPT
+    # (the portal renders it). A full allow-list conversion of this nested
+    # projection is the tracked follow-up (same as the party projection).
+    "evidence_class_label",
+    "evidence_classified_by_name",
+    "pilot_proof_eligible",
+    "document_reliance_status",
+    "verification_method",
+    "manual_acceptance",
+    "uploaded_by",
+    "uploaded_by_actor_id",
+    "uploaded_by_actor_type",
+    "uploaded_by_display",
+    "uploaded_by_name",
+    "upload_source",
 }
 
 CLIENT_PRESCREENING_FORBIDDEN_KEYS = {
@@ -10797,6 +10816,14 @@ class DocumentUploadHandler(BaseHandler):
             _decorate_document_evidence_classification(db, doc)
 
         db.close()
+
+        # Clients must receive the SAME sanitised document projection as the
+        # application-detail endpoint — this sibling endpoint would otherwise
+        # hand the owning client raw officer-only fields (review_comment,
+        # verification_results, evidence classification, uploader identity,
+        # storage locators). Officers keep the full record.
+        if user.get("type") == "client":
+            docs = [_client_safe_document_record(doc) for doc in docs]
 
         self.success(docs)
 
@@ -31959,6 +31986,12 @@ class ApplicationRMIRequestsHandler(BaseHandler):
 
         requests = _load_rmi_requests(db, app["id"])
         db.close()
+        # Clients get the same sanitised RMI projection the detail endpoint uses:
+        # the raw rows carry the officer-authored `reason` and the officer
+        # identity (`created_by` / `created_by_name`), which _client_safe_rmi_request
+        # replaces with a generic client-facing message and drops.
+        if user.get("type") == "client":
+            requests = [_client_safe_rmi_request(req) for req in requests]
         self.success({"requests": requests, "count": len(requests)})
 
 

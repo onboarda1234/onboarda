@@ -1837,26 +1837,46 @@ def test_client_application_allow_list_is_disjoint_from_forbidden_list():
         assert leaked not in allow, f"leaked internal column {leaked} is in the allow-list"
 
 
-def test_client_safe_document_record_hides_storage_locators():
-    """Nested document projection must strip internal storage pointers while
-    keeping portal-rendered fields (slot_key / storage_key stay)."""
+def test_client_safe_document_record_hides_storage_locators_and_officer_fields():
+    """Nested document projection must strip internal storage pointers AND the
+    derived officer-only fields (evidence label/classifier name, reliance
+    verdict, verification method, uploader identity) while keeping the
+    portal-rendered fields (slot_key, verification_status, document_reliance_state)."""
     import server
 
     doc = {
         "id": "doc-1",
         "doc_type": "passport",
-        "slot_key": "section_b_passport",
-        "storage_key": "sk-1",
+        "slot_key": "section_b_passport",  # real column, portal-rendered
         "verification_status": "verified",
+        "document_reliance_state": "relied",  # portal renders this — must stay
+        # internal storage locators
         "file_path": "/uploads/secret.pdf",
         "s3_key": "s3://bucket/secret.pdf",
         "file_sha256": "deadbeef",
         "replaced_by_user_id": "officer-9",
         "superseded_by_document_id": "doc-0",
+        "replaced_reason": "officer note",
+        # derived officer-only fields (were leaking through the denylist)
+        "evidence_class_label": "Approval Proof",
+        "evidence_classified_by_name": "Officer Jane",
+        "pilot_proof_eligible": True,
+        "document_reliance_status": "officer-verdict",
+        "verification_method": "manual",
+        "manual_acceptance": True,
+        "uploaded_by": "officer-9",
+        "uploaded_by_display": "Officer Jane",
+        "uploaded_by_name": "Officer Jane",
+        "upload_source": "backoffice",
     }
     safe = server._client_safe_document_record(doc)
-    for hidden in ("file_path", "s3_key", "file_sha256",
-                   "replaced_by_user_id", "superseded_by_document_id"):
-        assert hidden not in safe, f"storage locator {hidden} leaked to client"
-    for kept in ("id", "doc_type", "slot_key", "storage_key", "verification_status"):
+    for hidden in ("file_path", "s3_key", "file_sha256", "replaced_by_user_id",
+                   "superseded_by_document_id", "replaced_reason",
+                   "evidence_class_label", "evidence_classified_by_name",
+                   "pilot_proof_eligible", "document_reliance_status",
+                   "verification_method", "manual_acceptance", "uploaded_by",
+                   "uploaded_by_display", "uploaded_by_name", "upload_source"):
+        assert hidden not in safe, f"officer/internal field {hidden} leaked to client"
+    for kept in ("id", "doc_type", "slot_key", "verification_status",
+                 "document_reliance_state"):
         assert kept in safe, f"portal-rendered field {kept} was dropped"

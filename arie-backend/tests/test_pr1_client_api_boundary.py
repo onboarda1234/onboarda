@@ -310,6 +310,75 @@ class PR1ClientApiBoundaryTest(AsyncHTTPTestCase):
         assert forbidden_document_fields.isdisjoint(document.keys())
         assert document["verification_status"] == "verified"
 
+    def test_client_documents_endpoint_strips_officer_fields(self):
+        """PR-18 parallel-leak fix: GET /api/applications/:id/documents must apply
+        the SAME client projection as the detail endpoint. Previously it returned
+        raw documents (review_comment, verification_results, evidence classifier,
+        storage locators, uploader identity) to the owning client."""
+        resp = self.fetch(
+            f"/api/applications/{self.owner_app_id}/documents",
+            headers=self._auth_headers(self.client_token),
+        )
+        assert resp.code == 200, resp.body.decode()
+        docs = self._json(resp)
+        assert docs, "owner should still see their documents"
+        doc = docs[0]
+        forbidden = {
+            "review_comment", "review_status", "reviewed_by", "reviewed_by_name",
+            "verification_results", "evidence_class", "evidence_classification_note",
+            "evidence_classified_by", "file_path", "s3_key", "file_sha256",
+            "superseded_by_document_id", "uploaded_by", "upload_source",
+        }
+        leaked = forbidden.intersection(doc.keys())
+        assert not leaked, f"officer/internal document fields leaked to client: {sorted(leaked)}"
+        # The officer-only review comment string must not appear anywhere.
+        assert "Officer-only review comment" not in resp.body.decode()
+        # Client still sees the fields the portal renders.
+        assert doc.get("verification_status") == "verified"
+
+        # Control: an officer receives the full record on the same endpoint.
+        off = self.fetch(
+            f"/api/applications/{self.owner_app_id}/documents",
+            headers=self._auth_headers(self.co_token),
+        )
+        assert off.code == 200
+        assert "Officer-only review comment" in off.body.decode()
+
+    def test_client_rmi_endpoint_strips_officer_authored_reason(self):
+        """PR-18 parallel-leak fix: GET /api/applications/:id/rmi must apply the
+        client RMI projection — the raw rows carry the officer-authored reason and
+        the officer identity (created_by / created_by_name)."""
+        self.db.execute(
+            "INSERT INTO rmi_requests (id, application_id, client_id, status, reason, "
+            "deadline, created_by, created_by_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("pr1_rmi_1", self.owner_app_id, self.owner_client_id, "open",
+             "SECRET officer note: escalate — suspected shell company", "2026-12-31",
+             "sco001", "Officer Jane Doe"),
+        )
+        self.db.commit()
+
+        resp = self.fetch(
+            f"/api/applications/{self.owner_app_id}/rmi",
+            headers=self._auth_headers(self.client_token),
+        )
+        assert resp.code == 200, resp.body.decode()
+        body = resp.body.decode()
+        req = self._json(resp)["requests"][0]
+        # officer-authored reason replaced with the generic client-facing message
+        assert req["reason"] == "Additional information is required to continue your application review."
+        assert "SECRET officer note" not in body
+        # officer identity dropped
+        assert "created_by" not in req and "created_by_name" not in req
+        assert "Officer Jane Doe" not in body
+
+        # Control: an officer sees the raw reason + author.
+        off = self.fetch(
+            f"/api/applications/{self.owner_app_id}/rmi",
+            headers=self._auth_headers(self.co_token),
+        )
+        assert off.code == 200
+        assert "SECRET officer note" in off.body.decode()
+
     def test_client_cannot_access_another_clients_application_by_id_or_ref(self):
         for identifier in (self.owner_app_id, self.owner_ref):
             response = self.fetch(
