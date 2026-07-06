@@ -134,6 +134,104 @@ class TestSessionRevocationOnPasswordReset(unittest.TestCase):
                        "Must revoke via token_revocation_list")
 
 
+class TestChangePasswordRevokesAllSessions(unittest.TestCase):
+    """PR-23: a password *change* (not just reset) must kill EVERY session the
+    client holds, not only the token making the request.
+
+    Prior behaviour revoked only the calling JTI, so a stolen/second session on
+    another device survived a password change — the exact scenario a change is
+    meant to defend against. The handler now also calls
+    ``_revoke_all_client_sessions`` (the per-user ``user:{sub}`` entry that
+    decode_token honours). These are hermetic behavioural tests: they drive the
+    real create_token → _revoke_all_client_sessions → decode_token path against
+    an isolated in-memory revocation list (DB persistence stubbed to no-ops) so
+    the assertions are deterministic and independent of any test DB state.
+    """
+
+    def _hermetic_list(self):
+        """A revocation list with DB persistence neutralised — purely in-memory
+        so timing is fully controlled and no revoked_tokens rows leak between
+        tests."""
+        from security_hardening import TokenRevocationList
+        rl = TokenRevocationList()
+        rl._db_persist = lambda *a, **k: None
+        rl._db_load_all = lambda *a, **k: None
+        rl._db_lookup_active = lambda *a, **k: 0
+        rl._db_loaded = True
+        return rl
+
+    def test_source_calls_revoke_all(self):
+        """Guard the wiring: the change-password handler must invoke the
+        revoke-ALL helper, not merely the per-JTI revoke."""
+        import server
+        src = inspect.getsource(server.ClientChangePasswordHandler.post)
+        self.assertIn("_revoke_all_client_sessions", src,
+                       "Password change must revoke ALL sessions, not just the current JTI")
+
+    def test_all_prior_sessions_die_on_change(self):
+        """The load-bearing behaviour: two independent tokens for one client are
+        BOTH invalidated by the revoke-all the handler now performs."""
+        import auth
+        import server
+        rl = self._hermetic_list()
+        uid = "client-pr23-behav-1"
+        with patch.object(server, "token_revocation_list", rl), \
+             patch.object(auth, "_revocation_list", rl):
+            tok_a = auth.create_token(uid, "client", "Behav A", token_type="client")
+            tok_b = auth.create_token(uid, "client", "Behav B", token_type="client")
+            # baseline: both sessions are valid before the change
+            self.assertIsNotNone(auth.decode_token(tok_a))
+            self.assertIsNotNone(auth.decode_token(tok_b))
+
+            # exactly what ClientChangePasswordHandler.post now does
+            server._revoke_all_client_sessions(None, uid)
+
+            # BOTH prior sessions are dead — not just the one that made the call
+            self.assertIsNone(auth.decode_token(tok_a),
+                              "Session A survived the password change (PR-23 regressed)")
+            self.assertIsNone(auth.decode_token(tok_b),
+                              "Session B (other device) survived the password change (PR-23 regressed)")
+
+    def test_change_is_not_a_permanent_lockout(self):
+        """A token minted AFTER the change (i.e. at re-login) must still validate
+        — the revocation is a cutoff by issue-time, not a permanent user ban."""
+        import auth
+        import server
+        from auth import TOKEN_EXPIRY_HOURS
+        rl = self._hermetic_list()
+        uid = "client-pr23-behav-2"
+        with patch.object(server, "token_revocation_list", rl), \
+             patch.object(auth, "_revocation_list", rl):
+            server._revoke_all_client_sessions(None, uid)
+            # Back-date the revocation cutoff by 10s so a freshly minted token's
+            # integer-second iat is strictly after it — this exercises the
+            # re-login path deterministically without a real sleep (decode uses
+            # `iat <= int(revocation_time)`, so same-second would be a false
+            # positive by design).
+            user_jti = f"user:{uid}"
+            rl._revoked[user_jti] = (time.time() - 10) + TOKEN_EXPIRY_HOURS * 3600
+
+            tok_new = auth.create_token(uid, "client", "Post-change", token_type="client")
+            self.assertIsNotNone(auth.decode_token(tok_new),
+                                 "A token issued after the password change must still validate "
+                                 "(re-login must work, not be permanently locked out)")
+
+    def test_only_targeted_user_is_revoked(self):
+        """Revoking client X's sessions must not touch client Y — the cutoff is
+        keyed on the subject, so a co-tenant's live session is unaffected."""
+        import auth
+        import server
+        rl = self._hermetic_list()
+        victim, bystander = "client-pr23-victim", "client-pr23-bystander"
+        with patch.object(server, "token_revocation_list", rl), \
+             patch.object(auth, "_revocation_list", rl):
+            tok_bystander = auth.create_token(bystander, "client", "Bystander", token_type="client")
+            server._revoke_all_client_sessions(None, victim)
+            self.assertIsNotNone(auth.decode_token(tok_bystander),
+                                 "An unrelated client's session must survive another client's "
+                                 "password change")
+
+
 class TestForgotPasswordPerEmailRateLimit(unittest.TestCase):
     """Fix 5: forgot-password must rate-limit per email, not just per IP."""
 

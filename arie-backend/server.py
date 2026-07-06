@@ -4825,7 +4825,13 @@ class ClientChangePasswordHandler(BaseHandler):
         db.execute("UPDATE clients SET password_hash=? WHERE id=?", (new_hash, user.get("sub")))
         db.commit()
 
-        # Revoke the current session — client must re-login with new password
+        # Revoke ALL sessions for this client — a password change must kill every
+        # token issued before it, not just the one making this request. The
+        # per-user revocation entry (`user:{sub}`) is honoured by decode_token,
+        # which rejects any token with iat <= revocation time; tokens minted at
+        # re-login (after this point) still validate. The per-JTI revoke of the
+        # current session is kept as belt-and-braces for the calling token.
+        _revoke_all_client_sessions(db, user.get("sub"))
         jti = user.get("jti")
         exp = user.get("exp")
         if jti and exp:
@@ -4833,7 +4839,7 @@ class ClientChangePasswordHandler(BaseHandler):
 
         db.close()
         self.clear_session_cookie()
-        logger.info(f"Password changed for client {user.get('sub')}")
+        logger.info(f"Password changed for client {user.get('sub')} — all sessions revoked")
         self.success({"status": "password_changed"})
 
 
