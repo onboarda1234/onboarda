@@ -47,6 +47,7 @@ def _scenario_links_and_clean_verify(conn, dbmod):
     assert res["chained_rows"] == 3
     assert res["legacy_rows"] == 0
     assert res["coverage_gaps"] == 0
+    assert res["coverage_complete"] is True
     assert res["broken_links"] == []
 
 
@@ -75,17 +76,60 @@ def _scenario_legacy_tolerated(conn, dbmod):
     assert res["coverage_gaps"] == 0
 
 
-def _scenario_coverage_gap_detected(conn, dbmod):
+def _scenario_coverage_gap_reported_not_integrity_failure(conn, dbmod):
+    """A raw insert AFTER the chain started is a COVERAGE gap — reported via
+    coverage_complete/coverage_gaps but it must NOT flip integrity `verified`
+    to False. During the deferred wiring rollout such gaps are EXPECTED; forcing
+    verified:False would train operators to ignore the flag and bury a real
+    tamper."""
     _reset_audit_log(conn)
     for i in range(3):
         dbmod.append_audit_log(conn, action=f"G{i}", user_id="u", commit=True)
-    # A raw insert AFTER the chain started bypassed the chokepoint — detectable.
     conn.execute("INSERT INTO audit_log (action, user_id) VALUES ('RAW_BYPASS', 'u')")
     conn.commit()
     res = dbmod.verify_audit_log_chain(conn)
     assert res["coverage_gaps"] == 1
+    assert res["coverage_complete"] is False
+    assert res["verified"] is True, res["broken_links"]  # integrity intact
+    # coverage_gap is NOT an integrity break
+    assert not any(b.get("issue") == "coverage_gap" for b in res["broken_links"])
+
+
+def _scenario_tamper_caught_despite_coverage_gap(conn, dbmod):
+    """The load-bearing anti-alert-fatigue property: a genuine tamper is still
+    reported verified:False even when the table also has (expected) coverage
+    gaps — the gap must not mask the tamper."""
+    _reset_audit_log(conn)
+    for i in range(4):
+        dbmod.append_audit_log(conn, action=f"M{i}", user_id="u", detail=f"d{i}", commit=True)
+    # an expected rollout gap
+    conn.execute("INSERT INTO audit_log (action, user_id) VALUES ('RAW_BYPASS', 'u')")
+    # AND a real tamper on a chained row
+    conn.execute("UPDATE audit_log SET detail = 'TAMPERED' WHERE action = 'M2'")
+    conn.commit()
+    res = dbmod.verify_audit_log_chain(conn)
+    assert res["coverage_gaps"] == 1 and res["coverage_complete"] is False
     assert res["verified"] is False
-    assert any(b.get("issue") == "coverage_gap" for b in res["broken_links"])
+    assert any(b.get("issue") == "content_tampered" for b in res["broken_links"])
+
+
+def _scenario_limit_windowed_integrity(conn, dbmod):
+    """A positive `limit` bounds verification to the most recent N chained rows
+    (integrity-only recency check) without scanning the whole table; coverage
+    classification is skipped (coverage_complete is None)."""
+    _reset_audit_log(conn)
+    for i in range(8):
+        dbmod.append_audit_log(conn, action=f"W{i}", user_id="u", commit=True)
+    res = dbmod.verify_audit_log_chain(conn, limit=3)
+    assert res["verified"] is True, res["broken_links"]
+    assert res["entries_checked"] == 3  # bounded, not all 8
+    assert res["coverage_complete"] is None  # not evaluated in windowed mode
+    # tampering a row inside the window is still caught
+    conn.execute("UPDATE audit_log SET action = 'ZZ' WHERE action = 'W7'")
+    conn.commit()
+    res2 = dbmod.verify_audit_log_chain(conn, limit=3)
+    assert res2["verified"] is False
+    assert any(b.get("issue") == "content_tampered" for b in res2["broken_links"])
 
 
 def _scenario_genesis_after_retention_delete(conn, dbmod):
@@ -130,7 +174,9 @@ _SCENARIOS = [
     _scenario_links_and_clean_verify,
     _scenario_tamper_detected,
     _scenario_legacy_tolerated,
-    _scenario_coverage_gap_detected,
+    _scenario_coverage_gap_reported_not_integrity_failure,
+    _scenario_tamper_caught_despite_coverage_gap,
+    _scenario_limit_windowed_integrity,
     _scenario_genesis_after_retention_delete,
     _scenario_cross_engine_hash_reproducible,
 ]

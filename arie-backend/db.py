@@ -4380,6 +4380,15 @@ def append_audit_log(
     the same tail (a fork). SQLite already serialises writers; the partial unique
     index on previous_hash (v2.46) is the structural backstop on both engines.
 
+    CONTRACT — the advisory lock is a SINGLE global key held until the caller's
+    transaction commits, so it SERIALISES every audit append across all workers.
+    A caller MUST commit promptly after append_audit_log and MUST NOT interleave
+    slow work (external I/O, long computation) between append and commit, or it
+    stalls every other audit writer (and can abort at statement_timeout, failing
+    the action fail-closed). Before this is wired into the ~200 existing writers,
+    that throughput trade-off must be decided (commit-immediately here vs a
+    short dedicated audit transaction) — hence wiring is deliberately deferred.
+
     Keyword-only with None/"" defaults so it absorbs every existing audit_log
     caller's argument subset when the wiring step (deferred) routes them here.
     """
@@ -4441,40 +4450,70 @@ def append_audit_log(
 
 
 def verify_audit_log_chain(db: 'DBConnection', limit: Optional[int] = None) -> Dict[str, Any]:
-    """Verify the audit_log hash chain and classify unchained rows.
+    """Verify the audit_log hash chain.
+
+    `verified` reflects INTEGRITY ONLY — content tampering, broken links, forks,
+    orphans, duplicates, cycles. Whether every post-genesis row is chained
+    (COVERAGE) is reported SEPARATELY via `coverage_complete` / `coverage_gaps`
+    and does NOT flip `verified`. This matters during the (deferred) wiring
+    rollout: until every writer is migrated, hash-less rows after the genesis are
+    EXPECTED; if those forced `verified: False`, operators would learn to ignore
+    the flag and a genuine tamper would be buried under expected gaps. So a real
+    tamper is still reported `verified: False` even while coverage is partial.
 
     Order is reconstructed by FOLLOWING previous_hash -> entry_hash links (not by
     timestamp, which is second-granularity and non-deterministic on PostgreSQL).
 
-    Coverage model (makes a partial rollout a DETECTABLE condition):
+    Coverage model (full scan only — limit=None):
       - genesis_id = MIN(id) among chained rows (entry_hash IS NOT NULL).
-      - unchained rows with id < genesis_id  -> `legacy` (ALLOWED: written before
-        the chain existed).
+      - unchained rows with id < genesis_id  -> `legacy` (ALLOWED: pre-chain).
       - unchained rows with id > genesis_id  -> `coverage_gap` (a raw INSERT
-        bypassed append_audit_log after the chain started) -> reported.
+        bypassed append_audit_log after the chain started) -> reported; does NOT
+        fail integrity.
+
+    `limit`: when a positive int, only the most recent `limit` CHAINED rows are
+    fetched and integrity-checked — a BOUNDED recency check that does not scan
+    the whole table. Coverage classification is skipped in that mode
+    (`coverage_complete` is None). With limit=None the whole table is scanned
+    (O(N) — this is an operator/audit tool, not a hot path).
 
     Retention tolerance: the chain head is the earliest SURVIVING chained row
-    whose previous_hash is not the entry_hash of any surviving chained row. After
-    a GDPR retention delete of the oldest entries that head legitimately carries a
-    non-NULL previous_hash (pointing at a deleted predecessor); that is allowed,
-    not flagged as a broken genesis.
+    whose previous_hash is not the entry_hash of any surviving chained row, so a
+    GDPR retention delete of the oldest (contiguous) entries does not false-fail.
 
-    LIMITATION (same as the supervisor chain): suffix truncation — deleting the
-    most recent N entries — leaves a shorter but internally-consistent chain that
-    still verifies. Detecting it needs an out-of-band sealed head+count anchor
-    (a follow-up), so verified=True does not by itself prove no tail was dropped.
+    INTEGRITY LIMITATION — read before trusting `verified: True`. This is an
+    UNKEYED SHA-256 chain over a PUBLIC payload with NO external anchor. It proves
+    the rows are internally CONSISTENT; it does NOT prove they are AUTHENTIC
+    against an adversary holding UPDATE/DELETE on audit_log. Such an insider can
+    edit any entry and cascade-recompute previous_hash+entry_hash for every later
+    row, and can drop the newest N entries (suffix truncation) — both leave a
+    chain that verifies True. Defeating the write-capable insider needs a keyed
+    MAC (HMAC key in Secrets Manager, unreachable via SQL) plus periodic
+    out-of-band sealing of the tail hash+count to WORM storage — a tracked
+    follow-up. `verified: True` here means "internally consistent", not
+    "tamper-proof against a database-capable actor".
     """
+    windowed = isinstance(limit, int) and limit > 0
+    _cols = ("SELECT id, user_id, user_name, user_role, action, target, detail, "
+             "ip_address, timestamp, before_state, after_state, previous_hash, entry_hash "
+             "FROM audit_log")
     try:
-        rows = [dict(r) for r in db.execute(
-            "SELECT id, user_id, user_name, user_role, action, target, detail, "
-            "ip_address, timestamp, before_state, after_state, previous_hash, entry_hash "
-            "FROM audit_log ORDER BY id ASC"
-        ).fetchall()]
+        if windowed:
+            # Bounded fetch: only the most recent `limit` CHAINED rows (integrity
+            # recency check; does not scan the whole table).
+            rows = [dict(r) for r in db.execute(
+                _cols + " WHERE entry_hash IS NOT NULL ORDER BY id DESC LIMIT ?",
+                (limit,)
+            ).fetchall()]
+            rows.reverse()  # ascending
+            chained = rows
+            unchained: List[Dict[str, Any]] = []
+        else:
+            rows = [dict(r) for r in db.execute(_cols + " ORDER BY id ASC").fetchall()]
+            chained = [r for r in rows if r.get("entry_hash")]
+            unchained = [r for r in rows if not r.get("entry_hash")]
     except Exception as e:  # columns absent (migration not run) etc.
         return {"verified": False, "reason": str(e)}
-
-    chained = [r for r in rows if r.get("entry_hash")]
-    unchained = [r for r in rows if not r.get("entry_hash")]
 
     if not chained:
         # Nothing chained yet: a fully-legacy table is vacuously consistent.
@@ -4485,17 +4524,19 @@ def verify_audit_log_chain(db: 'DBConnection', limit: Optional[int] = None) -> D
             "chained_rows": 0,
             "legacy_rows": len(unchained),
             "coverage_gaps": 0,
+            "coverage_complete": None if windowed else True,
             "broken_links": [],
             "total_entries": len(rows),
         }
 
-    broken_links: List[Dict[str, Any]] = []
+    broken_links: List[Dict[str, Any]] = []   # INTEGRITY breaks — these flip verified
+    legacy_rows: List[Dict[str, Any]] = []
+    coverage_gaps: List[Dict[str, Any]] = []  # informational — do NOT flip verified
 
-    genesis_id = min(r["id"] for r in chained)
-    legacy_rows = [r for r in unchained if r["id"] < genesis_id]
-    coverage_gaps = [r for r in unchained if r["id"] > genesis_id]
-    for r in coverage_gaps:
-        broken_links.append({"entry_id": r.get("id"), "issue": "coverage_gap"})
+    if not windowed:
+        genesis_id = min(r["id"] for r in chained)
+        legacy_rows = [r for r in unchained if r["id"] < genesis_id]
+        coverage_gaps = [r for r in unchained if r["id"] > genesis_id]
 
     # Duplicate entry hashes are impossible in a valid chain.
     seen_hashes: Dict[str, Any] = {}
@@ -4511,8 +4552,9 @@ def verify_audit_log_chain(db: 'DBConnection', limit: Optional[int] = None) -> D
     for r in chained:
         ph = r.get("previous_hash") or None
         # A head is any chained row whose predecessor is not itself a surviving
-        # chained row: true genesis (ph is None) OR post-retention earliest row
-        # (ph points at a deleted predecessor).
+        # chained row: true genesis (ph is None), post-retention earliest row
+        # (ph points at a deleted predecessor), OR — in windowed mode — the
+        # earliest in-window row (ph points at an older row outside the window).
         if ph is None or ph not in chained_hashes:
             heads.append(r)
         if ph is not None:
@@ -4549,13 +4591,7 @@ def verify_audit_log_chain(db: 'DBConnection', limit: Optional[int] = None) -> D
     else:
         ordered = sorted(chained, key=lambda r: r["id"])
 
-    # Recency window (optional): verify the most recent `limit` entries, anchored
-    # on the stored previous_hash of the first in-window entry.
-    window = ordered
-    if isinstance(limit, int) and limit > 0 and len(ordered) > limit:
-        window = ordered[-limit:]
-
-    for idx, row in enumerate(window):
+    for idx, row in enumerate(ordered):
         expected = _compute_audit_log_entry_hash(row)
         if row.get("entry_hash") != expected:
             broken_links.append({
@@ -4566,7 +4602,7 @@ def verify_audit_log_chain(db: 'DBConnection', limit: Optional[int] = None) -> D
             })
         # Link check: every entry except the head must chain off its predecessor.
         if idx > 0:
-            prev = window[idx - 1]
+            prev = ordered[idx - 1]
             if (row.get("previous_hash") or None) != (prev.get("entry_hash") or None):
                 broken_links.append({
                     "entry_id": row.get("id"),
@@ -4576,11 +4612,12 @@ def verify_audit_log_chain(db: 'DBConnection', limit: Optional[int] = None) -> D
                 })
 
     return {
-        "verified": len(broken_links) == 0,
-        "entries_checked": len(window),
+        "verified": len(broken_links) == 0,   # INTEGRITY only — coverage is separate
+        "entries_checked": len(ordered),
         "chained_rows": len(chained),
         "legacy_rows": len(legacy_rows),
         "coverage_gaps": len(coverage_gaps),
+        "coverage_complete": None if windowed else (len(coverage_gaps) == 0),
         "broken_links": broken_links,
         "total_entries": len(rows),
     }
@@ -7771,8 +7808,10 @@ def _run_migrations(db: DBConnection):
             )
         except Exception as exc:
             logger.error(
-                "Migration v2.46: could not create anti-fork index on "
-                "audit_log.previous_hash (a pre-existing fork may exist): %s", exc,
+                "Migration v2.46: FAILED to create the anti-fork unique index on "
+                "audit_log.previous_hash — the structural fork backstop is NOT "
+                "active and a pre-existing duplicate previous_hash (a chain fork) "
+                "likely exists and needs manual investigation/repair: %s", exc,
             )
         try:
             db.executescript(
