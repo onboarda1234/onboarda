@@ -89,6 +89,24 @@ def test_authenticated_staging_browser_smoke_records_browser_evidence():
     assert "providerLabelFindings" in text
     assert "scanRemovedProviderLabels" in text
     assert "noRemovedProviderLabels" in text
+    assert "applicationStatusTokenFindings" in text
+    assert "scanApplicationStatusTokens" in text
+    assert "noRawApplicationStatusTokenStatusSurfaces" in text
+    assert "noRawApplicationStatusTokenFixtureNames" in text
+    assert "noVisibleInternalApplicationStatusReasonCodes" in text
+
+
+def test_authenticated_staging_browser_smoke_categorizes_application_status_tokens():
+    text = _script_text()
+
+    assert "submitted_to_compliance" in text
+    assert "officer_submitted_to_compliance" in text
+    assert "officerStatusSurfaces" in text
+    assert "fixturePartyNames" in text
+    assert "visibleInternalMachineCodes" in text
+    assert "storageMachineCodes" in text
+    assert "submitted_to_compliance\\s+(director|owner|ubo|beneficial owner|fixture)" in text
+    assert "category: \"storageMachineCodes\"" in text
 
 
 def test_authenticated_staging_browser_smoke_classifies_known_role_denials_as_non_blocking():

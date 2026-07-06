@@ -76,6 +76,26 @@ def _norm(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).lower()
 
 
+def _fixture_safe_person_name(person_name: Any, person_type: Any = "") -> str:
+    """Humanize synthetic fixture names that were generated from status tokens."""
+    raw = re.sub(r"\s+", " ", str(person_name or "").strip())
+    if not raw:
+        return "Unknown person"
+    match = re.match(r"^submitted_to_compliance(?:\s+(.+))?$", raw, flags=re.IGNORECASE)
+    if not match:
+        return raw
+    role_text = _norm(match.group(1) or person_type)
+    if role_text in {"director", "directors"}:
+        role = "Director"
+    elif role_text in {"owner", "owners", "ubo", "ubos", "beneficial owner", "beneficial owners"}:
+        role = "Owner"
+    elif role_text in {"fixture", "fixtures"}:
+        role = "Fixture"
+    else:
+        role = "Fixture"
+    return f"Senior Review {role}"
+
+
 def _person_key(person_type: str, person_id: str, person_name: str) -> str:
     return "|".join([_norm(person_type), _norm(person_id), _norm(person_name)])
 
@@ -190,6 +210,7 @@ def _status_payload(
 ) -> Dict[str, Any]:
     if verification_status not in VALID_STATUSES:
         verification_status = "unavailable"
+    display_person_name = _fixture_safe_person_name(person_name, person_type)
     blocking_flags = list(blocking_flags or [])
     warning_flags = list(warning_flags or [])
     rejection_labels = list(rejection_labels or [])
@@ -209,6 +230,7 @@ def _status_payload(
         "person_id": person_id,
         "person_type": person_type or "unknown",
         "person_name": person_name or "Unknown person",
+        "display_person_name": display_person_name,
         "provider": PROVIDER,
         "provider_label": PROVIDER_LABEL,
         "provider_scope": PROVIDER_SCOPE,
@@ -649,7 +671,7 @@ def build_idv_gate_summary(payload: Mapping[str, Any]) -> Dict[str, Any]:
         counts[status] = counts.get(status, 0) + 1
         if status in IDV_APPROVAL_ALLOW_STATUSES:
             continue
-        person = item.get("person_name") or "Unknown person"
+        person = item.get("display_person_name") or item.get("person_name") or "Unknown person"
         provider_status = str(item.get("verification_status") or "").strip().lower()
         title = "Identity verification unresolved"
         status_label = _canonical_status_label(status).lower()
@@ -695,6 +717,8 @@ def build_idv_gate_summary(payload: Mapping[str, Any]) -> Dict[str, Any]:
             "person_id": item.get("person_id"),
             "person_type": item.get("person_type"),
             "person_name": person,
+            "display_person_name": person,
+            "affected_people": [person] if person else [],
             "idv_resolution_status": status,
         })
     if not statuses:

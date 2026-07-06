@@ -5067,9 +5067,9 @@ function mapApplicationFromApi(a) {
     date: (a.created_at || '').split('T')[0].split(' ')[0],
     country: a.country || '',
     brn: a.brn || '',
-    directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: d.full_name, nat: d.nationality, dob: d.date_of_birth || '', pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
-    ubos: (a.ubos || []).map(function(u) { return { id: u.id || '', person_key: u.person_key || '', name: u.full_name, nat: u.nationality || '', dob: u.date_of_birth || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
-    intermediaries: (a.intermediaries || []).map(function(i) { return { id: i.person_key || i.id, name: i.entity_name || i.full_name || '', jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 }; }),
+    directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: applicationFixtureSafePartyName(d.full_name, 'director'), nat: d.nationality, dob: d.date_of_birth || '', pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
+    ubos: (a.ubos || []).map(function(u) { return { id: u.id || '', person_key: u.person_key || '', name: applicationFixtureSafePartyName(u.full_name, 'ubo'), nat: u.nationality || '', dob: u.date_of_birth || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
+    intermediaries: (a.intermediaries || []).map(function(i) { return { id: i.person_key || i.id, name: applicationFixtureSafePartyName(i.entity_name || i.full_name || '', 'fixture'), jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 }; }),
     dims: dims,
     docs: backendDocuments.map(function(d) { return d.doc_type; }),
     _documents: backendDocuments,
@@ -5945,6 +5945,18 @@ async function refreshDashboardData() {
 
 function normalizeStatusKey(status) {
   return String(status || '').toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function applicationFixtureSafePartyName(value, partyType) {
+  var raw = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  var match = raw.match(/^submitted_to_compliance(?:\s+(.+))?$/i);
+  if (!match) return raw;
+  var roleText = String(match[1] || partyType || '').toLowerCase().replace(/[_-]+/g, ' ').trim();
+  var role = 'Fixture';
+  if (roleText === 'director' || roleText === 'directors') role = 'Director';
+  else if (roleText === 'owner' || roleText === 'owners' || roleText === 'ubo' || roleText === 'ubos' || roleText === 'beneficial owner' || roleText === 'beneficial owners') role = 'Owner';
+  return 'Senior Review ' + role;
 }
 
 var APPLICATION_STATUS_ORDER = [
@@ -9056,7 +9068,10 @@ function personHasDeclaredOrVerifiedPep(person) {
 function buildPartyDisplayName(person) {
   if (!person) return 'Unnamed party';
   var combined = [person.first_name || '', person.last_name || ''].join(' ').trim();
-  return firstMeaningfulDetailValue(person.name, person.full_name, combined, person.entity_name, person.id, 'Unnamed party');
+  return applicationFixtureSafePartyName(
+    firstMeaningfulDetailValue(person.name, person.full_name, combined, person.entity_name, person.id, 'Unnamed party'),
+    person.person_type || person.type || ''
+  );
 }
 
 function buildStoredRiskComputation(app) {
@@ -10939,7 +10954,7 @@ async function fetchApplicationDetail(ref) {
     return {
       id: d.id || '',
       person_key: d.person_key || '',
-      name: d.full_name || d.name || '',
+      name: applicationFixtureSafePartyName(d.full_name || d.name || '', 'director'),
       first_name: d.first_name || '',
       last_name: d.last_name || '',
       nat: d.nationality || d.nat || '',
@@ -10977,7 +10992,7 @@ async function fetchApplicationDetail(ref) {
     return {
       id: u.id || '',
       person_key: u.person_key || '',
-      name: u.full_name || u.name || '',
+      name: applicationFixtureSafePartyName(u.full_name || u.name || '', 'ubo'),
       first_name: u.first_name || '',
       last_name: u.last_name || '',
       nat: u.nationality || u.nat || '',
@@ -11015,8 +11030,8 @@ async function fetchApplicationDetail(ref) {
     return {
       id: i.id || '',
       person_key: i.person_key || '',
-      name: i.entity_name || i.full_name || '',
-      entity_name: i.entity_name || '',
+      name: applicationFixtureSafePartyName(i.entity_name || i.full_name || '', 'fixture'),
+      entity_name: applicationFixtureSafePartyName(i.entity_name || '', 'fixture'),
       jurisdiction: i.jurisdiction || i.country_of_incorporation || '',
       country_of_incorporation: i.country_of_incorporation || i.jurisdiction || '',
       registration_number: i.registration_number || '',
@@ -11556,6 +11571,11 @@ function sumsubIdvLastUpdate(item) {
   return String(raw).replace('T', ' ').slice(0, 19);
 }
 
+function sumsubIdvDisplayName(item) {
+  item = item || {};
+  return item.display_person_name || item.displayPersonName || item.person_name || 'Unknown person';
+}
+
 function canViewUnmatchedSumsubWebhookNotice() {
   return false;
 }
@@ -11604,7 +11624,7 @@ function renderSumsubIdvPanel(app) {
       var canResolve = canResolveIdvException() && item.approval_ready !== true;
       var detailsId = 'idv-details-' + rowKey;
       html += '<div class="idv-compact-row" data-idv-row="' + escapeHtml(rowKey) + '">' +
-        '<div><div class="idv-compact-person">' + escapeHtml(item.person_name || 'Unknown person') + '</div><div class="idv-compact-muted">Individual KYC identity</div></div>' +
+        '<div><div class="idv-compact-person">' + escapeHtml(sumsubIdvDisplayName(item)) + '</div><div class="idv-compact-muted">Individual KYC identity</div></div>' +
         '<div class="idv-compact-muted">' + escapeHtml(sumsubIdvRoleLabel(item.person_type)) + '</div>' +
         '<div>' + sumsubIdvBadge(idvStatus) + '<div class="idv-compact-muted" style="margin-top:3px;">' + escapeHtml(String(idvStatusLabel).replace(/_/g, ' ')) + '</div></div>' +
         '<div class="idv-compact-evidence">' + escapeHtml(sumsubIdvDefaultEvidenceLabel(item)) + '</div>' +
@@ -11674,7 +11694,7 @@ function openIdvResolutionModal(rowKey) {
     return;
   }
   document.getElementById('idv-resolution-row-key').value = rowKey;
-  document.getElementById('idv-resolution-subject').textContent = (item.person_name || 'Unknown person') + ' - ' + sumsubIdvRoleLabel(item.person_type);
+  document.getElementById('idv-resolution-subject').textContent = sumsubIdvDisplayName(item) + ' - ' + sumsubIdvRoleLabel(item.person_type);
   document.getElementById('idv-resolution-outcome').value = '';
   document.getElementById('idv-resolution-reason').value = '';
   document.getElementById('idv-resolution-rationale').value = '';
@@ -26454,6 +26474,11 @@ function caseCommandSanitizeText(text) {
   value = value.replace(/provider=Sumsub Identity Verification/gi, 'Sumsub identity verification');
   value = value.replace(/review_answer=unavailable/gi, 'final result unavailable');
   value = value.replace(/source=derived/gi, 'derived status');
+  value = value.replace(/officer_submitted_to_compliance/gi, 'Submitted to Compliance');
+  value = value.replace(/pre_approval_route/gi, 'Pre-approval route');
+  value = value.replace(/submitted_to_compliance\s+Director/gi, 'Senior Review Director');
+  value = value.replace(/submitted_to_compliance\s+(Owner|UBO)/gi, 'Senior Review Owner');
+  value = value.replace(/submitted_to_compliance\s+Fixture/gi, 'Senior Review Fixture');
   return value;
 }
 

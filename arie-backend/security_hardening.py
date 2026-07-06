@@ -29,7 +29,7 @@ import re
 import time
 import hashlib
 from datetime import datetime, timedelta, timezone
-from typing import Tuple, Dict, List, Optional, Any, Mapping
+from typing import Tuple, Dict, List, Optional, Any, Mapping, Iterable
 from pathlib import Path
 
 from environment import ENV, is_production, get_screening_validity_days
@@ -769,6 +769,43 @@ def _approval_route_risk_level(app: Mapping[str, Any]) -> Optional[str]:
 
 def _approval_text(value: Any) -> str:
     return str(value or "").strip().lower()
+
+
+_APPROVAL_ROUTE_REASON_LABELS = {
+    "adverse_media": "Adverse media",
+    "compliance_review_required": "Compliance review required",
+    "declared_pep_present": "Declared PEP present",
+    "edd_required": "EDD required",
+    "edd_trigger": "EDD trigger",
+    "high_or_very_high_risk": "High or very high risk",
+    "material_screening_concern": "Material screening concern",
+    "officer_submitted_to_compliance": "Submitted to Compliance",
+    "pre_approval_route": "Pre-approval route",
+    "prohibited_screening_hit": "Prohibited screening hit",
+    "provider_pep_match_unresolved": "Provider PEP match unresolved",
+}
+
+
+def _approval_route_reason_label(reason: Any) -> str:
+    text = str(reason or "").strip()
+    if not text:
+        return ""
+    key = text.lower()
+    if key in _APPROVAL_ROUTE_REASON_LABELS:
+        return _APPROVAL_ROUTE_REASON_LABELS[key]
+    if "=" in text:
+        name, value = text.split("=", 1)
+        return f"{name.replace('_', ' ').strip().capitalize()}: {value.replace('_', ' ').strip()}"
+    return text.replace("_", " ").strip().capitalize()
+
+
+def _approval_route_reason_labels(reasons: Iterable[Any]) -> List[str]:
+    labels: List[str] = []
+    for reason in reasons or []:
+        label = _approval_route_reason_label(reason)
+        if label and label not in labels:
+            labels.append(label)
+    return labels
 
 
 def _approval_truthy_flag(value: Any) -> bool:
@@ -2159,11 +2196,12 @@ def can_decide_application(user, app, decision, *, risk_level=None, override_ai=
         and route_name in {APPROVAL_ROUTE_COMPLIANCE_REQUIRED, APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED}
     ):
         reasons = meta.get("approval_route_escalation_reasons") or ["compliance_review_required"]
+        reason_labels = _approval_route_reason_labels(reasons[:6])
         return (
             False,
             403,
             "Approval blocked: this application requires compliance/SCO review before approval "
-            f"(route={route_name}, reasons={', '.join(str(r) for r in reasons[:6])}).",
+            f"(route={_approval_route_reason_label(route_name)}, reasons={', '.join(reason_labels)}).",
             meta,
         )
 
@@ -2410,13 +2448,14 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
 
     if route_policy.get("route") in {APPROVAL_ROUTE_COMPLIANCE_REQUIRED, APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED}:
         reasons = route_policy.get("escalation_reasons") or ["compliance_review_required"]
+        reason_labels = _approval_route_reason_labels(reasons[:6])
         blockers.append(_approval_gate_blocker(
             "risk_escalation_required",
             "Risk Route",
             "Compliance review is required",
             "This case cannot use the direct LOW/MEDIUM approval route. "
             + "Escalation reason(s): "
-            + ", ".join(str(reason) for reason in reasons[:6])
+            + ", ".join(reason_labels)
             + ".",
             cta_label="Submit to Compliance",
             tab="overview",
@@ -2424,6 +2463,10 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
             blocker_group="risk_route",
             blocker_group_label="Risk Route",
             action_key="submit_to_compliance.open",
+            metadata={
+                "approval_route": route_policy.get("route"),
+                "escalation_reasons": list(reasons),
+            },
         ))
 
     if route_policy.get("requires_compliance_package"):

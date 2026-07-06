@@ -123,6 +123,32 @@ def test_missing_mapping_returns_not_started_not_approved():
     assert item["raw_provider_payload_exposed"] is False
 
 
+def test_fixture_status_token_party_names_have_safe_display_names():
+    conn = _db()
+
+    payload = build_sumsub_idv_statuses(
+        conn,
+        _application(),
+        directors=[_director("submitted_to_compliance Director")],
+        ubos=[{"id": "ubo-1", "full_name": "submitted_to_compliance Owner"}],
+    )
+
+    director = next(item for item in payload["statuses"] if item["person_type"] == "director")
+    owner = next(item for item in payload["statuses"] if item["person_type"] == "ubo")
+    assert director["person_name"] == "submitted_to_compliance Director"
+    assert director["display_person_name"] == "Senior Review Director"
+    assert owner["person_name"] == "submitted_to_compliance Owner"
+    assert owner["display_person_name"] == "Senior Review Owner"
+
+    blocker_text = " ".join(
+        str(blocker.get("description") or "")
+        for blocker in payload["gate_summary"]["blockers"]
+    )
+    assert "Senior Review Director" in blocker_text
+    assert "Senior Review Owner" in blocker_text
+    assert "submitted_to_compliance" not in blocker_text
+
+
 def test_mapping_only_returns_applicant_created_not_approved():
     conn = _db()
     conn.execute(
