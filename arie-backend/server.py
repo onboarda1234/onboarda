@@ -8092,124 +8092,14 @@ class ApplicationDetailHandler(BaseHandler):
                     db.close()
                     return self.error(message, 409)
 
-            # ── H-05 FIX: High-risk cases MUST go through compliance review before approval ──
-            if new_status == "approved" and risk_level in ("HIGH", "VERY_HIGH"):
-                review_states = ("under_review", "edd_required", "compliance_review", "in_review")
-                if current_status not in review_states:
-                    db.close()
-                    return self.error(
-                        f"HIGH/VERY_HIGH risk applications must undergo compliance review "
-                        f"before approval. Current status: {current_status}",
-                        400
-                    )
-
-            # For approval: enforce that screening is complete, memo exists, and approval gate passes
-            if new_status == "approved":
-                # Require screening to have been run (not in draft)
-                prescreening = safe_json_loads(app["prescreening_data"])
-                if not prescreening.get("screening_report"):
-                    db.close()
-                    return self.error("Cannot approve: screening has not been run. Submit the application first.", 400)
-
-                # Freeze screening post-submission: prevent re-screening after approval
-                screening_report = prescreening.get("screening_report", {})
-                if screening_report.get("screening_mode") == "simulated" and is_production():
-                    db.close()
-                    return self.error("Cannot approve: screening used simulated data in production.", 400)
-
-                # Require compliance memo before approval decision
-                memo = latest_compliance_memo_row(db, real_id)
-                if not memo:
-                    db.close()
-                    return self.error("Cannot approve: compliance memo must be generated before decision.", 400)
-                second_review_summary = _screening_second_review_summary_if_blocked(db, app)
-                if second_review_summary:
-                    reason = "Approval blocked: screening_second_review_pending"
-                    _audit_approval_blocked_screening_second_review(
-                        self,
-                        db,
-                        app,
-                        user,
-                        second_review_summary,
-                        "application_status_patch",
-                    )
-                    self.log_governance_attempt(
-                        user,
-                        "application.status_change",
-                        app["ref"],
-                        "rejected",
-                        400,
-                        reason,
-                        _governance_summary(data, ("status", "notes")),
-                        db=db,
-                        commit=False,
-                    )
-                    db.commit()
-                    db.close()
-                    return _write_screening_second_review_block_response(
-                        self,
-                        second_review_summary,
-                        reason,
-                        400,
-                    )
-                stale = _ensure_memo_fresh_or_mark_stale(
-                    db,
-                    app,
-                    memo,
-                    actor=user,
-                    ip_address=self.get_client_ip(),
-                    context="application_status_approval",
-                )
-                if stale.get("is_stale"):
-                    db.commit()
-                    db.close()
-                    return self.error(
-                        "Approval gate failed: Compliance memo is stale: "
-                        + stale.get("reason", "Regenerate the memo before approving."),
-                        400,
-                    )
-
-                # Run full approval gate validation
-                app_dict = dict(app)
-                app_dict["prescreening_data"] = prescreening
-                can_approve, gate_error = ApprovalGateValidator.validate_approval(app_dict, db)
-                if not can_approve:
-                    second_review_summary = _screening_second_review_summary_if_blocked(db, app_dict)
-                    if second_review_summary:
-                        reason = "Approval blocked: screening_second_review_pending"
-                        _audit_approval_blocked_screening_second_review(
-                            self,
-                            db,
-                            app_dict,
-                            user,
-                            second_review_summary,
-                            "application_status_patch",
-                        )
-                        self.log_governance_attempt(
-                            user,
-                            "application.status_change",
-                            app["ref"],
-                            "rejected",
-                            400,
-                            reason,
-                            _governance_summary(data, ("status", "notes")),
-                            db=db,
-                            commit=False,
-                        )
-                        db.commit()
-                        db.close()
-                        return _write_screening_second_review_block_response(
-                            self,
-                            second_review_summary,
-                            reason,
-                            400,
-                        )
-                    _audit_enhanced_requirement_approval_block_if_applicable(
-                        db, app_dict, user, gate_error
-                    )
-                    db.commit()
-                    db.close()
-                    return self.error(f"Approval gate failed: {gate_error}", 400)
+            # NOTE (chore-applications-deadcode-cleanup): the terminal targets
+            # 'approved'/'rejected' are hard-blocked above (409, P0-1) AND are
+            # absent from valid_transitions, so `new_status` can never be
+            # "approved"/"rejected" here. The approval enforcement stack
+            # (H-05 review-first, screening/memo/second-review/staleness gates,
+            # ApprovalGateValidator) lives exclusively on the real approval path,
+            # POST /api/applications/:id/decision. The unreachable duplicate that
+            # used to sit here was deleted; the /decision gate is unchanged.
 
             lane_synced = new_status == "edd_required" and str(app.get("onboarding_lane") or "").strip().upper() != "EDD"
             if lane_synced:
@@ -8222,9 +8112,8 @@ class ApplicationDetailHandler(BaseHandler):
                     "UPDATE applications SET status=?, updated_at=datetime('now') WHERE id=?",
                     (new_status, real_id),
                 )
-            if new_status in ("approved", "rejected"):
-                db.execute("UPDATE applications SET decided_at=datetime('now'), decision_by=?, decision_notes=? WHERE id=?",
-                           (user["sub"], data.get("notes",""), real_id))
+            # (decided_at/decision_by are stamped only on the /decision path;
+            #  approved/rejected can never be reached here — see note above.)
             audit_detail = f"Status: {current_status} → {new_status}"
             if lane_synced:
                 audit_detail += (
