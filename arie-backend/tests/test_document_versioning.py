@@ -295,9 +295,25 @@ def test_replacement_supersedes_previous_document_and_active_apis_hide_history(d
         timeout=5,
     )
     assert active_docs.status_code == 200, active_docs.text
+    # The client sees ONLY the current document (B); the superseded history (A)
+    # is hidden — the id list is the authoritative versioning assertion.
     assert [d["id"] for d in active_docs.json()] == [doc_b["id"]]
-    assert "B verified" in json.dumps(active_docs.json())
-    assert "A verified" not in json.dumps(active_docs.json())
+    # PR-18: verification_results is an officer-only field, stripped from the
+    # client document projection. The client must NOT see the AI verification
+    # detail ("B verified" lives inside verification_results).
+    assert "B verified" not in json.dumps(active_docs.json())
+
+    # The verification-content discriminator (current B, not history A) is
+    # asserted on the OFFICER view, which is allowed to see verification_results.
+    officer_docs = requests.get(
+        f"{document_versioning_server}/api/applications/{app_id}/documents",
+        headers=_officer_headers(),
+        timeout=5,
+    )
+    assert officer_docs.status_code == 200, officer_docs.text
+    assert [d["id"] for d in officer_docs.json()] == [doc_b["id"]]
+    assert "B verified" in json.dumps(officer_docs.json())
+    assert "A verified" not in json.dumps(officer_docs.json())
 
     active_detail = requests.get(
         f"{document_versioning_server}/api/applications/{app_id}",
