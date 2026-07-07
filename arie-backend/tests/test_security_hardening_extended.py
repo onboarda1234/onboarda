@@ -573,6 +573,9 @@ class TestTokenRevocationList:
         from security_hardening import TokenRevocationList
         trl = TokenRevocationList()
         trl._db_loaded = True  # Skip DB loading
+        # In-memory unit test: a cache miss consults the persistent store
+        # (fail-closed, BSA-001) — simulate a healthy store with no row.
+        trl._db_lookup_active = lambda jti: 0
         assert trl.is_revoked("some-jti") is False
 
     def test_revoke_marks_token(self):
@@ -581,8 +584,8 @@ class TestTokenRevocationList:
         trl._db_loaded = True
         future_time = time.time() + 3600
         trl._revoked = {}  # Reset
-        # Mock DB persist to avoid DB dependency
-        trl._db_persist = lambda jti, exp: None
+        # Mock DB persist to avoid DB dependency (accepts the BSA-001 db= kwarg)
+        trl._db_persist = lambda jti, exp, db=None: True
         trl.revoke("test-jti-123", future_time)
         assert trl.is_revoked("test-jti-123") is True
 
