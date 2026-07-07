@@ -1439,16 +1439,34 @@ def compute_risk_score(app_data, config_override=None):
 # EX-09: REUSABLE RISK RECOMPUTATION HELPER
 # ══════════════════════════════════════════════════════════
 
+# P10-3 / RDI-004: sentinel stamped onto applications whose recompute FAILED
+# during a risk-config update. It is present and never equals a real
+# `risk_config:*` version, so the decision-time staleness gate blocks approval
+# of these apps (regardless of their prior — possibly NULL — provenance) until
+# a successful re-score stamps the real current version.
+RISK_CONFIG_VERSION_RECOMPUTE_FAILED = "stale:recompute_failed"
+
+
+def _get_risk_config_version_strict(db):
+    """Return the current risk-config version, raising on lookup failure.
+
+    Returns ``None`` only when versioning is genuinely not in use (no
+    ``risk_config`` row / blank ``updated_at``). A database error propagates so
+    fail-closed callers (the approval staleness gate) can distinguish
+    "versioning not in use" from "could not verify" and block on the latter.
+    """
+    row = db.execute("SELECT updated_at FROM risk_config WHERE id=1").fetchone()
+    if row and row["updated_at"]:
+        return f"risk_config:{row['updated_at']}"
+    return None
+
+
 def _get_risk_config_version(db):
     """Return the risk_config timestamp that produced the current risk result."""
-    risk_config_version = None
     try:
-        row = db.execute("SELECT updated_at FROM risk_config WHERE id=1").fetchone()
-        if row and row["updated_at"]:
-            risk_config_version = f"risk_config:{row['updated_at']}"
+        return _get_risk_config_version_strict(db)
     except Exception:
-        pass
-    return risk_config_version
+        return None
 
 
 def _apply_edd_routing_floor_for_recompute(db, app, risk):
@@ -1902,10 +1920,27 @@ def recompute_risk_for_active_apps(db, reason, user=None, log_audit_fn=None):
     for row in rows:
         r = recompute_risk(db, row["id"], reason, user=user, log_audit_fn=log_audit_fn)
         results.append({"app_id": row["id"], **r})
+        if not r.get("recomputed"):
+            # P10-3 / RDI-004: quarantine the app. A failed recompute leaves the
+            # stored score computed under the OLD config; stamping the sentinel
+            # (present, never equal to a real version) makes the decision-time
+            # staleness gate block approval even when the prior provenance was
+            # NULL/blank. Same transaction as the config save — committed (or
+            # rolled back) together. A successful later re-score overwrites it.
+            try:
+                db.execute(
+                    "UPDATE applications SET risk_config_version=?, updated_at=datetime('now') WHERE id=?",
+                    (RISK_CONFIG_VERSION_RECOMPUTE_FAILED, row["id"]),
+                )
+            except Exception as quarantine_err:
+                logger.error(
+                    "recompute_risk_for_active_apps: failed to quarantine app_id=%s "
+                    "after recompute failure: %s", row["id"], quarantine_err)
 
     changed_count = sum(1 for r in results if r.get("changed"))
+    failed_count = sum(1 for r in results if not r.get("recomputed"))
     logger.info(
-        "Bulk risk recomputation: reason=%s, apps=%d, changed=%d",
-        reason, len(results), changed_count)
+        "Bulk risk recomputation: reason=%s, apps=%d, changed=%d, failed(quarantined)=%d",
+        reason, len(results), changed_count, failed_count)
 
     return results
