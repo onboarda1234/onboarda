@@ -92,7 +92,7 @@ def _approve_request(cm, wdb, req_id, user=None):
 
     PR-CM-APPROVAL-PRECONDITIONS-1: records evidence-backed screening/risk
     preconditions and approves with an officer other than the creator
-    (maker/checker is non-waivable for tier1/tier2).
+    (maker/checker is non-waivable for tier1).
     """
     u = user or ADMIN_USER
     cm.submit_change_request(wdb, req_id, u)

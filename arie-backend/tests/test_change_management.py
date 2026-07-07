@@ -112,6 +112,24 @@ class TestConstants:
         cm = _get_cm()
         assert cm.MATERIALITY_TIERS == ("tier1", "tier2", "tier3")
 
+    def test_maker_checker_policy_tier1_only(self):
+        import inspect
+
+        cm = _get_cm()
+        assert cm.MAKER_CHECKER_TIERS == frozenset({"tier1"})
+
+        policy_sources = "\n".join([
+            inspect.getsource(cm.approval_blockers),
+            inspect.getsource(cm.evaluate_approval),
+            inspect.getsource(cm.approve_change_request),
+            inspect.getsource(cm.get_change_request_audit_reconstruction),
+        ])
+        assert 'frozenset({"tier1", "tier2"})' not in policy_sources
+        assert '{"tier1", "tier2"}' not in policy_sources
+        assert '("tier1", "tier2")' not in policy_sources
+        assert "['tier1', 'tier2']" not in policy_sources
+        assert "MAKER_CHECKER_TIERS" in policy_sources
+
     def test_change_sources(self):
         cm = _get_cm()
         assert "portal_client" in cm.CHANGE_SOURCES

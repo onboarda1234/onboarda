@@ -2,7 +2,7 @@
 Tests for PR-CM-APPROVAL-PRECONDITIONS-1.
 
 Covers the approval gate added to Change Management:
-- maker/checker (tier1/tier2 non-waivable; tier3 self-approve allowed)
+- maker/checker (tier1 non-waivable; tier2/tier3 self-approve allowed)
 - screening / risk precondition results block approval until recorded
 - screening result must be EVIDENCE-BACKED (no blank "recorded" marker)
 - a recorded unresolved/indeterminate screening match blocks approval (non-waivable)
@@ -119,13 +119,45 @@ class TestMakerChecker:
         assert not ok
         assert "maker_checker_same_user" in err
 
-    def test_tier2_creator_cannot_approve_own(self, db):
+    def test_tier2_creator_self_approval_has_no_maker_checker_blocker(self, db):
         cm = _get_cm(); wdb = _DBWrapper(db)
         req = _make_cr(cm, wdb, _setup_app(db), "tier2", creator=SCO)
         _to_pending(cm, wdb, req["id"], SCO)
         ok, err = cm.approve_change_request(wdb, req["id"], SCO)
         assert not ok
-        assert "maker_checker_same_user" in err
+        assert "maker_checker_same_user" not in err
+        assert "screening_required_uncleared" in err
+        assert "risk_review_required_uncleared" in err
+
+    def test_tier2_creator_can_self_approve_after_compensating_controls_clear_and_audits_policy(self, db):
+        cm = _get_cm(); wdb = _DBWrapper(db)
+        events = []
+
+        def audit(user, action, target, detail, **kw):
+            events.append({"action": action, "after_state": kw.get("after_state")})
+
+        req = _make_cr(cm, wdb, _setup_app(db), "tier2", creator=SCO)
+        assert req["materiality"] == "tier2"
+        assert req["downstream_actions"]["screening_required"] is True
+        assert req["downstream_actions"]["risk_review_required"] is True
+
+        _to_pending(cm, wdb, req["id"], SCO)
+        _record_both(cm, wdb, req["id"], ADMIN)
+        request_row = dict(wdb.execute("SELECT * FROM change_requests WHERE id = ?", (req["id"],)).fetchone())
+        assert request_row["materiality"] == "tier2"
+        assert request_row["screening_required"] == 1
+        assert request_row["risk_review_required"] == 1
+        blockers = cm.approval_blockers(wdb, request_row, approver_user=SCO)
+        assert [b["code"] for b in blockers] == []
+        readiness = cm.evaluate_approval(wdb, request_row)
+        assert readiness["preconditions_met"] is True
+        assert [n["code"] for n in readiness["approval_notes"]] == []
+
+        ok, err = cm.approve_change_request(wdb, req["id"], SCO, log_audit_fn=audit)
+        assert ok, err
+        approved = next(event for event in events if event["action"] == "Change Request Approved")
+        assert approved["after_state"]["maker_checker"]["required"] is False
+        assert approved["after_state"]["maker_checker"]["passed"] is True
 
     def test_tier3_creator_can_self_approve(self, db):
         cm = _get_cm(); wdb = _DBWrapper(db)
