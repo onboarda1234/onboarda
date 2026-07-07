@@ -10,18 +10,26 @@ Legend: ✅ merged · 🟢 PR open (built, awaiting merge) · 🔨 in progress �
 
 # Onboarda / RegMind — Audit-Remediation Master List
 
-**Last reconciled:** 2026-07-07 (base `main` ≈ `b577a5f`, contains merged #691).
-The **entire tonight code batch is now merged, deployed to AWS staging, and
-validated (PASS):** #692 (item 37, merge `8f65435`, TD 775), #690 (item 18, merge
-`8b0a7a8`, TD 776), #693 (item 19, merge `db0702c`, TD 777), #691 (item 27, merge
-`b577a5f`). Earlier: #687/#688/#689 (items 23/22/38, TDs 771/772/773). Only #695
-(this docs PR) remains open in the batch. Incorporates REGMIND-SYSTEM-READINESS-AUDIT-1
-(P9-12/13/14 + CLIENT-PORTAL-RUNTIME-SMOKE-1 + PERIODIC-BASELINE-METHOD-HYGIENE-1),
-an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
+**Last reconciled:** 2026-07-07 (base `main` = `e66405a`, HEAD after #698).
+**Phase 10 Wave-1 complete:** all three current-stage blocking CRITICALs are merged,
+deployed to AWS staging (`regmind-staging:782` / worker `:230`, image `e66405a`), and
+validated (PASS) — **P10-1 #697 (RDI-006), P10-3 #696 (RDI-004), P10-2 #698
+(RDI-001/007/011)**; merge order #695 → #697 → #696 → #698. **Audit 2 can now proceed.**
+Prior tonight code batch (all merged/validated): #692/#690/#693/#691 (TDs 775/776/777)
+and #687/#688/#689 (TDs 771/772/773); docs PR #695 merged. Small-wins Wave A
+(#700–#703) CI-green, open, awaiting review + Codex handover. Incorporates
+REGMIND-SYSTEM-READINESS-AUDIT-1 (P9-12/13/14 + CLIENT-PORTAL-RUNTIME-SMOKE-1 +
+PERIODIC-BASELINE-METHOD-HYGIENE-1), an Optional/Post-Production Modernization section,
+Phase 10 (RDI audit), **Phase 11 (BSA audit / Audit 2 — 19 findings)**, and **Phase 12
+(DCI audit / Audit 3 — 30 findings, 6 blockers, schema safety rated UNSAFE)**. Section
+order now places **Phase 9 (Production readiness) last**, after Phases 10/11/12.
+**PR #699** (Codex draft, P10-1 closure-evidence docs, base `b6192fb`) is redundant with the
+P10-1 closure already recorded here and is **not merged** — recommend closing it or rebasing
+onto current `main` if the evidence artifacts are wanted in-repo (see note below).
 
 > Maintenance: this is the single source of truth for remediation status. On any
 > request for PR/phase status, refresh the Status/GitHub columns from GitHub and
-> update this file. Item IDs (1–40, 33–38, P9-1…P9-14, P10-1…P10-7, PR-* slugs) are canonical.
+> update this file. Item IDs (1–40, 33–38, P9-1…P9-14, P10-1…P10-7, P11-1…P11-9, P12-1…P12-10, PR-* slugs) are canonical.
 
 **Legend:** ✅ merged · 🟢 PR open (built) · 🔨 in progress · 📋 scoped · ⏸ blocked · ⬜ pending
 
@@ -67,12 +75,12 @@ an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
 | 18 | Redaction/response allow-list | #690 | ✅ |
 | 19 | Resilience/fail-safe → delete dead `resilience/` | #693 | ✅ |
 | 20 | Persist memo `blocked` verdict — P0 | #679 | ✅ |
-| 21 | DOB/PII encryption at rest | — | ⬜ |
+| 21 | DOB/PII encryption at rest *(= Audit-3 **DCI-018 BLOCKER**: PII taxonomy across all tables — names/DOB/emails/addresses still plaintext outside the PIIEncryptor field lists)* | — | ⬜ |
 | 22 | CSP headers (report-only) | #688 | ✅ |
 | 23 | Session revocation | #687 | ✅ |
 | 24 | CA webhook retry idempotency | — | 📋 scoped |
 | 25 | Unique seeded-account secrets (M14) — P0 | #681 | ✅ |
-| 26 | Shared rate limiter | — | ⬜ |
+| 26 | Shared rate limiter *(= Audit-2 **BSA-002**: persist forgot-pw/doc-upload/AI keys across ECS tasks, fail-closed)* | — | ⬜ |
 | 27 | audit_log tamper-evidence (core; wiring deferred) | #691 | ✅ |
 | 28 | Misc M7–M12 | — | ⬜ (skip) |
 | 40 | Close last silent fail-open (dead code) | #680 | ✅ |
@@ -106,6 +114,7 @@ an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
 | chore-applications-deadcode-cleanup | P3 | Delete dead approval branches | — | ⬜ |
 | CLIENT-PORTAL-RUNTIME-SMOKE-1 | P1 | Live client-credential smoke: status/upload/logout/**cross-tenant denial** *(audit REGMIND-P1-006)* | — | ⬜ |
 | PERIODIC-BASELINE-METHOD-HYGIENE-1 | P2 | Clean 405 on POST-only periodic-review baseline route *(audit REGMIND-P2-001)* | — | ⬜ |
+| PR-RISK-SECTOR-CALIBRATION-1 | P2 | Recalibrate sector risk + "unknown≠high" defaults *(audit done; was "Backlog — after Phase 7"; also Audit-3 **DCI-009**: missing/unknown country defaults MEDIUM — treat as manual-review/HIGH)* | — | 📋 scoped |
 
 ## Phase 8 — Pilot Controls Pack
 | # | Title | GitHub | Status |
@@ -117,24 +126,6 @@ an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
 | 37 | Lower-privilege fixture authz regression tests | #692 | ✅ |
 | 38 | Pilot operations runbook | #689 | ✅ |
 | — | ComplyAdvantage production workspace validation | #498 | ⏸ blocked (dashboard-mode evidence) |
-
-## Phase 9 — Production readiness
-| # | Item | Type | GitHub | Status |
-|---|------|:--:|:--:|:--:|
-| P9-1 | Enable live GDPR erasure (PC-4 control pack) | code | — | ⬜ |
-| P9-2 | Close PC-1 evidence-pack continuity residual | code | — | ⬜ |
-| P9-3 | ComplyAdvantage prod workspace validation | ops/vendor | #498 | ⏸ |
-| P9-4 | Provision prod environment (app.regmind.co) | ops | — | ⬜ |
-| P9-5 | Drill prod deploy + rollback | ops | — | ⬜ |
-| P9-6 | Load/performance test at prod scale | test/ops | — | ⬜ |
-| P9-7 | Pen test + security review + vuln scanning | security | — | ⬜ |
-| P9-8 | DR/backup drill (restore/PITR) | ops | — | ⬜ |
-| P9-9 | Legal/compliance sign-off (residency, DPA, regulator) | legal | — | ⬜ |
-| P9-10 | Prod monitoring/alerting/on-call | ops | — | ⬜ |
-| P9-11 | Close parked prod-posture decisions (PR-25 + PR-17) | decision | — | ⬜ |
-| P9-12 | ECR-IMMUTABLE-TAGS-1 — make ECR image tags immutable (rollback provenance) *(audit REGMIND-P2-004)* | ops | — | ⬜ |
-| P9-13 | Full authz / tenant-isolation **route matrix** audit (role-by-route) *(audit §7)* | security | — | ⬜ |
-| P9-14 | Registry KYB (OpenCorporates) **simulated → real/production** *(audit prod blocker)* | code/vendor | — | ⬜ |
 
 ## Phase 10 — Regulatory Decision Integrity (RDI audit)
 > Source: **RegMind Production Audit 1 — Regulatory Decision Integrity**, run against
@@ -150,9 +141,9 @@ an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
 
 | # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
 |---|----|----------|:--:|-----------------------|:--:|:--:|
-| P10-1 | PR-RDI-1 — Server-side materiality (+ approved maker-checker scope change: four-eyes {tier1,tier2}→{tier1}) | RDI-006 | CRITICAL | Ignore client-supplied change materiality; always classify server-side from change type. Part B: relax four-eyes to Tier 1 only (approved, Aisha Sudally) — screening hard-block still covers Tier 2 | — | 🔨 in progress |
-| P10-2 | PR-RDI-2 — Fail-closed decision & memo persistence | RDI-001, 007, 011 | CRITICAL + HIGH + MED | Decision status+audit+signoff+decision_record in one transaction; memo approve/validate roll back and 500 on save failure (no false "success") | — | 📋 scoped |
-| P10-3 | PR-RDI-3 — Risk-staleness gate | RDI-004 | CRITICAL | Block final decisions when `risk_config_version` ≠ current or recompute failed; persist recompute failures | — | 📋 scoped |
+| P10-1 | PR-RDI-1 — Server-side materiality | RDI-006 | CRITICAL | Ignore client-supplied change materiality; always classify server-side from change type via `classify_materiality(change_type)` | [#697](https://github.com/onboarda1234/onboarda/pull/697) | ✅ merged |
+| P10-2 | PR-RDI-2 — Fail-closed decision & memo persistence | RDI-001, 007, 011 | CRITICAL + HIGH + MED | Decision status+audit+signoff+decision_record in one transaction; memo approve/validate roll back and 500 on save failure (no false "success") | [#698](https://github.com/onboarda1234/onboarda/pull/698) | ✅ merged |
+| P10-3 | PR-RDI-3 — Risk-staleness gate | RDI-004 | CRITICAL | Block final decisions when `risk_config_version` ≠ current or recompute failed; persist recompute failures | [#696](https://github.com/onboarda1234/onboarda/pull/696) | ✅ merged |
 | P10-4 | PR-RDI-4 — Per-decision-type gates | RDI-003, 008 | HIGH | Add required prerequisites for reject / escalate_edd / request_documents; block failed-validation memo from supervisor step **(needs policy decision on per-type prerequisites)** | — | 📋 scoped (decision-gated) |
 | P10-5 | PR-RDI-5 — Decision-record coverage + provenance | RDI-009 (non-SAR), 010 | HIGH | Write decision_records for EDD closure / monitoring actions / change approvals / risk changes; add AI-vs-rule source + `agent_executions` link. Depends on **P10-2** | — | 📋 scoped |
 | P10-6 | PR-RDI-6 — Sign-off IP attribution | RDI-012 | HIGH | Trust `X-Real-IP` only when the direct peer is a known proxy/ALB (stop browser spoofing) | — | 📋 scoped |
@@ -160,14 +151,97 @@ an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
 
 **Deferred (per management response 2026-07-07):**
 - **RDI-002** — by-design LOW/MEDIUM fast-path, HIGH policy-exception (not a code defect). **P10-DOC-1:** policy **✅ APPROVED & signed off** (Aisha Sudally, 2026-07-07) at [`docs/compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md`](compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md) (eligibility = all LOW/MEDIUM; disqualifiers = sanctioned/FATF, PEP, adverse hit, stale/incomplete screening, failed IDV; approver = Onboarding Officer alone; 20% QA sampling). **Residual code assertions** (decision-record eligibility-basis stamp + direct-route test that a disqualifying signal can never fast-track) folded into the Phase 10 approval-path PRs (P10-3 / P10-5) — ⬜.
-- **RDI-005** — SAR permanence (`ON DELETE CASCADE`, cleanup delete, mutable SAR content), HIGH **Enterprise pre-enable blocker**. Must be fixed **before** enabling Enterprise SAR/STR; safe to defer **only while SAR/STR feature flags stay disabled** (`ENABLE_SAR_WORKFLOW`, `ENABLE_SAR_STR` = false). Same guard covers the SAR slices of RDI-009/RDI-013.
+- **RDI-005** — SAR permanence (`ON DELETE CASCADE`, cleanup delete, mutable SAR content), HIGH **Enterprise pre-enable blocker**. Must be fixed **before** enabling Enterprise SAR/STR; safe to defer **only while SAR/STR feature flags stay disabled** (`ENABLE_SAR_WORKFLOW`, `ENABLE_SAR_STR` = false). Same guard covers the SAR slices of RDI-009/RDI-013. *(Re-confirmed by Audit-3 **DCI-002** — same cascade + pre-file overwrite findings; note the general SAR cleanup-delete surface is also covered by P12-1.)*
 
 **Wave order:** W1 P10-1 → P10-2 → P10-3 (all CRITICAL; P10-2 unblocks P10-5) · W2 P10-4, P10-5, P10-6 (HIGH) · W3 P10-7 (MED/infra). P10-1 and P10-6 are small quick wins slot-able anytime.
 
-## Backlog — after Phase 7
-| PR | Priority | Title | Status |
-|----|:--:|-------|:--:|
-| PR-RISK-SECTOR-CALIBRATION-1 | P2 | Recalibrate sector risk + "unknown≠high" defaults | 📋 scoped (audit done) |
+**Closure evidence (2026-07-07):**
+- **P10-1 (#697)** — **merged** (base `b577a5f`, merge `b6192fb`; ancestor of deployed HEAD `e66405a`, so live on `regmind-staging:782`). `create_change_request()` now ignores client-supplied `items[].materiality` and server-computes tier from `change_type` via `classify_materiality`; fresh-context review fold prevents server-known alert types (e.g. `control_change`) downgrading to `other`/Tier 2. Full SQLite suite 6549 passed; CM regression 217 passed; static guard asserts no `item.get("materiality")` read. **RDI-006 CLOSED/REMEDIATED** (Codex-verified; control C-11 VERIFIED for client-supplied override). **Two residuals:** (a) `change_type` itself is still client-supplied — semantic mislabeling is a future hardening item (unknown types default Tier 2); (b) the previously-approved **four-eyes scope change (tier1,tier2→tier1) was NOT part of #697** — maker-checker was left unchanged — so it remains a separate outstanding decision/PR if still wanted (Tier 2 screening hard-block currently still applies).
+- **P10-3 (#696)** — **merged**, deployed (`regmind-staging:781` / `regmind-verification-worker:229`, image `fbedc7c`), validated. Targeted `test_risk_staleness_gate.py` 15 passed; runtime synthetic probe confirmed current-version app proceeds, older-version app + `stale:recompute_failed` quarantine both 409-block, non-approval decisions (reject/escalate/request-docs = 201) not newly blocked. **RDI-004 CLOSED/PASS.** Residual (per design): legacy `NULL`-provenance apps blocked only after first config update/sweep.
+- **P10-2 (#698)** — rebased onto #696-merged `main`, retargeted, CI green, **merged**, deployed (`regmind-staging:782` / `regmind-verification-worker:230`, image `e66405a`), validated. Targeted decision/memo/approval suite 263 passed / 2 skipped; full SQLite suite 6568 passed. Runtime probe: decision 201 persisted `decision_records_count=1` + audit + accepted governance; memo approve 200 with signoff audit; memo validate 200 persisted status+timestamp. **RDI-001 / RDI-007 / RDI-011 CLOSED/PASS.** Residual: live-DB fault injection not run (forced-failure covered by merged tests); memo-supervisor `decision_records` overlay stays scoped to P10-5/RDI-009.
+- Final staging aligned to #698 merge SHA `e66405a`; `/api/version` git_sha+image_tag match; liveness/health/readiness 200 (`ready=true`); both ALB targets healthy; 30-min CloudWatch window ERROR/Exception/Traceback/HTTP-5 = 0.
+
+**Audit-2 unpause status:** ✅ **all three current-stage blocking CRITICALs closed & validated** — RDI-006 (#697), RDI-004 (#696), RDI-001 (#698). Merge order on `main`: #695 → #697 → #696 → #698 (HEAD `e66405a`, deployed `regmind-staging:782`). The audit artifact's "remaining blockers RDI-001/RDI-004" note reflects the point-in-time when #697 was verified — both have since merged. **Audit 2 can now proceed.** Remaining Phase 10 work is W2/W3 (HIGH/MED: P10-4 decision-gated, P10-5 dep-on-P10-2, P10-6, P10-7) plus the deferred RDI-002/005 items and the outstanding four-eyes scope decision.
+
+## Phase 11 — Backend Security & Authorization (BSA audit)
+> Source: **RegMind Production Audit 2 — Backend Security & Authorization**, run against
+> `e66405a` (PR #698 merge — post-Audit-1-closure). 19 findings (BSA-001…019).
+> **Verdict: REMEDIATE BEFORE PROCEEDING** — 2 HIGH blockers (BSA-001, BSA-015); rest MED/LOW.
+> **BSA-002 is not new** — it is Phase 4 item 26 (Shared rate limiter), cross-referenced there.
+> Audit positively verified several controls (12-char password policy, CSRF double-submit,
+> Sumsub HMAC-before-parse constant-time, mock-mode prod hard-block, no-wildcard CORS in prod,
+> security headers). Many sections UNVERIFIED (not exhaustively checked; deepest gap = the
+> P9-13 route×role matrix, already listed). 18 net-new findings grouped into 9 PRs, 3 waves.
+> Item IDs `P11-1…P11-9` canonical. Same discipline per PR: implement → full SQLite + live-PG
+> tests → fresh-context adversarial review → fold → push.
+
+| # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
+|---|----|----------|:--:|-----------------------|:--:|:--:|
+| P11-1 | Fail-closed revocation + post-await session re-validation | BSA-001, 014 | HIGH + MED | Make token-revocation persistence **mandatory** for logout / password-reset / password-change (500 + no false success if it can't durably revoke); `is_revoked()` fail-closed for protected APIs; supervisor run re-reads actor/role after its long `await` before persisting | — | 📋 scoped (W1 blocker) |
+| P11-2 | Dependency CVE remediation + OSV/pip-audit CI gate | BSA-015 | HIGH | Upgrade Tornado ≥6.5.7, PyJWT ≥2.13.0, cryptography ≥48.0.1, WeasyPrint (upgrade/mitigate); add pip-audit / OSV scan that fails CI on HIGH/CRITICAL advisories | — | 📋 scoped (W1 blocker) |
+| P11-3 | Fail-closed inputs + AI budget | BSA-006, 007, 013 | MED + LOW | `get_json()` returns structured **400** on malformed body (not silent `{}`); bounded-int pagination (400 not 500); Claude persistent-budget **fails closed** in staging/prod when the usage store is unreadable | — | 📋 scoped |
+| P11-4 | Offload blocking I/O off the IOLoop | BSA-004, 005 | MED | Move WeasyPrint PDF render and in-request Claude document-verify to a worker/executor; replace `time.sleep` backoff; enforce per-user/app AI quotas *(coordinate with item 12 / B7)* | — | 📋 scoped |
+| P11-5 | AI prompt sanitisation + output schema + circuit breaker | BSA-011, 012 | MED | Apply the deep/3-pass sanitiser to **all** `generate()` inputs; replace raw-token enum parsing with Pydantic schemas (AI free-text advisory only); add source-controlled, DB-persisted circuit breaker around Anthropic/Sumsub/S3 | — | 📋 scoped |
+| P11-6 | AuthZ & audit hardening | BSA-003, 009 | MED | Require recent re-auth / second factor on admin password-reset (+ mandatory revocation); route all change-management 403 denials through `log_authz_denial()` | — | 📋 scoped |
+| P11-7 | Document-download attachment + webhook signature hygiene | BSA-008, 010 (+ DCI-017) | MED + LOW | Force `Content-Disposition: attachment` on all uploaded-doc downloads (separate sanitised preview endpoint if previews needed); document/opaque webhook invalid-sig response; remove ComplyAdvantage legacy signature fallback; *(DCI-017)* no silent local-disk fallback when S3 fails in staging/prod + MIME from server allowlist not stored value | — | 📋 scoped |
+| P11-8 | Supply-chain pinning | BSA-016, 017, 019 (= DCI-022/024) | MED + LOW | SHA-pin GitHub Actions; split test deps into `requirements-dev.txt`; pin Docker base image by digest + audit `.dockerignore` | — | 📋 scoped |
+| P11-9 | CI coverage-gate fail-closed | BSA-018 (= DCI-026) | LOW | Treat unparseable coverage as CI **failure** (drop the `exit 0`); upload raw coverage artifact | — | 📋 scoped |
+
+**Cross-ref:** **BSA-002** (share/persist rate limits across ECS tasks — forgot-pw, doc-upload, AI keys, fail-closed) = existing **Phase 4 item 26 "Shared rate limiter"** (⬜). Fold BSA-002's specifics there rather than duplicate here.
+
+**Wave order:** W1 P11-1, P11-2 (both blockers — clear before pilot/prod) · W2 P11-3…P11-7 (MED) · W3 P11-8, P11-9 (LOW/supply-chain/CI).
+
+## Phase 12 — Data Integrity, Compliance Logic & Infrastructure (DCI audit)
+> Source: **RegMind Production Audit 3 — Data Integrity, Compliance Logic and Infrastructure**,
+> run against `956ed5b` (#704 merge). 30 findings (DCI-001…030). Schema safety rated
+> **UNSAFE** (regulated-record deletion paths + admitted schema drift). Verdict:
+> **REMEDIATE BEFORE PROCEEDING** — 6 blockers (DCI-001, 003, 012, 018, 019, 027) plus 1
+> Enterprise pre-enable blocker (DCI-002). Positives verified: risk-config save validates
+> 5 dimensions/weight=100; sanctioned/FATF floor rules present in rule engine (12
+> elevation/floor rules enumerated); supervisor contradiction logic VERIFIED; Agent 9
+> properly deferred/guarded; presigned-URL expiry bounded.
+> **11 of 30 findings are already tracked elsewhere** — cross-referenced, NOT duplicated:
+> DCI-002 = RDI-005 (deferred Enterprise SAR blocker, Phase 10) · DCI-009 =
+> PR-RISK-SECTOR-CALIBRATION-1 (Phase 7) · DCI-017 → folded into P11-7 · DCI-018 =
+> Phase 4 item 21 (now an **Audit-3 BLOCKER**) · DCI-019 = P9-1 (now an **Audit-3
+> BLOCKER**) · DCI-022/024 = P11-8 · DCI-023 = P9-4 (IaC) · DCI-026 = P11-9 ·
+> DCI-027 = P9-8 (**CRITICAL blocker**, environment-required) · DCI-030 = P9-10.
+> The 19 net-new findings group into 10 PRs. Item IDs `P12-1…P12-10` canonical. Same
+> discipline per PR: implement → full SQLite + live-PG tests → fresh-context adversarial
+> review → fold → push.
+
+| # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
+|---|----|----------|:--:|-----------------------|:--:|:--:|
+| P12-1 | Regulated-record deletion protection | DCI-001, 003 | CRITICAL + HIGH | App-delete cleanup + startup cleanup migration must NEVER delete regulated evidence (`sar_reports`, `compliance_memos`, `edd_cases`, `agent_executions`, `supervisor_audit_log`, `decision_records`) — soft-delete/tombstone with deletion marker instead; move fixture cleanup out of generic startup code | — | 📋 scoped (W1 blocker) |
+| P12-2 | Change-implementation fail-closed recompute + audit-in-transaction | DCI-012, 013 | HIGH + MED | Recompute risk (or write a `requires_recomputation` quarantine marker, P10-3-style) in the SAME transaction as implement — a swallowed recompute failure must not leave a live material change on a stale score; write CM approve/implement audit rows before commit, not after | — | 📋 scoped (W1 blocker) |
+| P12-3 | Compliance-logic corrections | DCI-008, 010, 011 | HIGH + HIGH + MED | Risk-config load failure fails CLOSED in staging/prod (no silent hardcoded-default model); memo `jur_rating` actually mutates to VERY_HIGH when `SANCTIONED_COUNTRY_FLOOR` is claimed; fix `MULTI_GAP_ESCALATION` branch order (≥4 checked before ≥3) | — | 📋 scoped |
+| P12-4 | Migration hard-stops + schema-drift detection | DCI-005, 004 | HIGH | Reject `MIGRATION_FAILURE_MODE=continue` when ENVIRONMENT is staging/production; startup drift check comparing declared constraints/FKs/columns vs live schema, fail-closed in staging/prod (`CREATE TABLE IF NOT EXISTS` never alters existing FKs — drift already admitted in source) | — | 📋 scoped |
+| P12-5 | Status-column CHECK constraints | DCI-006 | MED | CHECK constraints/enums for `clients.status`, `agent_executions.status/source`, `supervisor_pipeline_results.status`, `supervisor_audit_log.event_type/severity`, `compliance_memos.supervisor_status/rule_engine_status` (backfill invalid data first) | — | 📋 scoped |
+| P12-6 | PG pool connection validation | DCI-007 | MED | Pre-ping (`SELECT 1`) on pool checkout; discard/retry stale connections after RDS failover | — | 📋 scoped |
+| P12-7 | Verification-matrix fidelity | DCI-014, 015 | MED + LOW | HYBRID checks go to Claude ONLY on deterministic INCONCLUSIVE (never override a deterministic FAIL), per the matrix policy; resolve the 5 TODO enhanced-requirement document mappings with compliance sign-off | — | 📋 scoped |
+| P12-8 | Retention purge enforceability + purge-log evidence | DCI-020, 021 | MED | Map (or explicitly mark manual-with-procedure) all retention categories beyond audit_logs/monitoring_alerts; add subject_id/application_id/tables_affected/per-table counts/batch id to `data_purge_log`, written atomically with the purge | — | 📋 scoped |
+| P12-9 | Observability hardening | DCI-028, 029 | MED | Force JSON logs + request-correlation IDs in staging/prod; readiness probes for S3 reachability and disk capacity | — | 📋 scoped |
+| P12-10 | Infra guards | DCI-016, 025 | MED + LOW | Enforce upload body-size before full buffering (server/proxy level; handler check stays as second line); deploy workflow FAILS when ECS `services-stable` times out *(partially mitigated by #702's SHA-alignment gate — stability half still open)* | — | 📋 scoped |
+
+**Wave order:** W1 P12-1, P12-2 (code blockers) — the other Audit-3 blockers live elsewhere: item 21 (DCI-018), P9-1 (DCI-019), P9-8 (DCI-027) · W2 P12-3…P12-9 · W3 P12-10.
+
+## Phase 9 — Production readiness
+| # | Item | Type | GitHub | Status |
+|---|------|:--:|:--:|:--:|
+| P9-1 | Enable live GDPR erasure (PC-4 control pack) *(= Audit-3 **DCI-019 BLOCKER**: dual-control live erasure incl. S3/file deletion)* | code | — | ⬜ |
+| P9-2 | Close PC-1 evidence-pack continuity residual | code | — | ⬜ |
+| P9-3 | ComplyAdvantage prod workspace validation | ops/vendor | #498 | ⏸ |
+| P9-4 | Provision prod environment (app.regmind.co) *(+ Audit-3 **DCI-023**: ECS task defs/IAM/subnets/SGs into source-controlled IaC)* | ops | — | ⬜ |
+| P9-5 | Drill prod deploy + rollback | ops | — | ⬜ |
+| P9-6 | Load/performance test at prod scale | test/ops | — | ⬜ |
+| P9-7 | Pen test + security review + vuln scanning | security | — | ⬜ |
+| P9-8 | DR/backup drill (restore/PITR) *(= Audit-3 **DCI-027 CRITICAL BLOCKER**: RDS backups/PITR/deletion-protection + documented restore test, environment-required)* | ops | — | ⬜ |
+| P9-9 | Legal/compliance sign-off (residency, DPA, regulator) | legal | — | ⬜ |
+| P9-10 | Prod monitoring/alerting/on-call *(+ Audit-3 **DCI-030**: confirm SNS subscription / test alarm reaches a human)* | ops | — | ⬜ |
+| P9-11 | Close parked prod-posture decisions (PR-25 + PR-17) | decision | — | ⬜ |
+| P9-12 | ECR-IMMUTABLE-TAGS-1 — make ECR image tags immutable (rollback provenance) *(audit REGMIND-P2-004)* | ops | — | ⬜ |
+| P9-13 | Full authz / tenant-isolation **route matrix** audit (role-by-route) *(audit §7)* | security | — | ⬜ |
+| P9-14 | Registry KYB (OpenCorporates) **simulated → real/production** *(audit prod blocker)* | code/vendor | — | ⬜ |
 
 ---
 
@@ -235,23 +309,33 @@ an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
 
 ---
 
-## Roll-up (78 remediation line items + optional modernization tracked separately)
+## Roll-up (97 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
-| ✅ merged | 36 |
+| ✅ merged | 39 |
 | 🟢 PR open (built) | 1 |
-| 🔨 in progress | 1 |
-| 📋 scoped | 9 |
+| 🔨 in progress | 0 |
+| 📋 scoped | 26 |
 | ⏸ blocked | 1 |
 | ⬜ pending | 30 |
 
-**Open PRs:** #695 (this docs PR) · **Old blocked draft:** #498. All tonight code PRs
-(#687–#693) merged, deployed to staging, validated PASS.
+**Open PRs:** #695 (prior docs PR, merged) · Wave-A small-wins **#700 (SW-1) · #701 (SW-2) ·
+#702 (SW-3) · #703 (SW-4)** — all CI-green, do-not-merge, awaiting review + Codex handover ·
+**Old blocked draft:** #498. Phase 10 **#696 (P10-3) and #698 (P10-2) merged**, deployed to
+staging, validated PASS; earlier code PRs (#687–#693) likewise merged/validated.
 
 **Where things stand:** Phases 0–3 (except B7 #12) and 5–6 done. **Phase 4 fully
 built/merged** (only decision-gated #17/#21/#24/#26/#28 remain). Phase 7: status-canon
 done + audit-tamper (#691) merged; ownership gate not started (⬜). Phases 8–9 are the
 remaining body — overwhelmingly ops/vendor/legal, not code. **Phase 10 (RDI audit):**
-P10-1 in progress; P10-2/P10-3 next (the other two current-stage CRITICALs — RDI-001/004);
-P10-DOC-1 policy approved. Management response (2026-07-07) narrowed Audit-2 blocking
-CRITICALs to 3 (RDI-001/004/006). Pilot-readiness ≈ 88–92%; production-readiness ≈ 30–35%.
+**all three current-stage CRITICALs closed & validated — P10-1 (#697, RDI-006) · P10-3
+(#696, RDI-004) · P10-2 (#698, RDI-001/007/011)**; P10-DOC-1 policy approved; W2/W3
+(P10-4…P10-7, HIGH/MED) and the deferred RDI-002/005 items remain. **Phase 11 (BSA audit,
+Audit 2 — run against `e66405a`):** 19 findings folded as P11-1…P11-9; 2 HIGH blockers
+(BSA-001 revocation fail-open, BSA-015 dependency CVEs) lead Wave 1; BSA-002 = existing
+item 26. **Phase 12 (DCI audit, Audit 3 — run against `956ed5b`):** 30 findings; 11 map to
+existing items (incl. 3 blockers elevating item 21 / P9-1 / P9-8), 19 net-new folded as
+P12-1…P12-10; code blockers P12-1 (regulated-record deletion) + P12-2 (change-implementation
+recompute) lead Wave 1. **Section order:** phase sections now run …8 → 10 → 11 → 12 →
+**9 (Production readiness, last)**. Pilot-readiness ≈ 88–92%; production-readiness ≈ 30–35%
+(Audit 3 verdict: REMEDIATE BEFORE PROCEEDING).
