@@ -186,13 +186,19 @@ VALID_CHANGE_TYPES = frozenset({
     "same_country_address_change",
     "registered_address_country_change",
     "business_activity_change",
+    "control_change",
+    "countries_of_operation_change",
     "licensing_change",
     "licensing_status_change",
+    "operational_change",
     "regulated_activity_change",
     "source_of_funds_change",
     "source_of_wealth_change",
     "contact_detail_update",
     "contact_update",
+    "website_update",
+    "typo_correction",
+    "formatting_correction",
     "other",
     # Director changes
     "director_add",
@@ -940,8 +946,8 @@ def _alert_changes_to_items(detected_changes: Dict, alert_type: str) -> List[Dic
     Alert types (e.g. legal_name_change, shareholding_change) may not match
     the VALID_CHANGE_TYPES whitelist used for request items.  When an alert
     type is not directly in the whitelist, we fall back to ``"other"`` so that
-    auto-derived items pass create-time validation while still preserving the
-    original materiality tier from the alert type.
+    auto-derived items pass create-time validation. Request materiality is
+    computed later from the request item's change_type.
     """
     items = []
     if not detected_changes:
@@ -956,7 +962,6 @@ def _alert_changes_to_items(detected_changes: Dict, alert_type: str) -> List[Dic
             "field_name": field,
             "old_value": json.dumps(old_value) if old_value is not None else None,
             "new_value": json.dumps(new_value) if new_value is not None else None,
-            "materiality": classify_materiality(alert_type),
         })
     return items
 
@@ -1054,11 +1059,21 @@ def create_change_request(
     request_id = generate_change_request_id()
     now = datetime.now(timezone.utc).isoformat()
 
-    # Determine overall materiality (highest of all items)
-    item_materialities = [
-        i.get("materiality", classify_materiality(i.get("change_type", "other")))
-        for i in items
-    ] if items else ["tier3"]
+    computed_items = []
+    for item in items:
+        change_type = item.get("change_type", "other")
+        computed_items.append({
+            "change_type": change_type,
+            "field_name": item.get("field_name"),
+            "old_value": item.get("old_value"),
+            "new_value": item.get("new_value"),
+            "materiality": classify_materiality(change_type),
+            "person_action": item.get("person_action"),
+            "person_snapshot": item.get("person_snapshot"),
+        })
+
+    # Determine overall materiality (highest of all server-computed items)
+    item_materialities = [item["materiality"] for item in computed_items] if computed_items else ["tier3"]
     overall_materiality = _highest_materiality(item_materialities)
 
     # Capture base profile version for conflict detection
@@ -1096,9 +1111,8 @@ def create_change_request(
     )
 
     # Insert items
-    for idx, item in enumerate(items):
+    for idx, item in enumerate(computed_items):
         item_id = f"{request_id}-I{idx + 1:03d}"
-        item_materiality = item.get("materiality", classify_materiality(item.get("change_type", "other")))
         person_snapshot = item.get("person_snapshot")
 
         db.execute(
@@ -1112,7 +1126,7 @@ def create_change_request(
                 item.get("field_name"),
                 item.get("old_value"),
                 item.get("new_value"),
-                item_materiality,
+                item["materiality"],
                 item.get("person_action"),
                 json.dumps(person_snapshot) if person_snapshot else None,
                 now,
@@ -1143,13 +1157,10 @@ def create_change_request(
                         "field_name": item.get("field_name"),
                         "old_value": item.get("old_value"),
                         "new_value": item.get("new_value"),
-                        "materiality": item.get(
-                            "materiality",
-                            classify_materiality(item.get("change_type", "other")),
-                        ),
+                        "materiality": item["materiality"],
                         "person_action": item.get("person_action"),
                     }
-                    for idx, item in enumerate(items)
+                    for idx, item in enumerate(computed_items)
                 ],
             },
         )
@@ -1164,7 +1175,7 @@ def create_change_request(
         "materiality": overall_materiality,
         "status": "draft",
         "base_profile_version_id": base_version_id,
-        "items": items,
+        "items": computed_items,
         "downstream_actions": downstream,
         "created_by": user.get("sub"),
         "created_at": now,

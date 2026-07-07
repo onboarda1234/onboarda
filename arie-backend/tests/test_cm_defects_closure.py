@@ -663,10 +663,11 @@ class TestPermissions:
 
         req = cm.create_change_request(
             wdb, app_id, "backoffice_manual", "backoffice", "Legal name change",
-            [{"change_type": "company_details", "field_name": "company_name",
-              "old_value": "Old Name", "new_value": "New Name", "materiality": "tier1"}],
+            [{"change_type": "legal_name_change", "field_name": "company_name",
+              "old_value": "Old Name", "new_value": "New Name"}],
             ADMIN_USER,
         )
+        assert req["materiality"] == "tier1"
         cm.submit_change_request(wdb, req["id"], ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", ADMIN_USER)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", ADMIN_USER)
