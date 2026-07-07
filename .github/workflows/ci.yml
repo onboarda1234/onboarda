@@ -142,8 +142,11 @@ jobs:
           COV=$(pytest tests/ --ignore=tests/test_pdf_generator.py --cov=. --cov-config=.coveragerc --cov-report=term -q 2>&1 | grep "^TOTAL" | awk '{print $NF}' | tr -d '%')
           echo "Coverage: ${COV}%"
           if [ -z "$COV" ]; then
-            echo "WARNING: Could not determine coverage percentage"
-            exit 0
+            # BSA-018 (fail-closed): an unparseable coverage run means the
+            # threshold was NOT enforced — that is a CI failure, not a warning,
+            # otherwise a broken coverage command silently disables the gate.
+            echo "FAIL: Could not determine coverage percentage — treating as gate failure (BSA-018)"
+            exit 1
           fi
           if [ "$COV" -lt 30 ]; then
             echo "FAIL: Coverage ${COV}% is below 30% minimum"
