@@ -633,42 +633,63 @@ def _application_risk_staleness_error(db, app, action_label="approve"):
     must not be approved on it — a stale LOW/MEDIUM snapshot could otherwise
     route past sanctioned/FATF floors that the current config would apply.
 
-    Returns an error string when the stored score's config version is present
-    and differs from the current one, else ``None``.
+    Returns an error string when the stored score's provenance cannot be
+    trusted, else ``None``.
 
-    Scope decisions (deliberate):
-      * Blocks only on a *present-and-different* version — the precise RDI-004
+    Blocking rules (deliberate):
+      * Blocks on a *present-and-different* stored version — the precise RDI-004
         scenario (the app was scored, the config then changed, and the app was
         not re-scored to the new version). After a config change,
         ``recompute_risk_for_active_apps`` stamps the current version on every
-        app it re-scores; an app whose re-score failed keeps its older version
-        and is caught here.
+        app it successfully re-scores and stamps the quarantine sentinel
+        ``RISK_CONFIG_VERSION_RECOMPUTE_FAILED`` on every app whose re-score
+        failed — so failed apps are blocked here regardless of their prior
+        (possibly NULL) provenance.
+      * Blocks (fail-closed) when the current config version cannot be READ —
+        a provenance check that errors must not silently allow approval.
       * A missing/blank ``risk_config_version`` (unknown provenance) is NOT
-        blocked. Many legitimately-scored applications predate version stamping,
-        and the live scoring path stamps the version going forward, so coverage
-        grows over time without breaking existing approvals. (Documented residual.)
-      * Returns ``None`` when versioning is not in use (no ``risk_config`` row),
-        so environments without a configured risk model are unaffected.
+        blocked: legacy applications predate version stamping and every live
+        scoring path stamps versions going forward. Residual: such an app is
+        unguarded only until the next risk-config update — the update sweep
+        re-stamps it (current version on success, quarantine sentinel on
+        failure), after which it is fully covered.
+      * Returns ``None`` when versioning is genuinely not in use (no
+        ``risk_config`` row), so environments without a configured risk model
+        are unaffected.
       * Scoped to approval only: rejection/escalation tighten the outcome and
         must remain available even when a re-score is pending.
     """
     if not app:
         return None
     try:
-        from rule_engine import _get_risk_config_version
-        current_version = _get_risk_config_version(db)
-    except Exception:
-        # Cannot determine the current version — do not invent a block.
-        return None
+        from rule_engine import _get_risk_config_version_strict
+        current_version = _get_risk_config_version_strict(db)
+    except Exception as version_err:
+        # Fail CLOSED: a provenance check that cannot run must not approve.
+        logger.error(
+            "Risk staleness gate: could not read current risk-config version: %s",
+            version_err,
+        )
+        return (
+            "Cannot " + action_label + ": the risk score's provenance could not "
+            "be verified against the current risk configuration. Retry, and if "
+            "this persists contact an administrator."
+        )
     if not current_version:
         # Versioning not established (no risk_config row) — nothing to compare.
         return None
     stored_version = dict(app).get("risk_config_version")
     if not stored_version:
-        # Unknown provenance — not blocked (see scope decisions above).
+        # Unknown provenance — not blocked (see blocking rules above).
         return None
     if stored_version == current_version:
         return None
+    if str(stored_version).startswith("stale:"):
+        return (
+            "Cannot " + action_label + ": the last risk recomputation for this "
+            "application FAILED after a risk-configuration change, so its stored "
+            "risk score is quarantined. Recompute risk successfully before approving."
+        )
     return (
         "Cannot " + action_label + ": the stored risk score was computed against "
         "an older risk-config version (the risk configuration has changed since "
@@ -683,9 +704,10 @@ def _summarize_risk_recompute_results(recomp_results):
     Reports successful recomputes separately from failures so a config save can
     never *silently* report success while active applications hold a stale
     score. ``recompute_risk`` returns ``recomputed=False`` on a swallowed
-    per-app failure; those apps keep their old ``risk_config_version`` and are
-    quarantined from approval by the decision-time staleness gate until
-    re-scored.
+    per-app failure; ``recompute_risk_for_active_apps`` stamps those apps with
+    the ``stale:recompute_failed`` quarantine sentinel, so the decision-time
+    staleness gate blocks their approval (regardless of prior provenance)
+    until a successful re-score.
     """
     results = list(recomp_results or [])
     recomputed_ok = [r for r in results if r.get("recomputed")]
@@ -704,8 +726,9 @@ def _summarize_risk_recompute_results(recomp_results):
         ][:50]
         summary["warning"] = (
             "Risk configuration saved, but {n} active application(s) failed to "
-            "recompute and hold a stale risk score. They are blocked from approval "
-            "by the decision-time staleness gate until re-scored."
+            "recompute and hold a stale risk score. They have been quarantined "
+            "(risk_config_version marked stale) and are blocked from approval "
+            "until a successful re-score."
         ).format(n=len(failed))
     return summary
 
@@ -14469,14 +14492,20 @@ class RiskConfigHandler(BaseHandler):
 
         try:
             db.execute("BEGIN")
+            # P10-3 / RDI-004: updated_at doubles as the risk-config VERSION
+            # (see rule_engine._get_risk_config_version). Stamp it with a
+            # microsecond-precision application timestamp so two saves within
+            # the same second (SQLite datetime('now') is second-granular)
+            # can never produce the same version string.
+            config_saved_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")
             db.execute(
-                "UPDATE risk_config SET dimensions=?, thresholds=?, country_risk_scores=?, sector_risk_scores=?, entity_type_scores=?, updated_by=?, updated_at=datetime('now') WHERE id=1",
+                "UPDATE risk_config SET dimensions=?, thresholds=?, country_risk_scores=?, sector_risk_scores=?, entity_type_scores=?, updated_by=?, updated_at=? WHERE id=1",
                 (json.dumps(validated.get("dimensions", [])),
                  json.dumps(validated.get("thresholds", [])),
                  json.dumps(validated.get("country_risk_scores", {})),
                  json.dumps(validated.get("sector_risk_scores", {})),
                  json.dumps(validated.get("entity_type_scores", {})),
-                 user["sub"]))
+                 user["sub"], config_saved_at))
 
             def _audit_without_commit(audit_user, action, target, detail, db=None,
                                       before_state=None, after_state=None, commit=False):
@@ -31469,17 +31498,6 @@ class ApplicationDecisionHandler(BaseHandler):
         # ── SECURITY: Enforce approval preconditions (mandatory) ──
         if decision == "approve":
             approval_risk_level, approval_risk_score = _application_risk_snapshot(app)
-            # ── P10-3 / RDI-004: block approval on a stale risk score ──
-            # If the stored score was not computed against the current risk
-            # config (config changed / recompute failed / unknown provenance),
-            # the application must be re-scored before it can be approved.
-            staleness_error = _application_risk_staleness_error(db, app, "approve application")
-            if staleness_error:
-                self.log_governance_attempt(
-                    user, "application.decision", attempt_target, "rejected", 409,
-                    staleness_error, attempt_summary, db=db)
-                db.close()
-                return self.error(staleness_error, 409)
             approval_route = classify_approval_route(dict(app), db)
             # ── PR-APPROVAL-AUTHORITY-MATRIX-1: centralized authority gate ──
             # Single source of truth for terminal-decision authority (replaces the
@@ -31496,6 +31514,20 @@ class ApplicationDecisionHandler(BaseHandler):
                     authority_reason, attempt_summary, db=db)
                 db.close()
                 return self.error(authority_reason, authority_code)
+
+            # ── P10-3 / RDI-004: block approval on a stale risk score ──
+            # After the authority gate (authority errors keep precedence): if
+            # the stored score was not computed against the current risk config
+            # (config changed and this app was not successfully re-scored, or
+            # its re-score failed and it carries the quarantine sentinel), the
+            # application must be re-scored before it can be approved.
+            staleness_error = _application_risk_staleness_error(db, app, "approve application")
+            if staleness_error:
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 409,
+                    staleness_error, attempt_summary, db=db)
+                db.close()
+                return self.error(staleness_error, 409)
 
             # Risk-conditional approval policy: clean LOW/MEDIUM files use the
             # direct operational gate route and do not require the compliance memo
