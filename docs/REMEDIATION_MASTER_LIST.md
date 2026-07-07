@@ -20,7 +20,11 @@ and #687/#688/#689 (TDs 771/772/773); docs PR #695 merged. Small-wins Wave A
 (#700–#703) CI-green, open, awaiting review + Codex handover. Incorporates
 REGMIND-SYSTEM-READINESS-AUDIT-1 (P9-12/13/14 + CLIENT-PORTAL-RUNTIME-SMOKE-1 +
 PERIODIC-BASELINE-METHOD-HYGIENE-1), an Optional/Post-Production Modernization section,
-and Phase 10 (RDI audit).
+Phase 10 (RDI audit), and **Phase 11 (BSA audit / Audit 2 — 19 findings)**. Section order
+now places **Phase 9 (Production readiness) last**, after Phase 10 and Phase 11.
+**PR #699** (Codex draft, P10-1 closure-evidence docs, base `b6192fb`) is redundant with the
+P10-1 closure already recorded here and is **not merged** — recommend closing it or rebasing
+onto current `main` if the evidence artifacts are wanted in-repo (see note below).
 
 > Maintenance: this is the single source of truth for remediation status. On any
 > request for PR/phase status, refresh the Status/GitHub columns from GitHub and
@@ -75,7 +79,7 @@ and Phase 10 (RDI audit).
 | 23 | Session revocation | #687 | ✅ |
 | 24 | CA webhook retry idempotency | — | 📋 scoped |
 | 25 | Unique seeded-account secrets (M14) — P0 | #681 | ✅ |
-| 26 | Shared rate limiter | — | ⬜ |
+| 26 | Shared rate limiter *(= Audit-2 **BSA-002**: persist forgot-pw/doc-upload/AI keys across ECS tasks, fail-closed)* | — | ⬜ |
 | 27 | audit_log tamper-evidence (core; wiring deferred) | #691 | ✅ |
 | 28 | Misc M7–M12 | — | ⬜ (skip) |
 | 40 | Close last silent fail-open (dead code) | #680 | ✅ |
@@ -109,6 +113,7 @@ and Phase 10 (RDI audit).
 | chore-applications-deadcode-cleanup | P3 | Delete dead approval branches | — | ⬜ |
 | CLIENT-PORTAL-RUNTIME-SMOKE-1 | P1 | Live client-credential smoke: status/upload/logout/**cross-tenant denial** *(audit REGMIND-P1-006)* | — | ⬜ |
 | PERIODIC-BASELINE-METHOD-HYGIENE-1 | P2 | Clean 405 on POST-only periodic-review baseline route *(audit REGMIND-P2-001)* | — | ⬜ |
+| PR-RISK-SECTOR-CALIBRATION-1 | P2 | Recalibrate sector risk + "unknown≠high" defaults *(audit done; was "Backlog — after Phase 7")* | — | 📋 scoped |
 
 ## Phase 8 — Pilot Controls Pack
 | # | Title | GitHub | Status |
@@ -120,24 +125,6 @@ and Phase 10 (RDI audit).
 | 37 | Lower-privilege fixture authz regression tests | #692 | ✅ |
 | 38 | Pilot operations runbook | #689 | ✅ |
 | — | ComplyAdvantage production workspace validation | #498 | ⏸ blocked (dashboard-mode evidence) |
-
-## Phase 9 — Production readiness
-| # | Item | Type | GitHub | Status |
-|---|------|:--:|:--:|:--:|
-| P9-1 | Enable live GDPR erasure (PC-4 control pack) | code | — | ⬜ |
-| P9-2 | Close PC-1 evidence-pack continuity residual | code | — | ⬜ |
-| P9-3 | ComplyAdvantage prod workspace validation | ops/vendor | #498 | ⏸ |
-| P9-4 | Provision prod environment (app.regmind.co) | ops | — | ⬜ |
-| P9-5 | Drill prod deploy + rollback | ops | — | ⬜ |
-| P9-6 | Load/performance test at prod scale | test/ops | — | ⬜ |
-| P9-7 | Pen test + security review + vuln scanning | security | — | ⬜ |
-| P9-8 | DR/backup drill (restore/PITR) | ops | — | ⬜ |
-| P9-9 | Legal/compliance sign-off (residency, DPA, regulator) | legal | — | ⬜ |
-| P9-10 | Prod monitoring/alerting/on-call | ops | — | ⬜ |
-| P9-11 | Close parked prod-posture decisions (PR-25 + PR-17) | decision | — | ⬜ |
-| P9-12 | ECR-IMMUTABLE-TAGS-1 — make ECR image tags immutable (rollback provenance) *(audit REGMIND-P2-004)* | ops | — | ⬜ |
-| P9-13 | Full authz / tenant-isolation **route matrix** audit (role-by-route) *(audit §7)* | security | — | ⬜ |
-| P9-14 | Registry KYB (OpenCorporates) **simulated → real/production** *(audit prod blocker)* | code/vendor | — | ⬜ |
 
 ## Phase 10 — Regulatory Decision Integrity (RDI audit)
 > Source: **RegMind Production Audit 1 — Regulatory Decision Integrity**, run against
@@ -175,10 +162,51 @@ and Phase 10 (RDI audit).
 
 **Audit-2 unpause status:** ✅ **all three current-stage blocking CRITICALs closed & validated** — RDI-006 (#697), RDI-004 (#696), RDI-001 (#698). Merge order on `main`: #695 → #697 → #696 → #698 (HEAD `e66405a`, deployed `regmind-staging:782`). The audit artifact's "remaining blockers RDI-001/RDI-004" note reflects the point-in-time when #697 was verified — both have since merged. **Audit 2 can now proceed.** Remaining Phase 10 work is W2/W3 (HIGH/MED: P10-4 decision-gated, P10-5 dep-on-P10-2, P10-6, P10-7) plus the deferred RDI-002/005 items and the outstanding four-eyes scope decision.
 
-## Backlog — after Phase 7
-| PR | Priority | Title | Status |
-|----|:--:|-------|:--:|
-| PR-RISK-SECTOR-CALIBRATION-1 | P2 | Recalibrate sector risk + "unknown≠high" defaults | 📋 scoped (audit done) |
+## Phase 11 — Backend Security & Authorization (BSA audit)
+> Source: **RegMind Production Audit 2 — Backend Security & Authorization**, run against
+> `e66405a` (PR #698 merge — post-Audit-1-closure). 19 findings (BSA-001…019).
+> **Verdict: REMEDIATE BEFORE PROCEEDING** — 2 HIGH blockers (BSA-001, BSA-015); rest MED/LOW.
+> **BSA-002 is not new** — it is Phase 4 item 26 (Shared rate limiter), cross-referenced there.
+> Audit positively verified several controls (12-char password policy, CSRF double-submit,
+> Sumsub HMAC-before-parse constant-time, mock-mode prod hard-block, no-wildcard CORS in prod,
+> security headers). Many sections UNVERIFIED (not exhaustively checked; deepest gap = the
+> P9-13 route×role matrix, already listed). 18 net-new findings grouped into 9 PRs, 3 waves.
+> Item IDs `P11-1…P11-9` canonical. Same discipline per PR: implement → full SQLite + live-PG
+> tests → fresh-context adversarial review → fold → push.
+
+| # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
+|---|----|----------|:--:|-----------------------|:--:|:--:|
+| P11-1 | Fail-closed revocation + post-await session re-validation | BSA-001, 014 | HIGH + MED | Make token-revocation persistence **mandatory** for logout / password-reset / password-change (500 + no false success if it can't durably revoke); `is_revoked()` fail-closed for protected APIs; supervisor run re-reads actor/role after its long `await` before persisting | — | 📋 scoped (W1 blocker) |
+| P11-2 | Dependency CVE remediation + OSV/pip-audit CI gate | BSA-015 | HIGH | Upgrade Tornado ≥6.5.7, PyJWT ≥2.13.0, cryptography ≥48.0.1, WeasyPrint (upgrade/mitigate); add pip-audit / OSV scan that fails CI on HIGH/CRITICAL advisories | — | 📋 scoped (W1 blocker) |
+| P11-3 | Fail-closed inputs + AI budget | BSA-006, 007, 013 | MED + LOW | `get_json()` returns structured **400** on malformed body (not silent `{}`); bounded-int pagination (400 not 500); Claude persistent-budget **fails closed** in staging/prod when the usage store is unreadable | — | 📋 scoped |
+| P11-4 | Offload blocking I/O off the IOLoop | BSA-004, 005 | MED | Move WeasyPrint PDF render and in-request Claude document-verify to a worker/executor; replace `time.sleep` backoff; enforce per-user/app AI quotas *(coordinate with item 12 / B7)* | — | 📋 scoped |
+| P11-5 | AI prompt sanitisation + output schema + circuit breaker | BSA-011, 012 | MED | Apply the deep/3-pass sanitiser to **all** `generate()` inputs; replace raw-token enum parsing with Pydantic schemas (AI free-text advisory only); add source-controlled, DB-persisted circuit breaker around Anthropic/Sumsub/S3 | — | 📋 scoped |
+| P11-6 | AuthZ & audit hardening | BSA-003, 009 | MED | Require recent re-auth / second factor on admin password-reset (+ mandatory revocation); route all change-management 403 denials through `log_authz_denial()` | — | 📋 scoped |
+| P11-7 | Document-download attachment + webhook signature hygiene | BSA-008, 010 | MED + LOW | Force `Content-Disposition: attachment` on all uploaded-doc downloads (separate sanitised preview endpoint if previews needed); document/opaque webhook invalid-sig response; remove ComplyAdvantage legacy signature fallback | — | 📋 scoped |
+| P11-8 | Supply-chain pinning | BSA-016, 017, 019 | MED + LOW | SHA-pin GitHub Actions; split test deps into `requirements-dev.txt`; pin Docker base image by digest + audit `.dockerignore` | — | 📋 scoped |
+| P11-9 | CI coverage-gate fail-closed | BSA-018 | LOW | Treat unparseable coverage as CI **failure** (drop the `exit 0`); upload raw coverage artifact | — | 📋 scoped |
+
+**Cross-ref:** **BSA-002** (share/persist rate limits across ECS tasks — forgot-pw, doc-upload, AI keys, fail-closed) = existing **Phase 4 item 26 "Shared rate limiter"** (⬜). Fold BSA-002's specifics there rather than duplicate here.
+
+**Wave order:** W1 P11-1, P11-2 (both blockers — clear before pilot/prod) · W2 P11-3…P11-7 (MED) · W3 P11-8, P11-9 (LOW/supply-chain/CI).
+
+## Phase 9 — Production readiness
+| # | Item | Type | GitHub | Status |
+|---|------|:--:|:--:|:--:|
+| P9-1 | Enable live GDPR erasure (PC-4 control pack) | code | — | ⬜ |
+| P9-2 | Close PC-1 evidence-pack continuity residual | code | — | ⬜ |
+| P9-3 | ComplyAdvantage prod workspace validation | ops/vendor | #498 | ⏸ |
+| P9-4 | Provision prod environment (app.regmind.co) | ops | — | ⬜ |
+| P9-5 | Drill prod deploy + rollback | ops | — | ⬜ |
+| P9-6 | Load/performance test at prod scale | test/ops | — | ⬜ |
+| P9-7 | Pen test + security review + vuln scanning | security | — | ⬜ |
+| P9-8 | DR/backup drill (restore/PITR) | ops | — | ⬜ |
+| P9-9 | Legal/compliance sign-off (residency, DPA, regulator) | legal | — | ⬜ |
+| P9-10 | Prod monitoring/alerting/on-call | ops | — | ⬜ |
+| P9-11 | Close parked prod-posture decisions (PR-25 + PR-17) | decision | — | ⬜ |
+| P9-12 | ECR-IMMUTABLE-TAGS-1 — make ECR image tags immutable (rollback provenance) *(audit REGMIND-P2-004)* | ops | — | ⬜ |
+| P9-13 | Full authz / tenant-isolation **route matrix** audit (role-by-route) *(audit §7)* | security | — | ⬜ |
+| P9-14 | Registry KYB (OpenCorporates) **simulated → real/production** *(audit prod blocker)* | code/vendor | — | ⬜ |
 
 ---
 
@@ -246,13 +274,13 @@ and Phase 10 (RDI audit).
 
 ---
 
-## Roll-up (78 remediation line items + optional modernization tracked separately)
+## Roll-up (87 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
 | ✅ merged | 39 |
 | 🟢 PR open (built) | 1 |
 | 🔨 in progress | 0 |
-| 📋 scoped | 7 |
+| 📋 scoped | 16 |
 | ⏸ blocked | 1 |
 | ⬜ pending | 30 |
 
@@ -266,6 +294,9 @@ built/merged** (only decision-gated #17/#21/#24/#26/#28 remain). Phase 7: status
 done + audit-tamper (#691) merged; ownership gate not started (⬜). Phases 8–9 are the
 remaining body — overwhelmingly ops/vendor/legal, not code. **Phase 10 (RDI audit):**
 **all three current-stage CRITICALs closed & validated — P10-1 (#697, RDI-006) · P10-3
-(#696, RDI-004) · P10-2 (#698, RDI-001/007/011) — so Audit 2 can now proceed**; P10-DOC-1
-policy approved; W2/W3 (P10-4…P10-7, HIGH/MED) and the deferred RDI-002/005 items remain.
-Pilot-readiness ≈ 88–92%; production-readiness ≈ 30–35%.
+(#696, RDI-004) · P10-2 (#698, RDI-001/007/011)**; P10-DOC-1 policy approved; W2/W3
+(P10-4…P10-7, HIGH/MED) and the deferred RDI-002/005 items remain. **Phase 11 (BSA audit,
+Audit 2 — now run against `e66405a`):** 19 findings folded as P11-1…P11-9; 2 HIGH blockers
+(BSA-001 revocation fail-open, BSA-015 dependency CVEs) lead Wave 1; BSA-002 = existing
+item 26. **Section order:** phase sections now run …8 → 10 → 11 → **9 (Production readiness,
+last)**. Pilot-readiness ≈ 88–92%; production-readiness ≈ 30–35%.
