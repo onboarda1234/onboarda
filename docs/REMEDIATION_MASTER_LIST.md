@@ -10,14 +10,17 @@ Legend: ✅ merged · 🟢 PR open (built, awaiting merge) · 🔨 in progress �
 
 # Onboarda / RegMind — Audit-Remediation Master List
 
-**Last reconciled:** 2026-07-07 (base `main` ≈ `b577a5f`, contains merged #691).
-The **entire tonight code batch is now merged, deployed to AWS staging, and
-validated (PASS):** #692 (item 37, merge `8f65435`, TD 775), #690 (item 18, merge
-`8b0a7a8`, TD 776), #693 (item 19, merge `db0702c`, TD 777), #691 (item 27, merge
-`b577a5f`). Earlier: #687/#688/#689 (items 23/22/38, TDs 771/772/773). Only #695
-(this docs PR) remains open in the batch. Incorporates REGMIND-SYSTEM-READINESS-AUDIT-1
-(P9-12/13/14 + CLIENT-PORTAL-RUNTIME-SMOKE-1 + PERIODIC-BASELINE-METHOD-HYGIENE-1),
-an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
+**Last reconciled:** 2026-07-07 (base `main` = `e66405a`, HEAD after #698).
+**Phase 10 Wave-1 complete:** all three current-stage blocking CRITICALs are merged,
+deployed to AWS staging (`regmind-staging:782` / worker `:230`, image `e66405a`), and
+validated (PASS) — **P10-1 #697 (RDI-006), P10-3 #696 (RDI-004), P10-2 #698
+(RDI-001/007/011)**; merge order #695 → #697 → #696 → #698. **Audit 2 can now proceed.**
+Prior tonight code batch (all merged/validated): #692/#690/#693/#691 (TDs 775/776/777)
+and #687/#688/#689 (TDs 771/772/773); docs PR #695 merged. Small-wins Wave A
+(#700–#703) CI-green, open, awaiting review + Codex handover. Incorporates
+REGMIND-SYSTEM-READINESS-AUDIT-1 (P9-12/13/14 + CLIENT-PORTAL-RUNTIME-SMOKE-1 +
+PERIODIC-BASELINE-METHOD-HYGIENE-1), an Optional/Post-Production Modernization section,
+and Phase 10 (RDI audit).
 
 > Maintenance: this is the single source of truth for remediation status. On any
 > request for PR/phase status, refresh the Status/GitHub columns from GitHub and
@@ -150,9 +153,9 @@ an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
 
 | # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
 |---|----|----------|:--:|-----------------------|:--:|:--:|
-| P10-1 | PR-RDI-1 — Server-side materiality (+ approved maker-checker scope change: four-eyes {tier1,tier2}→{tier1}) | RDI-006 | CRITICAL | Ignore client-supplied change materiality; always classify server-side from change type. Part B: relax four-eyes to Tier 1 only (approved, Aisha Sudally) — screening hard-block still covers Tier 2 | — | 🔨 in progress |
-| P10-2 | PR-RDI-2 — Fail-closed decision & memo persistence | RDI-001, 007, 011 | CRITICAL + HIGH + MED | Decision status+audit+signoff+decision_record in one transaction; memo approve/validate roll back and 500 on save failure (no false "success") | — | 📋 scoped |
-| P10-3 | PR-RDI-3 — Risk-staleness gate | RDI-004 | CRITICAL | Block final decisions when `risk_config_version` ≠ current or recompute failed; persist recompute failures | — | 📋 scoped |
+| P10-1 | PR-RDI-1 — Server-side materiality | RDI-006 | CRITICAL | Ignore client-supplied change materiality; always classify server-side from change type via `classify_materiality(change_type)` | [#697](https://github.com/onboarda1234/onboarda/pull/697) | ✅ merged |
+| P10-2 | PR-RDI-2 — Fail-closed decision & memo persistence | RDI-001, 007, 011 | CRITICAL + HIGH + MED | Decision status+audit+signoff+decision_record in one transaction; memo approve/validate roll back and 500 on save failure (no false "success") | [#698](https://github.com/onboarda1234/onboarda/pull/698) | ✅ merged |
+| P10-3 | PR-RDI-3 — Risk-staleness gate | RDI-004 | CRITICAL | Block final decisions when `risk_config_version` ≠ current or recompute failed; persist recompute failures | [#696](https://github.com/onboarda1234/onboarda/pull/696) | ✅ merged |
 | P10-4 | PR-RDI-4 — Per-decision-type gates | RDI-003, 008 | HIGH | Add required prerequisites for reject / escalate_edd / request_documents; block failed-validation memo from supervisor step **(needs policy decision on per-type prerequisites)** | — | 📋 scoped (decision-gated) |
 | P10-5 | PR-RDI-5 — Decision-record coverage + provenance | RDI-009 (non-SAR), 010 | HIGH | Write decision_records for EDD closure / monitoring actions / change approvals / risk changes; add AI-vs-rule source + `agent_executions` link. Depends on **P10-2** | — | 📋 scoped |
 | P10-6 | PR-RDI-6 — Sign-off IP attribution | RDI-012 | HIGH | Trust `X-Real-IP` only when the direct peer is a known proxy/ALB (stop browser spoofing) | — | 📋 scoped |
@@ -163,6 +166,14 @@ an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
 - **RDI-005** — SAR permanence (`ON DELETE CASCADE`, cleanup delete, mutable SAR content), HIGH **Enterprise pre-enable blocker**. Must be fixed **before** enabling Enterprise SAR/STR; safe to defer **only while SAR/STR feature flags stay disabled** (`ENABLE_SAR_WORKFLOW`, `ENABLE_SAR_STR` = false). Same guard covers the SAR slices of RDI-009/RDI-013.
 
 **Wave order:** W1 P10-1 → P10-2 → P10-3 (all CRITICAL; P10-2 unblocks P10-5) · W2 P10-4, P10-5, P10-6 (HIGH) · W3 P10-7 (MED/infra). P10-1 and P10-6 are small quick wins slot-able anytime.
+
+**Closure evidence (2026-07-07):**
+- **P10-1 (#697)** — **merged** (base `b577a5f`, merge `b6192fb`; ancestor of deployed HEAD `e66405a`, so live on `regmind-staging:782`). `create_change_request()` now ignores client-supplied `items[].materiality` and server-computes tier from `change_type` via `classify_materiality`; fresh-context review fold prevents server-known alert types (e.g. `control_change`) downgrading to `other`/Tier 2. Full SQLite suite 6549 passed; CM regression 217 passed; static guard asserts no `item.get("materiality")` read. **RDI-006 CLOSED/REMEDIATED** (Codex-verified; control C-11 VERIFIED for client-supplied override). **Two residuals:** (a) `change_type` itself is still client-supplied — semantic mislabeling is a future hardening item (unknown types default Tier 2); (b) the previously-approved **four-eyes scope change (tier1,tier2→tier1) was NOT part of #697** — maker-checker was left unchanged — so it remains a separate outstanding decision/PR if still wanted (Tier 2 screening hard-block currently still applies).
+- **P10-3 (#696)** — **merged**, deployed (`regmind-staging:781` / `regmind-verification-worker:229`, image `fbedc7c`), validated. Targeted `test_risk_staleness_gate.py` 15 passed; runtime synthetic probe confirmed current-version app proceeds, older-version app + `stale:recompute_failed` quarantine both 409-block, non-approval decisions (reject/escalate/request-docs = 201) not newly blocked. **RDI-004 CLOSED/PASS.** Residual (per design): legacy `NULL`-provenance apps blocked only after first config update/sweep.
+- **P10-2 (#698)** — rebased onto #696-merged `main`, retargeted, CI green, **merged**, deployed (`regmind-staging:782` / `regmind-verification-worker:230`, image `e66405a`), validated. Targeted decision/memo/approval suite 263 passed / 2 skipped; full SQLite suite 6568 passed. Runtime probe: decision 201 persisted `decision_records_count=1` + audit + accepted governance; memo approve 200 with signoff audit; memo validate 200 persisted status+timestamp. **RDI-001 / RDI-007 / RDI-011 CLOSED/PASS.** Residual: live-DB fault injection not run (forced-failure covered by merged tests); memo-supervisor `decision_records` overlay stays scoped to P10-5/RDI-009.
+- Final staging aligned to #698 merge SHA `e66405a`; `/api/version` git_sha+image_tag match; liveness/health/readiness 200 (`ready=true`); both ALB targets healthy; 30-min CloudWatch window ERROR/Exception/Traceback/HTTP-5 = 0.
+
+**Audit-2 unpause status:** ✅ **all three current-stage blocking CRITICALs closed & validated** — RDI-006 (#697), RDI-004 (#696), RDI-001 (#698). Merge order on `main`: #695 → #697 → #696 → #698 (HEAD `e66405a`, deployed `regmind-staging:782`). The audit artifact's "remaining blockers RDI-001/RDI-004" note reflects the point-in-time when #697 was verified — both have since merged. **Audit 2 can now proceed.** Remaining Phase 10 work is W2/W3 (HIGH/MED: P10-4 decision-gated, P10-5 dep-on-P10-2, P10-6, P10-7) plus the deferred RDI-002/005 items and the outstanding four-eyes scope decision.
 
 ## Backlog — after Phase 7
 | PR | Priority | Title | Status |
@@ -238,20 +249,23 @@ an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
 ## Roll-up (78 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
-| ✅ merged | 36 |
+| ✅ merged | 39 |
 | 🟢 PR open (built) | 1 |
-| 🔨 in progress | 1 |
-| 📋 scoped | 9 |
+| 🔨 in progress | 0 |
+| 📋 scoped | 7 |
 | ⏸ blocked | 1 |
 | ⬜ pending | 30 |
 
-**Open PRs:** #695 (this docs PR) · **Old blocked draft:** #498. All tonight code PRs
-(#687–#693) merged, deployed to staging, validated PASS.
+**Open PRs:** #695 (prior docs PR, merged) · Wave-A small-wins **#700 (SW-1) · #701 (SW-2) ·
+#702 (SW-3) · #703 (SW-4)** — all CI-green, do-not-merge, awaiting review + Codex handover ·
+**Old blocked draft:** #498. Phase 10 **#696 (P10-3) and #698 (P10-2) merged**, deployed to
+staging, validated PASS; earlier code PRs (#687–#693) likewise merged/validated.
 
 **Where things stand:** Phases 0–3 (except B7 #12) and 5–6 done. **Phase 4 fully
 built/merged** (only decision-gated #17/#21/#24/#26/#28 remain). Phase 7: status-canon
 done + audit-tamper (#691) merged; ownership gate not started (⬜). Phases 8–9 are the
 remaining body — overwhelmingly ops/vendor/legal, not code. **Phase 10 (RDI audit):**
-P10-1 in progress; P10-2/P10-3 next (the other two current-stage CRITICALs — RDI-001/004);
-P10-DOC-1 policy approved. Management response (2026-07-07) narrowed Audit-2 blocking
-CRITICALs to 3 (RDI-001/004/006). Pilot-readiness ≈ 88–92%; production-readiness ≈ 30–35%.
+**all three current-stage CRITICALs closed & validated — P10-1 (#697, RDI-006) · P10-3
+(#696, RDI-004) · P10-2 (#698, RDI-001/007/011) — so Audit 2 can now proceed**; P10-DOC-1
+policy approved; W2/W3 (P10-4…P10-7, HIGH/MED) and the deferred RDI-002/005 items remain.
+Pilot-readiness ≈ 88–92%; production-readiness ≈ 30–35%.
