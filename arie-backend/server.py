@@ -29053,7 +29053,20 @@ class MemoValidateHandler(BaseHandler):
                        (user.get("sub",""), user.get("name",""), user.get("role",""), "Validate Memo", app_id, f"Memo validation: {validation['validation_status']} (score: {validation['quality_score']}/10)", self.get_client_ip()))
             db.commit()
         except Exception as e:
+            # P10-2 / RDI-011: FAIL CLOSED. Never report validation output as
+            # recorded when persisting the validation status/audit row failed —
+            # downstream gates read the PERSISTED validation_status, so a false
+            # "done" here desynchronizes the officer's view from the database.
             logger.error(f"Failed to store memo validation results for {app_id}: {e}", exc_info=True)
+            _rollback_and_close(db)
+            # Keep the failed attempt visible in audit_log (fresh connection,
+            # best effort — the rollback erased this attempt's rows).
+            self.log_governance_attempt(
+                user, "memo.validate", app_id, "rejected", 500,
+                "persistence_failure: " + str(e)[:200])
+            return self.error(
+                "Memo validation failed: could not persist the validation result "
+                "safely. The validation has NOT been recorded — retry.", 500)
         db.close()
 
         self.success(validation)
@@ -30452,11 +30465,23 @@ class MemoApproveHandler(BaseHandler):
                                    self.request.headers.get("User-Agent", ""))
             self.log_governance_attempt(
                 user, "memo.approve", attempt_target, "accepted", 200,
-                "", attempt_summary, db=db, commit=False)
+                "", attempt_summary, db=db, commit=False, best_effort=False)
 
             db.commit()
         except Exception as e:
+            # P10-2 / RDI-007: FAIL CLOSED. Never report "approved" when the
+            # approval (memo update / audit / signoff / governance / commit)
+            # did not durably persist — roll back and surface the failure.
             logger.error(f"Failed to store memo approval for {app_id}: {e}", exc_info=True)
+            _rollback_and_close(db)
+            # Keep the failed attempt visible: the rollback erased the
+            # uncommitted "accepted" governance row (fresh connection, best effort).
+            self.log_governance_attempt(
+                user, "memo.approve", attempt_target, "rejected", 500,
+                "persistence_failure: " + str(e)[:200], attempt_summary)
+            return self.error(
+                "Memo approval failed: could not persist the approval safely. "
+                "The memo has NOT been approved — retry.", 500)
         db.close()
 
         response = {
@@ -30879,6 +30904,15 @@ class MemoSupervisorHandler(BaseHandler):
                     )
                     save_decision_record(db, sup_record)
             except Exception as rec_err:
+                # Deliberately best-effort for now — but NOT harmless
+                # (pre-existing behaviour, documented honestly): on PostgreSQL a
+                # failed statement rolls back the connection's open transaction,
+                # so an overlay failure here silently discards the uncommitted
+                # memo UPDATE and "Run Memo Supervisor" audit row above, while
+                # the hash-chain append below still commits — a chained verdict
+                # entry whose memo update was lost. Restructuring this site
+                # (overlay after commit, or savepoint) is tracked with the
+                # broader mandatory decision-record coverage as P10-5 / RDI-009.
                 logger.error("Failed to record supervisor decision record for %s: %s", app_id, rec_err)
 
             # ── Append hash-chain audit entry (fail-closed) ──
@@ -31909,9 +31943,16 @@ class ApplicationDecisionHandler(BaseHandler):
                                self.get_client_ip(),
                                self.request.headers.get("User-Agent", ""))
 
-        # ── Record normalized decision record ──
+        # ── Record normalized decision record + commit (P10-2 / RDI-001) ──
+        # FAIL-CLOSED: the normalized decision record is part of the regulatory
+        # paper trail, not a best-effort overlay. It is written inside the SAME
+        # transaction as the status update / audit_log / signoff / governance
+        # rows, and any failure (building it, saving it, or committing) rolls
+        # the ENTIRE decision back — a final decision can never commit without
+        # its decision_records row.
         try:
-            # Try to derive confidence from supervisor result in the compliance memo
+            # Optional enrichment only: derive confidence from the memo's
+            # supervisor result. Its absence must not block the decision.
             supervisor_result = None
             try:
                 memo_row = latest_compliance_memo_row(db, real_id, columns="id, memo_data")
@@ -31919,7 +31960,7 @@ class ApplicationDecisionHandler(BaseHandler):
                     memo_data = json.loads(memo_row["memo_data"]) if memo_row["memo_data"] else {}
                     supervisor_result = memo_data.get("supervisor")
             except Exception:
-                pass  # Non-critical: proceed without supervisor data
+                pass  # Non-critical enrichment: proceed without supervisor data
 
             decision_record = build_from_application_decision(
                 app=dict(app),
@@ -31932,23 +31973,31 @@ class ApplicationDecisionHandler(BaseHandler):
             )
             if approval_gate_snapshot:
                 decision_record.setdefault("extra", {})["approval_gate_snapshot"] = approval_gate_snapshot
-            save_decision_record(db, decision_record)
-        except Exception as e:
-            logger.error("Failed to record decision record for app %s: %s", app["ref"], e)
+            save_decision_record(db, decision_record)  # raises on failure (RDI-001)
 
-        try:
+            # best_effort=False: a swallowed governance failure would (on PG)
+            # auto-roll-back the whole transaction and let the commit below
+            # commit NOTHING while still returning 201.
             self.log_governance_attempt(
                 user, "application.decision", attempt_target, "accepted", 201,
-                "", attempt_summary, db=db, commit=False)
+                "", attempt_summary, db=db, commit=False, best_effort=False)
             db.commit()
         except Exception as decision_commit_error:
             logger.error(
-                "Failed to commit application decision transaction for %s: %s",
+                "Failed to persist application decision (status/audit/signoff/"
+                "decision-record/governance must commit atomically) for %s: %s",
                 app.get("ref"),
                 decision_commit_error,
                 exc_info=True,
             )
             _rollback_and_close(db)
+            # The rollback also erased this attempt's uncommitted governance
+            # row — re-log the failed attempt on a fresh connection (best
+            # effort) so a 500-failed decision remains visible in audit_log.
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 500,
+                "persistence_failure: " + str(decision_commit_error)[:200],
+                attempt_summary)
             return self.error("Decision failed: could not persist final decision safely.", 500)
         db.close()
 

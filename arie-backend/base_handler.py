@@ -642,18 +642,25 @@ class BaseHandler(tornado.web.RequestHandler):
         return (text or "unknown")[:160]
 
     def log_governance_attempt(self, user, action, target, outcome, status_code,
-                               reason="", payload_summary=None, db=None, commit=True):
+                               reason="", payload_summary=None, db=None, commit=True,
+                               best_effort=True):
         """Persist an audit row for success or rejection of governed actions.
 
         This is intentionally separate from the business-event audit rows
         ("Decision", "Screening Review", etc.) so failed attempts are visible
         even when the guarded action is rejected before any state change.
 
-        The write is best-effort: failures are logged with a structured marker
-        and never replace the original user-visible handler response. Rejected
-        attempts should generally use the default commit=True; accepted attempts
-        that share a caller transaction can pass commit=False. Do not use
-        commit=False unless the caller will commit the supplied db before close.
+        By default the write is best-effort: failures are logged with a
+        structured marker and never replace the original user-visible handler
+        response. Callers inside a FAIL-CLOSED atomic block (P10-2 / RDI-001)
+        MUST pass ``best_effort=False`` so a failed governance INSERT propagates
+        into their rollback path — on PostgreSQL a failed statement rolls back
+        the whole connection transaction, so swallowing it here would let the
+        caller commit an EMPTY transaction and report success with nothing
+        persisted. Rejected attempts should generally use the default
+        commit=True; accepted attempts that share a caller transaction can pass
+        commit=False. Do not use commit=False unless the caller will commit the
+        supplied db before close.
         """
         target = self._governance_audit_target(target)
         summary = payload_summary if isinstance(payload_summary, dict) else {}
@@ -709,6 +716,11 @@ class BaseHandler(tornado.web.RequestHandler):
                 "governance_audit_write_failed=true action=%s target=%s outcome=%s status_code=%s",
                 action, target, outcome, status_code,
             )
+            if not best_effort:
+                # Fail-closed caller: propagate so its atomic block rolls back
+                # instead of committing a (possibly auto-rolled-back) empty
+                # transaction and reporting success.
+                raise
         finally:
             if own_db and db is not None:
                 db.close()

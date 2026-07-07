@@ -125,9 +125,31 @@ def build_decision_record(
 # Persistence Helpers
 # ============================================================================
 
+def _canonical_record_risk_level(value: Optional[str]) -> Optional[str]:
+    """Map a stored risk level to a canonical VALID_RISK_LEVELS member.
+
+    Defensive (P10-2): `final_risk_level` was added by ALTER TABLE with no
+    CHECK constraint, so legacy case/spacing variants ("Very High", "high")
+    must normalize rather than trip build_decision_record's ValueError inside
+    a fail-closed persistence block. Unmappable values become None.
+    """
+    if value is None:
+        return None
+    candidate = str(value).strip().upper().replace(" ", "_")
+    return candidate if candidate in VALID_RISK_LEVELS else None
+
+
 def save_decision_record(db, record: Dict[str, Any]) -> str:
     """
     Persist a decision record to the decision_records table.
+
+    P10-2 / RDI-001: this helper RAISES on failure — it must not log-and-continue.
+    Decision records are part of the regulatory paper trail, not a best-effort
+    overlay: callers persisting a FINAL decision must run this inside the same
+    transaction as the status update / audit rows and roll everything back if it
+    fails, so a decision can never commit without its normalized record.
+    Callers for genuinely advisory records (e.g. supervisor verdict overlays)
+    may catch the exception themselves.
 
     Args:
         db: Database connection (DBConnection from db.py)
@@ -135,6 +157,9 @@ def save_decision_record(db, record: Dict[str, Any]) -> str:
 
     Returns:
         The decision_id of the saved record.
+
+    Raises:
+        Exception: whatever the underlying INSERT raised.
     """
     decision_id = record["decision_id"]
     try:
@@ -160,21 +185,20 @@ def save_decision_record(db, record: Dict[str, Any]) -> str:
                 json.dumps(record.get("extra", {})),
             ),
         )
-        logger.info(
-            "Decision record saved: %s type=%s app=%s",
-            decision_id,
-            record["decision_type"],
-            record["application_ref"],
-        )
     except Exception as e:
-        # Non-fatal: decision records are an audit overlay, not a blocking requirement.
-        # The original decision flow (status update, audit_log) has already committed.
         logger.error(
             "Failed to save decision record %s for app %s: %s",
             decision_id,
             record["application_ref"],
             e,
         )
+        raise
+    logger.info(
+        "Decision record saved: %s type=%s app=%s",
+        decision_id,
+        record["decision_type"],
+        record["application_ref"],
+    )
     return decision_id
 
 
@@ -273,18 +297,34 @@ def build_from_application_decision(
     Returns:
         Decision record dict.
     """
-    # Derive confidence from supervisor if available
+    # Derive confidence from supervisor if available.
+    # Defensive coercion (P10-2): the record save is FAIL-CLOSED at the caller,
+    # so cosmetic legacy memo data (non-numeric or >100 confidence) must not be
+    # able to convert a fully-gated decision into a 500. Unusable values drop
+    # to None instead of raising downstream.
     confidence = None
     if supervisor_result:
         confidence = supervisor_result.get("supervisor_confidence")
         if confidence is not None:
-            # Normalize to 0-1 range if stored as percentage
-            if confidence > 1.0:
-                confidence = confidence / 100.0
+            try:
+                confidence = float(confidence)
+            except (TypeError, ValueError):
+                confidence = None
+            else:
+                # Normalize to 0-1 range if stored as percentage
+                if confidence > 1.0:
+                    confidence = confidence / 100.0
+                if confidence < 0.0 or confidence > 1.0:
+                    confidence = None
 
-    # Build key flags from application context
+    # Build key flags from application context.
+    # Canonicalize risk level (same defensive reason): final_risk_level was
+    # added by ALTER TABLE with no CHECK constraint, so legacy case/spacing
+    # variants ("Very High", "high") must map to canonical values rather than
+    # trip build_decision_record's VALID_RISK_LEVELS ValueError.
     key_flags = []
-    risk_level = app.get("final_risk_level") or app.get("risk_level")
+    risk_level = _canonical_record_risk_level(
+        app.get("final_risk_level") or app.get("risk_level"))
     risk_score = app.get("final_risk_score") if app.get("final_risk_score") not in (None, "") else app.get("risk_score")
     if risk_level in ("HIGH", "VERY_HIGH"):
         key_flags.append(f"risk:{risk_level}")
@@ -360,7 +400,8 @@ def build_from_supervisor_verdict(
     else:
         decision_type = "escalate_edd"
 
-    risk_level = app.get("final_risk_level") or app.get("risk_level")
+    risk_level = _canonical_record_risk_level(
+        app.get("final_risk_level") or app.get("risk_level"))
     risk_score = app.get("final_risk_score") if app.get("final_risk_score") not in (None, "") else app.get("risk_score")
     return build_decision_record(
         application_ref=app.get("ref", ""),
