@@ -3536,6 +3536,11 @@ class TokenRevocationList:
         Workers may have already loaded the revocation table before another
         worker handles logout.  A miss in the local cache is therefore not
         authoritative until the current JTI has been checked in the database.
+
+        BSA-001 fail-closed read path: a DB failure here means the token's
+        revocation status is UNKNOWN, not "not revoked" — raise
+        RevocationCheckUnavailable so decode_token rejects the token instead
+        of admitting a possibly-killed session.
         """
         if not jti:
             return 0
@@ -3549,31 +3554,48 @@ class TokenRevocationList:
                 ).fetchone()
             finally:
                 db.close()
-            if not row:
-                return 0
-            expiry = row[0] if isinstance(row, (tuple, list)) else row["expires_at"]
-            self._revoked[jti] = expiry
-            return expiry
         except Exception as e:
-            logger.debug("Could not look up revoked token in DB: %s", e)
+            from auth import RevocationCheckUnavailable
+            logger.warning("Revocation lookup failed for %s...: %s", str(jti)[:8], e)
+            raise RevocationCheckUnavailable(
+                f"revocation store lookup failed: {e}") from e
+        if not row:
             return 0
+        expiry = row[0] if isinstance(row, (tuple, list)) else row["expires_at"]
+        self._revoked[jti] = expiry
+        return expiry
 
-    def _db_persist(self, jti: str, expires_at: float) -> None:
+    def _db_persist(self, jti: str, expires_at: float, db=None) -> bool:
         """Persist a revocation to DB. Returns True iff the row was durably
-        committed — callers that must attest a revocation actually happened
+        written — callers that must attest a revocation actually happened
         (e.g. a password-change "all sessions revoked" log) rely on this so
-        they never claim a revocation that only exists in one worker's memory."""
-        try:
-            from db import get_db as _db_get
-            db = _db_get()
-            # Use INSERT OR REPLACE for SQLite / ON CONFLICT for Postgres
+        they never claim a revocation that only exists in one worker's memory.
+
+        Two modes (BSA-001):
+        - db=None (default): own connection, own commit; returns False on
+          failure (caller decides how to fail).
+        - db=<caller's connection>: write on THAT connection with NO commit and
+          NO close — the caller commits it atomically with its own state change
+          (password update, etc.). A write failure PROPAGATES so the caller's
+          rollback covers both."""
+        if db is not None:
             db.execute(
                 "INSERT INTO revoked_tokens (jti, expires_at) VALUES (?, ?) "
                 "ON CONFLICT (jti) DO UPDATE SET expires_at = EXCLUDED.expires_at",
                 (jti, expires_at)
             )
-            db.commit()
-            db.close()
+            return True
+        try:
+            from db import get_db as _db_get
+            own_db = _db_get()
+            # Use INSERT OR REPLACE for SQLite / ON CONFLICT for Postgres
+            own_db.execute(
+                "INSERT INTO revoked_tokens (jti, expires_at) VALUES (?, ?) "
+                "ON CONFLICT (jti) DO UPDATE SET expires_at = EXCLUDED.expires_at",
+                (jti, expires_at)
+            )
+            own_db.commit()
+            own_db.close()
             return True
         except Exception as e:
             logger.warning(f"Could not persist revoked token to DB: {e}")
@@ -3590,13 +3612,18 @@ class TokenRevocationList:
         except Exception:
             pass
 
-    def revoke(self, jti: str, expires_at: float) -> bool:
+    def revoke(self, jti: str, expires_at: float, db=None) -> bool:
         """
         Add a token to the revocation list.
 
         Args:
             jti: JWT ID (from token's 'jti' claim)
             expires_at: Token expiry timestamp (Unix time)
+            db: Optional caller-owned DB connection (BSA-001). When provided,
+                the revocation row is written on THAT connection without
+                commit, so the caller can commit it atomically with its own
+                state change (e.g. a password update) — and a write failure
+                propagates so the caller's rollback covers both.
 
         Returns:
             True iff the revocation was durably persisted to the DB (so it
@@ -3605,11 +3632,12 @@ class TokenRevocationList:
             "revoked everywhere" from "revoked only on this instance".
         """
         self._revoked[jti] = expires_at
-        persisted = self._db_persist(jti, expires_at)
+        persisted = self._db_persist(jti, expires_at, db=db)
         logger.debug(f"Token {jti[:8]}... revoked (expires at {expires_at})")
 
-        # Cleanup if interval exceeded
-        if time.time() - self._last_cleanup > self._cleanup_interval:
+        # Cleanup if interval exceeded — never on a caller-owned transaction
+        # (cleanup opens its own connection and must not interleave).
+        if db is None and time.time() - self._last_cleanup > self._cleanup_interval:
             self.cleanup()
         return persisted
 

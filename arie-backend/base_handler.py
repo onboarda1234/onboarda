@@ -571,6 +571,25 @@ class BaseHandler(tornado.web.RequestHandler):
             return None
         return user
 
+    def revalidate_actor_post_await(self, roles=None):
+        """Re-validate the presented token AFTER a long ``await`` (BSA-014).
+
+        A handler that authenticates, awaits a long-running pipeline, and then
+        persists results would otherwise write with authority that may have
+        been revoked mid-run (logout / password change / deactivation /
+        demotion). Clearing the per-request auth cache and re-running
+        require_auth repeats the FULL chain against current state: fresh
+        decode_token (revocation store, fail-closed), fresh
+        _validate_current_actor (actor row still active, CURRENT role), and
+        the role check (with the standard authz-denial audit).
+
+        Returns the refreshed user dict, or None with the 401/403 response
+        already written — callers must ``return`` without persisting.
+        """
+        self._auth_user_checked = False
+        self._auth_user = None
+        return self.require_auth(roles=roles)
+
     def get_client_ip(self):
         remote_ip = self.request.remote_ip or ""
         x_real_ip = (self.request.headers.get("X-Real-IP") or "").strip()

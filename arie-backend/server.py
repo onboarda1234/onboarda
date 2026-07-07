@@ -1284,7 +1284,7 @@ def _duplicate_hashes_for_document(db, *, application_id, document_id, file_sha2
 
 def _revoke_all_client_sessions(db, user_id):
     """
-    Best-effort revocation helper: invalidate any JWT that was issued for *user_id*.
+    Revocation helper: invalidate any JWT that was issued for *user_id*.
 
     Since JWTs are stateless the only mechanism we have is the token revocation
     list, which tracks individual JTI values.  We don't store issued tokens
@@ -1296,6 +1296,12 @@ def _revoke_all_client_sessions(db, user_id):
 
     The entry expires after TOKEN_EXPIRY_HOURS so it is automatically cleaned
     up — any JWT issued before the password change will have expired by then.
+
+    BSA-001 (fail-closed): the revocation row is written on the CALLER's *db*
+    connection with no commit — the caller commits it atomically with its own
+    state change (the password update). A write failure PROPAGATES so the
+    caller rolls back everything: a credential rotation either fully happens
+    (password changed AND every prior session durably killed) or not at all.
     """
     import time as _time
     from auth import TOKEN_EXPIRY_HOURS
@@ -1303,10 +1309,7 @@ def _revoke_all_client_sessions(db, user_id):
     # Use a synthetic JTI that encode_token never generates but that the
     # revocation list can match on via the helper below.
     user_jti = f"user:{user_id}"
-    # Returns True iff the entry durably persisted (so it propagates to every
-    # worker). Callers that log/attest "all sessions revoked" must honour this
-    # — a transient DB write failure revokes only the serving worker's memory.
-    return token_revocation_list.revoke(user_jti, expires_at)
+    return token_revocation_list.revoke(user_jti, expires_at, db=db)
 
 
 def build_regulatory_analysis(doc: dict) -> dict:
@@ -4127,22 +4130,34 @@ class AdminResetPasswordHandler(BaseHandler):
 
         import bcrypt
         pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
-        db.execute("UPDATE clients SET password_hash=? WHERE LOWER(email)=?", (pw_hash, email))
-        self.log_audit(
-            user,
-            "Admin Password Reset",
-            f"client:{email}",
-            json.dumps({
-                "subject_type": "client",
-                "subject_id": client["id"],
-                "subject_email": email,
-                "sessions_revoked": True,
-            }, default=str),
-            db=db,
-            commit=False,
-        )
-        db.commit()
-        _revoke_all_client_sessions(db, client["id"])
+        # BSA-001 (fail-closed): password update, audit row, and session
+        # revocation commit atomically — the audit's "sessions_revoked": True
+        # is only ever written when the revocation row is in the same commit.
+        try:
+            db.execute("UPDATE clients SET password_hash=? WHERE LOWER(email)=?", (pw_hash, email))
+            self.log_audit(
+                user,
+                "Admin Password Reset",
+                f"client:{email}",
+                json.dumps({
+                    "subject_type": "client",
+                    "subject_id": client["id"],
+                    "subject_email": email,
+                    "sessions_revoked": True,
+                }, default=str),
+                db=db,
+                commit=False,
+            )
+            _revoke_all_client_sessions(db, client["id"])
+            db.commit()
+        except Exception:
+            logger.exception("Admin client password reset aborted: revocation/audit could not be persisted")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Password reset could not be completed. Please try again.", 503)
         db.close()
         self.success({"status": "password_reset", "email": email})
 
@@ -4185,23 +4200,34 @@ class AdminOfficerPasswordResetHandler(BaseHandler):
 
         import bcrypt
         pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
-        db.execute("UPDATE users SET password_hash = ? WHERE LOWER(email) = ?", (pw_hash, email))
-        self.log_audit(
-            user,
-            "Admin Password Reset",
-            f"officer:{email}",
-            json.dumps({
-                "subject_type": "officer",
-                "subject_id": officer_row["id"],
-                "subject_email": email,
-                "subject_role": officer_row["role"],
-                "sessions_revoked": True,
-            }, default=str),
-            db=db,
-            commit=False,
-        )
-        db.commit()
-        _revoke_all_client_sessions(db, officer_row["id"])
+        # BSA-001 (fail-closed): password update, audit row, and session
+        # revocation commit atomically — no false "sessions_revoked": True.
+        try:
+            db.execute("UPDATE users SET password_hash = ? WHERE LOWER(email) = ?", (pw_hash, email))
+            self.log_audit(
+                user,
+                "Admin Password Reset",
+                f"officer:{email}",
+                json.dumps({
+                    "subject_type": "officer",
+                    "subject_id": officer_row["id"],
+                    "subject_email": email,
+                    "subject_role": officer_row["role"],
+                    "sessions_revoked": True,
+                }, default=str),
+                db=db,
+                commit=False,
+            )
+            _revoke_all_client_sessions(db, officer_row["id"])
+            db.commit()
+        except Exception:
+            logger.exception("Admin officer password reset aborted: revocation/audit could not be persisted")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Password reset could not be completed. Please try again.", 503)
         db.close()
 
         logger.warning(f"OFFICER PASSWORD RESET: {email} (role={officer_row['role']}) password was reset via staging endpoint")
@@ -4896,18 +4922,33 @@ class ResetPasswordHandler(BaseHandler):
             db.close()
             return self.error("Invalid or expired reset token", 400)
 
-        # Reset password and clear token
+        # Reset password and clear token. BSA-001 (fail-closed): the session
+        # revocation is written in the SAME transaction as the password update
+        # — the reset only succeeds if every pre-existing session is durably
+        # revoked. On failure everything rolls back and we return 503 rather
+        # than claim a reset whose old sessions may still be alive.
         pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
-        db.execute("UPDATE clients SET password_hash=?, password_reset_token=NULL, password_reset_expires=NULL WHERE id=?",
-                   (pw_hash, client["id"]))
-        db.commit()
-
-        # Revoke all active sessions for this client so old tokens can't be reused
-        _revoke_all_client_sessions(db, client["id"])
+        try:
+            db.execute("UPDATE clients SET password_hash=?, password_reset_token=NULL, password_reset_expires=NULL WHERE id=?",
+                       (pw_hash, client["id"]))
+            _revoke_all_client_sessions(db, client["id"])
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Password reset aborted for %s: session revocation could not be persisted",
+                mask_email(client["email"]),
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error(
+                "Password reset could not be completed. Please try again.", 503)
 
         db.close()
 
-        logger.info(f"Password reset completed for {mask_email(client['email'])}")
+        logger.info(f"Password reset completed for {mask_email(client['email'])} — all sessions revoked")
         self.success({"message": "Password has been reset successfully."})
 
 
@@ -4934,36 +4975,43 @@ class ClientChangePasswordHandler(BaseHandler):
         if not is_valid:
             db.close()
             return self.error(f"Password policy violation: {pw_error}", 400)
+        # Change the password and revoke ALL sessions in ONE transaction — a
+        # password change must kill every token issued before it, not just the
+        # one making this request. The per-user revocation entry (`user:{sub}`)
+        # is honoured by decode_token, which rejects any token with iat <=
+        # revocation time; tokens minted at re-login (after this point) still
+        # validate. The per-JTI revoke of the current session is kept as
+        # belt-and-braces for the calling token.
+        #
+        # BSA-001 (fail-closed): if the revocation rows cannot be durably
+        # written, the whole transaction rolls back — the password is NOT
+        # changed and we return 503. No more "password changed but other
+        # workers may still honour old sessions".
         new_hash = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt()).decode()
-        db.execute("UPDATE clients SET password_hash=? WHERE id=?", (new_hash, user.get("sub")))
-        db.commit()
-
-        # Revoke ALL sessions for this client — a password change must kill every
-        # token issued before it, not just the one making this request. The
-        # per-user revocation entry (`user:{sub}`) is honoured by decode_token,
-        # which rejects any token with iat <= revocation time; tokens minted at
-        # re-login (after this point) still validate. The per-JTI revoke of the
-        # current session is kept as belt-and-braces for the calling token.
-        revocation_durable = _revoke_all_client_sessions(db, user.get("sub"))
-        jti = user.get("jti")
-        exp = user.get("exp")
-        if jti and exp:
-            token_revocation_list.revoke(jti, exp)
+        try:
+            db.execute("UPDATE clients SET password_hash=? WHERE id=?", (new_hash, user.get("sub")))
+            _revoke_all_client_sessions(db, user.get("sub"))
+            jti = user.get("jti")
+            exp = user.get("exp")
+            if jti and exp:
+                token_revocation_list.revoke(jti, exp, db=db)
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Password change aborted for client %s: session revocation could not be persisted",
+                user.get("sub"),
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error(
+                "Password change could not be completed. Please try again.", 503)
 
         db.close()
         self.clear_session_cookie()
-        # Log truthfully: only claim "all sessions revoked" when the revocation
-        # durably persisted (and therefore propagates to every worker). On a
-        # transient DB write failure the change still succeeds and this worker's
-        # sessions are killed, but other workers may not honour it yet — say so
-        # rather than assert a global revocation that didn't happen.
-        if revocation_durable:
-            logger.info(f"Password changed for client {user.get('sub')} — all sessions revoked")
-        else:
-            logger.warning(
-                f"Password changed for client {user.get('sub')} but session revocation "
-                f"did not persist durably — other workers may not honour it until retry"
-            )
+        logger.info(f"Password changed for client {user.get('sub')} — all sessions revoked")
         self.success({"status": "password_changed"})
 
 
@@ -4989,6 +5037,7 @@ class LogoutHandler(BaseHandler):
 
         user = None
         revoked_count = 0
+        failed_revocations = 0
         seen_tokens = set()
         for token in presented_tokens:
             if not token or token in seen_tokens:
@@ -5002,8 +5051,27 @@ class LogoutHandler(BaseHandler):
             jti = decoded.get("jti")
             exp = decoded.get("exp")
             if jti and exp:
-                token_revocation_list.revoke(jti, exp)
-                revoked_count += 1
+                # BSA-001 (fail-closed): revoke() returns True only when the
+                # revocation row durably persisted (propagates to every
+                # worker). A memory-only revocation covers just this instance.
+                if token_revocation_list.revoke(jti, exp):
+                    revoked_count += 1
+                else:
+                    failed_revocations += 1
+        if failed_revocations:
+            # Do not claim "logged_out": the token may still be honoured by
+            # other workers / after restart. The cookie is cleared and this
+            # worker's memory rejects the token, but the contract of logout is
+            # a GLOBAL kill — report failure so the client can retry.
+            logger.error(
+                "Logout could not durably revoke %d of %d session token(s)%s",
+                failed_revocations,
+                failed_revocations + revoked_count,
+                f" for user {user.get('sub')}" if user else "",
+            )
+            self.clear_session_cookie()
+            return self.error(
+                "Logout could not be completed — please try again.", 503)
         if user:
             self.log_audit(
                 user,
@@ -28762,6 +28830,18 @@ class SupervisorRunHandler(BaseHandler):
             logger.error("Supervisor pipeline execution failed for app %s: %s (%s)\n%s",
                          app_id, e, type(e).__name__, traceback.format_exc())
             return self.error(f"Pipeline execution failed: {type(e).__name__}: {str(e)}", 500)
+
+        # BSA-014: the pipeline await above can run up to 120s — re-validate the
+        # actor against CURRENT state (revocation store, active status, role)
+        # before persisting, so a session killed or demoted mid-run cannot
+        # write supervisor results with stale authority.
+        user = self.revalidate_actor_post_await(roles=["admin", "sco", "co"])
+        if not user:
+            logger.warning(
+                "Supervisor pipeline result NOT persisted for app %s: actor failed post-await re-validation",
+                app_id,
+            )
+            return
 
         # Persist to database (survives restarts)
         try:
