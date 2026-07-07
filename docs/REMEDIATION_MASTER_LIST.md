@@ -157,7 +157,7 @@ Optional/Post-Production Modernization section.
 | P10-7 | PR-RDI-7 — Append-only audit at DB level | RDI-013 (non-SAR) | MEDIUM | Separate migration/admin DB role from runtime role; revoke runtime `UPDATE`/`DELETE` on `audit_log`/`decision_records`/`supervisor_audit_log`; stop cleanup code deleting those rows *(code half ships early; grants half is RDS/infra)* | — | 📋 scoped (part ops) |
 
 **Deferred (per management response 2026-07-07):**
-- **RDI-002** — by-design LOW/MEDIUM fast-path, HIGH policy-exception (not a code defect). **Not zero-work:** needs a documented policy (eligibility, excluded risk signals, officer authority, required evidence) + compensating audit records + direct-route tests + decision-record eligibility fields. Tracked as **P10-DOC-1** (governance/docs, not a code PR) — 📋 scoped.
+- **RDI-002** — by-design LOW/MEDIUM fast-path, HIGH policy-exception (not a code defect). **P10-DOC-1:** policy **draft committed** at [`docs/compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md`](compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md) (eligibility = all LOW/MEDIUM; disqualifiers = sanctioned/FATF, PEP, adverse hit, stale/incomplete screening, failed IDV; approver = Onboarding Officer alone; 20% QA sampling) — 🔨 pending compliance sign-off. **Still open (code):** decision-record eligibility-basis fields + direct-route tests proving a disqualifying signal can never fast-track.
 - **RDI-005** — SAR permanence (`ON DELETE CASCADE`, cleanup delete, mutable SAR content), HIGH **Enterprise pre-enable blocker**. Must be fixed **before** enabling Enterprise SAR/STR; safe to defer **only while SAR/STR feature flags stay disabled** (`ENABLE_SAR_WORKFLOW`, `ENABLE_SAR_STR` = false). Same guard covers the SAR slices of RDI-009/RDI-013.
 
 **Wave order:** W1 P10-1 → P10-2 → P10-3 (all CRITICAL; P10-2 unblocks P10-5) · W2 P10-4, P10-5, P10-6 (HIGH) · W3 P10-7 (MED/infra). P10-1 and P10-6 are small quick wins slot-able anytime.
@@ -238,8 +238,8 @@ Optional/Post-Production Modernization section.
 |--------|:--:|
 | ✅ merged | 32 |
 | 🟢 PR open (built) | 4 |
-| 🔨 in progress | 1 |
-| 📋 scoped | 11 |
+| 🔨 in progress | 2 |
+| 📋 scoped | 10 |
 | ⏸ blocked | 1 |
 | ⬜ pending | 29 |
 
