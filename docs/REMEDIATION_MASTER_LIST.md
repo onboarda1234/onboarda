@@ -11,6 +11,9 @@ Legend: ✅ merged · 🟢 PR open (built, awaiting merge) · 🔨 in progress �
 # Onboarda / RegMind — Audit-Remediation Master List
 
 **Last reconciled:** 2026-07-06 (base `main` ≈ `19a44f5`, contains merged #687).
+Incorporates REGMIND-SYSTEM-READINESS-AUDIT-1 (5 new items: P9-12/13/14 +
+CLIENT-PORTAL-RUNTIME-SMOKE-1 + PERIODIC-BASELINE-METHOD-HYGIENE-1) and an
+Optional/Post-Production Modernization section.
 
 > Maintenance: this is the single source of truth for remediation status. On any
 > request for PR/phase status, refresh the Status/GitHub columns from GitHub and
@@ -97,6 +100,8 @@ Legend: ✅ merged · 🟢 PR open (built, awaiting merge) · 🔨 in progress �
 | audit-log-tamper-evidence-1 | P2 | *(= Phase 4 #27)* | #691 | 🟢 |
 | ux-applications-list-sort-status-tabs | P3 | Sortable headers + status tabs | — | ⬜ |
 | chore-applications-deadcode-cleanup | P3 | Delete dead approval branches | — | ⬜ |
+| CLIENT-PORTAL-RUNTIME-SMOKE-1 | P1 | Live client-credential smoke: status/upload/logout/**cross-tenant denial** *(audit REGMIND-P1-006)* | — | ⬜ |
+| PERIODIC-BASELINE-METHOD-HYGIENE-1 | P2 | Clean 405 on POST-only periodic-review baseline route *(audit REGMIND-P2-001)* | — | ⬜ |
 
 ## Phase 8 — Pilot Controls Pack
 | # | Title | GitHub | Status |
@@ -123,6 +128,9 @@ Legend: ✅ merged · 🟢 PR open (built, awaiting merge) · 🔨 in progress �
 | P9-9 | Legal/compliance sign-off (residency, DPA, regulator) | legal | — | ⬜ |
 | P9-10 | Prod monitoring/alerting/on-call | ops | — | ⬜ |
 | P9-11 | Close parked prod-posture decisions (PR-25 + PR-17) | decision | — | ⬜ |
+| P9-12 | ECR-IMMUTABLE-TAGS-1 — make ECR image tags immutable (rollback provenance) *(audit REGMIND-P2-004)* | ops | — | ⬜ |
+| P9-13 | Full authz / tenant-isolation **route matrix** audit (role-by-route) *(audit §7)* | security | — | ⬜ |
+| P9-14 | Registry KYB (OpenCorporates) **simulated → real/production** *(audit prod blocker)* | code/vendor | — | ⬜ |
 
 ## Backlog — after Phase 7
 | PR | Priority | Title | Status |
@@ -131,7 +139,71 @@ Legend: ✅ merged · 🟢 PR open (built, awaiting merge) · 🔨 in progress �
 
 ---
 
-## Roll-up (65 line items)
+## Optional / Post-Production Modernization (NOT required for pilot or first production cut)
+
+> These are **elective** architecture/scale/enterprise upgrades to consider
+> *after* production launch. They are tracked separately from the remediation
+> roll-up. Risk column = impact of the change itself on running workflows:
+> 🟢 additive/safe · 🟡 modifies live path (guardable by flag/parallel-run/test) ·
+> 🔴 modifies live path (intrinsic — cannot be made fully additive).
+> **Cleared?** column: ✅ already done · 🟡 partially done · 🟢 already on the
+> remediation list above · — not started.
+
+### 1. Monolithic `server.py` decomposition
+| # | Step | Impl. risk | Cleared? |
+|---|------|:--:|:--:|
+| 1.1 | Characterization/contract tests before any move | 🟢 | — |
+| 1.2 | Extract handlers into `handlers/<domain>.py` (strangler) | 🟡 | 🟡 partial — `auth.py`, `base_handler.py` already extracted; bulk of handlers still in `server.py` |
+| 1.3 | Split route table into per-domain lists | 🟡 | — |
+| 1.4 | Extract shared concerns (DB wrapper, auth decorators) | 🔴 | 🟡 partial — auth/base_handler extracted |
+| 1.5 | Add CODEOWNERS per module | 🟢 | — |
+
+### 2 & 3. Frontend modernization (Vite + React + TS)
+| # | Step | Impl. risk | Cleared? |
+|---|------|:--:|:--:|
+| 2.1 | Stand up Vite + TS in new `frontend/` workspace | 🟢 | — |
+| 2.2 | Choose React + TypeScript (decision) | 🟢 | — |
+| 2.3 | Typed API client / OpenAPI contract | 🟢/🟡 | — |
+| 2.4 | Migrate back-office screens page-by-page (flag/parallel) | 🟡 | — |
+| 2.5 | Component + Playwright E2E tests | 🟢 | — *(Playwright pre-installed in env; no FE tests yet)* |
+| 2.6 | Migrate client portal (later) | 🟡 | — |
+
+### 4. SQLite / PostgreSQL dual support
+| # | Step | Impl. risk | Cleared? |
+|---|------|:--:|:--:|
+| 4.1 | Run migrations against real PostgreSQL in CI | 🟢 | ✅ **done** — CI creates a fresh PG DB and runs the full suite (`ci.yml`) |
+| 4.2 | Migration round-trip / idempotency tests | 🟢 | ✅ **largely done** — `tests/test_migration_*` (004–026 idempotency, chain, backfill-replay) |
+| 4.3 | Make SQLite dev-only (decision + docs) | 🟡 | — |
+| 4.4 | Forward-migration safety policy + docs | 🟢 | 🟡 partial — `scripts/check_schema_migration_policy.py` gate runs on PRs |
+| 4.5 | Pre-deploy migration gate in deploy workflow | 🔴 | — |
+
+### 5a. IaC & autoscaling
+| # | Step | Impl. risk | Cleared? |
+|---|------|:--:|:--:|
+| 5a.1 | Codify ECS/RDS/Secrets/ALB in Terraform (import) | 🔴 | — *(overlaps P9-4)* |
+| 5a.2 | ECS desired count ≥ 2 across AZs | 🟡 | ✅ appears satisfied — audit shows 2 healthy ALB targets (staging) |
+| 5a.3 | ECS Service Auto Scaling policies | 🟡 | — |
+| 5a.4 | Confirm uploads→S3 / no SQLite in prod | 🔴 | ✅ **largely done** — S3 upload path present; `DATABASE_URL` required in prod (PR-13 #673) |
+
+### 5b. HA / DR
+| # | Step | Impl. risk | Cleared? |
+|---|------|:--:|:--:|
+| 5b.1 | RDS Multi-AZ + backups + PITR | 🟡 | ✅ done on **staging** (audit: Multi-AZ, deletion protection, 7-day retention); prod RDS not yet provisioned |
+| 5b.2 | DR runbook + restore drill | 🟢 | 🟢 on list — **P9-8** |
+| 5b.3 | Deploy rollback automation + circuit breaker | 🔴 | 🟡 partial — rollback *runbook* done (PR-16 #678); automation/circuit-breaker pending |
+| 5b.4 | Provision production env via IaC | 🔴 | 🟢 on list — **P9-4** |
+
+### 5c. Enterprise identity & compliance
+| # | Step | Impl. risk | Cleared? |
+|---|------|:--:|:--:|
+| 5c.1 | SSO (SAML 2.0 / OIDC) for officers | 🔴 | — |
+| 5c.2 | MFA / TOTP for officer logins | 🟡→🔴 | — |
+| 5c.3 | RBAC formalization | 🔴 | 🟡 overlaps P9-13 route-matrix audit |
+| 5c.4 | SOC 2 / ISO 27001 readiness | 🟢 | — |
+
+---
+
+## Roll-up (70 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
 | ✅ merged | 30 |
@@ -139,7 +211,7 @@ Legend: ✅ merged · 🟢 PR open (built, awaiting merge) · 🔨 in progress �
 | 🔨 in progress | 1 |
 | 📋 scoped | 3 |
 | ⏸ blocked | 1 |
-| ⬜ pending | 24 |
+| ⬜ pending | 29 |
 
 **Open PRs (tonight):** #688 #689 #690 #691 #692 #693 · **Old blocked draft:** #498.
 
