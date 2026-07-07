@@ -103,15 +103,17 @@ _MEMO_DATA = json.dumps({
 
 
 @contextmanager
-def _fail_sql(fragment):
+def _fail_sql(fragment, params_fragment=None):
     """Patch DBConnection.execute to raise ONLY for statements containing
-    ``fragment`` — the closest analogue of a real DB failure on that write."""
+    ``fragment`` (and, when given, whose params contain ``params_fragment``) —
+    the closest analogue of a real DB failure on that specific write."""
     import db as db_module
     original = db_module.DBConnection.execute
 
     def _patched(self, sql, *args, **kwargs):
         if isinstance(sql, str) and fragment in sql:
-            raise RuntimeError(f"injected DB failure for statement: {fragment}")
+            if params_fragment is None or params_fragment in str(args):
+                raise RuntimeError(f"injected DB failure for statement: {fragment}")
         return original(self, sql, *args, **kwargs)
 
     db_module.DBConnection.execute = _patched
@@ -253,6 +255,39 @@ class FailClosedPersistenceTest(AsyncHTTPTestCase):
         assert self._decision_audit(ref) == [], (
             "the audit_log Decision row must roll back with the decision")
 
+    def test_governance_write_failure_also_fails_closed(self):
+        """Review fold (BLOCKING finding): log_governance_attempt swallows its
+        own failures by default; on PostgreSQL a failed statement rolls back
+        the WHOLE transaction, so a swallowed governance failure would let
+        db.commit() commit an empty transaction and return 201 with nothing
+        persisted. The fail-closed block passes best_effort=False so the
+        failure propagates -> 500 + rollback, never a false 201."""
+        app_id, ref = self._seed_approvable()
+        with _fail_sql("INSERT INTO audit_log", params_fragment="Governance Attempt"):
+            resp = self._approve(app_id)
+        assert resp.code == 500, resp.body.decode()
+        row = self._app_row(app_id)
+        assert row["status"] == "compliance_review", (
+            "governance failure must roll the decision back, got %r" % row)
+        assert self._decision_records(ref) == []
+
+    def test_failed_decision_leaves_rejected_governance_trace(self):
+        """Review fold: a 500-failed decision must not vanish from audit_log —
+        after rollback, a REJECTED governance attempt is re-logged on a fresh
+        connection."""
+        app_id, ref = self._seed_approvable()
+        with _fail_sql("INSERT INTO decision_records"):
+            resp = self._approve(app_id)
+        assert resp.code == 500
+        rows = self.db.execute(
+            "SELECT detail FROM audit_log WHERE action='Governance Attempt' "
+            "AND target=? ORDER BY id DESC", (ref,)).fetchall()
+        assert rows, "expected a governance-attempt trace for the failed decision"
+        detail = json.loads(rows[0]["detail"])
+        assert detail["outcome"] == "rejected"
+        assert detail["response_code"] == 500
+        assert "persistence_failure" in detail["rejection_reason"]
+
     def test_clean_approval_succeeds_and_writes_decision_record(self):
         """Positive control: proves the failure test above reached the persist
         stage (same fixture + same request succeeds without the injection)."""
@@ -349,6 +384,33 @@ def test_save_decision_record_raises_on_db_failure():
     )
     with pytest.raises(RuntimeError, match="boom"):
         save_decision_record(_ExplodingDB(), record)
+
+
+# ── Review fold: record building tolerates cosmetic legacy data ──
+# (the record save is now fail-closed, so a legacy "Very High" or junk
+#  confidence must not convert a fully-gated decision into a 500)
+
+def test_record_building_canonicalizes_legacy_risk_levels():
+    from decision_model import build_from_application_decision
+    user = {"sub": "sco001", "role": "sco"}
+    for raw, expected in (("Very High", "VERY_HIGH"), ("high", "HIGH"),
+                          ("LOW", "LOW"), ("garbage", None), (None, None)):
+        rec = build_from_application_decision(
+            app={"ref": "P102-CANON", "final_risk_level": raw},
+            decision="approve", decision_reason="r", user=user)
+        assert rec["risk_level"] == expected, (raw, rec["risk_level"])
+
+
+def test_record_building_coerces_unusable_confidence():
+    from decision_model import build_from_application_decision
+    user = {"sub": "sco001", "role": "sco"}
+    for raw, expected in (("abc", None), (250, None), (85, 0.85),
+                          (0.7, 0.7), (None, None), (-1, None)):
+        rec = build_from_application_decision(
+            app={"ref": "P102-CONF", "risk_level": "LOW"},
+            decision="approve", decision_reason="r", user=user,
+            supervisor_result={"supervisor_confidence": raw, "verdict": "CONSISTENT"})
+        assert rec["confidence_score"] == expected, (raw, rec["confidence_score"])
 
 
 # ── Source guards: the fail-closed wiring stays wired ──
