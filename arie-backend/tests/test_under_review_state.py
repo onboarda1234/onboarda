@@ -142,10 +142,24 @@ class TestUnderReviewBusinessRules:
         src = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "server.py"), encoding="utf-8").read()
         assert '"under_review":' in src or "'under_review':" in src
 
-    def test_resilience_valid_statuses_includes_under_review(self):
-        """Resilience workflow_rules.py VALID_STATUSES must include under_review."""
-        from resilience.workflow_rules import WorkflowEnforcer
-        assert "under_review" in WorkflowEnforcer.VALID_STATUSES
+    def test_under_review_is_a_canonical_application_status(self):
+        """under_review must be part of the CANONICAL application-status
+        vocabulary — the applications CHECK constraint in db.py. (Previously this
+        asserted against resilience/workflow_rules.py WorkflowEnforcer.VALID_STATUSES,
+        a fictional status set that diverged from the real vocabulary; that dead
+        package was removed, so this now checks the authoritative source.)"""
+        import re
+        db_src = open(
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "db.py"),
+            encoding="utf-8",
+        ).read()
+        match = re.search(
+            r"status TEXT DEFAULT 'draft' CHECK\(status IN \((.*?)\)\)",
+            db_src,
+            re.DOTALL,
+        )
+        assert match, "applications status CHECK constraint not found in db.py"
+        assert "'under_review'" in match.group(1)
 
 
 class TestSchemaConsistency:

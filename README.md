@@ -57,7 +57,6 @@ onboarda/
 │   ├── s3_client.py               # AWS S3 document management
 │   ├── demo_pilot_data.py         # Demo seed data (5 risk-tier scenarios)
 │   ├── prescreening/              # Pre-screening field definitions
-│   ├── resilience/                # Circuit breaker, retry, resilient HTTP
 │   ├── supervisor/                # Advanced AI agent execution & supervision
 │   ├── migrations/                # SQL schema migrations
 │   ├── tests/                     # Test suite

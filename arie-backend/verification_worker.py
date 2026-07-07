@@ -2,8 +2,7 @@
 
 This is the PR7A runtime counterpart to the PR6 Postgres-backed queue
 foundation.  The worker is intentionally a separate process entrypoint for an
-ECS Fargate worker service; it does not use in-process callbacks or
-``resilience/task_queue.py``.
+ECS Fargate worker service; it does not use in-process callbacks.
 """
 
 import argparse
