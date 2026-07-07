@@ -34511,7 +34511,50 @@ class PeriodicReviewImportSetupHandler(BaseHandler):
             db.close()
 
 
-class PeriodicReviewBaselineHandler(BaseHandler):
+class PostOnlyHandlerMixin:
+    """Return a clean, spec-compliant 405 for any non-POST verb on a POST-only
+    endpoint.
+
+    PERIODIC-BASELINE-METHOD-HYGIENE-1 / audit REGMIND-P2-001: Tornado's default
+    for an unimplemented verb raises ``HTTPError(405)``, which surfaces as an
+    ``[ERROR] Unhandled exception`` log and a 405 response with **no ``Allow``
+    header**. The error-level line pollutes the CloudWatch validation window
+    (a wrong HTTP verb is a client mistake, not a server fault). These stubs
+    respond with a proper ``Allow`` header, a JSON body, and a WARNING-level
+    log instead — no exception, no ERROR noise. ``OPTIONS`` is intentionally
+    NOT overridden so CORS preflight keeps working.
+    """
+    _ALLOWED_METHODS = ("POST",)
+
+    def _respond_method_not_allowed(self):
+        allowed = list(self._ALLOWED_METHODS)
+        if "OPTIONS" not in allowed:
+            allowed.append("OPTIONS")
+        allow_value = ", ".join(allowed)
+        self.set_header("Allow", allow_value)
+        self.set_status(405)
+        self.write({"error": "Method Not Allowed", "status": 405,
+                    "allowed_methods": allowed})
+        logger.warning("405 %s %s (allowed: %s)",
+                       self.request.method, self.request.path, allow_value)
+
+    def get(self, *args, **kwargs):
+        return self._respond_method_not_allowed()
+
+    def head(self, *args, **kwargs):
+        return self._respond_method_not_allowed()
+
+    def put(self, *args, **kwargs):
+        return self._respond_method_not_allowed()
+
+    def patch(self, *args, **kwargs):
+        return self._respond_method_not_allowed()
+
+    def delete(self, *args, **kwargs):
+        return self._respond_method_not_allowed()
+
+
+class PeriodicReviewBaselineHandler(PostOnlyHandlerMixin, BaseHandler):
     """POST /api/monitoring/reviews/:id/baseline — save overview baseline metadata."""
     def post(self, review_id):
         user = self.require_auth(roles=["admin", "sco", "co"])
@@ -34584,7 +34627,7 @@ class PeriodicReviewBaselineHandler(BaseHandler):
             db.close()
 
 
-class ApplicationPeriodicReviewBaselineHandler(BaseHandler):
+class ApplicationPeriodicReviewBaselineHandler(PostOnlyHandlerMixin, BaseHandler):
     """POST /api/applications/:id/periodic-review-baseline — save application baseline metadata."""
     def post(self, app_id):
         user = self.require_auth(roles=["admin", "sco", "co"])
