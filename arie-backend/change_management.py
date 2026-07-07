@@ -1324,7 +1324,7 @@ def submit_change_request(
 
 # Materiality tiers that require maker/checker (creator != approver).
 # Non-waivable: segregation of duties has no break-glass.
-MAKER_CHECKER_TIERS = frozenset({"tier1", "tier2"})
+MAKER_CHECKER_TIERS = frozenset({"tier1"})
 
 # Roles permitted to override (waivable) precondition blockers.
 _OVERRIDE_ROLES = ("admin", "sco")
@@ -1954,7 +1954,7 @@ def approval_blockers(db, request: Dict, approver_user: Optional[Dict] = None) -
     results = _load_precondition_results(request)
     sig = _request_content_signature(db, request["id"])
 
-    # Maker/checker — non-waivable for tier1/tier2.
+    # Maker/checker — non-waivable for tier1.
     if materiality in MAKER_CHECKER_TIERS and approver_user is not None:
         if approver_user.get("sub") and approver_user.get("sub") == request.get("created_by"):
             blockers.append(_blocker(
@@ -2265,7 +2265,7 @@ def evaluate_approval(db, request: Dict) -> Dict[str, Any]:
     Excludes approver-specific maker/checker (no current user here), so this
     reports whether PRECONDITIONS are met — NOT whether a given user may approve.
     The field is intentionally named ``preconditions_met`` (not ``can_approve``)
-    so the UI never tells a creator they can approve their own tier1/tier2 change.
+    so the UI never tells a creator they can approve their own tier1 change.
     """
     blockers = approval_blockers(db, request, approver_user=None)
     notes = []
@@ -2314,7 +2314,7 @@ def approve_change_request(
     """Approve a change request (does NOT implement — separate step).
 
     Enforces approval preconditions (PR-CM-APPROVAL-PRECONDITIONS-1): maker/checker
-    (non-waivable for tier1/tier2) and screening/risk precondition results. SCO/Admin
+    (non-waivable for tier1) and screening/risk precondition results. SCO/Admin
     may override waivable blockers with a mandatory reason.
 
     Returns (success, error_message).
