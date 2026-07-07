@@ -1,0 +1,34 @@
+{
+  "payload": {
+    "checks": {
+      "aml_screening": {
+        "active": true,
+        "mode": "sandbox",
+        "mode_source": "attested_env",
+        "provider": "complyadvantage",
+        "status": "sandbox",
+        "webhook_signature_mode": "strict"
+      },
+      "config": {
+        "status": "ok"
+      },
+      "database": {
+        "idle_in_transaction_count": 0,
+        "idle_in_transaction_threshold_seconds": 0,
+        "status": "ok"
+      },
+      "encryption": {
+        "status": "ok"
+      },
+      "retention_policies": {
+        "count": 9,
+        "status": "ok"
+      }
+    },
+    "environment": "staging",
+    "ready": true,
+    "timestamp": "2026-07-07T13:25:07Z"
+  },
+  "ready_is_true": true,
+  "status": 200
+}

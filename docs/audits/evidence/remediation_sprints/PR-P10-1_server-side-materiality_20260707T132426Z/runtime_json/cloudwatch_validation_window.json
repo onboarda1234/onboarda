@@ -1,0 +1,21 @@
+{
+  "clean": true,
+  "counts": {
+    "ERROR": 0,
+    "Exception": 0,
+    "Traceback": 0,
+    "unexpected_http_5xx": 0
+  },
+  "end": "2026-07-07T13:31:01Z",
+  "event_count_scanned": 3519,
+  "http_5xx_pattern": "status-code-aware: [LEVEL] 5xx METHOD /, HTTP 5xx, status=5xx",
+  "log_group": "/ecs/regmind-staging",
+  "region": "af-south-1",
+  "samples": {
+    "ERROR": [],
+    "Exception": [],
+    "Traceback": [],
+    "unexpected_http_5xx": []
+  },
+  "start": "2026-07-07T13:01:55Z"
+}

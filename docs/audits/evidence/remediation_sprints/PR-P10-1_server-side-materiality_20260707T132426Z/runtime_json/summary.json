@@ -1,0 +1,35 @@
+{
+  "api_base": "https://staging.regmind.co/api",
+  "evidence_dir": "/private/tmp/onboarda-pr-p10-1/docs/audits/evidence/remediation_sprints/PR-P10-1_server-side-materiality_20260707T132426Z/runtime_json",
+  "expected_sha": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+  "files": {
+    "api_smoke": "/private/tmp/onboarda-pr-p10-1/docs/audits/evidence/remediation_sprints/PR-P10-1_server-side-materiality_20260707T132426Z/runtime_json/api_smoke.json",
+    "health": "/private/tmp/onboarda-pr-p10-1/docs/audits/evidence/remediation_sprints/PR-P10-1_server-side-materiality_20260707T132426Z/runtime_json/health.json",
+    "liveness": "/private/tmp/onboarda-pr-p10-1/docs/audits/evidence/remediation_sprints/PR-P10-1_server-side-materiality_20260707T132426Z/runtime_json/liveness.json",
+    "runtime_baseline": "/private/tmp/onboarda-pr-p10-1/docs/audits/evidence/remediation_sprints/PR-P10-1_server-side-materiality_20260707T132426Z/runtime_json/runtime_baseline.json",
+    "version": "/private/tmp/onboarda-pr-p10-1/docs/audits/evidence/remediation_sprints/PR-P10-1_server-side-materiality_20260707T132426Z/runtime_json/version.json"
+  },
+  "ok": true,
+  "runtime_alignment": {
+    "aligned": true,
+    "backend_env_git_sha": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+    "backend_env_image_tag": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+    "backend_env_matches_expected": true,
+    "backend_image_matches_expected": true,
+    "backend_image_tag": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+    "backend_service_healthy": true,
+    "expected_sha": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+    "worker_env_git_sha": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+    "worker_env_image_tag": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+    "worker_env_matches_expected": true,
+    "worker_image_matches_expected": true,
+    "worker_image_tag": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+    "worker_service_healthy": true
+  },
+  "version": {
+    "git_sha": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+    "git_sha_matches_expected": true,
+    "image_tag": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+    "image_tag_matches_expected": true
+  }
+}

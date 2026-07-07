@@ -1,0 +1,54 @@
+{
+  "ok": true,
+  "results": {
+    "api_base": "https://staging.regmind.co/api",
+    "applications_kpi_data": {
+      "edd": 37,
+      "pending": 186
+    },
+    "classified_total": 247,
+    "csv": {
+      "canonical_view": "applications_report_v1",
+      "field_list": "ref,company_name,status,risk_level,risk_score,sector,country,entity_type,created_at,assigned_to,director_count,ubo_count,document_count",
+      "rows": 247
+    },
+    "dashboard": {
+      "canonical_view": "dashboard_metrics_v2",
+      "early_stage_applications": 186,
+      "edd": 37,
+      "in_progress_applications": 186
+    },
+    "edd_routed_statuses": [
+      "edd_required"
+    ],
+    "git_sha": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+    "pending_statuses": [
+      "draft",
+      "pending",
+      "submitted",
+      "prescreening_submitted",
+      "pre_approval_review",
+      "pre_approved",
+      "pricing_review",
+      "pricing_accepted",
+      "in_review",
+      "under_review",
+      "compliance_review",
+      "kyc_submitted",
+      "kyc_documents",
+      "submitted_to_compliance",
+      "rmi_sent"
+    ],
+    "summary": {
+      "approval_rate": 8.91,
+      "approved": 22,
+      "avg_risk_score": 41.09,
+      "edd_required": 37,
+      "pending": 186,
+      "rejected": 1,
+      "rejection_rate": 0.4,
+      "total": 247,
+      "withdrawn": 1
+    }
+  }
+}

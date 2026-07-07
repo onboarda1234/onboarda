@@ -1,0 +1,55 @@
+{
+  "all_target_groups_healthy": true,
+  "cluster": "regmind-staging",
+  "region": "af-south-1",
+  "services": [
+    {
+      "desiredCount": 2,
+      "loadBalancers": [
+        {
+          "containerName": "regmind-backend",
+          "containerPort": 8080,
+          "targetGroupArn": "arn:aws:elasticloadbalancing:af-south-1:782913119880:targetgroup/regmind-staging-tg/5e7928153c29b613"
+        }
+      ],
+      "runningCount": 2,
+      "serviceName": "regmind-backend",
+      "status": "ACTIVE"
+    },
+    {
+      "desiredCount": 6,
+      "loadBalancers": [],
+      "runningCount": 6,
+      "serviceName": "regmind-verification-worker",
+      "status": "ACTIVE"
+    }
+  ],
+  "target_groups": [
+    {
+      "all_targets_healthy": true,
+      "targetGroupArn": "arn:aws:elasticloadbalancing:af-south-1:782913119880:targetgroup/regmind-staging-tg/5e7928153c29b613",
+      "targets": [
+        {
+          "target": {
+            "AvailabilityZone": "af-south-1b",
+            "Id": "10.0.4.85",
+            "Port": 8080
+          },
+          "targetHealth": {
+            "State": "healthy"
+          }
+        },
+        {
+          "target": {
+            "AvailabilityZone": "af-south-1a",
+            "Id": "10.0.3.149",
+            "Port": 8080
+          },
+          "targetHealth": {
+            "State": "healthy"
+          }
+        }
+      ]
+    }
+  ]
+}

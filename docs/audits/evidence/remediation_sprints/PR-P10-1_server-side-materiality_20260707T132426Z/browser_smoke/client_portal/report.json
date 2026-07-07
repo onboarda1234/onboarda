@@ -1,0 +1,41 @@
+{
+  "script": "p10_1_client_portal_browser_smoke",
+  "baseUrl": "https://staging.regmind.co",
+  "startedAt": "2026-07-07T13:28:00.841Z",
+  "credentialHandling": "synthetic client credentials generated in process; password omitted",
+  "syntheticData": {
+    "clientEmail": "p10-1-browser-smoke-fixture-1783430880841-61f685@example.test",
+    "companyName": "P10-1 Browser Portal SMOKE FIXTURE 1783430880841-61f685 Ltd",
+    "cleanupStatus": "left clearly marked as SMOKE FIXTURE synthetic audit data",
+    "clientId": "09d3a5b8649b4a86",
+    "applicationId": "40da33348b2d4d10",
+    "applicationRef": "ARF-2026-920626"
+  },
+  "checks": {
+    "syntheticClientAndApplicationCreated": true,
+    "portalLoginViewRendered": true,
+    "clientLoginRequestCompleted": true,
+    "clientLoginOk": true,
+    "clientPortalMyApplicationsRendered": true,
+    "clientPortalChangeRequestsRendered": true,
+    "noConsoleErrors": false,
+    "noPageErrors": true,
+    "noFailedRequests": true,
+    "noUnexpectedBadApiResponses": true
+  },
+  "consoleErrors": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 ()"
+    }
+  ],
+  "pageErrors": [],
+  "failedRequests": [],
+  "badResponses": [],
+  "unexpectedBadResponses": [],
+  "screenshots": [
+    "/tmp/onboarda-pr-p10-1/docs/audits/evidence/remediation_sprints/PR-P10-1_server-side-materiality_20260707T132426Z/browser_smoke/client_portal/client-portal-my-apps.png",
+    "/tmp/onboarda-pr-p10-1/docs/audits/evidence/remediation_sprints/PR-P10-1_server-side-materiality_20260707T132426Z/browser_smoke/client_portal/client-portal-change-requests.png"
+  ],
+  "result": "fail"
+}

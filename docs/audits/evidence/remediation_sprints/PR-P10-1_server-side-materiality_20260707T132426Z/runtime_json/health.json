@@ -1,0 +1,8 @@
+{
+  "environment": "staging",
+  "platform": "Onboarda",
+  "service": "RegMind API",
+  "status": "ok",
+  "timestamp": "2026-07-07T13:24:30Z",
+  "version": "1.0.0"
+}

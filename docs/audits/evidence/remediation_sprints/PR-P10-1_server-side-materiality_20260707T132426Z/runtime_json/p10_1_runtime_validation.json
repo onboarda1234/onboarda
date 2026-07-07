@@ -1,0 +1,141 @@
+{
+  "api_base": "https://staging.regmind.co/api",
+  "checks": {
+    "backoffice_tier1_downgrade_attempt": {
+      "flags": {
+        "memo_addendum_hook": true,
+        "periodic_review_acceleration_hook": true,
+        "risk_review_required": true,
+        "screening_required": true
+      },
+      "id": "CR-260707-A02432A5",
+      "item_materialities": [
+        "tier1"
+      ],
+      "materiality": "tier1",
+      "status": "draft"
+    },
+    "officer_login": {
+      "status": 200,
+      "token_returned": true
+    },
+    "portal_mixed_highest_server_computed_tier": {
+      "flags": {
+        "memo_addendum_hook": true,
+        "periodic_review_acceleration_hook": true,
+        "risk_review_required": true,
+        "screening_required": true
+      },
+      "id": "CR-260707-685A4BF4",
+      "item_materialities": [
+        "tier3",
+        "tier1"
+      ],
+      "materiality": "tier1",
+      "status": "submitted"
+    },
+    "portal_tier1_downgrade_attempt": {
+      "flags": {
+        "memo_addendum_hook": true,
+        "periodic_review_acceleration_hook": true,
+        "risk_review_required": true,
+        "screening_required": true
+      },
+      "id": "CR-260707-B4B2AADE",
+      "item_materialities": [
+        "tier1"
+      ],
+      "materiality": "tier1",
+      "status": "submitted"
+    },
+    "portal_tier3_upgrade_attempt": {
+      "flags": {
+        "memo_addendum_hook": false,
+        "periodic_review_acceleration_hook": false,
+        "risk_review_required": false,
+        "screening_required": false
+      },
+      "id": "CR-260707-0EB2231A",
+      "item_materialities": [
+        "tier3"
+      ],
+      "materiality": "tier3",
+      "status": "submitted"
+    },
+    "readiness_status": 200
+  },
+  "completed_at_epoch": 1783430722,
+  "expected_sha": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+  "ok": true,
+  "readiness": {
+    "checks": {
+      "aml_screening": {
+        "active": true,
+        "mode": "sandbox",
+        "mode_source": "attested_env",
+        "provider": "complyadvantage",
+        "status": "sandbox",
+        "webhook_signature_mode": "strict"
+      },
+      "config": {
+        "status": "ok"
+      },
+      "database": {
+        "idle_in_transaction_count": 0,
+        "idle_in_transaction_threshold_seconds": 0,
+        "status": "ok"
+      },
+      "encryption": {
+        "status": "ok"
+      },
+      "retention_policies": {
+        "count": 9,
+        "status": "ok"
+      }
+    },
+    "environment": "staging",
+    "ready": true,
+    "timestamp": "2026-07-07T13:25:18Z"
+  },
+  "started_at_epoch": 1783430717,
+  "synthetic_data": {
+    "application_id": "521361dae63c46ba",
+    "application_ref": "ARF-2026-920625",
+    "cleanup_status": "left clearly marked as SMOKE FIXTURE synthetic audit data",
+    "client_email": "p10-1-smoke-fixture-1783430718-93f4843c@example.test",
+    "client_id": "77d1a658a011498d",
+    "company_name": "P10-1 RDI Materiality SMOKE FIXTURE 1783430718-93f4843c Ltd"
+  },
+  "version": {
+    "build_time": "2026-07-07T12:48:29Z",
+    "environment": "staging",
+    "git_sha": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+    "git_sha_short": "b6192fb",
+    "image_tag": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+    "provider_status": {
+      "aml_screening": {
+        "abstraction_enabled": true,
+        "auth_probe": "not_run",
+        "checked_at": "2026-07-07T13:25:18Z",
+        "configuration_label": "regmind-default-screening-v1",
+        "fallback_enabled": false,
+        "fallback_mode": "disabled",
+        "health": "not_probed",
+        "mode": "sandbox",
+        "provider": "ComplyAdvantage Mesh",
+        "status": "live",
+        "workspace_label": "ca-sandbox"
+      },
+      "identity_verification": {
+        "provider": "Sumsub IDV/KYC",
+        "scope": "individual_kyc_identity_verification",
+        "status": "live"
+      },
+      "registry_kyb": {
+        "provider": "OpenCorporates registry/enrichment",
+        "status": "simulated"
+      }
+    },
+    "service": "regmind-backend"
+  }
+}

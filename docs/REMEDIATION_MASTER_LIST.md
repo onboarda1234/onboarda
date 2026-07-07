@@ -10,14 +10,15 @@ Legend: ✅ merged · 🟢 PR open (built, awaiting merge) · 🔨 in progress �
 
 # Onboarda / RegMind — Audit-Remediation Master List
 
-**Last reconciled:** 2026-07-07 (base `main` ≈ `b577a5f`, contains merged #691).
+**Last reconciled:** 2026-07-07 (base `main` = `b6192fb`, contains merged #697).
 The **entire tonight code batch is now merged, deployed to AWS staging, and
 validated (PASS):** #692 (item 37, merge `8f65435`, TD 775), #690 (item 18, merge
 `8b0a7a8`, TD 776), #693 (item 19, merge `db0702c`, TD 777), #691 (item 27, merge
-`b577a5f`). Earlier: #687/#688/#689 (items 23/22/38, TDs 771/772/773). Only #695
-(this docs PR) remains open in the batch. Incorporates REGMIND-SYSTEM-READINESS-AUDIT-1
+`b577a5f`), #697 (P10-1 / RDI-006, merge `b6192fb`, backend TD 780, worker TD 228).
+Earlier: #687/#688/#689 (items 23/22/38, TDs 771/772/773). Incorporates REGMIND-SYSTEM-READINESS-AUDIT-1
 (P9-12/13/14 + CLIENT-PORTAL-RUNTIME-SMOKE-1 + PERIODIC-BASELINE-METHOD-HYGIENE-1),
 an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
+P10-1 is closed by #697; maker-checker/four-eyes scope was not changed.
 
 > Maintenance: this is the single source of truth for remediation status. On any
 > request for PR/phase status, refresh the Status/GitHub columns from GitHub and
@@ -150,7 +151,7 @@ an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
 
 | # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
 |---|----|----------|:--:|-----------------------|:--:|:--:|
-| P10-1 | PR-RDI-1 — Server-side materiality (+ approved maker-checker scope change: four-eyes {tier1,tier2}→{tier1}) | RDI-006 | CRITICAL | Ignore client-supplied change materiality; always classify server-side from change type. Part B: relax four-eyes to Tier 1 only (approved, Aisha Sudally) — screening hard-block still covers Tier 2 | — | 🔨 in progress |
+| P10-1 | PR-RDI-1 — Server-side change-request materiality | RDI-006 | CRITICAL | CLOSED/PASS: Client-supplied materiality is ignored for all control decisions. Materiality is server-computed from `change_type`; request materiality uses highest computed item tier; unknown/unmapped types default to Tier 2. Residual: `change_type` itself remains client-supplied; semantic validation is out of scope. Maker-checker scope unchanged. Evidence: [`closure_report.md`](audits/evidence/remediation_sprints/PR-P10-1_server-side-materiality_20260707T132426Z/closure_report.md). | #697 | ✅ |
 | P10-2 | PR-RDI-2 — Fail-closed decision & memo persistence | RDI-001, 007, 011 | CRITICAL + HIGH + MED | Decision status+audit+signoff+decision_record in one transaction; memo approve/validate roll back and 500 on save failure (no false "success") | — | 📋 scoped |
 | P10-3 | PR-RDI-3 — Risk-staleness gate | RDI-004 | CRITICAL | Block final decisions when `risk_config_version` ≠ current or recompute failed; persist recompute failures | — | 📋 scoped |
 | P10-4 | PR-RDI-4 — Per-decision-type gates | RDI-003, 008 | HIGH | Add required prerequisites for reject / escalate_edd / request_documents; block failed-validation memo from supervisor step **(needs policy decision on per-type prerequisites)** | — | 📋 scoped (decision-gated) |
@@ -162,7 +163,7 @@ an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
 - **RDI-002** — by-design LOW/MEDIUM fast-path, HIGH policy-exception (not a code defect). **P10-DOC-1:** policy **✅ APPROVED & signed off** (Aisha Sudally, 2026-07-07) at [`docs/compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md`](compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md) (eligibility = all LOW/MEDIUM; disqualifiers = sanctioned/FATF, PEP, adverse hit, stale/incomplete screening, failed IDV; approver = Onboarding Officer alone; 20% QA sampling). **Residual code assertions** (decision-record eligibility-basis stamp + direct-route test that a disqualifying signal can never fast-track) folded into the Phase 10 approval-path PRs (P10-3 / P10-5) — ⬜.
 - **RDI-005** — SAR permanence (`ON DELETE CASCADE`, cleanup delete, mutable SAR content), HIGH **Enterprise pre-enable blocker**. Must be fixed **before** enabling Enterprise SAR/STR; safe to defer **only while SAR/STR feature flags stay disabled** (`ENABLE_SAR_WORKFLOW`, `ENABLE_SAR_STR` = false). Same guard covers the SAR slices of RDI-009/RDI-013.
 
-**Wave order:** W1 P10-1 → P10-2 → P10-3 (all CRITICAL; P10-2 unblocks P10-5) · W2 P10-4, P10-5, P10-6 (HIGH) · W3 P10-7 (MED/infra). P10-1 and P10-6 are small quick wins slot-able anytime.
+**Wave order:** W1 P10-1 ✅ closed → P10-2 → P10-3 (remaining CRITICALs; P10-2 unblocks P10-5) · W2 P10-4, P10-5, P10-6 (HIGH) · W3 P10-7 (MED/infra). P10-6 remains a small quick win slot-able anytime.
 
 ## Backlog — after Phase 7
 | PR | Priority | Title | Status |
@@ -238,20 +239,20 @@ an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
 ## Roll-up (78 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
-| ✅ merged | 36 |
+| ✅ merged | 37 |
 | 🟢 PR open (built) | 1 |
-| 🔨 in progress | 1 |
+| 🔨 in progress | 0 |
 | 📋 scoped | 9 |
 | ⏸ blocked | 1 |
 | ⬜ pending | 30 |
 
-**Open PRs:** #695 (this docs PR) · **Old blocked draft:** #498. All tonight code PRs
-(#687–#693) merged, deployed to staging, validated PASS.
+**Recently merged:** #695, #697 · **Old blocked draft:** #498. All tonight code PRs
+(#687–#693, #697) merged, deployed to staging, validated PASS.
 
 **Where things stand:** Phases 0–3 (except B7 #12) and 5–6 done. **Phase 4 fully
 built/merged** (only decision-gated #17/#21/#24/#26/#28 remain). Phase 7: status-canon
 done + audit-tamper (#691) merged; ownership gate not started (⬜). Phases 8–9 are the
 remaining body — overwhelmingly ops/vendor/legal, not code. **Phase 10 (RDI audit):**
-P10-1 in progress; P10-2/P10-3 next (the other two current-stage CRITICALs — RDI-001/004);
+P10-1 closed/PASS; P10-2/P10-3 next (the remaining current-stage CRITICALs — RDI-001/004);
 P10-DOC-1 policy approved. Management response (2026-07-07) narrowed Audit-2 blocking
 CRITICALs to 3 (RDI-001/004/006). Pilot-readiness ≈ 88–92%; production-readiness ≈ 30–35%.

@@ -1,0 +1,40 @@
+{
+  "script": "p10_1_client_portal_browser_smoke_icon_suppressed",
+  "baseUrl": "https://staging.regmind.co",
+  "startedAt": "2026-07-07T13:32:17.573Z",
+  "iconFetchSuppression": [
+    "/favicon.ico",
+    "/portal/favicon.ico",
+    "/apple-touch-icon.png"
+  ],
+  "syntheticData": {
+    "clientEmail": "p10-1-browser-smoke-fixture-1783431137572-1645bd@example.test",
+    "companyName": "P10-1 Browser Portal SMOKE FIXTURE 1783431137572-1645bd Ltd",
+    "cleanupStatus": "left clearly marked as SMOKE FIXTURE synthetic audit data",
+    "clientId": "dd3d164b94e04638",
+    "applicationId": "b5359561782f45cc",
+    "applicationRef": "ARF-2026-920627"
+  },
+  "checks": {
+    "syntheticClientAndApplicationCreated": true,
+    "portalLoginViewRendered": true,
+    "clientLoginRequestCompleted": true,
+    "clientLoginOk": true,
+    "clientPortalMyApplicationsRendered": true,
+    "clientPortalChangeRequestsRendered": true,
+    "noConsoleErrors": true,
+    "noPageErrors": true,
+    "noFailedRequests": true,
+    "noUnexpectedBadApiResponses": true
+  },
+  "consoleErrors": [],
+  "pageErrors": [],
+  "failedRequests": [],
+  "badResponses": [],
+  "unexpectedBadResponses": [],
+  "screenshots": [
+    "/tmp/onboarda-pr-p10-1/docs/audits/evidence/remediation_sprints/PR-P10-1_server-side-materiality_20260707T132426Z/browser_smoke/client_portal_icon_suppressed/client-portal-my-apps.png",
+    "/tmp/onboarda-pr-p10-1/docs/audits/evidence/remediation_sprints/PR-P10-1_server-side-materiality_20260707T132426Z/browser_smoke/client_portal_icon_suppressed/client-portal-change-requests.png"
+  ],
+  "result": "pass"
+}

@@ -1,0 +1,32 @@
+{
+  "build_time": "2026-07-07T12:48:29Z",
+  "environment": "staging",
+  "git_sha": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+  "git_sha_short": "b6192fb",
+  "image_tag": "b6192fbc775ce6616f8a90f56956016d3c89f68c",
+  "provider_status": {
+    "aml_screening": {
+      "abstraction_enabled": true,
+      "auth_probe": "not_run",
+      "checked_at": "2026-07-07T13:24:31Z",
+      "configuration_label": "regmind-default-screening-v1",
+      "fallback_enabled": false,
+      "fallback_mode": "disabled",
+      "health": "not_probed",
+      "mode": "sandbox",
+      "provider": "ComplyAdvantage Mesh",
+      "status": "live",
+      "workspace_label": "ca-sandbox"
+    },
+    "identity_verification": {
+      "provider": "Sumsub IDV/KYC",
+      "scope": "individual_kyc_identity_verification",
+      "status": "live"
+    },
+    "registry_kyb": {
+      "provider": "OpenCorporates registry/enrichment",
+      "status": "simulated"
+    }
+  },
+  "service": "regmind-backend"
+}
