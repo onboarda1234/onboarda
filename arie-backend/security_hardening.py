@@ -3626,18 +3626,28 @@ class TokenRevocationList:
                 propagates so the caller's rollback covers both.
 
         Returns:
-            True iff the revocation was durably persisted to the DB (so it
-            propagates to other workers). The in-memory entry is always set on
-            this worker regardless; the return value lets a caller distinguish
-            "revoked everywhere" from "revoked only on this instance".
+            db=None mode: True iff the revocation was durably persisted to the
+            DB (so it propagates to other workers). The in-memory entry is set
+            on this worker regardless; the return value lets a caller
+            distinguish "revoked everywhere" from "revoked only here".
+            db=<caller> mode: True after the row is written on the caller's
+            connection — it becomes DURABLE only when the caller COMMITS.
+            The in-memory cache is deliberately NOT touched in this mode
+            (review fold S1): a caller ROLLBACK must leave no ghost
+            revocation (a rolled-back password change must not lock the user
+            out of this worker for TOKEN_EXPIRY_HOURS), and after COMMIT this
+            worker's cache self-heals via the DB lookup on the next miss.
         """
+        if db is not None:
+            self._db_persist(jti, expires_at, db=db)
+            logger.debug(f"Token {jti[:8]}... revocation written on caller transaction")
+            return True
         self._revoked[jti] = expires_at
-        persisted = self._db_persist(jti, expires_at, db=db)
+        persisted = self._db_persist(jti, expires_at)
         logger.debug(f"Token {jti[:8]}... revoked (expires at {expires_at})")
 
-        # Cleanup if interval exceeded — never on a caller-owned transaction
-        # (cleanup opens its own connection and must not interleave).
-        if db is None and time.time() - self._last_cleanup > self._cleanup_interval:
+        # Cleanup if interval exceeded
+        if time.time() - self._last_cleanup > self._cleanup_interval:
             self.cleanup()
         return persisted
 

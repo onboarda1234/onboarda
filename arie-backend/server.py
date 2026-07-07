@@ -5035,6 +5035,8 @@ class LogoutHandler(BaseHandler):
         if session_token:
             presented_tokens.append(session_token)
 
+        from auth import decode_token_unrevoked
+
         user = None
         revoked_count = 0
         failed_revocations = 0
@@ -5043,7 +5045,13 @@ class LogoutHandler(BaseHandler):
             if not token or token in seen_tokens:
                 continue
             seen_tokens.add(token)
-            decoded = decode_token(token)
+            # BSA-001 fold (B1): validate signature/expiry ONLY — an already
+            # memory-revoked token must still be re-processable so a RETRIED
+            # logout (after a durable-write failure 503) re-attempts the
+            # durable row instead of skipping the token and laundering the
+            # failure into a false "logged_out". Revocation is an idempotent
+            # upsert, so re-revoking an already-revoked token is harmless.
+            decoded = decode_token_unrevoked(token)
             if not decoded:
                 continue
             if user is None:
@@ -5060,16 +5068,26 @@ class LogoutHandler(BaseHandler):
                     failed_revocations += 1
         if failed_revocations:
             # Do not claim "logged_out": the token may still be honoured by
-            # other workers / after restart. The cookie is cleared and this
-            # worker's memory rejects the token, but the contract of logout is
-            # a GLOBAL kill — report failure so the client can retry.
+            # other workers / after restart. This worker's memory rejects the
+            # token, but the contract of logout is a GLOBAL kill — report
+            # failure so the client can retry. The session cookie is KEPT so a
+            # cookie-only retry still presents the token to re-attempt the
+            # durable write. Audit what DID happen (some may have persisted).
             logger.error(
                 "Logout could not durably revoke %d of %d session token(s)%s",
                 failed_revocations,
                 failed_revocations + revoked_count,
                 f" for user {user.get('sub')}" if user else "",
             )
-            self.clear_session_cookie()
+            if user:
+                self.log_audit(
+                    user,
+                    "Logout Failed",
+                    "System",
+                    f"Durable revocation failed for {failed_revocations} of "
+                    f"{failed_revocations + revoked_count} session token(s); "
+                    f"{revoked_count} durably revoked; memory-revoked on this worker",
+                )
             return self.error(
                 "Logout could not be completed — please try again.", 503)
         if user:

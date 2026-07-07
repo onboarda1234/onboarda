@@ -117,8 +117,21 @@ class TestTransactionalRevoke:
         row = db.execute(
             "SELECT jti FROM revoked_tokens WHERE jti = ?", (jti,)).fetchone()
         assert row is None
-        # fail-closed direction: memory still holds it (over-revocation is safe)
-        assert jti in trl._revoked
+        # Review fold S1: db= mode must NOT touch the in-memory cache — a
+        # rolled-back credential change must leave no ghost revocation that
+        # locks the user out of this worker for TOKEN_EXPIRY_HOURS.
+        assert jti not in trl._revoked
+
+    def test_revoke_on_caller_connection_visible_after_commit_via_lookup(self, db):
+        """db= mode skips the memory write; after COMMIT the revocation must
+        still be honoured on this worker via the DB lookup (self-healing)."""
+        trl = _fresh_list()
+        jti = f"txn-see-{uuid.uuid4().hex[:8]}"
+        assert trl.revoke(jti, time.time() + 3600, db=db) is True
+        db.commit()
+        assert jti not in trl._revoked  # not cached yet
+        assert trl.is_revoked(jti) is True  # found via DB lookup
+        assert jti in trl._revoked  # now cached
 
     def test_revoke_with_db_propagates_write_failure(self):
         trl = _fresh_list()
@@ -192,6 +205,11 @@ class TestHandlerFailClosedGuards:
         assert "503" in body
         # success claim only on the fully-revoked path
         assert body.index("failed_revocations") < body.index('"logged_out"')
+        # Review fold B1: logout must decode with signature-only validation so
+        # a memory-revoked token is still re-processable on retry.
+        assert "decode_token_unrevoked" in body
+        # cookie is kept on the failure path (retry must re-present the token)
+        assert body.index("clear_session_cookie") > body.index('"Logout Failed"')
 
     def test_revoke_all_uses_caller_transaction(self):
         import re
@@ -269,3 +287,130 @@ class TestPostAwaitRevalidation:
         sh.token_revocation_list.revoke(decoded["jti"], decoded["exp"])
         assert handler.revalidate_actor_post_await(roles=["admin", "sco", "co"]) is None
         assert handler._status == 401
+
+
+# ══════════════════════════════════════════════════════════
+# B1 regression — logout retry must NOT launder a failed revocation
+# ══════════════════════════════════════════════════════════
+
+import tempfile
+import threading
+
+
+def _find_free_port():
+    import socket
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+@pytest.fixture(scope="module")
+def logout_server():
+    """Real Tornado HTTP server (same pattern as test_sprint35.api_server)."""
+    import tornado.httpserver
+    import tornado.ioloop
+
+    db_path = os.path.join(tempfile.gettempdir(), f"onboarda_fcr_{os.getpid()}.db")
+    os.environ["DB_PATH"] = db_path
+
+    from db import init_db, seed_initial_data, get_db as _get
+    init_db()
+    try:
+        conn = _get()
+        seed_initial_data(conn)
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+    from server import make_app
+    app = make_app()
+    port = _find_free_port()
+    server_ref = {}
+    started = threading.Event()
+
+    def run_server():
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        io_loop = tornado.ioloop.IOLoop.current()
+        srv = tornado.httpserver.HTTPServer(app)
+        srv.listen(port, "127.0.0.1")
+        server_ref["server"] = srv
+        server_ref["loop"] = io_loop
+        started.set()
+        io_loop.start()
+
+    thread = threading.Thread(target=run_server, daemon=True)
+    thread.start()
+    started.wait(timeout=3)
+    time.sleep(0.2)
+    yield f"http://127.0.0.1:{port}"
+    loop = server_ref.get("loop")
+    if loop:
+        loop.add_callback(loop.stop)
+    if os.path.exists(db_path):
+        try:
+            os.remove(db_path)
+        except OSError:
+            pass
+
+
+class TestLogoutFailClosedBehaviour:
+    """HTTP-level proof of the B1 contract: a durable-write failure 503s, a
+    RETRY while the store is still failing 503s AGAIN (no laundering), and a
+    retry after the store recovers converges to 200 with the row persisted."""
+
+    def test_logout_503_then_retry_converges(self, logout_server):
+        import requests as http_requests
+        import security_hardening as sh
+        from auth import create_token, decode_token_unrevoked
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        headers = {"Authorization": f"Bearer {token}"}
+        jti = decode_token_unrevoked(token)["jti"]
+
+        real_persist = sh.TokenRevocationList._db_persist
+        sh.token_revocation_list._db_persist = lambda *a, **k: False
+        try:
+            first = http_requests.post(
+                f"{logout_server}/api/auth/logout", headers=headers, timeout=3)
+            assert first.status_code == 503
+            assert "logged_out" not in first.text
+
+            # THE B1 regression: retry while the store is STILL failing must
+            # 503 again — before the fold, the memory-revoked token was
+            # skipped and this returned a false 200 "logged_out".
+            second = http_requests.post(
+                f"{logout_server}/api/auth/logout", headers=headers, timeout=3)
+            assert second.status_code == 503
+            assert "logged_out" not in second.text
+        finally:
+            sh.token_revocation_list._db_persist = real_persist.__get__(
+                sh.token_revocation_list, sh.TokenRevocationList)
+
+        # store recovered → retry converges to a real, durable logout
+        third = http_requests.post(
+            f"{logout_server}/api/auth/logout", headers=headers, timeout=3)
+        assert third.status_code == 200
+        assert third.json().get("status") == "logged_out"
+
+        from db import get_db as _get
+        conn = _get()
+        row = conn.execute(
+            "SELECT jti FROM revoked_tokens WHERE jti = ?", (jti,)).fetchone()
+        conn.close()
+        assert row is not None, "converged logout must have persisted the row"
+
+    def test_healthy_logout_still_succeeds(self, logout_server):
+        import requests as http_requests
+        from auth import create_token
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        headers = {"Authorization": f"Bearer {token}"}
+        resp = http_requests.post(
+            f"{logout_server}/api/auth/logout", headers=headers, timeout=3)
+        assert resp.status_code == 200
+        assert resp.json().get("status") == "logged_out"

@@ -77,6 +77,23 @@ def create_token(user_id, role, name, token_type="officer"):
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
 
+def decode_token_unrevoked(token):
+    """Signature/expiry/issuer validation ONLY — deliberately SKIPS the
+    revocation checks. For logout idempotency (BSA-001 review fold B1): a
+    token already memory-revoked on this worker must still be re-processable
+    so a RETRIED logout (after a durable-write failure returned 503) can
+    ensure the durable revocation row exists — with the normal decode_token
+    the retry would see the token as invalid, skip it, and claim
+    "logged_out" without any durable revocation ever being written.
+    NEVER use this for authenticating requests."""
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"],
+                          issuer="arie-finance",
+                          options={"require": ["exp", "iat", "sub"]})
+    except jwt.InvalidTokenError:
+        return None
+
+
 def decode_token(token):
     """Decode and validate JWT with issuer verification."""
     try:
