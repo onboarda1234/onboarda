@@ -252,6 +252,98 @@ jobs:
             exit 1
           fi
 
+      # ops-enforce-staging-sha-alignment-gate (code half): before any validation
+      # counts, PROVE staging is actually running the SHA we just built. Each
+      # service must now point at the exact task definition we registered for
+      # this commit, and that task definition's image tag + GIT_SHA/IMAGE_TAG env
+      # (the values /api/version reports) must equal github.sha. Fails the deploy
+      # run on any drift, so a stale-SHA staging can never be signed off as valid.
+      - name: Enforce staging SHA alignment
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_BACKEND_TD_ARN: ${{ steps.register-task-def.outputs.task-definition-arn }}
+          EXPECTED_WORKER_TD_ARN: ${{ steps.register-worker-task-def.outputs.task-definition-arn }}
+        run: |
+          set -euo pipefail
+          fail=0
+
+          assert_service_sha() {
+            local svc="$1" expected_td_arn="$2"
+            echo "── Checking $svc ──"
+            local live_td_arn
+            live_td_arn=$(aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" --services "$svc" --region "$AWS_REGION" \
+              --query 'services[0].taskDefinition' --output text)
+            if [ "$live_td_arn" != "$expected_td_arn" ]; then
+              echo "FAIL: $svc is running task def '$live_td_arn', expected '$expected_td_arn'"
+              fail=1
+              return
+            fi
+            local container_json
+            container_json=$(aws ecs describe-task-definition \
+              --task-definition "$live_td_arn" --region "$AWS_REGION" \
+              --query 'taskDefinition.containerDefinitions[0]' --output json)
+            EXPECTED_SHA="$EXPECTED_SHA" SVC="$svc" python3 - "$container_json" <<'PY'
+          import json, os, sys
+          expected = os.environ["EXPECTED_SHA"]
+          svc = os.environ["SVC"]
+          c = json.loads(sys.argv[1])
+          env = {e["name"]: e.get("value") for e in c.get("environment", [])}
+          image = c.get("image", "")
+          image_tag = image.rsplit(":", 1)[-1] if ":" in image else ""
+          problems = []
+          if image_tag != expected:
+              problems.append(f"image tag '{image_tag}' != '{expected}'")
+          if env.get("GIT_SHA") != expected:
+              problems.append(f"GIT_SHA env '{env.get('GIT_SHA')}' != '{expected}'")
+          if env.get("IMAGE_TAG") != expected:
+              problems.append(f"IMAGE_TAG env '{env.get('IMAGE_TAG')}' != '{expected}'")
+          if problems:
+              print(f"FAIL: {svc}: " + "; ".join(problems))
+              sys.exit(1)
+          print(f"OK: {svc} aligned to {expected} (image tag + GIT_SHA + IMAGE_TAG)")
+          PY
+            if [ "$?" -ne 0 ]; then fail=1; fi
+          }
+
+          assert_service_sha "$ECS_SERVICE" "$EXPECTED_BACKEND_TD_ARN"
+          assert_service_sha "$ECS_WORKER_SERVICE" "$EXPECTED_WORKER_TD_ARN"
+
+          if [ "$fail" -ne 0 ]; then
+            echo "Staging SHA alignment gate FAILED — staging is not running $EXPECTED_SHA."
+            exit 1
+          fi
+          echo "Staging SHA alignment gate PASSED — backend + worker both running $EXPECTED_SHA."
+
+      # Optional runtime confirmation: if a staging bearer token is configured,
+      # also assert the LIVE /api/version reports the SHA (runtime truth, not just
+      # the registered task def). Skips cleanly when the secret is absent so this
+      # code half can ship before ops provisions STAGING_VERSION_BEARER_TOKEN.
+      - name: Confirm runtime /api/version SHA (optional)
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          STAGING_VERSION_BEARER_TOKEN: ${{ secrets.STAGING_VERSION_BEARER_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${STAGING_VERSION_BEARER_TOKEN:-}" ]; then
+            echo "STAGING_VERSION_BEARER_TOKEN not configured — skipping runtime /api/version check."
+            echo "(Task-definition SHA gate above already enforced the deployed artifact.)"
+            exit 0
+          fi
+          for i in $(seq 1 12); do
+            BODY=$(curl -sf -H "Authorization: Bearer $STAGING_VERSION_BEARER_TOKEN" \
+              https://staging.regmind.co/api/version 2>/dev/null || true)
+            RUNTIME_SHA=$(printf '%s' "$BODY" | python3 -c "import json,sys; print(json.load(sys.stdin).get('git_sha',''))" 2>/dev/null || true)
+            if [ "$RUNTIME_SHA" = "$EXPECTED_SHA" ]; then
+              echo "Runtime /api/version git_sha == $EXPECTED_SHA — confirmed."
+              exit 0
+            fi
+            echo "Attempt $i: runtime git_sha='$RUNTIME_SHA' (want '$EXPECTED_SHA') — retrying in 10s..."
+            sleep 10
+          done
+          echo "FAIL: runtime /api/version never reported $EXPECTED_SHA."
+          exit 1
+
       - name: Verify deployment health
         run: |
           echo "Waiting for public liveness check..."
