@@ -130,11 +130,20 @@ class TestUnderReviewBusinessRules:
         assert "under_review" in m.group(1)
 
     def test_under_review_in_review_states(self):
-        """under_review must be in the review_states for H-05 risk gate."""
+        """under_review must be recognised as an active review lane.
+
+        (Previously this grepped for a local ``review_states`` tuple that lived
+        ONLY inside the H-05 approval branch of ApplicationDetailHandler.patch.
+        That branch was unreachable dead code — PATCH->approved is hard-blocked
+        at 409 by the terminal-transition guard and the real HIGH/VERY_HIGH
+        approval control lives on the /decision path via ApprovalGateValidator
+        (see test_patch_approval_deadcode_removed.py). The dead duplicate was
+        removed, so this now asserts the concept against the authoritative
+        surviving vocabulary of active review lanes.)"""
         import re
         src = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "server.py"), encoding="utf-8").read()
-        m = re.search(r'review_states\s*=\s*\(([^)]+)\)', src)
-        assert m, "review_states tuple not found in server.py"
+        m = re.search(r'SUBMIT_TO_COMPLIANCE_FROM_STATES\s*=\s*\((.*?)\)', src, re.DOTALL)
+        assert m, "SUBMIT_TO_COMPLIANCE_FROM_STATES tuple not found in server.py"
         assert "under_review" in m.group(1)
 
     def test_valid_transitions_includes_under_review_source(self):
