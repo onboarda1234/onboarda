@@ -623,6 +623,93 @@ def _application_risk_integrity_error(app, action_label="continue"):
     )
 
 
+def _application_risk_staleness_error(db, app, action_label="approve"):
+    """Fail-closed gate (P10-3 / RDI-004): block a final approval when the stored
+    risk score was NOT computed against the risk configuration now in force.
+
+    A risk-config change recomputes every active application; any application
+    whose recompute failed (or that was scored under an older config, or whose
+    score has no recorded provenance) keeps a stale ``risk_config_version`` and
+    must not be approved on it — a stale LOW/MEDIUM snapshot could otherwise
+    route past sanctioned/FATF floors that the current config would apply.
+
+    Returns an error string when the stored score's config version is present
+    and differs from the current one, else ``None``.
+
+    Scope decisions (deliberate):
+      * Blocks only on a *present-and-different* version — the precise RDI-004
+        scenario (the app was scored, the config then changed, and the app was
+        not re-scored to the new version). After a config change,
+        ``recompute_risk_for_active_apps`` stamps the current version on every
+        app it re-scores; an app whose re-score failed keeps its older version
+        and is caught here.
+      * A missing/blank ``risk_config_version`` (unknown provenance) is NOT
+        blocked. Many legitimately-scored applications predate version stamping,
+        and the live scoring path stamps the version going forward, so coverage
+        grows over time without breaking existing approvals. (Documented residual.)
+      * Returns ``None`` when versioning is not in use (no ``risk_config`` row),
+        so environments without a configured risk model are unaffected.
+      * Scoped to approval only: rejection/escalation tighten the outcome and
+        must remain available even when a re-score is pending.
+    """
+    if not app:
+        return None
+    try:
+        from rule_engine import _get_risk_config_version
+        current_version = _get_risk_config_version(db)
+    except Exception:
+        # Cannot determine the current version — do not invent a block.
+        return None
+    if not current_version:
+        # Versioning not established (no risk_config row) — nothing to compare.
+        return None
+    stored_version = dict(app).get("risk_config_version")
+    if not stored_version:
+        # Unknown provenance — not blocked (see scope decisions above).
+        return None
+    if stored_version == current_version:
+        return None
+    return (
+        "Cannot " + action_label + ": the stored risk score was computed against "
+        "an older risk-config version (the risk configuration has changed since "
+        "this application was scored). Recompute risk against the current "
+        "configuration before approving."
+    )
+
+
+def _summarize_risk_recompute_results(recomp_results):
+    """Build the risk-config-update response summary (P10-3 / RDI-004).
+
+    Reports successful recomputes separately from failures so a config save can
+    never *silently* report success while active applications hold a stale
+    score. ``recompute_risk`` returns ``recomputed=False`` on a swallowed
+    per-app failure; those apps keep their old ``risk_config_version`` and are
+    quarantined from approval by the decision-time staleness gate until
+    re-scored.
+    """
+    results = list(recomp_results or [])
+    recomputed_ok = [r for r in results if r.get("recomputed")]
+    failed = [r for r in results if not r.get("recomputed")]
+    changed_count = sum(1 for r in results if r.get("changed"))
+    summary = {
+        "status": "saved",
+        "risk_recomputed_apps": len(recomputed_ok),
+        "risk_recompute_attempted": len(results),
+        "risk_recompute_failures": len(failed),
+        "risk_changed_apps": changed_count,
+    }
+    if failed:
+        summary["risk_recompute_failed_app_ids"] = [
+            r.get("app_id") for r in failed if r.get("app_id")
+        ][:50]
+        summary["warning"] = (
+            "Risk configuration saved, but {n} active application(s) failed to "
+            "recompute and hold a stale risk score. They are blocked from approval "
+            "by the decision-time staleness gate until re-scored."
+        ).format(n=len(failed))
+    return summary
+
+
 def _edd_truthful_risk_snapshot(case_row, app_row=None):
     app_level, app_score = _application_risk_snapshot(app_row)
     if app_level:
@@ -14425,12 +14512,18 @@ class RiskConfigHandler(BaseHandler):
             return self.error("Failed to save risk model configuration", 500)
         db.close()
 
-        changed_count = sum(1 for r in recomp_results if r.get("changed"))
-        self.success({
-            "status": "saved",
-            "risk_recomputed_apps": len(recomp_results),
-            "risk_changed_apps": changed_count,
-        })
+        # ── P10-3 / RDI-004: do not silently report success when active-app
+        #    recomputation failed. Failed apps keep a stale risk_config_version
+        #    and are quarantined from approval by the decision-time staleness gate.
+        summary = _summarize_risk_recompute_results(recomp_results)
+        if summary.get("risk_recompute_failures"):
+            logger.error(
+                "risk_config_update: %d active application(s) failed risk recompute "
+                "and hold a stale score: %s",
+                summary["risk_recompute_failures"],
+                summary.get("risk_recompute_failed_app_ids"),
+            )
+        self.success(summary)
 
 
 class CountryRiskConfigHandler(BaseHandler):
@@ -31376,6 +31469,17 @@ class ApplicationDecisionHandler(BaseHandler):
         # ── SECURITY: Enforce approval preconditions (mandatory) ──
         if decision == "approve":
             approval_risk_level, approval_risk_score = _application_risk_snapshot(app)
+            # ── P10-3 / RDI-004: block approval on a stale risk score ──
+            # If the stored score was not computed against the current risk
+            # config (config changed / recompute failed / unknown provenance),
+            # the application must be re-scored before it can be approved.
+            staleness_error = _application_risk_staleness_error(db, app, "approve application")
+            if staleness_error:
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 409,
+                    staleness_error, attempt_summary, db=db)
+                db.close()
+                return self.error(staleness_error, 409)
             approval_route = classify_approval_route(dict(app), db)
             # ── PR-APPROVAL-AUTHORITY-MATRIX-1: centralized authority gate ──
             # Single source of truth for terminal-decision authority (replaces the
