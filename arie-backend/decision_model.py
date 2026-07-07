@@ -129,12 +129,23 @@ def save_decision_record(db, record: Dict[str, Any]) -> str:
     """
     Persist a decision record to the decision_records table.
 
+    P10-2 / RDI-001: this helper RAISES on failure — it must not log-and-continue.
+    Decision records are part of the regulatory paper trail, not a best-effort
+    overlay: callers persisting a FINAL decision must run this inside the same
+    transaction as the status update / audit rows and roll everything back if it
+    fails, so a decision can never commit without its normalized record.
+    Callers for genuinely advisory records (e.g. supervisor verdict overlays)
+    may catch the exception themselves.
+
     Args:
         db: Database connection (DBConnection from db.py)
         record: Decision record dict (from build_decision_record)
 
     Returns:
         The decision_id of the saved record.
+
+    Raises:
+        Exception: whatever the underlying INSERT raised.
     """
     decision_id = record["decision_id"]
     try:
@@ -160,21 +171,20 @@ def save_decision_record(db, record: Dict[str, Any]) -> str:
                 json.dumps(record.get("extra", {})),
             ),
         )
-        logger.info(
-            "Decision record saved: %s type=%s app=%s",
-            decision_id,
-            record["decision_type"],
-            record["application_ref"],
-        )
     except Exception as e:
-        # Non-fatal: decision records are an audit overlay, not a blocking requirement.
-        # The original decision flow (status update, audit_log) has already committed.
         logger.error(
             "Failed to save decision record %s for app %s: %s",
             decision_id,
             record["application_ref"],
             e,
         )
+        raise
+    logger.info(
+        "Decision record saved: %s type=%s app=%s",
+        decision_id,
+        record["decision_type"],
+        record["application_ref"],
+    )
     return decision_id
 
 
