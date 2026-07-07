@@ -93,12 +93,24 @@ def _record_persistent_usage(model: str, input_tokens: int, output_tokens: int, 
 
 
 def _check_persistent_budget(estimated_cost: float = 0.01) -> bool:
-    """Check if Claude budget allows another request. Returns True if within budget."""
+    """Check if Claude budget allows another request. Returns True if within budget.
+
+    BSA-013 (fail-closed): in staging/production an UNREADABLE budget store
+    blocks the request — an unenforceable spend cap must never silently become
+    unlimited paid API spend. Dev/test keeps the fail-open so local runs and
+    the test suite don't require the usage store.
+    """
     try:
         from production_controls import usage_cap_manager
         return usage_cap_manager.check_budget("CLAUDE", estimated_cost)
-    except Exception:
-        return True  # Fail-open: if budget store unavailable, allow the request
+    except Exception as e:
+        if _CFG_IS_STAGING or _CFG_IS_PRODUCTION:
+            logging.getLogger("claude_client").error(
+                "Claude budget store unavailable — failing CLOSED, request blocked: %s", e)
+            return False
+        logging.getLogger("claude_client").warning(
+            "Claude budget store unavailable — allowing request (dev/test fail-open only): %s", e)
+        return True
 
 # ── C-03: AI Output Validation Schemas ─────────────────────────
 if PYDANTIC_AVAILABLE:
@@ -2114,10 +2126,12 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
                 "Claude client not available. Initialize with valid API key or enable mock mode."
             )
 
-        # Persistent budget enforcement — block if monthly cap exceeded
+        # Persistent budget enforcement — block if monthly cap exceeded, or if
+        # the budget store cannot be read in staging/production (BSA-013).
         if not _check_persistent_budget():
             raise RuntimeError(
-                "Claude API monthly budget exceeded. Check usage via /api/config/ai-agents or contact admin."
+                "Claude API request blocked: monthly budget exceeded or budget "
+                "store unavailable. Check usage via /api/config/ai-agents or contact admin."
             )
 
         # Build message content — multimodal if content_blocks provided, else plain text

@@ -18124,8 +18124,10 @@ class ApplicationAuditLogHandler(BaseHandler):
         if not app:
             db.close()
             return self.error("Application not found", 404)
-        limit = min(int(self.get_argument("limit", "200")), 500)
-        offset = max(0, int(self.get_argument("offset", "0")))
+        # BSA-007: bounded parse — malformed pagination is a client mistake,
+        # not a 500 (same _bounded_int convention as every other list route).
+        limit = _bounded_int(self.get_argument("limit", "200"), 200, min_value=1, max_value=500)
+        offset = _bounded_int(self.get_argument("offset", "0"), 0, min_value=0, max_value=100000000)
         targets = _application_audit_targets(db, app)
         placeholders = ",".join(["?"] * len(targets))
         category = self.get_argument("category", "").strip().lower()
@@ -37860,8 +37862,9 @@ class ChangeAlertsListHandler(BaseHandler):
 
         application_id = self.get_argument("application_id", None)
         status = self.get_argument("status", None)
-        limit = int(self.get_argument("limit", "50"))
-        offset = int(self.get_argument("offset", "0"))
+        # BSA-007: bounded parse — malformed pagination must not 500.
+        limit = _bounded_int(self.get_argument("limit", "50"), 50, min_value=1, max_value=500)
+        offset = _bounded_int(self.get_argument("offset", "0"), 0, min_value=0, max_value=100000000)
         show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
         fixture_filter_sql = None
         fixture_filter_params = []
@@ -38029,8 +38032,9 @@ class ChangeRequestsListHandler(BaseHandler):
         status = self.get_argument("status", None)
         materiality = self.get_argument("materiality", None)
         source = self.get_argument("source", None)
-        limit = int(self.get_argument("limit", "50"))
-        offset = int(self.get_argument("offset", "0"))
+        # BSA-007: bounded parse — malformed pagination must not 500.
+        limit = _bounded_int(self.get_argument("limit", "50"), 50, min_value=1, max_value=500)
+        offset = _bounded_int(self.get_argument("offset", "0"), 0, min_value=0, max_value=100000000)
         show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
         fixture_filter_sql = None
         fixture_filter_params = []

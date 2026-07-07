@@ -358,10 +358,24 @@ class BaseHandler(tornado.web.RequestHandler):
         # GET/HEAD are safe methods — no CSRF check needed
 
     def get_json(self):
-        try:
-            return json.loads(self.request.body)
-        except Exception:
+        """Parse the JSON request body.
+
+        BSA-006 (fail-closed): a NON-EMPTY body that is not valid JSON is a
+        client error and returns a structured 400 — it must never silently
+        become ``{}``, because state-changing endpoints would then proceed on
+        defaults the client never sent. An EMPTY body still returns ``{}``
+        (many endpoints accept an optional body), as does a JSON ``null``.
+        """
+        body = self.request.body
+        if not body:
             return {}
+        try:
+            parsed = json.loads(body)
+        except Exception:
+            raise tornado.web.HTTPError(400, reason="Request body is not valid JSON")
+        if parsed is None:
+            return {}
+        return parsed
 
     def _cache_current_user_token(self, user):
         self._auth_user_checked = True
