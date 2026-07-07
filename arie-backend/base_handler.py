@@ -375,6 +375,12 @@ class BaseHandler(tornado.web.RequestHandler):
             raise tornado.web.HTTPError(400, reason="Request body is not valid JSON")
         if parsed is None:
             return {}
+        # A bare JSON scalar (42, "x", true) is equally malformed for every
+        # handler — they expect an object (or, rarely, an array). Fail closed
+        # with a 400 instead of the AttributeError-500 it used to become.
+        if not isinstance(parsed, (dict, list)):
+            raise tornado.web.HTTPError(
+                400, reason="Request body must be a JSON object")
         return parsed
 
     def _cache_current_user_token(self, user):
@@ -823,9 +829,13 @@ class BaseHandler(tornado.web.RequestHandler):
         error_msg = self._reason or "Internal server error"
         if "exc_info" in kwargs:
             exc_type, exc_value, _ = kwargs["exc_info"]
-            # Log full detail server-side for debugging
-            logger.error("Unhandled exception in %s: %s", self.__class__.__name__,
-                         traceback.format_exception(*kwargs["exc_info"])[-1].strip())
+            # Log full detail server-side for debugging. A 4xx is a CLIENT
+            # mistake (malformed body, CSRF, bad params) — WARNING, so it
+            # doesn't pollute the ERROR=0 CloudWatch validation window or give
+            # unauthenticated callers an ERROR-log spam vector. 5xx stays ERROR.
+            log_fn = logger.error if status_code >= 500 else logger.warning
+            log_fn("Unhandled exception in %s: %s", self.__class__.__name__,
+                   traceback.format_exception(*kwargs["exc_info"])[-1].strip())
             # Never expose raw DB errors, constraint names, or row data to the client
             if ENVIRONMENT not in ("production", "demo", "staging"):
                 # Local dev only: include exception type (not message, which may contain row data)

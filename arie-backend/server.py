@@ -14980,13 +14980,18 @@ class EnhancedRequirementRuleDetailHandler(BaseHandler):
         if not user:
             return
 
+        # BSA-006 review fold (B2): parse the body BEFORE checking out a DB
+        # connection — get_json raises HTTPError(400) on a malformed body,
+        # which would otherwise skip db.close() and leak a pool connection.
+        payload = self.get_json()
+
         db = get_db()
         before = _load_enhanced_requirement_rule(db, rule_id)
         if not before:
             db.close()
             return self.error("Rule not found", 404)
 
-        normalized, error = validate_enhanced_requirement_rule_payload(self.get_json(), existing=before)
+        normalized, error = validate_enhanced_requirement_rule_payload(payload, existing=before)
         if error:
             db.close()
             return self.error(error, 400)
@@ -39405,6 +39410,15 @@ class PortalApplicationEnhancedRequirementResponseHandler(BaseHandler):
                 "status": "submitted",
                 "requirement": safe_after,
             })
+        except tornado.web.HTTPError:
+            # BSA-006: a malformed request body raises HTTPError(400) from
+            # get_json — that is a CLIENT error and must surface as the
+            # structured 400, not be swallowed into the generic 500 below.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
         except Exception as exc:
             try:
                 db.rollback()

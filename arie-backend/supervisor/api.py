@@ -245,11 +245,46 @@ class SupervisorBaseHandler(tornado.web.RequestHandler):
             body["details"] = details
         self.write(json.dumps(body, default=str))
 
+    def write_error(self, status_code, **kwargs):
+        """Render uncaught HTTPErrors (e.g. the BSA-006 malformed-body 400)
+        as the same JSON envelope as write_error_json — these are JSON APIs,
+        never Tornado's default HTML error page."""
+        self.set_status(status_code)
+        self.finish(json.dumps(
+            {"error": self._reason or "Internal server error", "status": status_code},
+            default=str))
+
     def get_json_body(self) -> Dict[str, Any]:
-        try:
-            return json.loads(self.request.body)
-        except (json.JSONDecodeError, TypeError):
+        """Parse the JSON request body.
+
+        BSA-006 (fail-closed, review fold S1): a NON-EMPTY body that is not
+        valid JSON is a client error → structured 400, never a silent ``{}``
+        that lets a state-changing supervisor endpoint proceed on defaults the
+        client never sent. Empty body / JSON null still yield ``{}``.
+        """
+        body = self.request.body
+        if not body:
             return {}
+        try:
+            parsed = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            raise tornado.web.HTTPError(400, reason="Request body is not valid JSON")
+        if parsed is None:
+            return {}
+        if not isinstance(parsed, (dict, list)):
+            raise tornado.web.HTTPError(
+                400, reason="Request body must be a JSON object")
+        return parsed
+
+    def get_bounded_int_argument(self, name: str, default: int, min_value: int = 1, max_value: int = 1000) -> int:
+        """BSA-007 (review fold S2): malformed pagination is a client mistake,
+        not a 500 — parse with the same bounded-default convention as
+        server.py's _bounded_int."""
+        try:
+            parsed = int(self.get_argument(name, str(default)))
+        except (TypeError, ValueError):
+            return default
+        return max(min_value, min(parsed, max_value))
 
 
 # ═══════════════════════════════════════════════════════════
@@ -386,7 +421,7 @@ class ReviewListHandler(SupervisorBaseHandler):
             return
         app_id = self.get_argument("application_id", None)
         reviewer_id = self.get_argument("reviewer_id", None)
-        limit = int(self.get_argument("limit", "50"))
+        limit = self.get_bounded_int_argument("limit", 50, min_value=1, max_value=500)
 
         reviews = _review_service.get_reviews(
             application_id=app_id,
@@ -434,7 +469,7 @@ class EscalationListHandler(SupervisorBaseHandler):
         if not user:
             return
         level = self.get_argument("level", None)
-        limit = int(self.get_argument("limit", "50"))
+        limit = self.get_bounded_int_argument("limit", 50, min_value=1, max_value=500)
         escalations = _review_service.get_pending_escalations(
             escalation_level=level, limit=limit
         )
@@ -453,7 +488,7 @@ class OverrideListHandler(SupervisorBaseHandler):
         if not user:
             return
         app_id = self.get_argument("application_id", None)
-        limit = int(self.get_argument("limit", "50"))
+        limit = self.get_bounded_int_argument("limit", 50, min_value=1, max_value=500)
         overrides = _review_service.get_overrides(
             application_id=app_id, limit=limit
         )
@@ -473,7 +508,7 @@ class AuditLogHandler(SupervisorBaseHandler):
             return
         app_id = self.get_argument("application_id", None)
         event_type = self.get_argument("event_type", None)
-        limit = int(self.get_argument("limit", "100"))
+        limit = self.get_bounded_int_argument("limit", 100, min_value=1, max_value=500)
 
         supervisor = get_supervisor()
         entries = supervisor.audit.get_entries(
@@ -491,7 +526,7 @@ class AuditVerifyHandler(SupervisorBaseHandler):
         user = self.require_auth(roles=["admin", "sco"])
         if not user:
             return
-        limit = int(self.get_argument("limit", "1000"))
+        limit = self.get_bounded_int_argument("limit", 1000, min_value=1, max_value=5000)
         supervisor = get_supervisor()
         result = supervisor.audit.verify_chain_integrity(limit=limit)
         self.write_json(result)

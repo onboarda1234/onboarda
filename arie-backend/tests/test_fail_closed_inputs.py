@@ -71,6 +71,49 @@ class TestGetJsonFailClosed:
         same way they always did on arrays."""
         assert _handler_with_body(b'[1, 2]').get_json() == [1, 2]
 
+    def test_scalar_body_raises_400(self):
+        """Review fold N1: a bare JSON scalar used to become an
+        AttributeError-500 in every data.get() caller — now a clean 400."""
+        for scalar in (b"42", b'"x"', b"true"):
+            with pytest.raises(tornado.web.HTTPError) as exc:
+                _handler_with_body(scalar).get_json()
+            assert exc.value.status_code == 400
+
+
+class TestSupervisorGetJsonFailClosed:
+    """Review fold S1: the same fail-open bug class lived verbatim in
+    supervisor/api.py's SupervisorBaseHandler.get_json_body."""
+
+    def _sup_handler(self, body: bytes):
+        from supervisor.api import SupervisorBaseHandler
+
+        class _Req:
+            pass
+
+        h = SupervisorBaseHandler.__new__(SupervisorBaseHandler)
+        h.request = _Req()
+        h.request.body = body
+        return h
+
+    def test_malformed_body_raises_400(self):
+        with pytest.raises(tornado.web.HTTPError) as exc:
+            self._sup_handler(b"{nope").get_json_body()
+        assert exc.value.status_code == 400
+
+    def test_empty_and_null_return_empty_dict(self):
+        assert self._sup_handler(b"").get_json_body() == {}
+        assert self._sup_handler(b"null").get_json_body() == {}
+
+    def test_valid_object_parses(self):
+        assert self._sup_handler(b'{"a": 1}').get_json_body() == {"a": 1}
+
+    def test_bounded_int_argument_defaults_on_malformed(self):
+        h = self._sup_handler(b"")
+        h.get_argument = lambda name, default=None: "abc"
+        assert h.get_bounded_int_argument("limit", 50, 1, 500) == 50
+        h.get_argument = lambda name, default=None: "99999"
+        assert h.get_bounded_int_argument("limit", 50, 1, 500) == 500
+
 
 # ══════════════════════════════════════════════════════════
 # BSA-007 — no raw int(get_argument) pagination casts remain
@@ -82,15 +125,23 @@ _SERVER = os.path.join(
 
 class TestBoundedPagination:
     def test_no_raw_int_get_argument_casts_remain(self):
-        with open(_SERVER, encoding="utf-8") as fh:
-            src = fh.read()
+        """Scans server.py AND supervisor/api.py AND production_controls.py
+        (review fold S2 — the first cut scanned only server.py and missed five
+        live supervisor routes)."""
         import re
-        raw = [
-            line for line in src.splitlines()
-            if re.search(r"\bint\(self\.get_argument\(", line)
-            and "_bounded_int" not in line
-        ]
-        assert raw == [], f"raw int(get_argument) casts must use _bounded_int: {raw}"
+        backend = os.path.dirname(_SERVER)
+        offenders = []
+        for rel in ("server.py", os.path.join("supervisor", "api.py"), "production_controls.py"):
+            with open(os.path.join(backend, rel), encoding="utf-8") as fh:
+                for n, line in enumerate(fh, 1):
+                    if re.search(r"\bint\(self\.get_argument\(", line) \
+                            and "_bounded_int" not in line \
+                            and "int(self.get_argument(name" not in line:
+                        # allow the explicitly try/except-wrapped clamp pattern
+                        offenders.append(f"{rel}:{n}: {line.strip()}")
+        allowed = {"production_controls.py"}  # its one site is try/except-clamped
+        real = [o for o in offenders if o.split(":")[0] not in allowed]
+        assert real == [], f"raw int(get_argument) casts must use a bounded parse: {real}"
 
     def test_bounded_int_defaults_on_malformed(self):
         sys.path.insert(0, os.path.dirname(_SERVER))
@@ -129,12 +180,34 @@ class TestBudgetFailClosed:
         monkeypatch.setattr(claude_client, "_CFG_IS_PRODUCTION", True)
         assert claude_client._check_persistent_budget() is False
 
+    def test_store_outage_blocks_in_demo(self, monkeypatch):
+        """Review fold S3: demo is deployed + internet-facing and can carry a
+        real API key — it fails closed like staging/production."""
+        import claude_client
+        self._force_store_error(monkeypatch)
+        monkeypatch.setattr(claude_client, "_CFG_IS_STAGING", False)
+        monkeypatch.setattr(claude_client, "_CFG_IS_PRODUCTION", False)
+        monkeypatch.setattr(claude_client, "_CFG_IS_DEMO", True)
+        assert claude_client._check_persistent_budget() is False
+
     def test_store_outage_allows_in_dev(self, monkeypatch):
         import claude_client
         self._force_store_error(monkeypatch)
         monkeypatch.setattr(claude_client, "_CFG_IS_STAGING", False)
         monkeypatch.setattr(claude_client, "_CFG_IS_PRODUCTION", False)
+        monkeypatch.setattr(claude_client, "_CFG_IS_DEMO", False)
         assert claude_client._check_persistent_budget() is True
+
+    def test_generate_path_honours_budget_gate(self, monkeypatch):
+        """Review fold S4: generate() is a paid path too — over-budget (or
+        store-outage-in-staging) must block it, not just _call_claude."""
+        import claude_client
+        monkeypatch.setattr(claude_client, "_check_persistent_budget", lambda *a, **k: False)
+        client = claude_client.ClaudeClient.__new__(claude_client.ClaudeClient)
+        client.mock_mode = False
+        client._check_fail_closed = lambda ctx: None
+        with pytest.raises(RuntimeError, match="budget"):
+            client.generate("test prompt")
 
     def test_healthy_store_verdict_passes_through(self, monkeypatch):
         import claude_client

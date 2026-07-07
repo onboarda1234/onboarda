@@ -104,7 +104,10 @@ def _check_persistent_budget(estimated_cost: float = 0.01) -> bool:
         from production_controls import usage_cap_manager
         return usage_cap_manager.check_budget("CLAUDE", estimated_cost)
     except Exception as e:
-        if _CFG_IS_STAGING or _CFG_IS_PRODUCTION:
+        # S3: demo is a DEPLOYED, internet-facing environment that can carry a
+        # real API key — it fails closed like staging/production. Only local
+        # dev/test keeps the fail-open.
+        if _CFG_IS_STAGING or _CFG_IS_PRODUCTION or _CFG_IS_DEMO:
             logging.getLogger("claude_client").error(
                 "Claude budget store unavailable — failing CLOSED, request blocked: %s", e)
             return False
@@ -2060,6 +2063,15 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
         fail_result = self._check_fail_closed("generate")
         if fail_result:
             raise RuntimeError(fail_result.get("error", "Fail-closed mode active"))
+
+        # BSA-013 (review fold S4): generate() is a PAID API path too — it must
+        # honour the persistent budget exactly like the structured _call_claude
+        # path, including the staging/production fail-closed store-outage case.
+        if not _check_persistent_budget():
+            raise RuntimeError(
+                "Claude API request blocked: monthly budget exceeded or budget "
+                "store unavailable. Check usage via /api/config/ai-agents or contact admin."
+            )
 
         chosen_model = model or self.ROUTING_MODELS["fast"]
         system_prompt = "You are a compliance monitoring assistant. Provide concise, factual responses."

@@ -1150,8 +1150,12 @@ class IncidentsHandler(tornado.web.RequestHandler):
             self.write({"error": "Unauthorized"})
             return
 
-        # Parse query parameters
-        days_back = int(self.get_argument("days", 7))
+        # Parse query parameters — BSA-007: malformed input defaults, never 500s
+        try:
+            days_back = int(self.get_argument("days", 7))
+        except (TypeError, ValueError):
+            days_back = 7
+        days_back = max(1, min(days_back, 365))
         severity = self.get_argument("severity", None)
         incident_type = self.get_argument("type", None)
 
