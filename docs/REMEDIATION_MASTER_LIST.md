@@ -19,7 +19,7 @@ Optional/Post-Production Modernization section.
 
 > Maintenance: this is the single source of truth for remediation status. On any
 > request for PR/phase status, refresh the Status/GitHub columns from GitHub and
-> update this file. Item IDs (1–40, 33–38, P9-1…P9-14, PR-* slugs) are canonical.
+> update this file. Item IDs (1–40, 33–38, P9-1…P9-14, P10-1…P10-7, PR-* slugs) are canonical.
 
 **Legend:** ✅ merged · 🟢 PR open (built) · 🔨 in progress · 📋 scoped · ⏸ blocked · ⬜ pending
 
@@ -134,6 +134,29 @@ Optional/Post-Production Modernization section.
 | P9-13 | Full authz / tenant-isolation **route matrix** audit (role-by-route) *(audit §7)* | security | — | ⬜ |
 | P9-14 | Registry KYB (OpenCorporates) **simulated → real/production** *(audit prod blocker)* | code/vendor | — | ⬜ |
 
+## Phase 10 — Regulatory Decision Integrity (RDI audit)
+> Source: **RegMind Production Audit 1 — Regulatory Decision Integrity**, run against
+> `c8b6dac` (current `main`, all merged remediation included). 13 findings; **RDI-002**
+> (LOW/MEDIUM fast-path) accepted as **by-design** and **RDI-005** + the SAR slices of
+> RDI-009/RDI-013 deferred to **Enterprise** (SAR module not in scope at this stage).
+> The 11 remaining findings are grouped into 7 PRs across 3 waves. Discipline per PR:
+> implement → full SQLite + live-PostgreSQL tests → fresh-context adversarial review →
+> fold → push. Item IDs `P10-1…P10-7` are canonical.
+
+| # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
+|---|----|----------|:--:|-----------------------|:--:|:--:|
+| P10-1 | PR-RDI-1 — Server-side materiality | RDI-006 | CRITICAL | Ignore client-supplied change materiality; always classify server-side from change type | — | 📋 scoped |
+| P10-2 | PR-RDI-2 — Fail-closed decision & memo persistence | RDI-001, 007, 011 | CRITICAL + HIGH + MED | Decision status+audit+signoff+decision_record in one transaction; memo approve/validate roll back and 500 on save failure (no false "success") | — | 📋 scoped |
+| P10-3 | PR-RDI-3 — Risk-staleness gate | RDI-004 | CRITICAL | Block final decisions when `risk_config_version` ≠ current or recompute failed; persist recompute failures | — | 📋 scoped |
+| P10-4 | PR-RDI-4 — Per-decision-type gates | RDI-003, 008 | HIGH | Add required prerequisites for reject / escalate_edd / request_documents; block failed-validation memo from supervisor step **(needs policy decision on per-type prerequisites)** | — | 📋 scoped (decision-gated) |
+| P10-5 | PR-RDI-5 — Decision-record coverage + provenance | RDI-009 (non-SAR), 010 | HIGH | Write decision_records for EDD closure / monitoring actions / change approvals / risk changes; add AI-vs-rule source + `agent_executions` link. Depends on **P10-2** | — | 📋 scoped |
+| P10-6 | PR-RDI-6 — Sign-off IP attribution | RDI-012 | HIGH | Trust `X-Real-IP` only when the direct peer is a known proxy/ALB (stop browser spoofing) | — | 📋 scoped |
+| P10-7 | PR-RDI-7 — Append-only audit at DB level | RDI-013 (non-SAR) | MEDIUM | Separate migration/admin DB role from runtime role; revoke runtime `UPDATE`/`DELETE` on `audit_log`/`decision_records`/`supervisor_audit_log`; stop cleanup code deleting those rows *(code half ships early; grants half is RDS/infra)* | — | 📋 scoped (part ops) |
+
+**Deferred (Enterprise / by-design):** RDI-002 by-design fast-path (no action); RDI-005 SAR permanence — `ON DELETE CASCADE`, cleanup delete, mutable SAR content — deferred with the SAR module.
+
+**Wave order:** W1 P10-1 → P10-2 → P10-3 (all CRITICAL; P10-2 unblocks P10-5) · W2 P10-4, P10-5, P10-6 (HIGH) · W3 P10-7 (MED/infra). P10-1 and P10-6 are small quick wins slot-able anytime.
+
 ## Backlog — after Phase 7
 | PR | Priority | Title | Status |
 |----|:--:|-------|:--:|
@@ -205,13 +228,13 @@ Optional/Post-Production Modernization section.
 
 ---
 
-## Roll-up (70 remediation line items + optional modernization tracked separately)
+## Roll-up (77 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
 | ✅ merged | 32 |
 | 🟢 PR open (built) | 4 |
 | 🔨 in progress | 1 |
-| 📋 scoped | 3 |
+| 📋 scoped | 10 |
 | ⏸ blocked | 1 |
 | ⬜ pending | 29 |
 
@@ -220,4 +243,5 @@ Optional/Post-Production Modernization section.
 **Where things stand:** Phases 0–3 (except B7 #12) and 5–6 done. Phase 4 built out
 (#687/#688 merged; #690/#691/#693 open; rest decision-gated). Phase 7 progressing
 (ownership gate in progress). Phases 8–9 are the remaining body — overwhelmingly
-ops/vendor/legal, not code. Pilot-readiness ≈ 85–90%; production-readiness ≈ 30–35%.
+ops/vendor/legal, not code. **Phase 10 (RDI audit)** newly scoped: 7 PRs, 3 CRITICAL,
+none built yet. Pilot-readiness ≈ 85–90%; production-readiness ≈ 30–35%.
