@@ -10,12 +10,14 @@ Legend: ✅ merged · 🟢 PR open (built, awaiting merge) · 🔨 in progress �
 
 # Onboarda / RegMind — Audit-Remediation Master List
 
-**Last reconciled:** 2026-07-07 (base `main` ≈ `c8b6dac`, contains merged #694).
-#687 (item 23), #688 (item 22) and #689 (item 38) are **merged, deployed to AWS
-staging, and validated** (staging TDs regmind-staging:771/772/773). Incorporates
-REGMIND-SYSTEM-READINESS-AUDIT-1 (5 new items: P9-12/13/14 +
-CLIENT-PORTAL-RUNTIME-SMOKE-1 + PERIODIC-BASELINE-METHOD-HYGIENE-1) and an
-Optional/Post-Production Modernization section.
+**Last reconciled:** 2026-07-07 (base `main` ≈ `b577a5f`, contains merged #691).
+The **entire tonight code batch is now merged, deployed to AWS staging, and
+validated (PASS):** #692 (item 37, merge `8f65435`, TD 775), #690 (item 18, merge
+`8b0a7a8`, TD 776), #693 (item 19, merge `db0702c`, TD 777), #691 (item 27, merge
+`b577a5f`). Earlier: #687/#688/#689 (items 23/22/38, TDs 771/772/773). Only #695
+(this docs PR) remains open in the batch. Incorporates REGMIND-SYSTEM-READINESS-AUDIT-1
+(P9-12/13/14 + CLIENT-PORTAL-RUNTIME-SMOKE-1 + PERIODIC-BASELINE-METHOD-HYGIENE-1),
+an Optional/Post-Production Modernization section, and Phase 10 (RDI audit).
 
 > Maintenance: this is the single source of truth for remediation status. On any
 > request for PR/phase status, refresh the Status/GitHub columns from GitHub and
@@ -62,8 +64,8 @@ Optional/Post-Production Modernization section.
 | # | Title | GitHub | Status |
 |---|-------|--------|:--:|
 | 17 | Virus-scan uploads (H5) — P0 | — | 📋 scoped (decision needed) |
-| 18 | Redaction/response allow-list | #690 | 🟢 |
-| 19 | Resilience/fail-safe → delete dead `resilience/` | #693 | 🟢 |
+| 18 | Redaction/response allow-list | #690 | ✅ |
+| 19 | Resilience/fail-safe → delete dead `resilience/` | #693 | ✅ |
 | 20 | Persist memo `blocked` verdict — P0 | #679 | ✅ |
 | 21 | DOB/PII encryption at rest | — | ⬜ |
 | 22 | CSP headers (report-only) | #688 | ✅ |
@@ -71,7 +73,7 @@ Optional/Post-Production Modernization section.
 | 24 | CA webhook retry idempotency | — | 📋 scoped |
 | 25 | Unique seeded-account secrets (M14) — P0 | #681 | ✅ |
 | 26 | Shared rate limiter | — | ⬜ |
-| 27 | audit_log tamper-evidence (core; wiring deferred) | #691 | 🟢 |
+| 27 | audit_log tamper-evidence (core; wiring deferred) | #691 | ✅ |
 | 28 | Misc M7–M12 | — | ⬜ (skip) |
 | 40 | Close last silent fail-open (dead code) | #680 | ✅ |
 
@@ -96,10 +98,10 @@ Optional/Post-Production Modernization section.
 | PR | Priority | Title | GitHub | Status |
 |----|:--:|-------|:--:|:--:|
 | PR-APP-STATUS-CANONICALIZATION-1 | P1 blocker | Canonical status labels + senior queue + parity | #685 | ✅ |
-| PR-APP-ACTION-OWNERSHIP-SCOPE-1 | P1/P2 | Act-only-as-owner + supervisor override | — | 🔨 |
+| PR-APP-ACTION-OWNERSHIP-SCOPE-1 | P1/P2 | Act-only-as-owner + supervisor override | — | ⬜ |
 | ops-enforce-staging-sha-alignment-gate | P0 | Staging-SHA gate + delete test logins | — | ⬜ |
 | perf-applications-default-list-projection | P2 | Slim default list payload | — | ⬜ |
-| audit-log-tamper-evidence-1 | P2 | *(= Phase 4 #27)* | #691 | 🟢 |
+| audit-log-tamper-evidence-1 | P2 | *(= Phase 4 #27)* | #691 | ✅ |
 | ux-applications-list-sort-status-tabs | P3 | Sortable headers + status tabs | — | ⬜ |
 | chore-applications-deadcode-cleanup | P3 | Delete dead approval branches | — | ⬜ |
 | CLIENT-PORTAL-RUNTIME-SMOKE-1 | P1 | Live client-credential smoke: status/upload/logout/**cross-tenant denial** *(audit REGMIND-P1-006)* | — | ⬜ |
@@ -112,7 +114,7 @@ Optional/Post-Production Modernization section.
 | 34 | Dashboard API performance (15.1s → sub-2s) | — | ⬜ |
 | 35 | Screening full-evidence hydration performance | — | ⬜ |
 | 36 | Persisted negative-path fixtures | — | ⬜ |
-| 37 | Lower-privilege fixture authz regression tests | #692 | 🟢 |
+| 37 | Lower-privilege fixture authz regression tests | #692 | ✅ |
 | 38 | Pilot operations runbook | #689 | ✅ |
 | — | ComplyAdvantage production workspace validation | #498 | ⏸ blocked (dashboard-mode evidence) |
 
@@ -148,7 +150,7 @@ Optional/Post-Production Modernization section.
 
 | # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
 |---|----|----------|:--:|-----------------------|:--:|:--:|
-| P10-1 | PR-RDI-1 — Server-side materiality | RDI-006 | CRITICAL | Ignore client-supplied change materiality; always classify server-side from change type | — | 📋 scoped |
+| P10-1 | PR-RDI-1 — Server-side materiality (+ approved maker-checker scope change: four-eyes {tier1,tier2}→{tier1}) | RDI-006 | CRITICAL | Ignore client-supplied change materiality; always classify server-side from change type. Part B: relax four-eyes to Tier 1 only (approved, Aisha Sudally) — screening hard-block still covers Tier 2 | — | 🔨 in progress |
 | P10-2 | PR-RDI-2 — Fail-closed decision & memo persistence | RDI-001, 007, 011 | CRITICAL + HIGH + MED | Decision status+audit+signoff+decision_record in one transaction; memo approve/validate roll back and 500 on save failure (no false "success") | — | 📋 scoped |
 | P10-3 | PR-RDI-3 — Risk-staleness gate | RDI-004 | CRITICAL | Block final decisions when `risk_config_version` ≠ current or recompute failed; persist recompute failures | — | 📋 scoped |
 | P10-4 | PR-RDI-4 — Per-decision-type gates | RDI-003, 008 | HIGH | Add required prerequisites for reject / escalate_edd / request_documents; block failed-validation memo from supervisor step **(needs policy decision on per-type prerequisites)** | — | 📋 scoped (decision-gated) |
@@ -236,18 +238,20 @@ Optional/Post-Production Modernization section.
 ## Roll-up (78 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
-| ✅ merged | 32 |
-| 🟢 PR open (built) | 5 |
+| ✅ merged | 36 |
+| 🟢 PR open (built) | 1 |
 | 🔨 in progress | 1 |
-| 📋 scoped | 10 |
+| 📋 scoped | 9 |
 | ⏸ blocked | 1 |
-| ⬜ pending | 29 |
+| ⬜ pending | 30 |
 
-**Open PRs:** #690 #691 #692 #693 · **Old blocked draft:** #498.
+**Open PRs:** #695 (this docs PR) · **Old blocked draft:** #498. All tonight code PRs
+(#687–#693) merged, deployed to staging, validated PASS.
 
-**Where things stand:** Phases 0–3 (except B7 #12) and 5–6 done. Phase 4 built out
-(#687/#688 merged; #690/#691/#693 open; rest decision-gated). Phase 7 progressing
-(ownership gate in progress). Phases 8–9 are the remaining body — overwhelmingly
-ops/vendor/legal, not code. **Phase 10 (RDI audit)** newly scoped: 7 PRs + 1 governance
-doc, none built yet; management response (2026-07-07) narrowed current-stage blocking
-CRITICALs to 3 (RDI-001/004/006 = Wave 1). Pilot-readiness ≈ 85–90%; production-readiness ≈ 30–35%.
+**Where things stand:** Phases 0–3 (except B7 #12) and 5–6 done. **Phase 4 fully
+built/merged** (only decision-gated #17/#21/#24/#26/#28 remain). Phase 7: status-canon
+done + audit-tamper (#691) merged; ownership gate not started (⬜). Phases 8–9 are the
+remaining body — overwhelmingly ops/vendor/legal, not code. **Phase 10 (RDI audit):**
+P10-1 in progress; P10-2/P10-3 next (the other two current-stage CRITICALs — RDI-001/004);
+P10-DOC-1 policy approved. Management response (2026-07-07) narrowed Audit-2 blocking
+CRITICALs to 3 (RDI-001/004/006). Pilot-readiness ≈ 88–92%; production-readiness ≈ 30–35%.
