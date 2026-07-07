@@ -10,7 +10,7 @@ import logging
 import hashlib
 import re
 from collections.abc import Mapping
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Dict, List, Tuple
 import secrets
 import subprocess
@@ -4279,6 +4279,350 @@ def _compute_supervisor_audit_entry_hash(row: Dict[str, Any]) -> str:
     ).hexdigest()
 
 
+# ===========================================================================
+# General audit_log hash chain (PR-27 / audit-log-tamper-evidence-1) — CORE.
+#
+# Mirrors the shipped, audited supervisor_audit_log chain (above +
+# supervisor/audit.py) but for the general audit_log table. This is the
+# decision-INDEPENDENT core: schema (v2.46 migration), the canonical hash, a
+# single append chokepoint, and a verifier with a legacy/coverage-gap model.
+# Routing the ~200 existing audit_log writers through append_audit_log is a
+# SEPARATE, decision-gated step (global-lock throughput + sequencing after the
+# ownership PR) and is intentionally NOT done here — legacy hash-less rows stay
+# valid and are classified as `legacy` by the verifier.
+# ===========================================================================
+
+# Distinct from the supervisor chain's advisory lock (8674309921) so the two
+# chains never serialise against each other.
+_AUDIT_LOG_CHAIN_LOCK_KEY = 8674309922
+
+
+def _audit_log_ts_for_hash(value: Any) -> str:
+    """Normalize a stored timestamp to the exact string that was hashed.
+
+    append_audit_log stores an explicit "%Y-%m-%dT%H:%M:%SZ" string. PostgreSQL
+    returns it as a datetime on read; SQLite returns the string. Normalizing both
+    back to the same string keeps append-time and verify-time hashes identical
+    across engines (mirrors supervisor/audit.py _timestamp_for_hash)."""
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return "" if value is None else str(value)
+
+
+def _audit_log_state_str(value: Any) -> Optional[str]:
+    """Serialize before/after_state ONCE to the string that is both stored and
+    hashed (so stored bytes == hashed bytes). dicts -> deterministic JSON;
+    strings pass through; None -> None (stored NULL, hashed as "")."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, default=str, sort_keys=True)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _audit_log_hash_payload(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Canonical audit_log chain payload (hash_version=1).
+
+    Deliberately EXCLUDES the DB serial id (unknown at insert time, unlike the
+    supervisor chain's app-generated TEXT id) — ordering integrity comes from the
+    previous_hash links, not the serial. Null optionals hash as "" so a NULL and
+    an empty string are indistinguishable and can't be used to forge a match."""
+    return {
+        "user_id": row.get("user_id") or "",
+        "user_name": row.get("user_name") or "",
+        "user_role": row.get("user_role") or "",
+        "action": row.get("action") or "",
+        "target": row.get("target") or "",
+        "detail": row.get("detail") or "",
+        "ip_address": row.get("ip_address") or "",
+        "before_state": row.get("before_state") or "",
+        "after_state": row.get("after_state") or "",
+        "timestamp": _audit_log_ts_for_hash(row.get("timestamp")),
+        "previous_hash": row.get("previous_hash") or "",
+        "hash_version": 1,
+    }
+
+
+def _compute_audit_log_entry_hash(row: Dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(_audit_log_hash_payload(row), sort_keys=True).encode()
+    ).hexdigest()
+
+
+def append_audit_log(
+    db: 'DBConnection',
+    *,
+    action: str,
+    user_id: str = "",
+    user_name: str = "",
+    user_role: str = "",
+    target: Optional[str] = None,
+    detail: Optional[str] = None,
+    ip_address: Optional[str] = None,
+    before_state: Any = None,
+    after_state: Any = None,
+    commit: bool = False,
+) -> str:
+    """Append a hash-chained entry to audit_log and return its entry_hash.
+
+    Operates on the caller's OPEN connection/transaction so the audit row commits
+    atomically with the caller's work; does not commit unless commit=True. On
+    failure the exception propagates (fail-closed — the caller's transaction is
+    never committed with a missing audit row).
+
+    Concurrency: a PostgreSQL transaction-scoped advisory lock makes the
+    tail-select + insert atomic across sessions so two appends cannot chain off
+    the same tail (a fork). SQLite already serialises writers; the partial unique
+    index on previous_hash (v2.46) is the structural backstop on both engines.
+
+    CONTRACT — the advisory lock is a SINGLE global key held until the caller's
+    transaction commits, so it SERIALISES every audit append across all workers.
+    A caller MUST commit promptly after append_audit_log and MUST NOT interleave
+    slow work (external I/O, long computation) between append and commit, or it
+    stalls every other audit writer (and can abort at statement_timeout, failing
+    the action fail-closed). Before this is wired into the ~200 existing writers,
+    that throughput trade-off must be decided (commit-immediately here vs a
+    short dedicated audit transaction) — hence wiring is deliberately deferred.
+
+    Keyword-only with None/"" defaults so it absorbs every existing audit_log
+    caller's argument subset when the wiring step (deferred) routes them here.
+    """
+    if getattr(db, "is_postgres", False):
+        db.execute("SELECT pg_advisory_xact_lock(?)", (_AUDIT_LOG_CHAIN_LOCK_KEY,))
+
+    # Tail = the chained entry whose hash no other entry references as its
+    # predecessor. entry_hash IS NOT NULL skips legacy (pre-chain) rows so the
+    # chain starts cleanly at the first appended entry. id DESC is unambiguous
+    # (monotonic PK), unlike a second-granularity timestamp tie-break.
+    tail = db.execute(
+        """
+        SELECT a.entry_hash AS entry_hash
+          FROM audit_log a
+         WHERE a.entry_hash IS NOT NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM audit_log b WHERE b.previous_hash = a.entry_hash
+           )
+         ORDER BY a.id DESC
+         LIMIT 1
+        """
+    ).fetchone()
+    previous_hash = (tail["entry_hash"] if tail else None)
+
+    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    before_str = _audit_log_state_str(before_state)
+    after_str = _audit_log_state_str(after_state)
+    row = {
+        "user_id": user_id or "",
+        "user_name": user_name or "",
+        "user_role": user_role or "",
+        "action": action,
+        "target": target,
+        "detail": detail,
+        "ip_address": ip_address,
+        "before_state": before_str,
+        "after_state": after_str,
+        "timestamp": timestamp,  # supplied explicitly so stored == hashed
+        "previous_hash": previous_hash,
+    }
+    entry_hash = _compute_audit_log_entry_hash(row)
+
+    db.execute(
+        """
+        INSERT INTO audit_log
+            (user_id, user_name, user_role, action, target, detail, ip_address,
+             timestamp, before_state, after_state, previous_hash, entry_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            user_id or None, user_name or None, user_role or None, action,
+            target, detail, ip_address, timestamp, before_str, after_str,
+            previous_hash, entry_hash,
+        ),
+    )
+    if commit:
+        db.commit()
+    return entry_hash
+
+
+def verify_audit_log_chain(db: 'DBConnection', limit: Optional[int] = None) -> Dict[str, Any]:
+    """Verify the audit_log hash chain.
+
+    `verified` reflects INTEGRITY ONLY — content tampering, broken links, forks,
+    orphans, duplicates, cycles. Whether every post-genesis row is chained
+    (COVERAGE) is reported SEPARATELY via `coverage_complete` / `coverage_gaps`
+    and does NOT flip `verified`. This matters during the (deferred) wiring
+    rollout: until every writer is migrated, hash-less rows after the genesis are
+    EXPECTED; if those forced `verified: False`, operators would learn to ignore
+    the flag and a genuine tamper would be buried under expected gaps. So a real
+    tamper is still reported `verified: False` even while coverage is partial.
+
+    Order is reconstructed by FOLLOWING previous_hash -> entry_hash links (not by
+    timestamp, which is second-granularity and non-deterministic on PostgreSQL).
+
+    Coverage model (full scan only — limit=None):
+      - genesis_id = MIN(id) among chained rows (entry_hash IS NOT NULL).
+      - unchained rows with id < genesis_id  -> `legacy` (ALLOWED: pre-chain).
+      - unchained rows with id > genesis_id  -> `coverage_gap` (a raw INSERT
+        bypassed append_audit_log after the chain started) -> reported; does NOT
+        fail integrity.
+
+    `limit`: when a positive int, only the most recent `limit` CHAINED rows are
+    fetched and integrity-checked — a BOUNDED recency check that does not scan
+    the whole table. Coverage classification is skipped in that mode
+    (`coverage_complete` is None). With limit=None the whole table is scanned
+    (O(N) — this is an operator/audit tool, not a hot path).
+
+    Retention tolerance: the chain head is the earliest SURVIVING chained row
+    whose previous_hash is not the entry_hash of any surviving chained row, so a
+    GDPR retention delete of the oldest (contiguous) entries does not false-fail.
+
+    INTEGRITY LIMITATION — read before trusting `verified: True`. This is an
+    UNKEYED SHA-256 chain over a PUBLIC payload with NO external anchor. It proves
+    the rows are internally CONSISTENT; it does NOT prove they are AUTHENTIC
+    against an adversary holding UPDATE/DELETE on audit_log. Such an insider can
+    edit any entry and cascade-recompute previous_hash+entry_hash for every later
+    row, and can drop the newest N entries (suffix truncation) — both leave a
+    chain that verifies True. Defeating the write-capable insider needs a keyed
+    MAC (HMAC key in Secrets Manager, unreachable via SQL) plus periodic
+    out-of-band sealing of the tail hash+count to WORM storage — a tracked
+    follow-up. `verified: True` here means "internally consistent", not
+    "tamper-proof against a database-capable actor".
+    """
+    windowed = isinstance(limit, int) and limit > 0
+    _cols = ("SELECT id, user_id, user_name, user_role, action, target, detail, "
+             "ip_address, timestamp, before_state, after_state, previous_hash, entry_hash "
+             "FROM audit_log")
+    try:
+        if windowed:
+            # Bounded fetch: only the most recent `limit` CHAINED rows (integrity
+            # recency check; does not scan the whole table).
+            rows = [dict(r) for r in db.execute(
+                _cols + " WHERE entry_hash IS NOT NULL ORDER BY id DESC LIMIT ?",
+                (limit,)
+            ).fetchall()]
+            rows.reverse()  # ascending
+            chained = rows
+            unchained: List[Dict[str, Any]] = []
+        else:
+            rows = [dict(r) for r in db.execute(_cols + " ORDER BY id ASC").fetchall()]
+            chained = [r for r in rows if r.get("entry_hash")]
+            unchained = [r for r in rows if not r.get("entry_hash")]
+    except Exception as e:  # columns absent (migration not run) etc.
+        return {"verified": False, "reason": str(e)}
+
+    if not chained:
+        # Nothing chained yet: a fully-legacy table is vacuously consistent.
+        return {
+            "verified": True,
+            "status": "no_chained_entries",
+            "entries_checked": 0,
+            "chained_rows": 0,
+            "legacy_rows": len(unchained),
+            "coverage_gaps": 0,
+            "coverage_complete": None if windowed else True,
+            "broken_links": [],
+            "total_entries": len(rows),
+        }
+
+    broken_links: List[Dict[str, Any]] = []   # INTEGRITY breaks — these flip verified
+    legacy_rows: List[Dict[str, Any]] = []
+    coverage_gaps: List[Dict[str, Any]] = []  # informational — do NOT flip verified
+
+    if not windowed:
+        genesis_id = min(r["id"] for r in chained)
+        legacy_rows = [r for r in unchained if r["id"] < genesis_id]
+        coverage_gaps = [r for r in unchained if r["id"] > genesis_id]
+
+    # Duplicate entry hashes are impossible in a valid chain.
+    seen_hashes: Dict[str, Any] = {}
+    for r in chained:
+        h = r.get("entry_hash")
+        if h in seen_hashes:
+            broken_links.append({"entry_id": r.get("id"), "issue": "duplicate_entry_hash"})
+        seen_hashes[h] = r
+
+    chained_hashes = set(seen_hashes.keys())
+    successors: Dict[str, List[Dict[str, Any]]] = {}
+    heads: List[Dict[str, Any]] = []
+    for r in chained:
+        ph = r.get("previous_hash") or None
+        # A head is any chained row whose predecessor is not itself a surviving
+        # chained row: true genesis (ph is None), post-retention earliest row
+        # (ph points at a deleted predecessor), OR — in windowed mode — the
+        # earliest in-window row (ph points at an older row outside the window).
+        if ph is None or ph not in chained_hashes:
+            heads.append(r)
+        if ph is not None:
+            successors.setdefault(ph, []).append(r)
+
+    ordered: List[Dict[str, Any]] = []
+    if len(heads) != 1:
+        broken_links.append({
+            "issue": "head_count",
+            "detail": f"expected exactly one chain head, found {len(heads)}",
+        })
+
+    if len(heads) == 1:
+        seen = set()
+        current = heads[0]
+        while current is not None:
+            ch = current.get("entry_hash")
+            if ch in seen:
+                broken_links.append({"entry_id": current.get("id"), "issue": "cycle_detected"})
+                break
+            seen.add(ch)
+            ordered.append(current)
+            nxts = successors.get(ch, [])
+            if len(nxts) > 1:
+                broken_links.append({
+                    "issue": "chain_fork",
+                    "after_entry_id": current.get("id"),
+                    "successor_count": len(nxts),
+                })
+            current = nxts[0] if nxts else None
+        for r in chained:
+            if r.get("entry_hash") not in seen:
+                broken_links.append({"entry_id": r.get("id"), "issue": "orphan_entry"})
+    else:
+        ordered = sorted(chained, key=lambda r: r["id"])
+
+    for idx, row in enumerate(ordered):
+        expected = _compute_audit_log_entry_hash(row)
+        if row.get("entry_hash") != expected:
+            broken_links.append({
+                "entry_id": row.get("id"),
+                "issue": "content_tampered",
+                "expected_hash": expected,
+                "actual_hash": row.get("entry_hash"),
+            })
+        # Link check: every entry except the head must chain off its predecessor.
+        if idx > 0:
+            prev = ordered[idx - 1]
+            if (row.get("previous_hash") or None) != (prev.get("entry_hash") or None):
+                broken_links.append({
+                    "entry_id": row.get("id"),
+                    "issue": "previous_hash_mismatch",
+                    "expected_previous": prev.get("entry_hash"),
+                    "actual_previous": row.get("previous_hash"),
+                })
+
+    return {
+        "verified": len(broken_links) == 0,   # INTEGRITY only — coverage is separate
+        "entries_checked": len(ordered),
+        "chained_rows": len(chained),
+        "legacy_rows": len(legacy_rows),
+        "coverage_gaps": len(coverage_gaps),
+        "coverage_complete": None if windowed else (len(coverage_gaps) == 0),
+        "broken_links": broken_links,
+        "total_entries": len(rows),
+    }
+
+
 def _create_supervisor_audit_log_table(db: DBConnection, table_name: str = "supervisor_audit_log") -> None:
     timestamp_type = "TIMESTAMP" if db.is_postgres else "TEXT"
     timestamp_default = "CURRENT_TIMESTAMP" if db.is_postgres else "(datetime('now'))"
@@ -7430,6 +7774,60 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.45: Ensured provider PEP detection separation repair")
     except Exception as e:
         logger.error("Migration v2.45 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.46 (PR-27 / audit-log-tamper-evidence-1): hash-chain columns
+    # on the general audit_log, mirroring supervisor_audit_log's v2 chain.
+    # Additive only — existing rows keep NULL previous_hash/entry_hash and are
+    # treated as `legacy` by verify_audit_log_chain. Nothing is routed through
+    # append_audit_log yet (that wiring is a separate, decision-gated step), so
+    # this migration changes no write behaviour; it only makes the chain possible.
+    try:
+        added = False
+        if not _safe_column_exists(db, "audit_log", "previous_hash"):
+            logger.info("Migration v2.46: Adding audit_log.previous_hash")
+            db.execute("ALTER TABLE audit_log ADD COLUMN previous_hash TEXT")
+            added = True
+        if not _safe_column_exists(db, "audit_log", "entry_hash"):
+            logger.info("Migration v2.46: Adding audit_log.entry_hash")
+            db.execute("ALTER TABLE audit_log ADD COLUMN entry_hash TEXT")
+            added = True
+        # Structural anti-fork backstop (mirrors uq_sup_audit_prev_hash): at most
+        # one entry may reference a given predecessor hash, so two concurrent
+        # appends can never both chain off the same tail. Genesis rows (NULL
+        # previous_hash) and legacy rows are excluded by the partial predicate,
+        # valid on PostgreSQL and SQLite >= 3.8. Best-effort: a pre-existing fork
+        # logs loudly rather than blocking startup.
+        try:
+            db.executescript(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_audit_log_prev_hash "
+                "ON audit_log(previous_hash) WHERE previous_hash IS NOT NULL;"
+            )
+        except Exception as exc:
+            logger.error(
+                "Migration v2.46: FAILED to create the anti-fork unique index on "
+                "audit_log.previous_hash — the structural fork backstop is NOT "
+                "active and a pre-existing duplicate previous_hash (a chain fork) "
+                "likely exists and needs manual investigation/repair: %s", exc,
+            )
+        try:
+            db.executescript(
+                "CREATE INDEX IF NOT EXISTS idx_audit_log_entry_hash "
+                "ON audit_log(entry_hash);"
+            )
+        except Exception as exc:
+            logger.debug("Migration v2.46: entry_hash index create skipped: %s", exc)
+        if added:
+            db.commit()
+            logger.info("Migration v2.46: audit_log hash-chain columns added")
+        else:
+            db.commit()
+            logger.info("Migration v2.46: audit_log hash-chain columns already present")
+    except Exception as e:
+        logger.error("Migration v2.46 failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:
