@@ -80,22 +80,24 @@ def decode_token(token):
         # Check per-user revocation (password change/reset invalidates all sessions)
         user_jti = f"user:{decoded.get('sub', '')}"
         if revocation.is_revoked(user_jti):
-            # Only revoke if token was issued BEFORE the user-level revocation was recorded.
-            # This allows new tokens issued after password change to still work.
+            # Only revoke tokens issued BEFORE the user-level revocation was
+            # recorded, so tokens minted at re-login after a password change
+            # still work. A token whose issue time we cannot establish (missing
+            # OR non-numeric iat) cannot be proven to post-date the change, so
+            # it fails CLOSED — both branches below reject.
             iat = decoded.get("iat")
-            if iat is not None:
-                # The user-level entry's expiry = revocation_time + TOKEN_EXPIRY_HOURS*3600
-                # So revocation_time = entry_expiry - TOKEN_EXPIRY_HOURS*3600
-                entry_expiry = revocation.get_expiry(user_jti)
-                revocation_time = entry_expiry - TOKEN_EXPIRY_HOURS * 3600
-                # JWT iat is an int (seconds), revocation_time is a float.
-                # Floor revocation_time to avoid false positives from sub-second precision.
-                # Use <= because a token issued in the same second as the revocation
-                # cannot be distinguished from one issued just before it.
-                if isinstance(iat, (int, float)) and iat <= int(revocation_time):
-                    logger.debug("Token revoked by user-level password change")
-                    return None
-            else:
+            if not isinstance(iat, (int, float)):
+                logger.debug("Token revoked by user-level change (no usable iat)")
+                return None
+            # The user-level entry's expiry = revocation_time + TOKEN_EXPIRY_HOURS*3600
+            # So revocation_time = entry_expiry - TOKEN_EXPIRY_HOURS*3600
+            entry_expiry = revocation.get_expiry(user_jti)
+            revocation_time = entry_expiry - TOKEN_EXPIRY_HOURS * 3600
+            # JWT iat is an int (seconds), revocation_time is a float.
+            # Floor revocation_time to avoid false positives from sub-second precision.
+            # Use <= because a token issued in the same second as the revocation
+            # cannot be distinguished from one issued just before it.
+            if iat <= int(revocation_time):
                 logger.debug("Token revoked by user-level password change")
                 return None
         return decoded

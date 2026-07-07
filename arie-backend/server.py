@@ -1193,7 +1193,10 @@ def _revoke_all_client_sessions(db, user_id):
     # Use a synthetic JTI that encode_token never generates but that the
     # revocation list can match on via the helper below.
     user_jti = f"user:{user_id}"
-    token_revocation_list.revoke(user_jti, expires_at)
+    # Returns True iff the entry durably persisted (so it propagates to every
+    # worker). Callers that log/attest "all sessions revoked" must honour this
+    # — a transient DB write failure revokes only the serving worker's memory.
+    return token_revocation_list.revoke(user_jti, expires_at)
 
 
 def build_regulatory_analysis(doc: dict) -> dict:
@@ -4825,7 +4828,13 @@ class ClientChangePasswordHandler(BaseHandler):
         db.execute("UPDATE clients SET password_hash=? WHERE id=?", (new_hash, user.get("sub")))
         db.commit()
 
-        # Revoke the current session — client must re-login with new password
+        # Revoke ALL sessions for this client — a password change must kill every
+        # token issued before it, not just the one making this request. The
+        # per-user revocation entry (`user:{sub}`) is honoured by decode_token,
+        # which rejects any token with iat <= revocation time; tokens minted at
+        # re-login (after this point) still validate. The per-JTI revoke of the
+        # current session is kept as belt-and-braces for the calling token.
+        revocation_durable = _revoke_all_client_sessions(db, user.get("sub"))
         jti = user.get("jti")
         exp = user.get("exp")
         if jti and exp:
@@ -4833,7 +4842,18 @@ class ClientChangePasswordHandler(BaseHandler):
 
         db.close()
         self.clear_session_cookie()
-        logger.info(f"Password changed for client {user.get('sub')}")
+        # Log truthfully: only claim "all sessions revoked" when the revocation
+        # durably persisted (and therefore propagates to every worker). On a
+        # transient DB write failure the change still succeeds and this worker's
+        # sessions are killed, but other workers may not honour it yet — say so
+        # rather than assert a global revocation that didn't happen.
+        if revocation_durable:
+            logger.info(f"Password changed for client {user.get('sub')} — all sessions revoked")
+        else:
+            logger.warning(
+                f"Password changed for client {user.get('sub')} but session revocation "
+                f"did not persist durably — other workers may not honour it until retry"
+            )
         self.success({"status": "password_changed"})
 
 
