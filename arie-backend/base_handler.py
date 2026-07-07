@@ -241,6 +241,35 @@ class BaseHandler(tornado.web.RequestHandler):
             "frame-ancestors 'none'"
         )
         self.set_header("Content-Security-Policy", csp)
+        # Report-Only CSP — the *measuring* policy (PR-22a).
+        #
+        # This is a STRICTER mirror of the enforcing csp above with 'unsafe-inline'
+        # DROPPED from script-src and style-src. It is emitted as the distinct
+        # Content-Security-Policy-Report-Only header, so it is INERT — the browser
+        # evaluates it and would-be violations surface in each browser's devtools
+        # console, but nothing is blocked and the app cannot break. The enforcing
+        # header above is left exactly as-is (still permissive, still enforcing).
+        #
+        # Purpose: quantify the inline-script/style surface a future strict enforce
+        # would break (the deferred frontend rewrite in the comment above), without
+        # taking that risk now. cdnjs/fonts allowances are kept so the ONLY new
+        # violations reported are our own inline handlers/styles — exactly the work
+        # to be scoped. There is intentionally NO report-uri yet: a central
+        # collector is an anonymous unauthenticated write endpoint and is deferred
+        # to a sign-off-gated follow-up (PR-22b); until then, violations are visible
+        # in browser devtools only, not centrally logged.
+        csp_report_only = (
+            "default-src 'self'; "
+            "script-src 'self' https://cdnjs.cloudflare.com; "
+            "style-src 'self' https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
+            "img-src 'self' data: blob:; "
+            "connect-src 'self'; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "frame-ancestors 'none'"
+        )
+        self.set_header("Content-Security-Policy-Report-Only", csp_report_only)
         self.set_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
 
     def issue_csrf_token(self):
