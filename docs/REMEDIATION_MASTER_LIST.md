@@ -10,7 +10,12 @@ Legend: ✅ merged · 🟢 PR open (built, awaiting merge) · 🔨 in progress �
 
 # Onboarda / RegMind — Audit-Remediation Master List
 
-**Last reconciled:** 2026-07-07 late (base `main` = `57890e3`, HEAD after #702).
+**Last reconciled:** 2026-07-07 late (base `main` = `0edee4d`, HEAD after #700 merged —
+SW-1 is now ✅; SW-2 #701 and SW-4 #703 remain the open CI-green PRs). **Audit 4 (FEO)
+folded as Phase 13**; consolidated 4-audit verdict: BLOCKED for uncontrolled production,
+conditional for controlled pilot; only remaining CRITICALs = DCI-001 (P12-1) and
+DCI-027 (P9-8). P11-1 (BSA-001/014) implementation is in progress on branch
+`claude/lucid-carson-ww52p3-p11-1`.
 **Phase 10 Wave-1 complete:** all three current-stage blocking CRITICALs are merged,
 deployed to AWS staging (`regmind-staging:782` / worker `:230`, image `e66405a`), and
 validated (PASS) — **P10-1 #697 (RDI-006), P10-3 #696 (RDI-004), P10-2 #698
@@ -31,7 +36,7 @@ record is carried here instead.
 
 > Maintenance: this is the single source of truth for remediation status. On any
 > request for PR/phase status, refresh the Status/GitHub columns from GitHub and
-> update this file. Item IDs (1–40, 33–38, P9-1…P9-14, P10-1…P10-7, P11-1…P11-9, P12-1…P12-10, PR-* slugs) are canonical.
+> update this file. Item IDs (1–40, 33–38, P9-1…P9-14, P10-1…P10-7, P11-1…P11-9, P12-1…P12-10, P13-1…P13-7, PR-* slugs) are canonical.
 
 **Legend:** ✅ merged · 🟢 PR open (built) · 🔨 in progress · 📋 scoped · ⏸ blocked · ⬜ pending
 
@@ -108,14 +113,14 @@ record is carried here instead.
 | PR | Priority | Title | GitHub | Status |
 |----|:--:|-------|:--:|:--:|
 | PR-APP-STATUS-CANONICALIZATION-1 | P1 blocker | Canonical status labels + senior queue + parity | #685 | ✅ |
-| PR-APP-ACTION-OWNERSHIP-SCOPE-1 | P1/P2 | Act-only-as-owner + supervisor override | — | ⬜ |
+| PR-APP-ACTION-OWNERSHIP-SCOPE-1 | P1/P2 | Act-only-as-owner + supervisor override *(= Audit-4 **FEO-013**: pilot runbook's named-owner control is manual, not code-enforced)* | — | ⬜ |
 | ops-enforce-staging-sha-alignment-gate | P0 | Staging-SHA gate + delete test logins | [#702](https://github.com/onboarda1234/onboarda/pull/702) | ✅ code half merged (SW-3; gate exercises on next deploy) · delete-test-logins half ⬜ ops-side |
 | perf-applications-default-list-projection | P2 | Slim default list payload | — | ⬜ |
 | audit-log-tamper-evidence-1 | P2 | *(= Phase 4 #27)* | #691 | ✅ |
 | ux-applications-list-sort-status-tabs | P3 | Sortable headers + status tabs | — | ⬜ |
 | chore-applications-deadcode-cleanup | P3 | Delete dead approval branches | [#701](https://github.com/onboarda1234/onboarda/pull/701) | 🟢 PR open (SW-2, CI-green) |
 | CLIENT-PORTAL-RUNTIME-SMOKE-1 | P1 | Live client-credential smoke: status/upload/logout/**cross-tenant denial** *(audit REGMIND-P1-006)* | — | ⬜ |
-| PERIODIC-BASELINE-METHOD-HYGIENE-1 | P2 | Clean 405 on POST-only periodic-review baseline route *(audit REGMIND-P2-001)* | [#700](https://github.com/onboarda1234/onboarda/pull/700) | 🟢 PR open (SW-1, CI-green) |
+| PERIODIC-BASELINE-METHOD-HYGIENE-1 | P2 | Clean 405 on POST-only periodic-review baseline route *(audit REGMIND-P2-001)* | [#700](https://github.com/onboarda1234/onboarda/pull/700) | ✅ merged (SW-1) |
 | PR-RISK-SECTOR-CALIBRATION-1 | P2 | Recalibrate sector risk + "unknown≠high" defaults *(audit done; was "Backlog — after Phase 7"; also Audit-3 **DCI-009**: missing/unknown country defaults MEDIUM — treat as manual-review/HIGH)* | — | 📋 scoped |
 
 ## Phase 8 — Pilot Controls Pack
@@ -179,7 +184,7 @@ record is carried here instead.
 
 | # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
 |---|----|----------|:--:|-----------------------|:--:|:--:|
-| P11-1 | Fail-closed revocation + post-await session re-validation | BSA-001, 014 | HIGH + MED | Make token-revocation persistence **mandatory** for logout / password-reset / password-change (500 + no false success if it can't durably revoke); `is_revoked()` fail-closed for protected APIs; supervisor run re-reads actor/role after its long `await` before persisting | — | 📋 scoped (W1 blocker) |
+| P11-1 | Fail-closed revocation + post-await session re-validation | BSA-001, 014 | HIGH + MED | Make token-revocation persistence **mandatory** for logout / password-reset / password-change (500 + no false success if it can't durably revoke); `is_revoked()` fail-closed for protected APIs; supervisor run re-reads actor/role after its long `await` before persisting | — | 🔨 in progress (W1 blocker) |
 | P11-2 | Dependency CVE remediation + OSV/pip-audit CI gate | BSA-015 | HIGH | Upgrade Tornado ≥6.5.7, PyJWT ≥2.13.0, cryptography ≥48.0.1, WeasyPrint (upgrade/mitigate); add pip-audit / OSV scan that fails CI on HIGH/CRITICAL advisories | — | 📋 scoped (W1 blocker) |
 | P11-3 | Fail-closed inputs + AI budget | BSA-006, 007, 013 | MED + LOW | `get_json()` returns structured **400** on malformed body (not silent `{}`); bounded-int pagination (400 not 500); Claude persistent-budget **fails closed** in staging/prod when the usage store is unreadable | — | 📋 scoped |
 | P11-4 | Offload blocking I/O off the IOLoop | BSA-004, 005 | MED | Move WeasyPrint PDF render and in-request Claude document-verify to a worker/executor; replace `time.sleep` backoff; enforce per-user/app AI quotas *(coordinate with item 12 / B7)* | — | 📋 scoped |
@@ -227,19 +232,50 @@ record is carried here instead.
 
 **Wave order:** W1 P12-1, P12-2 (code blockers) — the other Audit-3 blockers live elsewhere: item 21 (DCI-018), P9-1 (DCI-019), P9-8 (DCI-027) · W2 P12-3…P12-9 · W3 P12-10.
 
+## Phase 13 — Frontend & Operational Readiness (FEO audit)
+> Source: **RegMind Production Audit 4 — Frontend & Operational Readiness**, run against
+> `57890e3` (#702 merge). 15 findings (FEO-001…015). Consolidated 4-audit verdict:
+> **BLOCKED** for uncontrolled production; **conditional for controlled pilot** with
+> documented manual controls. The only remaining CRITICALs across all 4 audits are
+> **DCI-001** (= P12-1) and **DCI-027** (= P9-8) — both already tracked.
+> Positives verified: token in httpOnly cookie / in-memory only (no localStorage);
+> portal password fields + 12-char policy mirror; prescreening inputs are allowlisted
+> selects; client cannot set status; portal renderers use `escapeHtml()` far more
+> consistently than backoffice.
+> **8 of 15 findings are already tracked elsewhere** — cross-referenced, NOT duplicated:
+> FEO-008 = P9-4/P9-5 (prod provisioning + deploy/rollback drill) · FEO-009 = DCI-027 =
+> P9-8 · FEO-010 = P9-7 (secrets-rotation half) · FEO-011 = P9-10 (+ DCI-030) ·
+> FEO-012 = P9-2 (PC-1 evidence-pack continuity residual + supervisor-export hash
+> stripping) · FEO-013 = PR-APP-ACTION-OWNERSHIP-SCOPE-1 (Phase 7) · FEO-015 = Optional
+> Modernization §2 (frontend rework/profiling).
+> The 7 net-new findings group into 6 PRs + 1 ops/docs pack. Item IDs `P13-1…P13-7`
+> canonical. Frontend PRs touch `arie-backoffice.html` / `arie-portal.html` only.
+
+| # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
+|---|----|----------|:--:|-----------------------|:--:|:--:|
+| P13-1 | Backoffice stored-XSS elimination | FEO-001, 002 | HIGH | Escape (or DOM-construct with `textContent`) every API-interpolated field in the memo renderer (`renderMemoSections`) and supervisor/audit renderers (contradictions, rules, audit entries, chain errors); fixed enum→class maps for status/risk badges; XSS regression fixtures (payload in company name, memo section, red flag, supervisor recommendation, audit detail, error string) | — | 📋 scoped (W1) |
+| P13-2 | Single API wrapper + consistent CSRF | FEO-003 | MED | Route all 23 backoffice + portal raw `fetch()` sites through `boApiCall`/`apiCall`; state-changing calls fail closed client-side without a CSRF token; consistent `credentials: 'include'` (incl. logout + uploads + supervisor-run) | — | 📋 scoped |
+| P13-3 | Defensive API response parsing | FEO-004 | MED | Check status + `Content-Type` BEFORE `res.json()` in both wrappers; handle 401 before JSON-dependent logic; text/error-envelope fallback for ALB/proxy HTML errors | — | 📋 scoped |
+| P13-4 | App-detail render race guard | FEO-005 | MED | Monotonic request nonce / expected-ref check in `openAppDetail`→`renderAuthoritativeAppDetail`; ignore stale responses so Application A can never render over Application B's context | — | 📋 scoped |
+| P13-5 | Role-UI fail-closed until matrix loads | FEO-006 | LOW | Privileged controls hidden/disabled with a loading/retry state until the RBAC matrix is fetched (today UI deliberately fails open; backend remains the gate) | — | 📋 scoped |
+| P13-6 | Portal intake PII out of sessionStorage | FEO-007 | MED | Persist company-intake state via the authenticated server-side save/resume path; keep only an opaque resume handle client-side; clear legacy `arie_company_intake_state` on load | — | 📋 scoped |
+| P13-7 | Compliance-officer SOP pack | FEO-014 | MED (ops/docs) | Officer onboarding/training SOP, pre-approval review checklist, `INCONSISTENT` supervisor-verdict handling, senior escalation, override + evidence-export procedures | — | 📋 scoped (ops/docs) |
+
+**Wave order:** W1 P13-1 (the two HIGH stored-XSS findings — officer-session code execution) · W2 P13-2…P13-6 · P13-7 alongside (docs, non-code).
+
 ## Phase 9 — Production readiness
 | # | Item | Type | GitHub | Status |
 |---|------|:--:|:--:|:--:|
 | P9-1 | Enable live GDPR erasure (PC-4 control pack) *(= Audit-3 **DCI-019 BLOCKER**: dual-control live erasure incl. S3/file deletion)* | code | — | ⬜ |
-| P9-2 | Close PC-1 evidence-pack continuity residual | code | — | ⬜ |
+| P9-2 | Close PC-1 evidence-pack continuity residual *(+ Audit-4 **FEO-012**: supervisor audit export strips hash fields; ship a hashes-only global continuity ledger / anchored checkpoints so a regulator can verify chain continuity from an export)* | code | — | ⬜ |
 | P9-3 | ComplyAdvantage prod workspace validation | ops/vendor | #498 | ⏸ |
-| P9-4 | Provision prod environment (app.regmind.co) *(+ Audit-3 **DCI-023**: ECS task defs/IAM/subnets/SGs into source-controlled IaC)* | ops | — | ⬜ |
-| P9-5 | Drill prod deploy + rollback | ops | — | ⬜ |
+| P9-4 | Provision prod environment (app.regmind.co) *(+ Audit-3 **DCI-023**: ECS task defs/IAM/subnets/SGs into source-controlled IaC; + Audit-4 **FEO-008**)* | ops | — | ⬜ |
+| P9-5 | Drill prod deploy + rollback *(+ Audit-4 **FEO-008**: prod-specific runbooks are staging-only today — validate with a drill + evidence)* | ops | — | ⬜ |
 | P9-6 | Load/performance test at prod scale | test/ops | — | ⬜ |
-| P9-7 | Pen test + security review + vuln scanning | security | — | ⬜ |
-| P9-8 | DR/backup drill (restore/PITR) *(= Audit-3 **DCI-027 CRITICAL BLOCKER**: RDS backups/PITR/deletion-protection + documented restore test, environment-required)* | ops | — | ⬜ |
+| P9-7 | Pen test + security review + vuln scanning *(+ Audit-4 **FEO-010**: documented + REHEARSED secret-rotation procedures — Fernet multi-key re-encrypt, JWT invalidation comms, provider keys, DB password)* | security | — | ⬜ |
+| P9-8 | DR/backup drill (restore/PITR) *(= Audit-3 **DCI-027 CRITICAL BLOCKER** = Audit-4 **FEO-009**: RDS backups/PITR/deletion-protection + documented restore test + prod RTO/RPO, environment-required)* | ops | — | ⬜ |
 | P9-9 | Legal/compliance sign-off (residency, DPA, regulator) | legal | — | ⬜ |
-| P9-10 | Prod monitoring/alerting/on-call *(+ Audit-3 **DCI-030**: confirm SNS subscription / test alarm reaches a human)* | ops | — | ⬜ |
+| P9-10 | Prod monitoring/alerting/on-call *(+ Audit-3 **DCI-030** + Audit-4 **FEO-011**: on-call rotation, 15-min human escalation, confirmed SNS subscription, tested first page)* | ops | — | ⬜ |
 | P9-11 | Close parked prod-posture decisions (PR-25 + PR-17) | decision | — | ⬜ |
 | P9-12 | ECR-IMMUTABLE-TAGS-1 — make ECR image tags immutable (rollback provenance) *(audit REGMIND-P2-004)* | ops | — | ⬜ |
 | P9-13 | Full authz / tenant-isolation **route matrix** audit (role-by-route) *(audit §7)* | security | — | ⬜ |
@@ -311,13 +347,13 @@ record is carried here instead.
 
 ---
 
-## Roll-up (97 remediation line items + optional modernization tracked separately)
+## Roll-up (104 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
-| ✅ merged | 40 |
-| 🟢 PR open (built) | 3 |
-| 🔨 in progress | 0 |
-| 📋 scoped | 25 |
+| ✅ merged | 41 |
+| 🟢 PR open (built) | 2 |
+| 🔨 in progress | 1 |
+| 📋 scoped | 31 |
 | ⏸ blocked | 1 |
 | ⬜ pending | 28 |
 
