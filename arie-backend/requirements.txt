@@ -36,7 +36,7 @@ prometheus-client==0.24.1
 # System Health Monitoring (disk/memory in health endpoint)
 psutil==7.2.2
 
-# Async SQLite Support (for resilience layer)
+# Async SQLite support
 aiosqlite==0.22.1
 
 # Server-side PDF Generation
@@ -49,5 +49,4 @@ pycountry==26.2.16
 pytest==9.0.2
 pytest-cov==7.1.0
 pytest-asyncio==1.3.0
-
 

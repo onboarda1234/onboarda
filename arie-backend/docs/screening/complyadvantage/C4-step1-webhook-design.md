@@ -136,7 +136,7 @@ Audit performed for Celery, RQ, Dramatiq, AWS SQS/SNS, custom thread-pool worker
 Findings:
 
 - No Celery/RQ/Dramatiq/SQS/SNS production worker was found.
-- `resilience/task_queue.py` defines a SQLite-backed async `ExternalTaskQueue` with `enqueue`, `dequeue_ready`, `mark_completed`, `mark_failed`, `mark_processing`, `get_task`, and `get_queue_stats` (`arie-backend/resilience/task_queue.py:45-69`, `arie-backend/resilience/task_queue.py:112-153`, `arie-backend/resilience/task_queue.py:155-239`, `arie-backend/resilience/task_queue.py:240-368`). It stores rows in `external_retry_queue` (`arie-backend/resilience/task_queue.py:85-103`, `arie-backend/resilience/task_queue.py:122-130`). It is a helper, not a running worker service; no webhook handler currently uses it.
+- Historical note: the deleted `resilience/task_queue.py` helper previously defined a SQLite-backed async `ExternalTaskQueue`, but it was never a running worker service and no webhook handler used it. Do not treat it as live infrastructure.
 - The CA orchestrator uses `ThreadPoolExecutor(max_workers=2)` for strict/relaxed screening (`arie-backend/screening_complyadvantage/orchestrator.py:78-107`), and legacy screening also uses thread pools per C2/C3 docs, but that is per-request concurrency, not deferred processing.
 
 Conclusion: there is **no suitable existing deferred webhook processing infrastructure** that can accept CA webhook receipt, return immediately, and guarantee background fetch-back/dual-write. Recommending async implies new infrastructure, scheduling, operational ownership, and likely env/config decisions; this must be surfaced in §7.3/§12.5.
@@ -322,7 +322,7 @@ Recommendation: **async receiver + worker is the correct production design**, bu
 Reasoning:
 
 - Locked s3 recon says fetch-back can take ~146 seconds, while typical webhook timeouts are likely 10-30 seconds. A synchronous production handler would predictably time out and should be treated as a production blocker, not the preferred design.
-- §2.6 found no suitable existing webhook queue/worker. `ExternalTaskQueue` exists as an async SQLite helper (`resilience/task_queue.py:45-239`) but no production worker integrates it with webhooks, no scheduling/daemon lifecycle is wired, and no CA task schema exists.
+- §2.6 found no suitable existing webhook queue/worker. The historical `ExternalTaskQueue` helper has been deleted; no production worker integrates it with webhooks, no scheduling/daemon lifecycle is wired, and no CA task schema exists.
 - Therefore the recommended async design implies new infrastructure: durable receipt storage/queue, a worker process, retry/dead-letter policy, monitoring, and deployment/config ownership. C4 Step 1 does not design those changes because the prompt forbids schema changes and requires honest infrastructure claims.
 
 Fallback if CTO refuses new infrastructure: implement the synchronous path only as a constrained interim design and explicitly accept webhook timeout/retry risk. That fallback must include a per-case in-process circuit breaker/backoff guard to avoid concurrent duplicate fetch-backs during provider retries, but it remains non-production-robust for the observed 146-second fetch-back.
@@ -515,7 +515,7 @@ C1 documents prompt-only/verbal recon not fully captured in fixtures: full s3 PE
 - **Agent 7 entrypoint mismatch:** Applies. Actual entrypoint is `execute_adverse_media_pep(application_id, context)` (`agent_executors.py:3797-3802`), not a normalized-record push API. HTTP manual run is simulated (`server.py:9586-9608`). CTO must decide whether full application-level Agent 7 run is acceptable.
 - **`monitoring_alerts` UNIQUE constraint gap:** Applies. No provider/case columns or unique constraint exist (`db.py:569-591`, `db.py:1319-1341`). C4 cannot get DB-level one-row-per-case idempotency without schema follow-up.
 - **Webhook idempotency infrastructure needed:** Partially applies. Normalized provider truth has idempotent unique hash; generic CA webhook receipt/DLQ infrastructure does not exist. Existing `webhook_processed_events` and `sumsub_unmatched_webhooks` are Sumsub-shaped (`db.py:3218-3249`, `db.py:2757-2797`). If CTO requires replay/DLQ beyond logs/202, new infrastructure is needed.
-- **Async/queue infrastructure needed:** Applies if CTO rejects synchronous fetch-back. `ExternalTaskQueue` is only a helper, not a running webhook worker (`resilience/task_queue.py:45-239`). A real async CA webhook design implies new worker/deployment/config scope.
+- **Async/queue infrastructure needed:** Applies if CTO rejects synchronous fetch-back. The deleted historical `ExternalTaskQueue` was only a helper, not a running webhook worker. A real async CA webhook design implies new worker/deployment/config scope.
 
 ### Proposed new env vars
 
