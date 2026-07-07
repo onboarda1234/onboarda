@@ -136,12 +136,15 @@ Optional/Post-Production Modernization section.
 
 ## Phase 10 — Regulatory Decision Integrity (RDI audit)
 > Source: **RegMind Production Audit 1 — Regulatory Decision Integrity**, run against
-> `c8b6dac` (current `main`, all merged remediation included). 13 findings; **RDI-002**
-> (LOW/MEDIUM fast-path) accepted as **by-design** and **RDI-005** + the SAR slices of
-> RDI-009/RDI-013 deferred to **Enterprise** (SAR module not in scope at this stage).
-> The 11 remaining findings are grouped into 7 PRs across 3 waves. Discipline per PR:
-> implement → full SQLite + live-PostgreSQL tests → fresh-context adversarial review →
-> fold → push. Item IDs `P10-1…P10-7` are canonical.
+> `c8b6dac` (current `main`, all merged remediation included). 13 findings.
+> **Management response 2026-07-07** formally reclassified two: **RDI-002** (LOW/MEDIUM
+> fast-path) CRITICAL → **HIGH policy-exception** (by-design, not a code defect) and
+> **RDI-005** (SAR permanence) CRITICAL → **HIGH Enterprise pre-enable blocker**. Both
+> are deferred (see below); current-stage **blocking CRITICALs are now 3 — RDI-001,
+> RDI-004, RDI-006 = exactly Wave 1 (P10-2, P10-3, P10-1)**. Audit 2 stays paused until
+> those three are remediated + re-verified. The 11 remaining findings are grouped into 7
+> PRs across 3 waves. Discipline per PR: implement → full SQLite + live-PostgreSQL tests →
+> fresh-context adversarial review → fold → push. Item IDs `P10-1…P10-7` are canonical.
 
 | # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
 |---|----|----------|:--:|-----------------------|:--:|:--:|
@@ -153,7 +156,9 @@ Optional/Post-Production Modernization section.
 | P10-6 | PR-RDI-6 — Sign-off IP attribution | RDI-012 | HIGH | Trust `X-Real-IP` only when the direct peer is a known proxy/ALB (stop browser spoofing) | — | 📋 scoped |
 | P10-7 | PR-RDI-7 — Append-only audit at DB level | RDI-013 (non-SAR) | MEDIUM | Separate migration/admin DB role from runtime role; revoke runtime `UPDATE`/`DELETE` on `audit_log`/`decision_records`/`supervisor_audit_log`; stop cleanup code deleting those rows *(code half ships early; grants half is RDS/infra)* | — | 📋 scoped (part ops) |
 
-**Deferred (Enterprise / by-design):** RDI-002 by-design fast-path (no action); RDI-005 SAR permanence — `ON DELETE CASCADE`, cleanup delete, mutable SAR content — deferred with the SAR module.
+**Deferred (per management response 2026-07-07):**
+- **RDI-002** — by-design LOW/MEDIUM fast-path, HIGH policy-exception (not a code defect). **Not zero-work:** needs a documented policy (eligibility, excluded risk signals, officer authority, required evidence) + compensating audit records + direct-route tests + decision-record eligibility fields. Tracked as **P10-DOC-1** (governance/docs, not a code PR) — 📋 scoped.
+- **RDI-005** — SAR permanence (`ON DELETE CASCADE`, cleanup delete, mutable SAR content), HIGH **Enterprise pre-enable blocker**. Must be fixed **before** enabling Enterprise SAR/STR; safe to defer **only while SAR/STR feature flags stay disabled** (`ENABLE_SAR_WORKFLOW`, `ENABLE_SAR_STR` = false). Same guard covers the SAR slices of RDI-009/RDI-013.
 
 **Wave order:** W1 P10-1 → P10-2 → P10-3 (all CRITICAL; P10-2 unblocks P10-5) · W2 P10-4, P10-5, P10-6 (HIGH) · W3 P10-7 (MED/infra). P10-1 and P10-6 are small quick wins slot-able anytime.
 
@@ -228,13 +233,13 @@ Optional/Post-Production Modernization section.
 
 ---
 
-## Roll-up (77 remediation line items + optional modernization tracked separately)
+## Roll-up (78 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
 | ✅ merged | 32 |
 | 🟢 PR open (built) | 4 |
 | 🔨 in progress | 1 |
-| 📋 scoped | 10 |
+| 📋 scoped | 11 |
 | ⏸ blocked | 1 |
 | ⬜ pending | 29 |
 
@@ -243,5 +248,6 @@ Optional/Post-Production Modernization section.
 **Where things stand:** Phases 0–3 (except B7 #12) and 5–6 done. Phase 4 built out
 (#687/#688 merged; #690/#691/#693 open; rest decision-gated). Phase 7 progressing
 (ownership gate in progress). Phases 8–9 are the remaining body — overwhelmingly
-ops/vendor/legal, not code. **Phase 10 (RDI audit)** newly scoped: 7 PRs, 3 CRITICAL,
-none built yet. Pilot-readiness ≈ 85–90%; production-readiness ≈ 30–35%.
+ops/vendor/legal, not code. **Phase 10 (RDI audit)** newly scoped: 7 PRs + 1 governance
+doc, none built yet; management response (2026-07-07) narrowed current-stage blocking
+CRITICALs to 3 (RDI-001/004/006 = Wave 1). Pilot-readiness ≈ 85–90%; production-readiness ≈ 30–35%.
