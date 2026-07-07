@@ -187,6 +187,28 @@ def _cr_source(db_path, app_id):
         conn.close()
 
 
+def _latest_cr_materiality(db_path, app_id):
+    conn = sqlite3.connect(db_path, timeout=5)
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(
+            """SELECT cr.materiality AS request_materiality,
+                      cr.screening_required,
+                      cr.risk_review_required,
+                      cr.memo_addendum_hook,
+                      cr.periodic_review_acceleration_hook,
+                      cri.materiality AS item_materiality
+                 FROM change_requests cr
+                 JOIN change_request_items cri ON cri.request_id = cr.id
+                WHERE cr.application_id = ?
+                ORDER BY cr.created_at DESC, cri.id ASC
+                LIMIT 1""",
+            (app_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
 def _live_director(db_path, app_id, column):
     conn = sqlite3.connect(db_path, timeout=5)
     try:
@@ -213,6 +235,49 @@ def _audit_actions(db_path, target):
 # ---------------------------------------------------------------------------
 # PUT /api/applications/:id
 # ---------------------------------------------------------------------------
+
+def test_change_request_api_ignores_client_materiality_downgrade(api_server):
+    base_url, db_path = api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    resp = requests.post(
+        f"{base_url}/api/change-management/requests",
+        headers=_headers("sco"),
+        json={
+            "application_id": case["app_id"],
+            "source": "backoffice_manual",
+            "source_channel": "backoffice",
+            "reason": "API materiality downgrade regression",
+            "items": [{
+                "change_type": "ubo_change",
+                "field_name": "ownership_pct",
+                "old_value": "20",
+                "new_value": "80",
+                "materiality": "tier3",
+            }],
+        },
+        timeout=5,
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["materiality"] == "tier1"
+    assert body["items"][0]["materiality"] == "tier1"
+    assert body["downstream_actions"]["screening_required"] is True
+    assert body["downstream_actions"]["risk_review_required"] is True
+    assert body["downstream_actions"]["memo_addendum_hook"] is True
+    assert body["downstream_actions"]["periodic_review_acceleration_hook"] is True
+
+    persisted = _latest_cr_materiality(db_path, case["app_id"])
+    assert persisted["request_materiality"] == "tier1"
+    assert persisted["item_materiality"] == "tier1"
+    assert persisted["screening_required"] == 1
+    assert persisted["risk_review_required"] == 1
+    assert persisted["memo_addendum_hook"] == 1
+    assert persisted["periodic_review_acceleration_hook"] == 1
+
 
 def test_put_material_edit_on_approved_drafts_cr(api_server):
     base_url, db_path = api_server

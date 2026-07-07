@@ -159,6 +159,142 @@ class TestDownstreamActions:
         assert a["risk_review_required"] is False
 
 
+class TestServerComputedRequestMateriality:
+    def test_client_tier1_downgrade_payload_is_ignored_for_controls_and_persistence(self, db):
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, client_id = _setup_test_data(db)
+        user = {"sub": client_id, "name": "Client", "role": "client"}
+        items = [{
+            "change_type": "ubo_change",
+            "field_name": "ownership_pct",
+            "old_value": "20",
+            "new_value": "80",
+            "materiality": "tier3",
+        }]
+
+        req = cm.create_change_request(
+            wdb, app_id, "portal_client", "portal", "UBO change", items, user)
+
+        assert req["materiality"] == "tier1"
+        assert req["items"][0]["materiality"] == "tier1"
+        assert req["downstream_actions"]["screening_required"] is True
+        assert req["downstream_actions"]["risk_review_required"] is True
+        assert req["downstream_actions"]["memo_addendum_hook"] is True
+        assert req["downstream_actions"]["periodic_review_acceleration_hook"] is True
+
+        row = db.execute(
+            """SELECT materiality, screening_required, risk_review_required,
+                      memo_addendum_hook, periodic_review_acceleration_hook
+                 FROM change_requests WHERE id = ?""",
+            (req["id"],),
+        ).fetchone()
+        assert row["materiality"] == "tier1"
+        assert row["screening_required"] == 1
+        assert row["risk_review_required"] == 1
+        assert row["memo_addendum_hook"] == 1
+        assert row["periodic_review_acceleration_hook"] == 1
+
+        item_row = db.execute(
+            "SELECT materiality FROM change_request_items WHERE request_id = ?",
+            (req["id"],),
+        ).fetchone()
+        assert item_row["materiality"] == "tier1"
+
+    def test_mixed_items_overall_uses_highest_server_computed_materiality(self, db):
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, _ = _setup_test_data(db)
+        user = {"sub": "u1", "name": "Officer", "role": "sco"}
+        items = [
+            {"change_type": "contact_detail_update", "field_name": "email", "new_value": "new@example.com", "materiality": "tier1"},
+            {"change_type": "ubo_change", "field_name": "ownership_pct", "new_value": "55", "materiality": "tier3"},
+        ]
+
+        req = cm.create_change_request(
+            wdb, app_id, "backoffice_manual", "backoffice", "Mixed changes", items, user)
+
+        assert req["materiality"] == "tier1"
+        assert [item["materiality"] for item in req["items"]] == ["tier3", "tier1"]
+        rows = db.execute(
+            "SELECT change_type, materiality FROM change_request_items WHERE request_id = ? ORDER BY id",
+            (req["id"],),
+        ).fetchall()
+        assert [(row["change_type"], row["materiality"]) for row in rows] == [
+            ("contact_detail_update", "tier3"),
+            ("ubo_change", "tier1"),
+        ]
+
+    def test_client_supplied_materiality_cannot_downgrade_or_upgrade(self, db):
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, client_id = _setup_test_data(db)
+        user = {"sub": client_id, "name": "Client", "role": "client"}
+
+        downgrade = cm.create_change_request(
+            wdb, app_id, "portal_client", "portal", "Downgrade attempt",
+            [{"change_type": "ubo_change", "field_name": "ownership_pct", "new_value": "51", "materiality": "tier3"}],
+            user,
+        )
+        upgrade = cm.create_change_request(
+            wdb, app_id, "portal_client", "portal", "Upgrade attempt",
+            [{"change_type": "contact_detail_update", "field_name": "email", "new_value": "new@example.com", "materiality": "tier1"}],
+            user,
+        )
+
+        assert downgrade["materiality"] == "tier1"
+        assert downgrade["items"][0]["materiality"] == "tier1"
+        assert upgrade["materiality"] == "tier3"
+        assert upgrade["items"][0]["materiality"] == "tier3"
+        assert upgrade["downstream_actions"]["screening_required"] is False
+        assert upgrade["downstream_actions"]["risk_review_required"] is False
+
+    def test_backoffice_entrypoint_uses_server_side_classification(self, db):
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, _ = _setup_test_data(db)
+        user = {"sub": "u1", "name": "Officer", "role": "sco"}
+
+        req = cm.create_change_request(
+            wdb, app_id, "backoffice_manual", "backoffice", "Officer request",
+            [{"change_type": "ubo_change", "field_name": "ownership_pct", "new_value": "60", "materiality": "tier3"}],
+            user,
+        )
+
+        assert req["materiality"] == "tier1"
+        assert req["items"][0]["materiality"] == "tier1"
+
+    def test_unmapped_valid_change_type_defaults_tier2_on_create(self, db):
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, client_id = _setup_test_data(db)
+        user = {"sub": client_id, "name": "Client", "role": "client"}
+
+        req = cm.create_change_request(
+            wdb, app_id, "portal_client", "portal", "Unmapped type",
+            [{"change_type": "company_details", "field_name": "company_name", "new_value": "New Co", "materiality": "tier1"}],
+            user,
+        )
+
+        assert req["materiality"] == "tier2"
+        assert req["items"][0]["materiality"] == "tier2"
+        assert req["downstream_actions"]["screening_required"] is True
+        assert req["downstream_actions"]["risk_review_required"] is True
+        assert req["downstream_actions"]["memo_addendum_hook"] is False
+        assert req["downstream_actions"]["periodic_review_acceleration_hook"] is False
+
+    def test_create_request_static_guard_uses_change_type_not_client_materiality(self):
+        import inspect
+
+        cm = _get_cm()
+        source = inspect.getsource(cm.create_change_request)
+
+        assert 'get("materiality"' not in source
+        assert "get('materiality'" not in source
+        assert "classify_materiality(change_type)" in source
+        assert "_highest_materiality(item_materialities)" in source
+
+
 class TestAlertTransitions:
     def test_valid_from_new(self):
         cm = _get_cm()
@@ -348,6 +484,37 @@ class TestDBIntegration:
         updated = cm.get_change_alert_detail(wdb, alert["id"])
         assert updated["status"] == "converted_to_change_request"
 
+    def test_convert_alert_preserves_server_known_tier1_change_type(self, db):
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, _ = _setup_test_data(db)
+        user = {"sub": "u1", "name": "User", "role": "sco"}
+
+        alert = cm.create_change_alert(
+            wdb, app_id, "control_change", "companies_house",
+            "Control change detected", {"control": {"old": "A", "new": "B"}},
+            user=user,
+        )
+        cm.update_change_alert_status(wdb, alert["id"], "under_review", user)
+
+        req, err = cm.convert_alert_to_request(wdb, alert["id"], user)
+
+        assert req is not None, f"Failed: {err}"
+        assert req["materiality"] == "tier1"
+        assert req["items"][0]["change_type"] == "control_change"
+        assert req["items"][0]["materiality"] == "tier1"
+        assert req["downstream_actions"]["screening_required"] is True
+        assert req["downstream_actions"]["risk_review_required"] is True
+        assert req["downstream_actions"]["memo_addendum_hook"] is True
+        assert req["downstream_actions"]["periodic_review_acceleration_hook"] is True
+
+        item = db.execute(
+            "SELECT change_type, materiality FROM change_request_items WHERE request_id = ?",
+            (req["id"],),
+        ).fetchone()
+        assert item["change_type"] == "control_change"
+        assert item["materiality"] == "tier1"
+
     def test_cannot_convert_dismissed(self, db):
         cm = _get_cm()
         wdb = _DBWrapper(db)
@@ -372,7 +539,7 @@ class TestDBIntegration:
                                         "Name change", items, user)
         assert req["id"].startswith("CR-")
         assert req["status"] == "draft"
-        assert req["materiality"] == "tier1"
+        assert req["materiality"] == "tier2"
 
         db_items = db.execute("SELECT * FROM change_request_items WHERE request_id = ?",
                               (req["id"],)).fetchall()

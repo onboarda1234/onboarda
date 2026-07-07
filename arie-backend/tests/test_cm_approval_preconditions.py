@@ -17,6 +17,8 @@ import secrets
 from datetime import datetime, timezone
 from decimal import Decimal
 
+from tests.cm_evidence_test_helpers import attach_verified_cm_evidence
+
 
 def _get_cm():
     import change_management as cm
@@ -73,14 +75,23 @@ def _setup_app(raw_db, with_screen_report=False, risk_level="MEDIUM"):
 
 
 def _make_cr(cm, wdb, app_id, materiality="tier1", creator=CREATOR):
+    change_type_by_materiality = {
+        "tier1": "ubo_change",
+        "tier2": "other",
+        "tier3": "contact_detail_update",
+    }
     item = {
-        "change_type": "other",
+        "change_type": change_type_by_materiality[materiality],
         "field_name": "operational_note",
         "old_value": "old",
         "new_value": "new",
-        "materiality": materiality,
     }
-    return cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice", "r", [item], creator)
+    if materiality == "tier3":
+        item["person_snapshot"] = {"officer_review_note": "Callback completed"}
+    req = cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice", "r", [item], creator)
+    if materiality == "tier1":
+        attach_verified_cm_evidence(cm, wdb, req["id"])
+    return req
 
 
 def _to_pending(cm, wdb, req_id, user=CREATOR):
