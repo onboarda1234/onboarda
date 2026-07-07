@@ -822,6 +822,32 @@ def _persist_monitoring_alert_evidence(db, monitoring_alert_id, application_id, 
     return count
 
 
+def _is_unique_violation(exc):
+    """True if exc is a PK/unique-constraint violation (sqlite or PostgreSQL)."""
+    if type(exc).__name__ in ("IntegrityError", "UniqueViolation"):
+        return True
+    return getattr(exc, "pgcode", None) == "23505"  # PostgreSQL unique_violation
+
+
+def _mark_duplicate_delivery(db, *, webhook_id, webhook_type, case_identifier,
+                             customer_identifier, trace_id):
+    db.execute(
+        """
+        UPDATE complyadvantage_webhook_deliveries
+           SET last_seen_at = CURRENT_TIMESTAMP,
+               duplicate_count = COALESCE(duplicate_count, 0) + 1,
+               webhook_type = COALESCE(NULLIF(webhook_type, ''), ?),
+               case_identifier = COALESCE(NULLIF(case_identifier, ''), ?),
+               customer_identifier = COALESCE(NULLIF(customer_identifier, ''), ?),
+               trace_id = COALESCE(NULLIF(trace_id, ''), ?)
+         WHERE webhook_id = ?
+        """,
+        (webhook_type, case_identifier, customer_identifier, trace_id, webhook_id),
+    )
+    _commit(db)
+    return {"claimed": False, "duplicate": True}
+
+
 def _claim_existing_webhook_delivery(db, existing, *, webhook_id, webhook_type,
                                      case_identifier, customer_identifier, trace_id):
     """Given an already-present delivery row, decide claim vs duplicate.
@@ -830,6 +856,14 @@ def _claim_existing_webhook_delivery(db, existing, *, webhook_id, webhook_type,
     under the retry cap) is a genuine retry of a delivery that did NOT complete
     — re-claim it. Anything else (``processing`` in flight, ``processed``, or
     retries exhausted) is a duplicate → count it and no-op.
+
+    PR-24: the re-claim is an ATOMIC compare-and-swap. In production the receipt
+    row is pre-recorded as ``received`` BEFORE processing is spawned, so two
+    concurrent deliveries (the 2 backend ECS tasks each get an at-least-once
+    retry) both read ``received`` here. The UPDATE re-checks the claimable state
+    in its WHERE clause, so only ONE worker's UPDATE affects a row (rowcount==1)
+    and claims; the other affects 0 rows and is the duplicate — preventing the
+    double dual-write a plain read-then-UPDATE allowed.
     """
     status = _row_value(existing, "processing_status")
     retry_count = int(_row_value(existing, "retry_count") or 0)
@@ -850,26 +884,24 @@ def _claim_existing_webhook_delivery(db, existing, *, webhook_id, webhook_type,
                    customer_identifier = COALESCE(NULLIF(customer_identifier, ''), ?),
                    trace_id = COALESCE(NULLIF(trace_id, ''), ?)
              WHERE webhook_id = ?
+               AND processing_status IN ('received', 'retry_pending', 'failed')
+               AND COALESCE(retry_count, 0) < ?
             """,
-            (webhook_type, case_identifier, customer_identifier, trace_id, webhook_id),
+            (webhook_type, case_identifier, customer_identifier, trace_id,
+             webhook_id, _WEBHOOK_MAX_RETRIES),
         )
+        # rowcount lives on the underlying cursor (both sqlite3 and psycopg2
+        # report it reliably for UPDATE); the codebase reads it this way
+        # elsewhere. A value != 1 means we lost the CAS race (another worker
+        # already flipped the row) — fall through to the safe duplicate path.
+        claimed_rows = getattr(getattr(db, "_cursor", None), "rowcount", -1)
         _commit(db)
-        return {"claimed": True, "duplicate": False}
-    db.execute(
-        """
-        UPDATE complyadvantage_webhook_deliveries
-           SET last_seen_at = CURRENT_TIMESTAMP,
-               duplicate_count = COALESCE(duplicate_count, 0) + 1,
-               webhook_type = COALESCE(NULLIF(webhook_type, ''), ?),
-               case_identifier = COALESCE(NULLIF(case_identifier, ''), ?),
-               customer_identifier = COALESCE(NULLIF(customer_identifier, ''), ?),
-               trace_id = COALESCE(NULLIF(trace_id, ''), ?)
-         WHERE webhook_id = ?
-        """,
-        (webhook_type, case_identifier, customer_identifier, trace_id, webhook_id),
-    )
-    _commit(db)
-    return {"claimed": False, "duplicate": True}
+        if claimed_rows == 1:
+            return {"claimed": True, "duplicate": False}
+    return _mark_duplicate_delivery(
+        db, webhook_id=webhook_id, webhook_type=webhook_type,
+        case_identifier=case_identifier, customer_identifier=customer_identifier,
+        trace_id=trace_id)
 
 
 def _claim_webhook_delivery(db, *, webhook_id, webhook_type, case_identifier, customer_identifier, trace_id):
@@ -897,14 +929,17 @@ def _claim_webhook_delivery(db, *, webhook_id, webhook_type, case_identifier, cu
         _commit(db)
         return {"claimed": True, "duplicate": False}
     except Exception as insert_err:
-        # PR-24 concurrent-delivery race: the webhook_id PRIMARY KEY rejected
-        # this INSERT because another worker (the 2 backend ECS tasks can each
-        # receive a CA at-least-once retry) claimed the same delivery first.
-        # The PK already prevented a double-apply; roll back the aborted
-        # transaction, re-read, and route through the existing-row logic so the
-        # loser resolves as a clean duplicate/no-op — never a spurious async
-        # ERROR. If the row still isn't there, this was NOT a uniqueness race
-        # (a real INSERT failure) — surface it.
+        # PR-24 first-delivery concurrent race: two workers both found no row and
+        # both INSERTed; the webhook_id PRIMARY KEY rejected the loser. (In the
+        # normal live path the receipt row is pre-recorded, so this branch is a
+        # defensive fallback for callers without a pre-recorded receipt.)
+        # Only a genuine UNIQUENESS violation is a race — re-raise anything else
+        # (a real INSERT failure must surface, not be masked as a duplicate).
+        # Roll back the aborted transaction (required before reuse on
+        # PostgreSQL), re-read, and route the loser through the atomic
+        # existing-row claim.
+        if not _is_unique_violation(insert_err):
+            raise
         _rollback(db)
         existing = db.execute(
             "SELECT processing_status, retry_count FROM complyadvantage_webhook_deliveries WHERE webhook_id = ?",

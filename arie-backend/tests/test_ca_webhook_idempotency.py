@@ -42,11 +42,17 @@ CREATE TABLE complyadvantage_webhook_deliveries (
 
 
 class _DB:
+    """Mirrors db.DBConnection: keeps the last cursor on ``_cursor`` so the
+    compare-and-swap claim can read ``_cursor.rowcount``; ``execute`` returns the
+    cursor (which also provides ``fetchone``)."""
+
     def __init__(self, conn):
         self.conn = conn
+        self._cursor = None
 
     def execute(self, sql, params=()):
-        return self.conn.execute(sql, params)
+        self._cursor = self.conn.execute(sql, params)
+        return self._cursor
 
     def commit(self):
         self.conn.commit()
@@ -62,7 +68,7 @@ class _RaceDB(_DB):
     """Real sqlite (real PRIMARY KEY), but the FIRST claim SELECT is forced to
     miss — simulating two workers whose SELECTs both return empty before either
     INSERTs. The subsequent INSERT then hits the real PK of the pre-existing
-    winner row, exercising the concurrent-race branch."""
+    winner row, exercising the first-delivery concurrent-race branch."""
 
     def __init__(self, conn):
         super().__init__(conn)
@@ -72,19 +78,25 @@ class _RaceDB(_DB):
         if (not self._select_miss_used
                 and sql.strip().upper().startswith("SELECT PROCESSING_STATUS")):
             self._select_miss_used = True
-            return self.conn.execute(
+            self._cursor = self.conn.execute(
                 "SELECT processing_status, retry_count "
                 "FROM complyadvantage_webhook_deliveries WHERE 1=0")
-        return self.conn.execute(sql, params)
+            return self._cursor
+        self._cursor = self.conn.execute(sql, params)
+        return self._cursor
 
 
 class _InsertBoomDB(_DB):
-    """INSERT raises a NON-uniqueness error and no row exists — must re-raise."""
+    """INSERT raises a NON-uniqueness error — must re-raise (not masked)."""
+
+    def __init__(self, conn, *, row_present=False):
+        super().__init__(conn)
+        self._row_present = row_present
 
     def execute(self, sql, params=()):
         if sql.strip().upper().startswith("INSERT INTO COMPLYADVANTAGE_WEBHOOK_DELIVERIES"):
             raise RuntimeError("disk I/O error")
-        return self.conn.execute(sql, params)
+        return super().execute(sql, params)
 
 
 @pytest.fixture()
@@ -165,7 +177,46 @@ def test_retries_exhausted_becomes_duplicate(conn):
     assert res == {"claimed": False, "duplicate": True}
 
 
-# ── concurrent race: PK rejects the loser -> clean duplicate (the PR-24 fold) ──
+# ── the REAL production race: two workers re-claim the pre-recorded row ──
+
+def test_concurrent_reclaim_of_prerecorded_row_only_one_wins(conn):
+    """In production the receipt row is pre-recorded as 'received' BEFORE
+    processing spawns, so two concurrent deliveries both reach the existing-row
+    claim with the SAME stale snapshot ('received', retry 0). The atomic CAS
+    must let exactly ONE claim; the other is a duplicate. (Before the CAS fix
+    both did an unconditional UPDATE and both claimed -> double dual-write.)"""
+    conn.execute(
+        "INSERT INTO complyadvantage_webhook_deliveries "
+        "(webhook_id, processing_status, retry_count) VALUES ('wh-cc', 'received', 0)")
+    conn.commit()
+    stale = {"processing_status": "received", "retry_count": 0}  # both workers read this
+    kw = dict(webhook_id="wh-cc", webhook_type="T", case_identifier="c",
+              customer_identifier="cu", trace_id="t")
+    a = _claim_existing_webhook_delivery(_DB(conn), dict(stale), **kw)
+    b = _claim_existing_webhook_delivery(_DB(conn), dict(stale), **kw)
+    claimed = [r["claimed"] for r in (a, b)]
+    assert claimed.count(True) == 1, f"exactly one worker may claim, got {claimed}"
+    assert claimed.count(False) == 1
+    dup = a if not a["claimed"] else b
+    assert dup["duplicate"] is True
+    assert _row(conn, "wh-cc")["duplicate_count"] == 1
+    assert _row(conn, "wh-cc")["processing_status"] == "processing"
+
+
+def test_concurrent_reclaim_three_workers_only_one_wins(conn):
+    conn.execute(
+        "INSERT INTO complyadvantage_webhook_deliveries "
+        "(webhook_id, processing_status, retry_count) VALUES ('wh-3', 'received', 0)")
+    conn.commit()
+    stale = {"processing_status": "received", "retry_count": 0}
+    kw = dict(webhook_id="wh-3", webhook_type="T", case_identifier="c",
+              customer_identifier="cu", trace_id="t")
+    results = [_claim_existing_webhook_delivery(_DB(conn), dict(stale), **kw) for _ in range(3)]
+    assert sum(1 for r in results if r["claimed"]) == 1
+    assert _row(conn, "wh-3")["duplicate_count"] == 2
+
+
+# ── first-delivery concurrent race: PK rejects the loser -> clean duplicate ──
 
 def test_concurrent_insert_race_resolves_as_duplicate(conn):
     # Winner already inserted + committed (status 'processing').
@@ -203,6 +254,35 @@ def test_non_uniqueness_insert_failure_is_reraised(conn):
     with pytest.raises(RuntimeError, match="disk I/O error"):
         _claim(_InsertBoomDB(conn), webhook_id="wh-boom")
     assert _row(conn, "wh-boom") is None
+
+
+def test_non_uniqueness_insert_failure_reraised_even_with_row_present(conn):
+    # Masking guard: a non-uniqueness INSERT error must re-raise even if a row
+    # for this webhook_id happens to exist — the handler discriminates by
+    # exception TYPE, not merely by row presence.
+    conn.execute(
+        "INSERT INTO complyadvantage_webhook_deliveries "
+        "(webhook_id, processing_status, retry_count) VALUES ('wh-present', 'processed', 0)")
+    conn.commit()
+
+    class _RaceThenBoom(_InsertBoomDB):
+        # Force the initial claim SELECT to miss so we reach the INSERT branch
+        # even though a row exists; the INSERT then raises a non-uniqueness error.
+        def __init__(self, c):
+            super().__init__(c)
+            self._miss = False
+
+        def execute(self, sql, params=()):
+            if not self._miss and sql.strip().upper().startswith("SELECT PROCESSING_STATUS"):
+                self._miss = True
+                self._cursor = self.conn.execute(
+                    "SELECT processing_status, retry_count "
+                    "FROM complyadvantage_webhook_deliveries WHERE 1=0")
+                return self._cursor
+            return super().execute(sql, params)
+
+    with pytest.raises(RuntimeError, match="disk I/O error"):
+        _claim(_RaceThenBoom(conn), webhook_id="wh-present")
 
 
 # ── guards ──
