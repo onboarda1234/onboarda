@@ -1,6 +1,7 @@
 # Low/Medium-Risk Fast-Path Approval Policy
 
-**Status:** DRAFT for review · **Owner:** Head of Compliance · **Applies to:** RegMind application approvals
+**Status:** APPROVED · **Owner:** Head of Compliance · **Applies to:** RegMind application approvals
+**Approved & signed off by:** Aisha Sudally · **Approval date:** 2026-07-07
 **Audit reference:** RDI-002 (RegMind Production Audit 1) · **Last updated:** 2026-07-07
 
 ---
@@ -74,5 +75,5 @@ or regulatory guidance changes.
 
 | Role | Name | Signature | Date |
 |------|------|-----------|------|
-| Head of Compliance | | | |
+| Head of Compliance | Aisha Sudally | Signed (approved) | 2026-07-07 |
 | MLRO / SCO | | | |
