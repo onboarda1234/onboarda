@@ -1,5 +1,12 @@
 # CLAUDE.md — Onboarda Project Context
 
+> **Audit-remediation master list:** the authoritative status of every
+> remediation PR/phase lives in [`docs/REMEDIATION_MASTER_LIST.md`](docs/REMEDIATION_MASTER_LIST.md).
+> When the user asks for "the master list", "full table", or PR/phase status,
+> READ that file, reconcile its Status/GitHub columns against live GitHub PR
+> state, present the table, and commit any updates back to the file. Its phase
+> numbering and item IDs are canonical — do not renumber.
+
 ## Project Overview
 
 Onboarda is an AI-powered compliance onboarding platform for regulated financial institutions (banks, EMIs, payment providers). It automates KYC/AML due diligence with a deterministic 4-layer AI pipeline.
