@@ -153,7 +153,7 @@ record is carried here instead.
 | P10-3 | PR-RDI-3 — Risk-staleness gate | RDI-004 | CRITICAL | Block final decisions when `risk_config_version` ≠ current or recompute failed; persist recompute failures | [#696](https://github.com/onboarda1234/onboarda/pull/696) | ✅ merged |
 | P10-4 | PR-RDI-4 — Per-decision-type gates | RDI-003, 008 | HIGH | Add required prerequisites for reject / escalate_edd / request_documents; block failed-validation memo from supervisor step **(needs policy decision on per-type prerequisites)** | — | 📋 scoped (decision-gated) |
 | P10-5 | PR-RDI-5 — Decision-record coverage + provenance | RDI-009 (non-SAR), 010 | HIGH | Write decision_records for EDD closure / monitoring actions / change approvals / risk changes; add AI-vs-rule source + `agent_executions` link. Depends on **P10-2** | — | 📋 scoped |
-| P10-6 | PR-RDI-6 — Sign-off IP attribution | RDI-012 | HIGH | Trust `X-Real-IP` only when the direct peer is a known proxy/ALB (stop browser spoofing) | — | 📋 scoped |
+| P10-6 | PR-RDI-6 — Sign-off IP attribution | RDI-012 | HIGH | Trust `X-Real-IP` only when the direct peer is a known proxy/ALB (stop browser spoofing) — XFF was already gated; the unconditional X-Real-IP fallback closed | [#708](https://github.com/onboarda1234/onboarda/pull/708) | 🟢 PR open (CI pending) |
 | P10-7 | PR-RDI-7 — Append-only audit at DB level | RDI-013 (non-SAR) | MEDIUM | Separate migration/admin DB role from runtime role; revoke runtime `UPDATE`/`DELETE` on `audit_log`/`decision_records`/`supervisor_audit_log`; stop cleanup code deleting those rows *(code half ships early; grants half is RDS/infra)* | — | 📋 scoped (part ops) |
 
 **Deferred (per management response 2026-07-07):**
@@ -192,7 +192,7 @@ record is carried here instead.
 | P11-6 | AuthZ & audit hardening | BSA-003, 009 | MED | Require recent re-auth / second factor on admin password-reset (+ mandatory revocation); route all change-management 403 denials through `log_authz_denial()` | — | 📋 scoped |
 | P11-7 | Document-download attachment + webhook signature hygiene | BSA-008, 010 (+ DCI-017) | MED + LOW | Force `Content-Disposition: attachment` on all uploaded-doc downloads (separate sanitised preview endpoint if previews needed); document/opaque webhook invalid-sig response; remove ComplyAdvantage legacy signature fallback; *(DCI-017)* no silent local-disk fallback when S3 fails in staging/prod + MIME from server allowlist not stored value | — | 📋 scoped |
 | P11-8 | Supply-chain pinning | BSA-016, 017, 019 (= DCI-022/024) | MED + LOW | SHA-pin GitHub Actions; split test deps into `requirements-dev.txt`; pin Docker base image by digest + audit `.dockerignore` | — | 📋 scoped |
-| P11-9 | CI coverage-gate fail-closed | BSA-018 (= DCI-026) | LOW | Treat unparseable coverage as CI **failure** (drop the `exit 0`); upload raw coverage artifact | — | 📋 scoped |
+| P11-9 | CI coverage-gate fail-closed | BSA-018 (= DCI-026) | LOW | Unparseable coverage now FAILS the build (empty-COV branch exits 1) | [#707](https://github.com/onboarda1234/onboarda/pull/707) | 🟢 PR open (CI pending) |
 
 **Cross-ref:** **BSA-002** (share/persist rate limits across ECS tasks — forgot-pw, doc-upload, AI keys, fail-closed) = existing **Phase 4 item 26 "Shared rate limiter"** (⬜). Fold BSA-002's specifics there rather than duplicate here.
 
