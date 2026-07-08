@@ -143,6 +143,11 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .notes-empty-state { padding:8px 10px; border:1px dashed var(--border1); border-radius:8px; background:var(--surface2); color:var(--text3); font-size:12px; line-height:1.4; }
 
 /* ── Tables ── */
+.app-status-tab { border:1px solid var(--border1); background:var(--surface); color:var(--text2); border-radius:999px; padding:6px 14px; cursor:pointer; font-size:12px; font-weight:600; transition:all 0.15s; }
+.app-status-tab:hover { border-color:var(--brand); color:var(--brand); }
+.app-status-tab.active { background:var(--brand); border-color:var(--brand); color:white; }
+.app-sort-header { user-select:none; white-space:nowrap; }
+.app-sort-indicator { font-size:10px; color:var(--brand); }
 .data-table { width:100%; border-collapse:collapse; font-size:13px; }
 .data-table th { text-align:left; padding:10px 14px; font-size:11px; text-transform:uppercase; letter-spacing:0.4px; color:var(--text3); font-weight:600; border-bottom:2px solid var(--border1); background:var(--surface2); position:sticky; top:0; z-index:2; }
 .data-table td { padding:12px 14px; border-bottom:1px solid var(--border1); vertical-align:middle; }
@@ -1073,28 +1078,6 @@ body.role-admin .role-enhanced-settings, body.role-sco .role-enhanced-settings, 
 body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role-enhanced-settings, body.role-co .snav-item.role-enhanced-settings { display:flex !important; }
 
 /* ── AI Chat Sidebar ── */
-.ai-chat-sidebar { position:fixed; top:0; right:-400px; width:400px; height:100vh; background:var(--surface); box-shadow:-4px 0 24px rgba(0,0,0,0.12); z-index:1000; transition:right 0.3s ease; display:flex; flex-direction:column; border-left:1px solid var(--border1); }
-.ai-chat-sidebar.open { right:0; }
-.ai-chat-header { padding:16px 18px; border-bottom:1px solid var(--border1); display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
-.ai-chat-header h3 { font-size:15px; font-weight:700; margin:0; }
-.ai-chat-header-close { background:none; border:none; font-size:20px; cursor:pointer; color:var(--text3); padding:4px; }
-.ai-chat-messages { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; }
-.ai-message { display:flex; gap:8px; margin-bottom:8px; }
-.ai-message.user { justify-content:flex-end; }
-.ai-message.ai { justify-content:flex-start; }
-.ai-message-bubble { max-width:85%; padding:10px 14px; border-radius:12px; font-size:13px; line-height:1.4; }
-.ai-message.user .ai-message-bubble { background:#2B2F8F; color:white; border-radius:12px 0 12px 12px; }
-.ai-message.ai .ai-message-bubble { background:var(--surface2); color:var(--text1); border-radius:0 12px 12px 12px; }
-.ai-chat-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:12px 16px; border-bottom:1px solid var(--border1); flex-shrink:0; }
-.ai-quick-btn { padding:8px 10px; font-size:12px; border:1px solid var(--border1); background:var(--surface); border-radius:6px; cursor:pointer; transition:all 0.15s; }
-.ai-quick-btn:hover { border-color:var(--brand); color:var(--brand); }
-.ai-chat-input-box { padding:12px 16px; display:flex; gap:8px; flex-shrink:0; }
-.ai-chat-input { flex:1; padding:8px 12px; border:1px solid var(--border1); border-radius:6px; font-size:13px; outline:none; }
-.ai-chat-input:focus { border-color:var(--brand); }
-.ai-chat-send { padding:8px 14px; background:var(--brand); color:white; border:none; border-radius:6px; cursor:pointer; font-weight:600; transition:all 0.15s; }
-.ai-chat-send:hover { background:var(--brand-light); }
-.ai-chat-toggle { position:fixed; bottom:var(--bo-floating-bottom); right:var(--bo-floating-right); width:var(--bo-floating-size); height:var(--bo-floating-size); border-radius:50%; background:linear-gradient(135deg,#2B2F8F,#4F46E5); color:white; font-size:24px; border:none; cursor:pointer; z-index:1001; box-shadow:0 4px 16px rgba(43,47,143,0.4); display:flex; align-items:center; justify-content:center; transition:all 0.2s; }
-.ai-chat-toggle:hover { transform:scale(1.1); }
 
 /* ── Kanban Board ── */
 .kanban-board { display:flex; gap:16px; padding:16px; overflow-x:auto; min-height:calc(100vh - 180px); }
@@ -1419,6 +1402,14 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
 <!-- ═══════════════ APPLICATIONS VIEW ═══════════════ -->
 <div class="view" id="view-applications">
+  <div id="applications-status-tabs" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;" role="tablist" aria-label="Application status groups">
+    <button class="btn btn-sm app-status-tab active" role="tab" aria-selected="true" data-tab-status="" onclick="setApplicationsStatusTab(this)">All</button>
+    <button class="btn btn-sm app-status-tab" role="tab" aria-selected="false" data-tab-status="draft,submitted,prescreening_submitted,pricing_review,pricing_accepted" onclick="setApplicationsStatusTab(this)">Intake</button>
+    <button class="btn btn-sm app-status-tab" role="tab" aria-selected="false" data-tab-status="pre_approval_review,pre_approved" onclick="setApplicationsStatusTab(this)">Pre-Approval</button>
+    <button class="btn btn-sm app-status-tab" role="tab" aria-selected="false" data-tab-status="kyc_documents,kyc_submitted" onclick="setApplicationsStatusTab(this)">KYC</button>
+    <button class="btn btn-sm app-status-tab" role="tab" aria-selected="false" data-tab-status="compliance_review,submitted_to_compliance,in_review,under_review,edd_required,rmi_sent" onclick="setApplicationsStatusTab(this)">Compliance Review</button>
+    <button class="btn btn-sm app-status-tab" role="tab" aria-selected="false" data-tab-status="approved,rejected,withdrawn" onclick="setApplicationsStatusTab(this)">Decided</button>
+  </div>
   <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center;">
     <select class="form-select" style="width:auto;" id="filter-risk" onchange="filterApplications()">
       <option value="">All Risk Levels</option>
@@ -1457,7 +1448,19 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div class="card" style="padding:0;overflow:hidden;">
     <table class="data-table">
       <thead>
-        <tr><th>Reference</th><th>Company</th><th>Sector</th><th>Risk Level</th><th>Score</th><th>Review Route</th><th>Enhanced Status</th><th>Next Action</th><th>Status</th><th>Assigned To</th><th>Date</th></tr>
+        <tr>
+          <th class="app-sort-header" data-sort-key="ref" onclick="setApplicationsSort('ref')" style="cursor:pointer;">Reference <span class="app-sort-indicator" data-indicator-for="ref"></span></th>
+          <th class="app-sort-header" data-sort-key="company_name" onclick="setApplicationsSort('company_name')" style="cursor:pointer;">Company <span class="app-sort-indicator" data-indicator-for="company_name"></span></th>
+          <th class="app-sort-header" data-sort-key="sector" onclick="setApplicationsSort('sector')" style="cursor:pointer;">Sector <span class="app-sort-indicator" data-indicator-for="sector"></span></th>
+          <th class="app-sort-header" data-sort-key="risk_level" onclick="setApplicationsSort('risk_level')" style="cursor:pointer;">Risk Level <span class="app-sort-indicator" data-indicator-for="risk_level"></span></th>
+          <th class="app-sort-header" data-sort-key="risk_score" onclick="setApplicationsSort('risk_score')" style="cursor:pointer;">Score <span class="app-sort-indicator" data-indicator-for="risk_score"></span></th>
+          <th>Review Route</th>
+          <th>Enhanced Status</th>
+          <th>Next Action</th>
+          <th class="app-sort-header" data-sort-key="status" onclick="setApplicationsSort('status')" style="cursor:pointer;">Status <span class="app-sort-indicator" data-indicator-for="status"></span></th>
+          <th class="app-sort-header" data-sort-key="assigned_name" onclick="setApplicationsSort('assigned_name')" style="cursor:pointer;">Assigned To <span class="app-sort-indicator" data-indicator-for="assigned_name"></span></th>
+          <th class="app-sort-header" data-sort-key="created_at" onclick="setApplicationsSort('created_at')" style="cursor:pointer;">Date <span class="app-sort-indicator" data-indicator-for="created_at"></span></th>
+        </tr>
       </thead>
       <tbody id="applications-body"></tbody>
     </table>
@@ -3716,27 +3719,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 <!-- Toast -->
 <div class="toast" id="toast" role="alert" aria-live="polite"></div>
 
-<!-- Quick Reference Sidebar -->
-<div class="ai-chat-sidebar" id="ai-chat-sidebar">
-  <div class="ai-chat-header">
-    <h3>Quick Reference</h3>
-    <button class="ai-chat-header-close" onclick="toggleAIChat()">✕</button>
-  </div>
-  <div class="ai-chat-messages" id="ai-chat-messages"></div>
-  <div class="ai-chat-actions">
-    <button class="ai-quick-btn" onclick="sendQuickQuestion('Review checklist')">Review checklist</button>
-    <button class="ai-quick-btn" onclick="sendQuickQuestion('Risk assessment guide')">Risk assessment guide</button>
-    <button class="ai-quick-btn" onclick="sendQuickQuestion('Agent status')">Agent status</button>
-    <button class="ai-quick-btn" onclick="sendQuickQuestion('Regulatory updates')">Regulatory updates</button>
-  </div>
-  <div class="ai-chat-input-box">
-    <input class="ai-chat-input" type="text" id="ai-chat-input" placeholder="Search topics..." onkeypress="if(event.key==='Enter'){sendAIMessage();}" />
-    <button class="ai-chat-send" onclick="sendAIMessage()">Send</button>
-  </div>
-</div>
-
-<!-- Quick Reference Toggle Button -->
-<button class="ai-chat-toggle" onclick="toggleAIChat()">📋</button>
 
 <script>
 // ═══════════════════════════════════════════════════════════
@@ -5343,12 +5325,62 @@ function setDashboardBootstrapState(state) {
   renderDashboardRecent();
 }
 
+// ux-applications-list-sort-status-tabs: sort + status-tab state. Sorting is
+// SERVER-side (the list is paginated — client sorting would only reorder the
+// visible page); tabs are grouped canonical status presets sent as a
+// comma-separated status filter. The status dropdown and the tabs are
+// mutually exclusive: picking one resets the other.
+var applicationsSortKey = '';
+var applicationsSortDir = 'desc';
+var applicationsStatusTabValue = '';
+
+function setApplicationsSort(key) {
+  if (applicationsSortKey === key) {
+    applicationsSortDir = applicationsSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    applicationsSortKey = key;
+    applicationsSortDir = key === 'created_at' ? 'desc' : 'asc';
+  }
+  updateApplicationsSortIndicators();
+  filterApplications();
+}
+
+function updateApplicationsSortIndicators() {
+  document.querySelectorAll('.app-sort-indicator').forEach(function(el) {
+    var key = el.getAttribute('data-indicator-for');
+    el.textContent = (key === applicationsSortKey) ? (applicationsSortDir === 'asc' ? '▲' : '▼') : '';
+  });
+}
+
+function setApplicationsStatusTab(btn) {
+  applicationsStatusTabValue = btn.getAttribute('data-tab-status') || '';
+  document.querySelectorAll('.app-status-tab').forEach(function(el) {
+    el.classList.toggle('active', el === btn);
+    el.setAttribute('aria-selected', el === btn ? 'true' : 'false');
+  });
+  var dropdown = document.getElementById('filter-status');
+  if (dropdown) dropdown.value = '';
+  filterApplications();
+}
+
 function applicationsCurrentFilters() {
+  var dropdownStatus = (document.getElementById('filter-status') || {}).value || '';
+  if (dropdownStatus && applicationsStatusTabValue) {
+    // The dropdown wins; reset the tabs to All for a consistent UI state.
+    applicationsStatusTabValue = '';
+    document.querySelectorAll('.app-status-tab').forEach(function(el) {
+      var isAll = !el.getAttribute('data-tab-status');
+      el.classList.toggle('active', isAll);
+      el.setAttribute('aria-selected', isAll ? 'true' : 'false');
+    });
+  }
   return {
     risk: (document.getElementById('filter-risk') || {}).value || '',
-    status: (document.getElementById('filter-status') || {}).value || '',
+    status: dropdownStatus || applicationsStatusTabValue,
     assigned: (document.getElementById('filter-assigned') || {}).value || '',
     enhanced_review: (document.getElementById('filter-enhanced') || {}).value || '',
+    sort: applicationsSortKey,
+    dir: applicationsSortKey ? applicationsSortDir : '',
     q: getApplicationsSearchText()
   };
 }
@@ -5400,6 +5432,10 @@ function setApplicationsFromApiPayload(appResp, options) {
   applicationsCurrentPage = Math.floor(applicationsPageOffset / Math.max(applicationsPageSize, 1)) + 1;
   APPLICATIONS_LIST_ROWS = items.map(mapApplicationFromApi);
   mergeApplicationsIntoCache(APPLICATIONS_LIST_ROWS);
+  // Refresh the status dropdown so off-canon statuses present in loaded
+  // data surface as "(non-standard)" options (the function preserves the
+  // current selection, canonical or not).
+  populateApplicationStatusFilter();
   APPLICATIONS_LOAD_ERROR = '';
   APPLICATIONS_LOAD_STATE = 'ready';
   APPLICATIONS_LAST_QUERY_KEY = options.queryKey || applicationsQueryKey();
@@ -6067,7 +6103,25 @@ function populateApplicationStatusFilter() {
     opt.textContent = meta.filterLabel || meta.label;
     filter.appendChild(opt);
   });
-  if (selected && APPLICATION_STATUS_META[selected]) {
+  // Safety net: surface any status present in the loaded data that is NOT
+  // in the canonical list, so off-canon rows (legacy data, migrations in
+  // flight) stay findable instead of silently unfilterable.
+  var canonical = {};
+  APPLICATION_STATUS_ORDER.forEach(function(st) { canonical[st] = true; });
+  var extras = {};
+  (APPLICATIONS || []).forEach(function(app) {
+    // Cached rows store the display label in `status` and the canonical
+    // value in `statusRaw`; raw API rows only have `status`.
+    var st = app ? String((app.statusRaw !== undefined ? app.statusRaw : app.status) || '') : '';
+    if (st && !canonical[st]) extras[st] = true;
+  });
+  Object.keys(extras).sort().forEach(function(status) {
+    var opt = document.createElement('option');
+    opt.value = status;
+    opt.textContent = status + ' (non-standard)';
+    filter.appendChild(opt);
+  });
+  if (selected && (APPLICATION_STATUS_META[selected] || extras[selected])) {
     filter.value = selected;
   }
 }
@@ -31525,34 +31579,6 @@ function formatMonthsLabel(months) {
 // ═══════════════════════════════════════════════════════════
 // AI CHAT SIDEBAR
 // ═══════════════════════════════════════════════════════════
-function toggleAIChat() {
-  var sidebar = document.getElementById('ai-chat-sidebar');
-  sidebar.classList.toggle('open');
-  if (sidebar.classList.contains('open')) {
-    setTimeout(function() { document.getElementById('ai-chat-input').focus(); }, 300);
-  }
-}
-
-function sendAIMessage() {
-  var input = document.getElementById('ai-chat-input');
-  var msg = input.value.trim();
-  if (!msg) return;
-  input.value = '';
-  addChatMessage('user', msg);
-  setTimeout(function() {
-    var response = generateAIResponse(msg);
-    addChatMessage('ai', response);
-  }, 1200);
-}
-
-function sendQuickQuestion(question) {
-  addChatMessage('user', question);
-  setTimeout(function() {
-    var response = generateAIResponse(question);
-    addChatMessage('ai', response);
-  }, 1200);
-}
-
 function toggleDimExplain(idx) {
   var card = document.getElementById('dim-explain-' + idx);
   var factors = document.getElementById('dim-factors-' + idx);
@@ -32113,35 +32139,6 @@ function getRegWorkflowStateMeta(state) {
     border: 'rgba(34, 197, 94, 0.24)',
     text: 'var(--green)'
   };
-}
-
-function addChatMessage(sender, text) {
-  var container = document.getElementById('ai-chat-messages');
-  var div = document.createElement('div');
-  div.className = 'ai-message ' + sender;
-  var bubble = document.createElement('div');
-  bubble.className = 'ai-message-bubble';
-  bubble.textContent = text;
-  div.appendChild(bubble);
-  container.appendChild(div);
-  container.scrollTop = container.scrollHeight;
-}
-
-function generateAIResponse(question) {
-  var q = question.toLowerCase();
-  var responses = {
-    'review checklist': 'Here\'s your compliance review checklist:\n\n✓ Client identity verified\n✓ UBO structure validated\n✓ Sanctions screening complete\n✓ PEP database checked\n✓ Source of funds assessed\n✓ Business model analyzed\n\nAll checks passed. Status: Ready for approval.',
-    'risk assessment guide': 'Risk assessment follows our 5-dimension model:\n\n1. Entity Risk (20%) — company structure, geography\n2. UBO Risk (20%) — beneficial ownership clarity\n3. FinCrime Risk (30%) — sanctions, PEP, adverse media\n4. Business Risk (15%) — transaction patterns\n5. Transactional Risk (15%) — high-risk activities\n\nComposite scores: 0-30 (Low), 31-60 (Medium), 61-80 (High), 81+ (Very High)',
-    'agent status': '🤖 Current Agent Status:\n\nAuthoritative onboarding controls:\n✓ Document verification — live Claude-backed verification path where configured\n✓ Compliance memo generation — deterministic live path\n✓ Memo validation — deterministic live path\n✓ Memo supervisor — deterministic consistency control used for approval gating\n\nDecision-support and synthetic supervisor agents:\n• The newer supervisor pipeline is decision-support only in this environment\n• Several monitoring and analysis agents are heuristic, synthetic, or future-phase rather than authoritative approval controls\n• Regulatory Impact Agent is future-phase and not part of the live approval chain',
-    'regulatory updates': 'Recent regulatory updates:\n\n• FATF Mutual Evaluation Report: Enhanced CDD requirements for high-risk jurisdictions\n• EU AML Directive 6: Beneficial ownership registry transparency increased\n• OFAC: New sanctions list (SDN) updates — 8 new entities added this week\n• Local Jurisdiction: AML regulations updated — customer reporting now quarterly\n\nAny resulting AI-agent or rules changes still require implementation review and human sign-off before they should be treated as live.'
-  };
-  if (q.includes('checklist')) return responses['review checklist'];
-  if (q.includes('risk') && q.includes('assessment')) return responses['risk assessment guide'];
-  if (q.includes('agent')) return responses['agent status'];
-  if (q.includes('regulatory')) return responses['regulatory updates'];
-  if (q.includes('kyc') || q.includes('compliance')) return 'KYC compliance in this environment uses a mix of live provider integrations, deterministic controls, and decision-support tooling. The authoritative approval path relies on screening data, deterministic memo generation, memo validation, and memo supervisor checks before human approval.';
-  if (q.includes('screening')) return 'Screening covers sanctions, PEP, adverse media, and registry checks where configured. Some screening and interpretation surfaces are live, while others are deterministic or decision-support only depending on the workflow.';
-  return 'Quick reference topics available: review checklists, risk assessment, agent status, regulatory updates, KYC processes, screening procedures. Select a topic or use the quick buttons above.';
 }
 
 // Live update labels as user types
