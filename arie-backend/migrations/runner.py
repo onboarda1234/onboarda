@@ -233,6 +233,11 @@ def run_all_migrations_with_connection(db):
     ensure_schema_version_table(db)
     pending = get_pending_migrations(db)
 
+    # Evaluate the failure policy BEFORE the no-pending early exit so a
+    # staging/production box with the continue override wrongly set gets the
+    # rejection ERROR on every boot — not only once a migration is pending.
+    continue_on_failure = _failure_mode_continue()
+
     if not pending:
         logger.info("Database schema is up to date")
         return 0
@@ -243,7 +248,6 @@ def run_all_migrations_with_connection(db):
     applied = 0
     failed = []   # list of failed version strings
     skipped = []  # list of unattempted version strings (continue mode)
-    continue_on_failure = _failure_mode_continue()
 
     for index, (version, filepath, description) in enumerate(pending):
         if failed and not continue_on_failure:
