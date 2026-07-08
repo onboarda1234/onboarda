@@ -26,6 +26,10 @@ The runner is **loud** and **fail-closed** by default:
   that was not attempted and returns the count of successfully applied
   migrations instead of raising.  This override is intended only for
   non-production debugging and CI bring-up.
+* P12-4 / DCI-005: the ``continue`` override is REJECTED when
+  ``ENVIRONMENT`` is staging or production — the variable is ignored
+  with a loud ERROR log and the fail-closed default applies.  A
+  partially-migrated schema must never serve regulated traffic.
 """
 
 import hashlib
@@ -62,8 +66,27 @@ class MigrationFailure(RuntimeError):
 
 
 def _failure_mode_continue() -> bool:
-    """Return True iff ``MIGRATION_FAILURE_MODE=continue`` is set."""
-    return (os.environ.get(MIGRATION_FAILURE_MODE_ENV, "") or "").strip().lower() == "continue"
+    """Return True iff ``MIGRATION_FAILURE_MODE=continue`` is set AND the
+    environment permits it.
+
+    DCI-005 (P12-4): ``continue`` is a debugging/CI-bring-up override only.
+    In staging/production a partially-migrated schema must never serve
+    regulated traffic, so the override is REJECTED there — the variable is
+    ignored, a loud error is logged, and the default fail-closed policy
+    (raise ``MigrationFailure``, halt startup) applies.
+    """
+    if (os.environ.get(MIGRATION_FAILURE_MODE_ENV, "") or "").strip().lower() != "continue":
+        return False
+    from environment import get_environment
+    env = get_environment()
+    if env in ("staging", "production"):
+        logger.error(
+            "MIGRATION_FAILURE_MODE=continue is NOT permitted when ENVIRONMENT=%s "
+            "— ignoring the override; migration failures will halt startup (DCI-005)",
+            env,
+        )
+        return False
+    return True
 
 
 def _safe_rollback(db) -> None:
