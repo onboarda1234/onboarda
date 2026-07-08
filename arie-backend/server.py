@@ -160,6 +160,7 @@ from rule_engine import (
     normalize_country_key,
     validate_risk_config,
     recompute_risk, recompute_risk_for_active_apps,
+    RiskConfigUnavailable,
 )
 from validation_engine import (
     validate_compliance_memo,
@@ -9440,6 +9441,14 @@ class SubmitApplicationHandler(BaseHandler):
                 str(exc)[:500],
                 exc_info=True,
             )
+            if isinstance(exc, RiskConfigUnavailable):
+                # DCI-008 fail-closed: the live risk model could not be loaded —
+                # refuse to score rather than fall back to hardcoded defaults.
+                return self.error(
+                    "Risk configuration is unavailable — submission scoring is "
+                    "disabled until the live risk model can be loaded.",
+                    503,
+                )
             return self.error("An unexpected error occurred while processing your submission. Please try again.", 500)
         finally:
             try:
@@ -14577,6 +14586,13 @@ class CountryRiskConfigHandler(BaseHandler):
                 "entries": entries,
                 "entry_count": len(entries),
             })
+        except RiskConfigUnavailable:
+            logger.exception("country_risk_config_unavailable_fail_closed")
+            self.error(
+                "Risk configuration is unavailable — the live risk model "
+                "could not be loaded.",
+                503,
+            )
         except Exception:
             logger.exception("country_risk_config_lookup_failed")
             self.error("Failed to load manual country risk settings", 500)
@@ -28689,6 +28705,20 @@ class ComplianceMemoHandler(BaseHandler):
                 memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(
                     app, directors, ubos, documents
                 )
+        except RiskConfigUnavailable as e:
+            # DCI-008 fail-closed: never build a memo against the hardcoded
+            # default model when the approved live risk config is unavailable.
+            logger.error("Risk config unavailable — memo generation blocked for %s: %s", real_id, e)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error(
+                "Risk configuration is unavailable — memo generation is "
+                "disabled until the live risk model can be loaded.",
+                503,
+            )
         except Exception as e:
             logger.error("Failed to build compliance memo for %s: %s", real_id, e, exc_info=True)
             try:
