@@ -40381,6 +40381,7 @@ if __name__ == "__main__":
     if HAS_GDPR_PURGE and ENVIRONMENT not in ("testing",):
         @_singleton_tick("gdpr_purge")
         def _gdpr_purge_tick():
+            db = None
             try:
                 db = get_db()
                 results = _gdpr_run_scheduled_purge(db, purged_by="system-scheduler")
@@ -40390,9 +40391,17 @@ if __name__ == "__main__":
                                 purged, len(results))
                 else:
                     logger.debug("gdpr-purge: daily run complete — no records eligible for purge")
-                db.close()
             except Exception as exc:
                 logger.error("gdpr-purge: daily run failed: %s", exc)
+            finally:
+                # close in a finally (P12-8 review): on the exception path an
+                # uncommitted DELETE may sit on this connection — it must be
+                # discarded, never left for a later commit.
+                if db is not None:
+                    try:
+                        db.close()
+                    except Exception:
+                        pass
 
         _gdpr_purge_cb = tornado.ioloop.PeriodicCallback(_gdpr_purge_tick, 86_400_000)
         _gdpr_purge_cb.start()

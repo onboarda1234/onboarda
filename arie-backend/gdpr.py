@@ -453,9 +453,13 @@ def purge_expired_data(
 
     # Execute purge + evidence log in ONE transaction (P12-8 / DCI-021):
     # a purge whose evidence row cannot be written must not commit — the
-    # exception propagates, the caller's connection rolls back, and the data
-    # survives. The log row carries batch id, per-table counts and structured
-    # evidence so a regulator can reconstruct the purge from the log alone.
+    # exception propagates uncommitted. On PostgreSQL the wrapper rolls the
+    # transaction back at statement-error time; on SQLite the uncommitted
+    # DELETE dies with the connection — callers must not reuse the
+    # connection for a later commit after catching this (the scheduler
+    # closes it in a finally). The log row carries batch id, per-table
+    # counts and structured evidence so a regulator can reconstruct the
+    # purge from the log alone.
     batch_id = purge_batch_id or f"purge-{uuid4().hex[:12]}"
     cur = db.execute(f"DELETE FROM {table} WHERE {date_col} < ?", (cutoff,))
     deleted = getattr(cur, "rowcount", None)
@@ -561,10 +565,30 @@ def run_scheduled_purge(db, purged_by: str = "system") -> List[Dict]:
             })
             continue
 
-        result = purge_expired_data(
-            db, category, purged_by=purged_by, dry_run=False,
-            purge_batch_id=batch_id,
-        )
+        try:
+            result = purge_expired_data(
+                db, category, purged_by=purged_by, dry_run=False,
+                purge_batch_id=batch_id,
+            )
+        except Exception as e:
+            # Per-category isolation: one category's failure (e.g. its
+            # evidence INSERT) must not abort the remaining categories or
+            # discard the results already gathered. The failed category's
+            # transaction was rolled back; its data survives.
+            logger.error(
+                "Scheduled purge failed for category %s (batch %s): %s",
+                category, batch_id, e, exc_info=True,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            result = {
+                "category": category,
+                "error": f"purge failed: {e}",
+                "records_deleted": 0,
+                "purge_batch_id": batch_id,
+            }
         results.append(result)
 
     return results
@@ -602,7 +626,8 @@ def record_manual_purge(
         return {"error": "purge_reason is required"}
     if not (purged_by or "").strip() or not (approved_by or "").strip():
         return {"error": "purged_by and approved_by are both required"}
-    forbidden = sorted(set(per_table_counts) & _NEVER_PURGE_TABLES)
+    normalized_names = {str(t).strip().lower() for t in per_table_counts}
+    forbidden = sorted(normalized_names & _NEVER_PURGE_TABLES)
     if forbidden:
         return {
             "error": (
@@ -611,12 +636,13 @@ def record_manual_purge(
                 "here"
             )
         }
-    try:
-        counts = {str(t): int(c) for t, c in per_table_counts.items()}
-    except (TypeError, ValueError):
+    if any(isinstance(c, bool) or not isinstance(c, int) for c in per_table_counts.values()):
         return {"error": "per_table_counts values must be integers"}
+    counts = {str(t).strip(): int(c) for t, c in per_table_counts.items()}
     if any(c < 0 for c in counts.values()):
         return {"error": "per_table_counts values must be >= 0"}
+    if any(not t for t in counts):
+        return {"error": "per_table_counts table names must be non-empty"}
 
     policy = db.execute(
         "SELECT * FROM data_retention_policies WHERE data_category = ?", (category,)

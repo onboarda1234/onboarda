@@ -310,6 +310,91 @@ class TestRecordManualPurge:
         assert "error" in record_manual_purge(gdpr_db, **{**base, "approved_by": ""})
         assert "error" in record_manual_purge(gdpr_db, **{**base, "category": "not_a_category"})
 
+    def test_scheduler_identity_is_writable(self, gdpr_db):
+        """Adversarial review MAJOR: purged_by carried an FK to users(id),
+        so the scheduler's 'system-scheduler' attribution string (not a
+        users row) made every real scheduled purge fail its evidence INSERT
+        on PostgreSQL. The FK is gone — the scheduler identity must write."""
+        from gdpr import purge_expired_data
+        _insert_old_audit_rows(gdpr_db, n=1)
+        result = purge_expired_data(
+            gdpr_db, "audit_logs", purged_by="system-scheduler", dry_run=False,
+        )
+        assert result["records_deleted"] >= 1
+        log = dict(gdpr_db.execute(
+            "SELECT purged_by FROM data_purge_log WHERE purge_batch_id = ?",
+            (result["purge_batch_id"],),
+        ).fetchone())
+        assert log["purged_by"] == "system-scheduler"
+
+    def test_ddl_has_no_purged_by_fk(self):
+        """Source guard: purged_by must stay a plain attribution string in
+        BOTH schemas — re-adding the users(id) FK re-breaks the scheduler."""
+        backend = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(backend, "db.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        assert "purged_by TEXT REFERENCES users(id)" not in src, (
+            "data_purge_log.purged_by must not FK users(id) — the scheduler "
+            "writes 'system-scheduler', which is not a users row"
+        )
+
+    def test_never_purge_refusal_is_case_and_whitespace_insensitive(self, gdpr_db):
+        """Adversarial review: PG folds unquoted identifiers to lowercase and
+        SQLite is case-insensitive — 'Supervisor_Audit_Log' IS the protected
+        table and must be refused."""
+        from gdpr import record_manual_purge
+        for variant in ("Supervisor_Audit_Log", " supervisor_audit_log", "SUPERVISOR_AUDIT_LOG "):
+            result = record_manual_purge(
+                gdpr_db, category="audit_logs",
+                per_table_counts={variant: 1},
+                purge_reason="r", purged_by="ops-1", approved_by="sco-1",
+            )
+            assert "error" in result and "never-purge" in result["error"], variant
+
+    def test_bool_and_float_counts_rejected(self, gdpr_db):
+        from gdpr import record_manual_purge
+        base = dict(category="client_pii", purge_reason="r",
+                    purged_by="ops-1", approved_by="sco-1")
+        assert "error" in record_manual_purge(
+            gdpr_db, per_table_counts={"clients": True}, **base)
+        assert "error" in record_manual_purge(
+            gdpr_db, per_table_counts={"clients": 3.9}, **base)
+
+    def test_scheduled_run_isolates_category_failures(self, gdpr_db, monkeypatch):
+        """One category's purge failure must not abort the remaining
+        categories or discard gathered results."""
+        import gdpr as gdpr_mod
+        from gdpr import run_scheduled_purge
+        gdpr_db.execute(
+            "UPDATE data_retention_policies SET auto_purge = 1 "
+            "WHERE data_category IN ('monitoring_alerts', 'audit_logs')"
+        )
+        gdpr_db.commit()
+
+        real = gdpr_mod.purge_expired_data
+
+        def exploding_for_monitoring(db_, category, **kwargs):
+            if category == "monitoring_alerts":
+                raise RuntimeError("simulated evidence write failure")
+            return real(db_, category, **kwargs)
+
+        monkeypatch.setattr(gdpr_mod, "purge_expired_data", exploding_for_monitoring)
+        try:
+            results = run_scheduled_purge(gdpr_db, purged_by="system-scheduler")
+        finally:
+            gdpr_db.execute(
+                "UPDATE data_retention_policies SET auto_purge = 0 "
+                "WHERE data_category IN ('monitoring_alerts', 'audit_logs')"
+            )
+            gdpr_db.commit()
+        by_cat = {r.get("category"): r for r in results}
+        # audit_logs is refused by the B1 guard (still reported), and the
+        # exploding monitoring_alerts is captured as an error result — the
+        # run completed and reported BOTH.
+        assert "monitoring_alerts" in by_cat and "audit_logs" in by_cat
+        assert "purge failed" in by_cat["monitoring_alerts"]["error"]
+        assert by_cat["monitoring_alerts"]["records_deleted"] == 0
+
     def test_never_purge_table_refused(self, gdpr_db):
         from gdpr import record_manual_purge
         before = gdpr_db.execute(

@@ -1709,7 +1709,12 @@ def _get_postgres_schema() -> str:
         newest_record_date TIMESTAMP,
         retention_policy_id INTEGER REFERENCES data_retention_policies(id),
         purge_reason TEXT NOT NULL,
-        purged_by TEXT REFERENCES users(id),
+        -- P12-8: attribution string, deliberately NOT an FK to users(id) —
+        -- the scheduler writes 'system-scheduler' (no users row), and PG
+        -- enforces FKs, so the evidence INSERT (and with it the atomic
+        -- purge) would fail on every scheduled run. Matches audit_log's
+        -- actor columns.
+        purged_by TEXT,
         -- P12-8 / DCI-021: regulator-reconstructable purge evidence
         subject_id TEXT,
         application_id TEXT,
@@ -2934,7 +2939,12 @@ def _get_sqlite_schema() -> str:
         newest_record_date TEXT,
         retention_policy_id INTEGER REFERENCES data_retention_policies(id),
         purge_reason TEXT NOT NULL,
-        purged_by TEXT REFERENCES users(id),
+        -- P12-8: attribution string, deliberately NOT an FK to users(id) —
+        -- the scheduler writes 'system-scheduler' (no users row), and PG
+        -- enforces FKs, so the evidence INSERT (and with it the atomic
+        -- purge) would fail on every scheduled run. Matches audit_log's
+        -- actor columns.
+        purged_by TEXT,
         -- P12-8 / DCI-021: regulator-reconstructable purge evidence
         subject_id TEXT,
         application_id TEXT,
@@ -7927,6 +7937,38 @@ def _ensure_data_purge_log_evidence_columns(db: 'DBConnection'):
         "CREATE INDEX IF NOT EXISTS idx_purge_log_batch "
         "ON data_purge_log(purge_batch_id)"
     )
+    # Drop the legacy purged_by -> users(id) FK on long-lived PostgreSQL
+    # databases: the scheduler's actor string ('system-scheduler') is not a
+    # users row, so the FK made every real scheduled purge fail its evidence
+    # INSERT and roll back (adversarial review, P12-8). SQLite never enforced
+    # it (no PRAGMA foreign_keys), so only PG needs the drop.
+    if db.is_postgres:
+        fks = db.execute(
+            """
+            SELECT c.conname
+              FROM pg_constraint c
+              JOIN pg_class t ON t.oid = c.conrelid
+             WHERE t.relname = 'data_purge_log'
+               AND c.contype = 'f'
+               AND EXISTS (
+                    SELECT 1 FROM pg_attribute a
+                     WHERE a.attrelid = c.conrelid
+                       AND a.attnum = ANY(c.conkey)
+                       AND a.attname = 'purged_by'
+               )
+            """
+        ).fetchall()
+        for fk in fks:
+            name = dict(fk).get("conname")
+            if name:
+                db.execute(
+                    f"ALTER TABLE data_purge_log DROP CONSTRAINT IF EXISTS {_pg_quote_identifier(name)}"
+                )
+                logger.info(
+                    "Migration v2.48: dropped legacy data_purge_log.purged_by "
+                    "FK %s (scheduler attribution strings are not users rows)",
+                    name,
+                )
 
 
 def _ensure_change_request_precondition_schema(db: 'DBConnection'):

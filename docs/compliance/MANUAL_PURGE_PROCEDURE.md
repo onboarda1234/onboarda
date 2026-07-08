@@ -78,3 +78,7 @@ enriched evidence logging (DCI-021).
   transaction); this procedure enforces it for manual purges via step 5-6.
 - Setting `auto_purge=TRUE` on a manual-with-procedure category is a
   misconfiguration; the scheduler logs an ERROR every run until corrected.
+- A scheduled run that finds **nothing eligible writes no purge-log rows** —
+  absence of rows means "nothing was purged", not "the scheduler ran".
+  Scheduler liveness is evidenced by the daily `gdpr-purge:` CloudWatch log
+  lines, not by `data_purge_log`.
