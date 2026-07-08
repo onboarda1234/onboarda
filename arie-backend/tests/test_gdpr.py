@@ -522,3 +522,9 @@ class TestAuditTrailPurgeProtection:
         finally:
             gdpr.CATEGORY_TABLE_MAP = original
             gdpr._ALLOWED_GDPR_TABLES = original_tables
+            # Clean up the test policy row — a leaked row makes the INSERT
+            # above fail with a UNIQUE violation on shared/reused test DBs.
+            gdpr_db.execute(
+                "DELETE FROM data_retention_policies WHERE data_category = 'supervisor_chain_test'"
+            )
+            gdpr_db.commit()

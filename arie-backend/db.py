@@ -1710,12 +1710,20 @@ def _get_postgres_schema() -> str:
         retention_policy_id INTEGER REFERENCES data_retention_policies(id),
         purge_reason TEXT NOT NULL,
         purged_by TEXT REFERENCES users(id),
+        -- P12-8 / DCI-021: regulator-reconstructable purge evidence
+        subject_id TEXT,
+        application_id TEXT,
+        tables_affected TEXT,
+        per_table_counts TEXT,
+        purge_batch_id TEXT,
+        evidence_json TEXT,
         purged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE INDEX IF NOT EXISTS idx_dsr_status ON data_subject_requests(status);
     CREATE INDEX IF NOT EXISTS idx_dsr_client ON data_subject_requests(client_id);
     CREATE INDEX IF NOT EXISTS idx_purge_log_category ON data_purge_log(data_category);
+    CREATE INDEX IF NOT EXISTS idx_purge_log_batch ON data_purge_log(purge_batch_id);
 
     -- Rate limiting persistence (survives restarts for auth-critical keys)
     CREATE TABLE IF NOT EXISTS rate_limits (
@@ -2927,12 +2935,20 @@ def _get_sqlite_schema() -> str:
         retention_policy_id INTEGER REFERENCES data_retention_policies(id),
         purge_reason TEXT NOT NULL,
         purged_by TEXT REFERENCES users(id),
+        -- P12-8 / DCI-021: regulator-reconstructable purge evidence
+        subject_id TEXT,
+        application_id TEXT,
+        tables_affected TEXT,
+        per_table_counts TEXT,
+        purge_batch_id TEXT,
+        evidence_json TEXT,
         purged_at TEXT DEFAULT (datetime('now'))
     );
 
     CREATE INDEX IF NOT EXISTS idx_dsr_status ON data_subject_requests(status);
     CREATE INDEX IF NOT EXISTS idx_dsr_client ON data_subject_requests(client_id);
     CREATE INDEX IF NOT EXISTS idx_purge_log_category ON data_purge_log(data_category);
+    CREATE INDEX IF NOT EXISTS idx_purge_log_batch ON data_purge_log(purge_batch_id);
 
     -- Rate limiting persistence (survives restarts for auth-critical keys)
     CREATE TABLE IF NOT EXISTS rate_limits (
@@ -7878,6 +7894,39 @@ def _run_migrations(db: DBConnection):
             db.rollback()
         except Exception:
             pass
+
+    # Migration v2.48 (P12-8 / DCI-021): regulator-reconstructable purge
+    # evidence columns on data_purge_log. Additive only — all nullable TEXT,
+    # old rows keep NULLs, old images ignore the columns (rollback-safe).
+    try:
+        _ensure_data_purge_log_evidence_columns(db)
+        db.commit()
+        logger.info("Migration v2.48: Ensured data_purge_log evidence columns")
+    except Exception as e:
+        logger.error("Migration v2.48 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _ensure_data_purge_log_evidence_columns(db: 'DBConnection'):
+    """P12-8 / DCI-021: additive purge-evidence columns for long-lived DBs.
+
+    Fresh schemas carry these in the CREATE TABLE DDL; existing databases
+    gain them here (all nullable TEXT — purely additive, old rows keep
+    NULLs, old images ignore the columns, so image rollback stays safe).
+    """
+    if not _safe_table_exists(db, "data_purge_log"):
+        return
+    for col in ("subject_id", "application_id", "tables_affected",
+                "per_table_counts", "purge_batch_id", "evidence_json"):
+        if not _safe_column_exists(db, "data_purge_log", col):
+            db.execute(f"ALTER TABLE data_purge_log ADD COLUMN {col} TEXT")
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_purge_log_batch "
+        "ON data_purge_log(purge_batch_id)"
+    )
 
 
 def _ensure_change_request_precondition_schema(db: 'DBConnection'):
