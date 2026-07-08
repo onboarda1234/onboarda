@@ -207,6 +207,18 @@ class DirectorsUBOsReportHTTPBase(AsyncHTTPTestCase):
     def _json(self, path, role="admin"):
         resp = self.fetch(path, headers=self._headers(role))
         assert resp.code == 200, resp.body.decode("utf-8", errors="replace")
+        # Diagnostic tripwire for the historical order-dependence flake ("seeded
+        # rows came back empty"): if any earlier test file leaked state that
+        # re-points the db module mid-test, fail HERE with the real cause
+        # instead of a mystery empty-rows assertion downstream.
+        import db as _db_module
+        assert _db_module.DB_PATH == self.db_path, (
+            "db.DB_PATH drifted mid-test (leaked cross-test state): "
+            f"{_db_module.DB_PATH!r} != {self.db_path!r}"
+        )
+        assert not _db_module.USE_POSTGRESQL, (
+            "db.USE_POSTGRESQL flipped True mid-test (leaked cross-test state)"
+        )
         return json.loads(resp.body.decode("utf-8"))
 
     def _rows(self, path, role="admin"):

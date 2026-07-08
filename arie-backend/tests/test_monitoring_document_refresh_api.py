@@ -69,12 +69,8 @@ def monitoring_doc_refresh_server(tmp_path_factory):
     time.sleep(0.2)
     yield f"http://127.0.0.1:{port}", db_module
 
-    loop = server_ref.get("loop")
-    server = server_ref.get("server")
-    if loop and server:
-        loop.add_callback(server.stop)
-        loop.add_callback(loop.stop)
-    thread.join(timeout=2)
+    from tests.conftest import shutdown_test_http_server
+    shutdown_test_http_server(thread, server_ref)
 
 
 @pytest.fixture(autouse=True)

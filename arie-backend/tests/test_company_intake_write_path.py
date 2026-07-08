@@ -139,12 +139,8 @@ def intake_api(monkeypatch, tmp_path):
         "db_path": db_path,
     }
 
-    io_loop = server_ref.get("loop")
-    srv = server_ref.get("server")
-    if io_loop and srv:
-        io_loop.add_callback(srv.stop)
-        io_loop.add_callback(io_loop.stop)
-    thread.join(timeout=2)
+    from tests.conftest import shutdown_test_http_server
+    shutdown_test_http_server(thread, server_ref)
 
 
 def _headers(token):

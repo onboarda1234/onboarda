@@ -68,6 +68,10 @@ def _find_free_port():
 
 @pytest.fixture
 def api_server(tmp_path):
+    # Capture ambient DB bindings so teardown can restore them — this fixture
+    # historically left env + reloaded module state pointing at its tmp_path
+    # database for every later test file in the process.
+    _prior_env = {k: os.environ.get(k) for k in ("DB_PATH", "DATABASE_URL")}
     db_path = str(tmp_path / "cm_lock.db")
     conn = _fresh_db(db_path)
     conn.close()
@@ -99,12 +103,27 @@ def api_server(tmp_path):
     time.sleep(0.2)
     yield f"http://127.0.0.1:{port}", db_path
 
-    io_loop = server_ref.get("loop")
-    srv = server_ref.get("server")
-    if io_loop and srv:
-        io_loop.add_callback(srv.stop)
-        io_loop.add_callback(io_loop.stop)
-    thread.join(timeout=2)
+    from tests.conftest import shutdown_test_http_server
+    shutdown_test_http_server(thread, server_ref)
+
+    # Symmetric restore: put the ambient DB bindings back and re-derive the
+    # reloaded config/db module constants from them, so this fixture's
+    # tmp_path database and env do not leak into every later test file.
+    for k, v in _prior_env.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    import config as config_module
+    import db as db_module
+    importlib.reload(config_module)
+    importlib.reload(db_module)
+    import server as server_module
+    for mod in (config_module, db_module, server_module):
+        if hasattr(mod, "DB_PATH"):
+            mod.DB_PATH = db_module.DB_PATH
+    if hasattr(server_module, "_CFG_DB_PATH"):
+        server_module._CFG_DB_PATH = db_module.DB_PATH
 
 
 def _headers(role="admin"):

@@ -219,6 +219,7 @@ def fresh_pg(monkeypatch):
         raise
     fresh_dsn = urlunsplit((parts.scheme, parts.netloc, "/" + db_name, parts.query, parts.fragment))
     orig = os.environ.get("DATABASE_URL")
+    orig_environment = os.environ.get("ENVIRONMENT")
     try:
         monkeypatch.setenv("DATABASE_URL", fresh_dsn)
         monkeypatch.setenv("ENVIRONMENT", "development")
@@ -237,6 +238,15 @@ def fresh_pg(monkeypatch):
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = orig
+        # Restore ENVIRONMENT BEFORE the reloads: monkeypatch's own undo runs
+        # only after this finally block, so without this the reloaded config/db
+        # modules re-derive their constants under ENVIRONMENT=development and
+        # every later test in the process runs against development-flavoured
+        # module state while os.environ says testing.
+        if orig_environment is None:
+            os.environ.pop("ENVIRONMENT", None)
+        else:
+            os.environ["ENVIRONMENT"] = orig_environment
         try:
             import config as config_module
             import db as db_module
