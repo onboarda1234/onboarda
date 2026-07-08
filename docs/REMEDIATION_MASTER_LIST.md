@@ -192,7 +192,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | P11-5 | AI prompt sanitisation + output schema + circuit breaker | BSA-011, 012 | MED | Apply the deep/3-pass sanitiser to **all** `generate()` inputs; replace raw-token enum parsing with Pydantic schemas (AI free-text advisory only); add source-controlled, DB-persisted circuit breaker around Anthropic/Sumsub/S3 | — | 📋 scoped |
 | P11-6 | AuthZ & audit hardening | BSA-003, 009 | MED | Require recent re-auth / second factor on admin password-reset (+ mandatory revocation); route all change-management 403 denials through `log_authz_denial()` | — | 📋 scoped |
 | P11-7 | Document-download attachment + webhook signature hygiene | BSA-008, 010 (+ DCI-017) | MED + LOW | Force `Content-Disposition: attachment` on all uploaded-doc downloads (separate sanitised preview endpoint if previews needed); document/opaque webhook invalid-sig response; remove ComplyAdvantage legacy signature fallback; *(DCI-017)* no silent local-disk fallback when S3 fails in staging/prod + MIME from server allowlist not stored value | — | 📋 scoped |
-| P11-8 | Supply-chain pinning | BSA-016, 017, 019 (= DCI-022/024) | MED + LOW | SHA-pin GitHub Actions; split test deps into `requirements-dev.txt`; pin Docker base image by digest + audit `.dockerignore` | — | 📋 scoped |
+| P11-8 | Supply-chain pinning | BSA-016, 017, 019 (= DCI-022/024) | MED + LOW | SHA-pin GitHub Actions (all 4 workflows, exact-release comments, annotated tags peeled); split test deps into `requirements-dev.txt` (flake8 now pinned too); pin Docker base image by manifest-list digest + `.dockerignore` excludes uploads/data/logs; 8 guard tests prevent regression. Residual: CI service container + dev compose still on mutable postgres tags (out of scope) | [#712](https://github.com/onboarda1234/onboarda/pull/712) | 🟢 PR open |
 | P11-9 | CI coverage-gate fail-closed | BSA-018 (= DCI-026) | LOW | Unparseable coverage now FAILS the build (empty-COV branch exits 1) | [#707](https://github.com/onboarda1234/onboarda/pull/707) | 🟢 PR open (CI pending) |
 
 **Cross-ref:** **BSA-002** (share/persist rate limits across ECS tasks — forgot-pw, doc-upload, AI keys, fail-closed) = existing **Phase 4 item 26 "Shared rate limiter"** (⬜). Fold BSA-002's specifics there rather than duplicate here.
@@ -352,14 +352,15 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | Status | Count |
 |--------|:--:|
 | ✅ merged | 46 |
-| 🟢 PR open (built) | 4 |
+| 🟢 PR open (built) | 5 |
 | 🔨 in progress | 0 |
-| 📋 scoped | 25 |
+| 📋 scoped | 24 |
 | ⏸ blocked | 1 |
 | ⬜ pending | 28 |
 
 **Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#707 (P11-9)** ·
-**#709 (P12-6)** · **#710 (P12-3)** · **#711 (P12-4, DCI-005 half)** · **Old blocked draft:** #498.
+**#709 (P12-6)** · **#710 (P12-3)** · **#711 (P12-4, DCI-005 half)** · **#712 (P11-8)** ·
+**Old blocked draft:** #498.
 **Recently merged:** **#705 (P11-1)** · **#706 (P11-3)** · **#708 (P10-6)** — awaiting
 Codex deploy/validate report. **Merged + validated:** Wave A **#700/#701/#702/#703** (TDs
 784–789) · #704 (Tier-1-only maker-checker) · Phase 10 Wave 1 #696/#697/#698 · docs #695 ·
