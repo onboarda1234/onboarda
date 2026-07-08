@@ -149,7 +149,9 @@ CREATE TABLE IF NOT EXISTS supervisor_audit_log (
         'system_error'
     )),
     severity TEXT DEFAULT 'info' CHECK(severity IN (
-        'critical', 'error', 'warning', 'info', 'debug'
+        -- P12-5 / DCI-006: aligned with supervisor/schemas.py Severity enum
+        -- (the executed canon lives in db.py SUPERVISOR_AUDIT_SEVERITY_VALUES)
+        'critical', 'high', 'medium', 'low', 'info', 'warning'
     )),
     pipeline_id TEXT,
     application_id TEXT,

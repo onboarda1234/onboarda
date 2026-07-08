@@ -506,7 +506,7 @@ class TestAuditChainEntry:
             conn.execute(
                 "INSERT INTO supervisor_audit_log "
                 "(id, timestamp, event_type, severity, action, previous_hash, entry_hash) "
-                "VALUES ('forkrow', '2026-01-01T00:00:00Z', 'x', 'info', 'x', ?, 'forkhash')",
+                "VALUES ('forkrow', '2026-01-01T00:00:00Z', 'system_error', 'info', 'x', ?, 'forkhash')",
                 (genesis_hash,),
             )
             conn.commit()

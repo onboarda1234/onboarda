@@ -1,0 +1,35 @@
+-- Migration 042 (P12-5 / DCI-006): workflow status/source enum CHECK marker.
+-- ==========================================================================
+-- Fresh schemas carry inline CHECK constraints for:
+--   clients.status                       ('active','inactive') + NOT NULL
+--   agent_executions.status              ('verified','flagged','skipped','completed',
+--                                         'pending','in_progress','failed','error')
+--   agent_executions.source              ('ai','stored_screening_results')
+--   supervisor_pipeline_results.status   ('running','completed','completed_with_errors',
+--                                         'awaiting_review','failed')
+--   supervisor_audit_log.event_type      (the full AuditEventType enum, 25 values)
+--   supervisor_audit_log.severity        ('critical','high','medium','low','info','warning')
+--   compliance_memos.supervisor_status   ('pending','CONSISTENT','CONSISTENT_WITH_WARNINGS',
+--                                         'INCONSISTENT','approved')
+--   compliance_memos.rule_engine_status  ('pending','pass')
+--
+-- Existing PostgreSQL deployments are repaired by the inline startup
+-- migration v2.47 in db.py (CHECK constraint installation is
+-- dialect-specific — SQLite cannot ALTER TABLE ... ADD CONSTRAINT; see
+-- migration_028's precedent).  v2.47 semantics:
+--   * NULL/blank backfill: clients.status -> 'active',
+--     agent_executions.source -> 'ai', supervisor_audit_log.severity ->
+--     'info', compliance_memos.supervisor_status/rule_engine_status ->
+--     'pending'.
+--   * Off-canon values are NEVER rewritten (agent_executions and the
+--     hash-chained supervisor_audit_log rows are evidence): the constraint
+--     for that column is skipped with a loud ERROR listing the values, and
+--     retried on the next boot after operator remediation.
+--   * Stale/conflicting historical CHECKs on the same column (e.g. the
+--     severity canon once shipped in migration_002 DDL) are dropped and
+--     replaced with the canonical constraint.
+--
+-- The same change fixes supervisor/schemas.py Severity.WARNING (previously
+-- missing; six audit paths crashed before their INSERT), which is why
+-- 'warning' is in the severity canon.
+SELECT 1;
