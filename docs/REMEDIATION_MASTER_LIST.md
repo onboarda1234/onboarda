@@ -85,7 +85,7 @@ record is carried here instead.
 | 21 | DOB/PII encryption at rest *(= Audit-3 **DCI-018 BLOCKER**: PII taxonomy across all tables — names/DOB/emails/addresses still plaintext outside the PIIEncryptor field lists)* | — | ⬜ |
 | 22 | CSP headers (report-only) | #688 | ✅ |
 | 23 | Session revocation | #687 | ✅ |
-| 24 | CA webhook retry idempotency | [#703](https://github.com/onboarda1234/onboarda/pull/703) | 🟢 PR open (SW-4, CI-green) |
+| 24 | CA webhook retry idempotency | [#703](https://github.com/onboarda1234/onboarda/pull/703) | ✅ merged (SW-4; merge `daab2bb`, TD 789, validated PASS; reconciler wiring = item 24b residual) |
 | 25 | Unique seeded-account secrets (M14) — P0 | #681 | ✅ |
 | 26 | Shared rate limiter *(= Audit-2 **BSA-002**: persist forgot-pw/doc-upload/AI keys across ECS tasks, fail-closed)* | — | ⬜ |
 | 27 | audit_log tamper-evidence (core; wiring deferred) | #691 | ✅ |
@@ -118,7 +118,7 @@ record is carried here instead.
 | perf-applications-default-list-projection | P2 | Slim default list payload | — | ⬜ |
 | audit-log-tamper-evidence-1 | P2 | *(= Phase 4 #27)* | #691 | ✅ |
 | ux-applications-list-sort-status-tabs | P3 | Sortable headers + status tabs | — | ⬜ |
-| chore-applications-deadcode-cleanup | P3 | Delete dead approval branches | [#701](https://github.com/onboarda1234/onboarda/pull/701) | 🟢 PR open (SW-2, CI-green) |
+| chore-applications-deadcode-cleanup | P3 | Delete dead approval branches | [#701](https://github.com/onboarda1234/onboarda/pull/701) | ✅ merged (SW-2; merge `dd28a79`, TD 788, validated PASS) |
 | CLIENT-PORTAL-RUNTIME-SMOKE-1 | P1 | Live client-credential smoke: status/upload/logout/**cross-tenant denial** *(audit REGMIND-P1-006)* | — | ⬜ |
 | PERIODIC-BASELINE-METHOD-HYGIENE-1 | P2 | Clean 405 on POST-only periodic-review baseline route *(audit REGMIND-P2-001)* | [#700](https://github.com/onboarda1234/onboarda/pull/700) | ✅ merged (SW-1) |
 | PR-RISK-SECTOR-CALIBRATION-1 | P2 | Recalibrate sector risk + "unknown≠high" defaults *(audit done; was "Backlog — after Phase 7"; also Audit-3 **DCI-009**: missing/unknown country defaults MEDIUM — treat as manual-review/HIGH)* | — | 📋 scoped |
@@ -350,10 +350,10 @@ record is carried here instead.
 ## Roll-up (104 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
-| ✅ merged | 41 |
-| 🟢 PR open (built) | 2 |
-| 🔨 in progress | 1 |
-| 📋 scoped | 31 |
+| ✅ merged | 43 |
+| 🟢 PR open (built) | 4 |
+| 🔨 in progress | 0 |
+| 📋 scoped | 28 |
 | ⏸ blocked | 1 |
 | ⬜ pending | 28 |
 
