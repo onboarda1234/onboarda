@@ -1526,6 +1526,16 @@ def compute_risk_score(app_data, config_override=None):
 # a successful re-score stamps the real current version.
 RISK_CONFIG_VERSION_RECOMPUTE_FAILED = "stale:recompute_failed"
 
+# P12-2 / DCI-012: sentinel stamped onto an application IN THE SAME TRANSACTION
+# as a change-request implementation that requires risk review
+# (change_management.implement_change_request). It becomes durable atomically
+# with the implemented change, so a post-commit recompute that fails — or never
+# runs at all (process crash between commits, rule engine unavailable) — leaves
+# the application quarantined behind the same decision-time staleness gate
+# instead of approvable on its stale pre-change score. A successful recompute
+# overwrites it with the real current config version.
+RISK_CONFIG_VERSION_CM_RECOMPUTE_PENDING = "stale:cm_recompute_pending"
+
 
 def _get_risk_config_version_strict(db):
     """Return the current risk-config version, raising on lookup failure.

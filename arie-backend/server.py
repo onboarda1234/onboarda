@@ -38446,7 +38446,26 @@ class ChangeRequestImplementHandler(BaseHandler):
                     status_code = 400
                 self.error(err, status_code)
                 return
-            self.success({"status": "implemented", "profile_version_id": version_id})
+            resp = {"status": "implemented", "profile_version_id": version_id}
+            # DCI-012: surface the risk-quarantine outcome so the officer UI
+            # can explain up front that application approval is blocked until
+            # a successful re-score (staleness gate). Informational only —
+            # never fails the implemented response.
+            try:
+                row = db.execute(
+                    """SELECT a.risk_config_version FROM applications a
+                       JOIN change_requests cr ON cr.application_id = a.id
+                       WHERE cr.id = ?""",
+                    (request_id,),
+                ).fetchone()
+                rcv = str((dict(row) if row else {}).get("risk_config_version") or "")
+                resp["risk_recompute_quarantined"] = rcv.startswith("stale:")
+            except Exception as flag_err:
+                logger.warning(
+                    "implement: could not read risk quarantine flag for %s: %s",
+                    request_id, flag_err,
+                )
+            self.success(resp)
         finally:
             db.close()
 

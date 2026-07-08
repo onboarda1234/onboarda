@@ -616,12 +616,19 @@ def _log_audit_compat(
     db=None,
     before_state=None,
     after_state=None,
+    commit=None,
 ):
     """Call an audit writer while tolerating older test callbacks.
 
     Production ``BaseHandler.log_audit`` accepts db/before_state/after_state.
     Some service-layer tests pass minimal four-argument collectors; this helper
     preserves those callbacks without dropping structured state in production.
+
+    DCI-013: ``commit=False`` is forwarded (when the callback accepts it) so an
+    audit row can join the caller's OPEN transaction instead of forcing an
+    early commit — the caller then commits state + audit evidence atomically.
+    The default ``commit=None`` forwards nothing, preserving each callback's
+    own default.
     """
     if not log_audit_fn:
         return
@@ -634,6 +641,7 @@ def _log_audit_compat(
             ("db", db),
             ("before_state", before_state),
             ("after_state", after_state),
+            ("commit", commit),
         ):
             if value is not None and (accepts_var_kw or key in params):
                 kwargs[key] = value
@@ -643,6 +651,8 @@ def _log_audit_compat(
             "before_state": before_state,
             "after_state": after_state,
         }
+        if commit is not None:
+            kwargs["commit"] = commit
     log_audit_fn(user, action, target, detail, **kwargs)
 
 
@@ -2376,52 +2386,69 @@ def approve_change_request(
         )
 
     now = datetime.now(timezone.utc).isoformat()
-    db.execute(
-        """UPDATE change_requests
-           SET status = 'approved', approved_by = ?, approved_at = ?,
-               decision_notes = ?, updated_at = ?
-           WHERE id = ?""",
-        (user.get("sub"), now, decision_notes, now, request_id),
-    )
-
-    # Record review
-    review_id = f"{request_id}-RV-{secrets.token_hex(3).upper()}"
-    db.execute(
-        """INSERT INTO change_request_reviews
-           (id, request_id, reviewer_id, reviewer_role, decision,
-            decision_notes, reviewed_at)
-           VALUES (?, ?, ?, ?, 'approved', ?, ?)""",
-        (review_id, request_id, user.get("sub"), user.get("role"), decision_notes, now),
-    )
-
-    db.commit()
-
-    if log_audit_fn:
-        _log_audit_compat(
-            log_audit_fn,
-            user, "Change Request Approved", request_id,
-            f"Approved by {user.get('name', user.get('sub'))}. "
-            f"Materiality: {materiality}. Notes: {decision_notes or 'none'}",
-            db=db,
-            before_state={"status": row["status"]},
-            after_state={
-                "status": "approved",
-                "request_id": request_id,
-                "approved_by": user.get("sub"),
-                "approved_by_role": user.get("role"),
-                "approved_at": now,
-                "decision_notes": decision_notes,
-                "maker_checker": {
-                    "required": materiality in MAKER_CHECKER_TIERS,
-                    "creator_id": request.get("created_by"),
-                    "approver_id": user.get("sub"),
-                    "passed": (
-                        materiality not in MAKER_CHECKER_TIERS
-                        or request.get("created_by") != user.get("sub")
-                    ),
-                },
-            },
+    try:
+        db.execute(
+            """UPDATE change_requests
+               SET status = 'approved', approved_by = ?, approved_at = ?,
+                   decision_notes = ?, updated_at = ?
+               WHERE id = ?""",
+            (user.get("sub"), now, decision_notes, now, request_id),
         )
+
+        # Record review
+        review_id = f"{request_id}-RV-{secrets.token_hex(3).upper()}"
+        db.execute(
+            """INSERT INTO change_request_reviews
+               (id, request_id, reviewer_id, reviewer_role, decision,
+                decision_notes, reviewed_at)
+               VALUES (?, ?, ?, ?, 'approved', ?, ?)""",
+            (review_id, request_id, user.get("sub"), user.get("role"), decision_notes, now),
+        )
+
+        # DCI-013: the approval audit row joins the SAME transaction as the
+        # state transition (commit=False) — an approval must never become
+        # durable without its audit evidence. A failed audit write therefore
+        # rolls back the approval instead of leaving it unevidenced.
+        if log_audit_fn:
+            _log_audit_compat(
+                log_audit_fn,
+                user, "Change Request Approved", request_id,
+                f"Approved by {user.get('name', user.get('sub'))}. "
+                f"Materiality: {materiality}. Notes: {decision_notes or 'none'}",
+                db=db,
+                commit=False,
+                before_state={"status": row["status"]},
+                after_state={
+                    "status": "approved",
+                    "request_id": request_id,
+                    "approved_by": user.get("sub"),
+                    "approved_by_role": user.get("role"),
+                    "approved_at": now,
+                    "decision_notes": decision_notes,
+                    "maker_checker": {
+                        "required": materiality in MAKER_CHECKER_TIERS,
+                        "creator_id": request.get("created_by"),
+                        "approver_id": user.get("sub"),
+                        "passed": (
+                            materiality not in MAKER_CHECKER_TIERS
+                            or request.get("created_by") != user.get("sub")
+                        ),
+                    },
+                },
+            )
+
+        # Single atomic commit — state transition, review record and audit
+        # evidence all succeed or all fail together (DCI-013).
+        db.commit()
+    except Exception as e:
+        logger.error(
+            "Approval of change request %s failed: %s", request_id, e, exc_info=True
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return False, f"Approval failed: {str(e)}"
 
     return True, ""
 
@@ -2454,33 +2481,47 @@ def reject_change_request(
         return False, err
 
     now = datetime.now(timezone.utc).isoformat()
-    db.execute(
-        """UPDATE change_requests
-           SET status = 'rejected', approved_by = ?, approved_at = ?,
-               decision_notes = ?, updated_at = ?
-           WHERE id = ?""",
-        (user.get("sub"), now, decision_notes, now, request_id),
-    )
-
-    review_id = f"{request_id}-RV-{secrets.token_hex(3).upper()}"
-    db.execute(
-        """INSERT INTO change_request_reviews
-           (id, request_id, reviewer_id, reviewer_role, decision,
-            decision_notes, reviewed_at)
-           VALUES (?, ?, ?, ?, 'rejected', ?, ?)""",
-        (review_id, request_id, user.get("sub"), user.get("role"), decision_notes, now),
-    )
-
-    db.commit()
-
-    if log_audit_fn:
-        log_audit_fn(
-            user, "Change Request Rejected", request_id,
-            f"Rejected by {user.get('name', user.get('sub'))}. Notes: {decision_notes or 'none'}",
-            db=db,
-            before_state={"status": row["status"]},
-            after_state={"status": "rejected"},
+    try:
+        db.execute(
+            """UPDATE change_requests
+               SET status = 'rejected', approved_by = ?, approved_at = ?,
+                   decision_notes = ?, updated_at = ?
+               WHERE id = ?""",
+            (user.get("sub"), now, decision_notes, now, request_id),
         )
+
+        review_id = f"{request_id}-RV-{secrets.token_hex(3).upper()}"
+        db.execute(
+            """INSERT INTO change_request_reviews
+               (id, request_id, reviewer_id, reviewer_role, decision,
+                decision_notes, reviewed_at)
+               VALUES (?, ?, ?, ?, 'rejected', ?, ?)""",
+            (review_id, request_id, user.get("sub"), user.get("role"), decision_notes, now),
+        )
+
+        # DCI-013 (same pattern as approve): rejection audit evidence joins
+        # the state-transition transaction and commits atomically with it.
+        if log_audit_fn:
+            _log_audit_compat(
+                log_audit_fn,
+                user, "Change Request Rejected", request_id,
+                f"Rejected by {user.get('name', user.get('sub'))}. Notes: {decision_notes or 'none'}",
+                db=db,
+                commit=False,
+                before_state={"status": row["status"]},
+                after_state={"status": "rejected"},
+            )
+
+        db.commit()
+    except Exception as e:
+        logger.error(
+            "Rejection of change request %s failed: %s", request_id, e, exc_info=True
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return False, f"Rejection failed: {str(e)}"
 
     return True, ""
 
@@ -2500,9 +2541,13 @@ def implement_change_request(
     3. Snapshots current profile (before_state)
     4. Applies approved changes to live data
     5. Creates new profile version (after_state)
-    6. Triggers risk recomputation if needed
-    7. Writes audit evidence
-    8. Rolls back on failure
+    6. Stamps the risk-quarantine sentinel when risk review is required
+       (DCI-012) and writes audit evidence (DCI-013) — both INSIDE the same
+       transaction — then commits everything atomically
+    7. Attempts risk recomputation post-commit; a successful re-score clears
+       the sentinel, any failure leaves the application quarantined behind
+       the decision-time staleness gate
+    8. Rolls back on failure (pre-commit)
 
     Returns (success, error_message, new_version_id).
     """
@@ -2612,29 +2657,97 @@ def implement_change_request(
             (now, user.get("sub"), new_version_id, now, request_id),
         )
 
-        # Single atomic commit — live update, profile version, and status
-        # all succeed or all fail together
-        db.commit()
-
-        # Trigger risk recomputation if needed (after commit)
-        if request.get("risk_review_required") and recompute_risk_fn:
-            try:
-                recompute_risk_fn(db, application_id, f"Change request {request_id} implemented", user, log_audit_fn)
-            except Exception as e:
-                logger.warning("Risk recomputation after change %s failed: %s", request_id, e)
+        # DCI-012: when this change requires risk review, quarantine the
+        # application's risk provenance IN THE SAME TRANSACTION as the
+        # implementation. The sentinel becomes durable atomically with the
+        # change, so a post-commit recompute that fails — or never runs at
+        # all (process crash between commits, rule engine unavailable) —
+        # leaves the decision-time staleness gate blocking application
+        # approval on the stale pre-change score. A successful recompute
+        # below overwrites the sentinel with the real config version.
+        risk_recompute_pending = bool(request.get("risk_review_required"))
+        if risk_recompute_pending:
+            from rule_engine import RISK_CONFIG_VERSION_CM_RECOMPUTE_PENDING
+            db.execute(
+                "UPDATE applications SET risk_config_version=?, updated_at=datetime('now') WHERE id=?",
+                (RISK_CONFIG_VERSION_CM_RECOMPUTE_PENDING, application_id),
+            )
 
         audit_msg = f"Profile version: {new_version_id}. Items applied: {len(applied_details)}"
         if skipped_details:
             audit_msg += f". Items skipped: {len(skipped_details)} ({'; '.join(skipped_details)})"
+        if risk_recompute_pending:
+            audit_msg += ". Risk recompute: pending (application quarantined until re-scored)"
 
+        # DCI-013: the implementation audit row joins the same atomic commit
+        # as the state change — implemented-without-audit-evidence can no
+        # longer occur; a failed audit write rolls the implementation back.
         if log_audit_fn:
-            log_audit_fn(
+            after_summary = dict(_safe_snapshot_summary(after_snapshot))
+            after_summary["risk_recompute"] = (
+                "pending_quarantined" if risk_recompute_pending else "not_required"
+            )
+            _log_audit_compat(
+                log_audit_fn,
                 user, "Change Request Implemented", request_id,
                 audit_msg,
                 db=db,
+                commit=False,
                 before_state=_safe_snapshot_summary(before_snapshot),
-                after_state=_safe_snapshot_summary(after_snapshot),
+                after_state=after_summary,
             )
+
+        # Single atomic commit — live update, profile version, status,
+        # risk-quarantine marker (DCI-012) and audit evidence (DCI-013)
+        # all succeed or all fail together
+        db.commit()
+
+        # DCI-012: attempt the recompute now that the implementation (and
+        # its quarantine marker) is durable. recompute_risk writes on this
+        # same connection and never commits — success is committed here and
+        # stamps the real config version over the sentinel; ANY failure
+        # keeps the sentinel, so application approval stays blocked until a
+        # successful re-score. The implementation itself remains committed
+        # either way, so failures here must not flip the result to an error.
+        if risk_recompute_pending:
+            recompute_ok = False
+            recompute_err = None
+            if recompute_risk_fn:
+                try:
+                    rr = recompute_risk_fn(
+                        db, application_id,
+                        f"Change request {request_id} implemented", user, log_audit_fn,
+                    )
+                    if rr and rr.get("recomputed"):
+                        db.commit()
+                        # Verify ground truth: recompute_risk can report
+                        # recomputed=True even when its persistence UPDATE
+                        # failed (the flag is set before the write) — trust
+                        # only the stored provenance.
+                        check = db.execute(
+                            "SELECT risk_config_version FROM applications WHERE id = ?",
+                            (application_id,),
+                        ).fetchone()
+                        stored = str((dict(check) if check else {}).get("risk_config_version") or "")
+                        recompute_ok = not stored.startswith("stale:")
+                    else:
+                        db.rollback()
+                except Exception as e:
+                    recompute_err = e
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+            else:
+                recompute_err = "no recompute function available"
+            if not recompute_ok:
+                logger.error(
+                    "Risk recomputation after change %s did not complete (%s); "
+                    "application %s stays quarantined (stale risk_config_version "
+                    "sentinel) and cannot be approved until re-scored.",
+                    request_id, recompute_err or "recompute reported failure",
+                    application_id,
+                )
 
         return True, "", new_version_id
 
