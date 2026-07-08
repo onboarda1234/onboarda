@@ -853,6 +853,23 @@ class BaseHandler(tornado.web.RequestHandler):
         error_msg = self._reason or "Internal server error"
         if "exc_info" in kwargs:
             exc_type, exc_value, _ = kwargs["exc_info"]
+            from rule_engine import RiskConfigUnavailable
+            if isinstance(exc_value, RiskConfigUnavailable):
+                # DCI-008 fail-closed backstop: any decision path that lets the
+                # condition propagate (recompute on edit / KYC submit /
+                # screening disposition / rerun, etc.) surfaces as an explicit
+                # 503, not a generic unhandled 500.
+                logger.error(
+                    "Risk configuration unavailable (fail-closed) in %s: %s",
+                    self.__class__.__name__, exc_value,
+                )
+                self.set_status(503)
+                self.write({
+                    "error": "Risk configuration is unavailable — this action "
+                             "is disabled until the live risk model can be loaded.",
+                    "status": 503,
+                })
+                return
             # Log full detail server-side for debugging. A 4xx is a CLIENT
             # mistake (malformed body, CSRF, bad params) — WARNING, so it
             # doesn't pollute the ERROR=0 CloudWatch validation window or give

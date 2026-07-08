@@ -752,8 +752,13 @@ def load_risk_config():
     try:
         from db import get_db
         db = get_db()
-        config = db.execute("SELECT * FROM risk_config WHERE id=1").fetchone()
-        db.close()
+        try:
+            config = db.execute("SELECT * FROM risk_config WHERE id=1").fetchone()
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
         if config:
             result = {}
             for key in ("dimensions", "thresholds", "country_risk_scores",
@@ -1966,6 +1971,12 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
                     app_id, _re_err,
                 )
 
+    except RiskConfigUnavailable:
+        # DCI-008: a fail-closed risk-config condition must never degrade into
+        # a silent {"recomputed": False} no-op — the caller's decision path
+        # (edit, KYC submit, screening disposition, periodic review) would
+        # proceed with the STALE stored risk level while returning success.
+        raise
     except Exception as e:
         logger.warning("recompute_risk failed for app_id=%s: %s", app_id, e)
 

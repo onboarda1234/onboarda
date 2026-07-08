@@ -2940,7 +2940,12 @@ def _jurisdiction_risk_tier(app):
         from rule_engine import classify_country
 
         score = classify_country((app or {}).get("country"))
-    except Exception:
+    except Exception as exc:
+        from rule_engine import RiskConfigUnavailable
+        if isinstance(exc, RiskConfigUnavailable):
+            # DCI-008: don't silently build the EDD requirement set with an
+            # empty jurisdiction tier — fail the generation attempt instead.
+            raise
         return ""
     if score >= 4:
         return "very_high"
