@@ -14,8 +14,13 @@ Legend: ✅ merged · 🟢 PR open (built, awaiting merge) · 🔨 in progress �
 **Wave A fully closed:** all four small-wins merged + deployed to AWS staging + validated
 (PASS) — **#700 (SW-1)**, **#701 (SW-2, `dd28a79`, TD 788)**, **#702 (SW-3, staging-SHA
 gate)**, **#703 (SW-4, `daab2bb`, TD 789)**; staging == `origin/main` == `daab2bb`.
-**Overnight batch:** **#705 (P11-1)**, **#706 (P11-3)**, **#708 (P10-6)** MERGED
-(await Codex deploy/validate report); **#707 (P11-9)** still open. **Wave B built
+**Overnight batch — merged + DEPLOYED to AWS staging + validated (Codex closure report):**
+**#705 (P11-1)** PASS, **#706 (P11-3)** PASS-with-limitation (budget-store outage source/test-validated,
+not live fault-injected), **#708 (P10-6)** PASS-with-limitation (no live sign-off audit record;
+spoof rejection source/test-validated), **#707 (P11-9)** PASS. Final staging SHA `fadf8a6` ==
+latest `origin/main`; backend `regmind-staging:796`, worker `regmind-verification-worker:244`;
+`/api/version`+liveness+health+readiness 200; CloudWatch ERROR/Exception/Traceback/5xx = 0.
+Staging-only evidence — no production-readiness claim. **Wave B built
 (do-not-merge):** **#709 (P12-6 / DCI-007)**, **#710 (P12-3 / DCI-008+010+011)** — each
 implemented → SQLite + live-PostgreSQL → fresh-context adversarial review → folded → pushed.
 **Audit 4 (FEO) folded as Phase 13.** Consolidated 4-audit verdict: BLOCKED for
@@ -193,7 +198,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | P11-6 | AuthZ & audit hardening | BSA-003, 009 | MED | Require recent re-auth / second factor on admin password-reset (+ mandatory revocation); route all change-management 403 denials through `log_authz_denial()` | — | 📋 scoped |
 | P11-7 | Document-download attachment + webhook signature hygiene | BSA-008, 010 (+ DCI-017) | MED + LOW | Force `Content-Disposition: attachment` on all uploaded-doc downloads (separate sanitised preview endpoint if previews needed); document/opaque webhook invalid-sig response; remove ComplyAdvantage legacy signature fallback; *(DCI-017)* no silent local-disk fallback when S3 fails in staging/prod + MIME from server allowlist not stored value | — | 📋 scoped |
 | P11-8 | Supply-chain pinning | BSA-016, 017, 019 (= DCI-022/024) | MED + LOW | SHA-pin GitHub Actions (all 4 workflows, exact-release comments, annotated tags peeled); split test deps into `requirements-dev.txt` (flake8 now pinned too); pin Docker base image by manifest-list digest + `.dockerignore` excludes uploads/data/logs; 8 guard tests prevent regression. Residual: CI service container + dev compose still on mutable postgres tags (out of scope) | [#712](https://github.com/onboarda1234/onboarda/pull/712) | 🟢 PR open |
-| P11-9 | CI coverage-gate fail-closed | BSA-018 (= DCI-026) | LOW | Unparseable coverage now FAILS the build (empty-COV branch exits 1) | [#707](https://github.com/onboarda1234/onboarda/pull/707) | 🟢 PR open (CI pending) |
+| P11-9 | CI coverage-gate fail-closed | BSA-018 (= DCI-026) | LOW | Unparseable coverage now FAILS the build (empty-COV branch exits 1) | [#707](https://github.com/onboarda1234/onboarda/pull/707) | ✅ merged + deployed (`fadf8a6`, PASS) |
 
 **Cross-ref:** **BSA-002** (share/persist rate limits across ECS tasks — forgot-pw, doc-upload, AI keys, fail-closed) = existing **Phase 4 item 26 "Shared rate limiter"** (⬜). Fold BSA-002's specifics there rather than duplicate here.
 
@@ -351,18 +356,17 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 ## Roll-up (104 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
-| ✅ merged | 46 |
-| 🟢 PR open (built) | 5 |
+| ✅ merged | 47 |
+| 🟢 PR open (built) | 4 |
 | 🔨 in progress | 0 |
 | 📋 scoped | 24 |
 | ⏸ blocked | 1 |
 | ⬜ pending | 28 |
 
-**Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#707 (P11-9)** ·
-**#709 (P12-6)** · **#710 (P12-3)** · **#711 (P12-4, DCI-005 half)** · **#712 (P11-8)** ·
-**Old blocked draft:** #498.
-**Recently merged:** **#705 (P11-1)** · **#706 (P11-3)** · **#708 (P10-6)** — awaiting
-Codex deploy/validate report. **Merged + validated:** Wave A **#700/#701/#702/#703** (TDs
+**Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#709 (P12-6)** ·
+**#710 (P12-3)** · **#711 (P12-4, DCI-005 half)** · **#712 (P11-8)** · **Old blocked draft:** #498.
+**Merged + deployed + validated:** **#705/#706/#707/#708** (staging `fadf8a6` == main;
+backend TD `:796`, worker `:244`; #706/#708 PASS-with-limitation) · Wave A **#700/#701/#702/#703** (TDs
 784–789) · #704 (Tier-1-only maker-checker) · Phase 10 Wave 1 #696/#697/#698 · docs #695 ·
 #699 closed unmerged (redundant). Earlier code PRs (#687–#693) merged/validated.
 
