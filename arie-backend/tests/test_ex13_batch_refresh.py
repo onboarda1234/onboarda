@@ -262,7 +262,7 @@ class TestBatchFetchingIntegration:
         """GET /api/applications returns apps with all related data."""
         base_url, _ = ex13_server
         resp = http_requests.get(
-            f"{base_url}/api/applications",
+            f"{base_url}/api/applications?view=full",
             headers={"Authorization": f"Bearer {admin_token}"},
             timeout=5,
         )
@@ -279,7 +279,7 @@ class TestBatchFetchingIntegration:
         """Backward-compatible response shape with all expected keys."""
         base_url, _ = ex13_server
         resp = http_requests.get(
-            f"{base_url}/api/applications",
+            f"{base_url}/api/applications?view=full",
             headers={"Authorization": f"Bearer {admin_token}"},
             timeout=5,
         )
@@ -296,7 +296,7 @@ class TestBatchFetchingIntegration:
         """Directors have full_name and pep_declaration in list response."""
         base_url, _ = ex13_server
         resp = http_requests.get(
-            f"{base_url}/api/applications",
+            f"{base_url}/api/applications?view=full",
             headers={"Authorization": f"Bearer {admin_token}"},
             timeout=5,
         )
@@ -309,7 +309,7 @@ class TestBatchFetchingIntegration:
         """Intermediaries have full_name in list response."""
         base_url, _ = ex13_server
         resp = http_requests.get(
-            f"{base_url}/api/applications",
+            f"{base_url}/api/applications?view=full",
             headers={"Authorization": f"Bearer {admin_token}"},
             timeout=5,
         )

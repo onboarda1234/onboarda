@@ -1094,7 +1094,7 @@ class TestAuthenticatedAccess:
         client_token = create_token(client_id, "client", "Test Client", "client")
 
         default_resp = http_requests.get(
-            f"{api_server}/api/applications?limit=5000",
+            f"{api_server}/api/applications?view=full&limit=5000",
             headers={"Authorization": f"Bearer {admin_token}"},
             timeout=3,
         )
@@ -1104,7 +1104,7 @@ class TestAuthenticatedAccess:
         assert fixture_ref not in default_refs
 
         include_resp = http_requests.get(
-            f"{api_server}/api/applications?limit=5000&include_fixtures=1",
+            f"{api_server}/api/applications?view=full&limit=5000&include_fixtures=1",
             headers={"Authorization": f"Bearer {admin_token}"},
             timeout=3,
         )
@@ -1113,7 +1113,7 @@ class TestAuthenticatedAccess:
         assert {real_ref, fixture_ref}.issubset(include_refs)
 
         co_include = http_requests.get(
-            f"{api_server}/api/applications?limit=5000&include_fixtures=1",
+            f"{api_server}/api/applications?view=full&limit=5000&include_fixtures=1",
             headers={"Authorization": f"Bearer {co_token}"},
             timeout=3,
         )
