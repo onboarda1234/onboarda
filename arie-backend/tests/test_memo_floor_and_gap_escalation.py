@@ -106,6 +106,9 @@ class TestSanctionedCountryFloor:
         # the audit record must show the true pre-floor value, not VERY_HIGH
         assert floor[0]["original"] == "MEDIUM"
         assert floor[0]["enforced"] == "VERY_HIGH"
+        # the evidence numeric must be floored WITH the rating — never
+        # rating=VERY_HIGH alongside the stale mis-set manual score of 2
+        assert memo["metadata"]["risk_evidence"]["jurisdiction"]["risk_score"] == 4
 
     def test_non_sanctioned_country_unaffected(self):
         app = _base_app(country="Mauritius")
@@ -153,11 +156,20 @@ class TestMultiGapEscalationLevel:
 
 
 class TestMultiGapEscalationEndToEnd:
+    """Behaviour pin, NOT a pre-fix-failing regression. This app's 4+ gaps
+    (no docs -> doc_rating HIGH, no UBOs -> ownership floor, missing SoF/volume
+    -> data-quality MEDIUM) push the weighted base to MEDIUM, and the >=4-gaps
+    branch already reached HIGH from a MEDIUM base pre-fix. A true LOW base
+    with 4+ gaps appears unreachable through build_compliance_memo: a LOW base
+    needs disclosed UBOs / no ownership gaps, which removes the no_ubo_data and
+    ownership_gaps gaps and caps the count at 3. The genuine DCI-011 regression
+    guard is TestMultiGapEscalationLevel::test_four_gaps_low_base_escalates_to_high,
+    which fails against the pre-fix branch order."""
+
     def test_many_gaps_escalate_memo_to_high(self):
-        """End-to-end: an app with 4+ critical data gaps at a MEDIUM-or-lower base
-        records a MULTI_GAP_ESCALATION enforcement to HIGH (never capped at
-        MEDIUM). Gaps: no UBOs (-> no_ubo_data + ownership_gaps), no documents,
-        source-of-funds missing, expected-volume missing."""
+        """End-to-end: 4+ critical data gaps (here 5, MEDIUM base) record a
+        MULTI_GAP_ESCALATION enforcement to HIGH. Gaps: no UBOs (-> no_ubo_data
+        + ownership_gaps), no documents, SoF missing, expected-volume missing."""
         app = _base_app(
             risk_level="LOW",
             risk_score=15,
@@ -173,4 +185,7 @@ class TestMultiGapEscalationEndToEnd:
         )
         esc = _find_enforcement(memo, "MULTI_GAP_ESCALATION")
         assert esc, "4+ gaps must trigger MULTI_GAP_ESCALATION"
-        assert esc[0]["enforced"] == "HIGH", "4+ gaps must escalate to HIGH, not stop at MEDIUM"
+        assert esc[0]["enforced"] == "HIGH", "4+ gaps must escalate to HIGH"
+        # documents the MEDIUM base this scenario actually produces (see class
+        # docstring — a LOW base with 4+ gaps is not constructible end-to-end)
+        assert esc[0]["original"] == "MEDIUM"

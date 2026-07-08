@@ -1715,7 +1715,12 @@ def build_compliance_memo(app, directors, ubos, documents):
 
     jurisdiction_evidence = {
         "rating": jur_rating,
-        "risk_score": country_risk_score,
+        # DCI-010: keep the numeric consistent with the floored rating — a
+        # mis-set manual score for a sanctioned country must not surface as
+        # e.g. rating=VERY_HIGH with risk_score=2 in the evidence block.
+        # (For a correctly-configured sanctioned country the manual score is
+        # already 4, so this is a no-op.)
+        "risk_score": 4 if is_sanctioned_country else country_risk_score,
         "source": country_risk.get("source_name") or "Manual Risk Scoring Model country-risk settings",
         "source_url": country_risk.get("source_url") or "",
         "source_publication_date": country_risk.get("source_publication_date") or "",
