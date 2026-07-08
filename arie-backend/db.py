@@ -7934,6 +7934,15 @@ def _repair_risk_config_shapes(db: 'DBConnection'):
     needs_update = False
     repaired = {}
 
+    # DCI-008: in fail-closed environments a malformed column must NOT be
+    # silently reset to '{}' — that converts a hard load failure (503 until an
+    # operator fixes the config) into a silent hardcoded-defaults fallback on
+    # the next container restart, defeating the fail-closed gate exactly where
+    # it matters. The lossless list-of-dicts normalization still runs
+    # everywhere; only the destructive reset-to-empty is suppressed.
+    from environment import get_environment
+    _fail_closed = get_environment() in ("staging", "production")
+
     for col in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
         raw = row[col]
         if not raw or raw == '{}':
@@ -7943,6 +7952,11 @@ def _repair_risk_config_shapes(db: 'DBConnection'):
         try:
             parsed = json.loads(raw) if isinstance(raw, str) else raw
         except (json.JSONDecodeError, TypeError):
+            if _fail_closed:
+                logger.error(
+                    "Migration v2.16: %s is unparsable — leaving in place for the "
+                    "fail-closed risk-config gate (operator must fix the config)", col)
+                continue
             logger.warning("Migration v2.16: %s is unparsable, will re-seed", col)
             repaired[col] = '{}'
             needs_update = True
@@ -7965,6 +7979,11 @@ def _repair_risk_config_shapes(db: 'DBConnection'):
                 repaired[col] = json.dumps(merged)
                 needs_update = True
             else:
+                if _fail_closed:
+                    logger.error(
+                        "Migration v2.16: %s is malformed list — leaving in place for "
+                        "the fail-closed risk-config gate", col)
+                    continue
                 logger.warning(
                     "Migration v2.16: %s is malformed list (not list-of-dicts), resetting to empty",
                     col,
@@ -7972,6 +7991,11 @@ def _repair_risk_config_shapes(db: 'DBConnection'):
                 repaired[col] = '{}'
                 needs_update = True
         else:
+            if _fail_closed:
+                logger.error(
+                    "Migration v2.16: %s has unexpected type %s — leaving in place "
+                    "for the fail-closed risk-config gate", col, type(parsed).__name__)
+                continue
             logger.warning(
                 "Migration v2.16: %s has unexpected type %s, resetting to empty",
                 col, type(parsed).__name__,

@@ -160,6 +160,7 @@ from rule_engine import (
     normalize_country_key,
     validate_risk_config,
     recompute_risk, recompute_risk_for_active_apps,
+    RiskConfigUnavailable,
 )
 from validation_engine import (
     validate_compliance_memo,
@@ -6409,6 +6410,11 @@ def _officer_correction_is_high_risk_country(value):
         from rule_engine import classify_country
 
         return int(classify_country(raw) or 0) >= 3
+    except RiskConfigUnavailable:
+        # DCI-008: never downgrade a correction's high-risk classification
+        # (materiality / four-eyes tiering) because the live risk model
+        # could not be loaded — fail the correction instead.
+        raise
     except Exception:
         return False
 
@@ -9418,6 +9424,20 @@ class SubmitApplicationHandler(BaseHandler):
                 db.rollback()
             except Exception:
                 pass
+            if isinstance(exc, RiskConfigUnavailable):
+                # DCI-008 fail-closed: an anticipated operational state, not an
+                # unhandled bug — log concisely (no traceback) and return 503.
+                logger.error(
+                    "Risk config unavailable — submission scoring blocked: app_id=%s user=%s: %s",
+                    app_id,
+                    user.get("sub", "unknown") if user else "unknown",
+                    str(exc)[:500],
+                )
+                return self.error(
+                    "Risk configuration is unavailable — submission scoring is "
+                    "disabled until the live risk model can be loaded.",
+                    503,
+                )
             # Attempt to identify the failing stage from the traceback
             import traceback
             tb_text = traceback.format_exc()
@@ -14577,6 +14597,13 @@ class CountryRiskConfigHandler(BaseHandler):
                 "entries": entries,
                 "entry_count": len(entries),
             })
+        except RiskConfigUnavailable:
+            logger.exception("country_risk_config_unavailable_fail_closed")
+            self.error(
+                "Risk configuration is unavailable — the live risk model "
+                "could not be loaded.",
+                503,
+            )
         except Exception:
             logger.exception("country_risk_config_lookup_failed")
             self.error("Failed to load manual country risk settings", 500)
@@ -28689,6 +28716,20 @@ class ComplianceMemoHandler(BaseHandler):
                 memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(
                     app, directors, ubos, documents
                 )
+        except RiskConfigUnavailable as e:
+            # DCI-008 fail-closed: never build a memo against the hardcoded
+            # default model when the approved live risk config is unavailable.
+            logger.error("Risk config unavailable — memo generation blocked for %s: %s", real_id, e)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error(
+                "Risk configuration is unavailable — memo generation is "
+                "disabled until the live risk model can be loaded.",
+                503,
+            )
         except Exception as e:
             logger.error("Failed to build compliance memo for %s: %s", real_id, e, exc_info=True)
             try:
@@ -40014,6 +40055,22 @@ if __name__ == "__main__":
     logger.info("startup: entering enforce_startup_safety (+%s)", _elapsed())
     enforce_startup_safety()
     logger.info("startup: completed enforce_startup_safety (+%s)", _elapsed())
+
+    # DCI-008 boot probe: in fail-closed environments, surface a broken live
+    # risk config IMMEDIATELY at boot (operators should not discover it via
+    # request-time 503s). Boot continues — scoring requests fail closed until
+    # the config is fixed via the risk-model settings endpoint.
+    if ENVIRONMENT in ("staging", "production"):
+        try:
+            from rule_engine import load_risk_config as _boot_risk_config_probe
+            _boot_risk_config_probe()
+            logger.info("startup: risk-config probe OK (+%s)", _elapsed())
+        except Exception as _rc_exc:
+            logger.critical(
+                "startup: RISK CONFIG UNAVAILABLE — all scoring/memo decision "
+                "paths will return 503 until the live risk model is fixed: %s",
+                _rc_exc,
+            )
 
     # Bind to 0.0.0.0 for cloud deployment (Railway, Render, etc.)
     logger.info("startup: binding to 0.0.0.0:%s (+%s)", PORT, _elapsed())

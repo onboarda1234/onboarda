@@ -1198,6 +1198,25 @@ def _build_enhanced_review_memo_section(summary):
     }
 
 
+def multi_gap_escalation_level(num_gaps, aggregated_risk):
+    """DCI-011: resolve the multi-gap escalation for `num_gaps` critical data
+    gaps at a given `aggregated_risk` base level.
+
+    Returns the level the memo must be escalated TO ("HIGH" / "MEDIUM"), or None
+    if no escalation applies. The strongest branch (>=4 gaps -> HIGH) is checked
+    FIRST: previously the >=3 -> MEDIUM branch ran first, so a LOW-base case with
+    4+ gaps was only ever raised to MEDIUM and the HIGH branch was unreachable.
+    Ordering most-severe-first makes the HIGH escalation reachable while
+    preserving the >=3 -> MEDIUM behaviour for a LOW base.
+    """
+    rank = RISK_RANK.get(aggregated_risk, 2)
+    if num_gaps >= 4 and rank < 3:
+        return "HIGH"
+    if num_gaps >= 3 and rank < 2:
+        return "MEDIUM"
+    return None
+
+
 def build_compliance_memo(app, directors, ubos, documents):
     """
     Build a complete compliance memo from application data.
@@ -1638,6 +1657,17 @@ def build_compliance_memo(app, directors, ubos, documents):
     jur_rating = country_risk.get("risk_rating") or (
         "VERY_HIGH" if is_sanctioned_country else "HIGH" if is_high_risk_country else "MEDIUM" if is_offshore else "LOW"
     )
+    # DCI-010: a sanctioned / FATF-blacklisted incorporation country carries a
+    # HARD VERY_HIGH jurisdiction floor that must OVERRIDE any manual
+    # country-risk config value — not merely be *recorded* as enforced while the
+    # displayed sub-rating stays lower. `country_risk.get("risk_rating")` (a
+    # manual/DB value) is taken first above, so without this a bad manual score
+    # for a sanctioned country would show e.g. MEDIUM jurisdiction risk while the
+    # memo claims the floor was applied. Capture the pre-floor value for the
+    # audit record, then force the floor.
+    jur_rating_before_floor = jur_rating
+    if is_sanctioned_country:
+        jur_rating = "VERY_HIGH"
     # Rule 4C: Sectors with inherent minimum MEDIUM risk floor
     biz_rating = "HIGH" if is_high_risk_sector else "MEDIUM" if (is_medium_risk_sector or is_minimum_medium_sector) else "LOW"
     fc_rating = "HIGH" if adverse_media_context["has_hit"] else "MEDIUM" if len(all_peps) > 0 else "LOW"
@@ -1685,7 +1715,12 @@ def build_compliance_memo(app, directors, ubos, documents):
 
     jurisdiction_evidence = {
         "rating": jur_rating,
-        "risk_score": country_risk_score,
+        # DCI-010: keep the numeric consistent with the floored rating — a
+        # mis-set manual score for a sanctioned country must not surface as
+        # e.g. rating=VERY_HIGH with risk_score=2 in the evidence block.
+        # (For a correctly-configured sanctioned country the manual score is
+        # already 4, so this is a no-op.)
+        "risk_score": 4 if is_sanctioned_country else country_risk_score,
         "source": country_risk.get("source_name") or "Manual Risk Scoring Model country-risk settings",
         "source_url": country_risk.get("source_url") or "",
         "source_publication_date": country_risk.get("source_publication_date") or "",
@@ -1758,7 +1793,7 @@ def build_compliance_memo(app, directors, ubos, documents):
     if is_sanctioned_country:
         rule_enforcements.append({
             "rule": "SANCTIONED_COUNTRY_FLOOR",
-            "original": jur_rating if jur_rating != "VERY_HIGH" else "VERY_HIGH",
+            "original": jur_rating_before_floor,
             "enforced": "VERY_HIGH",
             "reason": country + " is a sanctioned or FATF blacklisted jurisdiction — jurisdiction risk floor is VERY_HIGH"
         })
@@ -1924,15 +1959,11 @@ def build_compliance_memo(app, directors, ubos, documents):
     if ownership_has_gaps:
         critical_gaps.append("ownership_gaps")
 
-    if len(critical_gaps) >= 3 and RISK_RANK.get(aggregated_risk, 2) < 2:
-        rule_enforcements.append({
-            "rule": "MULTI_GAP_ESCALATION",
-            "original": aggregated_risk,
-            "enforced": "MEDIUM",
-            "reason": str(len(critical_gaps)) + " critical data gaps (" + ", ".join(critical_gaps) + ") prevent LOW overall risk classification"
-        })
-        aggregated_risk = "MEDIUM"
-    elif len(critical_gaps) >= 4 and RISK_RANK.get(aggregated_risk, 2) < 3:
+    # DCI-011: resolve escalation via the shared helper, which checks the
+    # strongest branch (>=4 gaps -> HIGH) first so it is not shadowed by the
+    # >=3 -> MEDIUM branch for a LOW base. See multi_gap_escalation_level().
+    _gap_escalation = multi_gap_escalation_level(len(critical_gaps), aggregated_risk)
+    if _gap_escalation == "HIGH":
         rule_enforcements.append({
             "rule": "MULTI_GAP_ESCALATION",
             "original": aggregated_risk,
@@ -1940,6 +1971,14 @@ def build_compliance_memo(app, directors, ubos, documents):
             "reason": str(len(critical_gaps)) + " critical data gaps require escalation to HIGH risk"
         })
         aggregated_risk = "HIGH"
+    elif _gap_escalation == "MEDIUM":
+        rule_enforcements.append({
+            "rule": "MULTI_GAP_ESCALATION",
+            "original": aggregated_risk,
+            "enforced": "MEDIUM",
+            "reason": str(len(critical_gaps)) + " critical data gaps (" + ", ".join(critical_gaps) + ") prevent LOW overall risk classification"
+        })
+        aggregated_risk = "MEDIUM"
 
     # Confidence-to-decision linkage (Issue D fix)
     model_confidence = max(60, doc_confidence - 5)

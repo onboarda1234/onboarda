@@ -325,6 +325,10 @@ def _country_scores_from_db_if_available():
         config = load_risk_config() or {}
         scores = config.get("country_risk_scores") if isinstance(config, dict) else None
         return scores if isinstance(scores, dict) and scores else None
+    except RiskConfigUnavailable:
+        # DCI-008: never launder a fail-closed condition into a silent
+        # hardcoded-fallback path — let the decision abort.
+        raise
     except Exception:
         return None
 
@@ -681,28 +685,88 @@ def validate_risk_config(config):
 # RISK CONFIG LOADING (DB is canonical, hardcoded = fallback)
 # ══════════════════════════════════════════════════════════
 
+class RiskConfigUnavailable(Exception):
+    """Raised when the live risk-scoring configuration cannot be loaded or
+    fails validation in a fail-closed environment (staging/production).
+
+    DCI-008: regulated decision paths must not silently score against the
+    hardcoded default model when the approved live model in the DB is
+    unavailable or malformed — the request must fail instead. Dev/test/demo
+    keep the historical hardcoded fallback so local work and the pytest suite
+    do not require a seeded risk_config row.
+    """
+
+
+def _risk_config_fail_closed():
+    """True when a risk-config load failure must abort the decision path.
+
+    Reads the environment at call time (not import time) so tests can
+    exercise both postures via monkeypatched ENVIRONMENT.
+    """
+    from environment import get_environment
+    return get_environment() in ("staging", "production")
+
+
+def _parse_config_column(val):
+    """Parse a risk_config column preserving the TRUE shape for validation.
+
+    DCI-008: safe_json_loads() coerces any non-dict/list value to {} — on
+    PostgreSQL, where these columns are JSONB and arrive already parsed, a
+    malformed scalar (e.g. the number 5) would be silently laundered into an
+    empty dict and never reach the validator, defeating the fail-closed gate
+    in exactly the environments that need it. Here a malformed value is
+    returned as-is (or the raw string when JSON-undecodable) so
+    validate_risk_config() can flag it.
+    """
+    if val is None or val == "":
+        return None
+    if isinstance(val, str):
+        try:
+            val = json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return val  # undecodable text — validator reports the bad shape
+    if val == {} or val == []:
+        # Empty container == not configured (pre-fix parity: the old
+        # `if val` truthiness check mapped these to None on the PG/JSONB
+        # path). Only genuinely malformed shapes should fail closed.
+        return None
+    return val  # JSONB already parsed: dict/list pass validation, scalars get flagged
+
+
 def load_risk_config():
-    """Load live risk scoring configuration from DB. Falls back to None if DB unavailable.
+    """Load live risk scoring configuration from DB.
 
     Validates that score-mapping columns (country_risk_scores, sector_risk_scores,
-    entity_type_scores) are dicts after JSON parsing.  If any column is malformed
-    (e.g. stored as a list or scalar), it is logged and set to None so that the
-    hardcoded fallback in the scoring functions takes over.
+    entity_type_scores) are dicts after JSON parsing, attempting normalization of
+    list-of-dicts → flat dict before rejecting.
 
-    Attempts normalization of list-of-dicts → flat dict before rejecting.
+    Failure posture (DCI-008):
+    - staging/production: raises RiskConfigUnavailable when the DB read fails,
+      the risk_config row is missing, or validation reports errors — regulated
+      decisions must never silently fall back to the hardcoded default model.
+    - dev/test/demo: returns None on load failure and nulls malformed columns
+      so the hardcoded fallback in the scoring functions takes over (historical
+      behaviour, keeps local dev and the test suite runnable without a seeded row).
     """
+    fail_closed = _risk_config_fail_closed()
     try:
         from db import get_db
         db = get_db()
-        config = db.execute("SELECT * FROM risk_config WHERE id=1").fetchone()
-        db.close()
+        try:
+            config = db.execute("SELECT * FROM risk_config WHERE id=1").fetchone()
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
         if config:
             result = {}
             for key in ("dimensions", "thresholds", "country_risk_scores",
                         "sector_risk_scores", "entity_type_scores"):
                 try:
-                    val = config[key]
-                    result[key] = safe_json_loads(val) if val else None
+                    # DCI-008: parse WITHOUT coercing malformed values to {} so
+                    # the validator sees the true shape (see _parse_config_column).
+                    result[key] = _parse_config_column(config[key])
                 except (KeyError, IndexError):
                     result[key] = None
 
@@ -710,9 +774,25 @@ def load_risk_config():
             validated, errors = validate_risk_config(result)
             for err in errors:
                 logger.error("risk_config validation: %s", err)
+            if errors and fail_closed:
+                raise RiskConfigUnavailable(
+                    "risk_config failed validation in a fail-closed environment: "
+                    + "; ".join(str(e) for e in errors)
+                )
 
             return validated
+        if fail_closed:
+            raise RiskConfigUnavailable(
+                "risk_config row (id=1) is missing — the live risk model is not "
+                "seeded; scoring is disabled in this environment"
+            )
+    except RiskConfigUnavailable:
+        raise
     except Exception as e:
+        if fail_closed:
+            raise RiskConfigUnavailable(
+                "Failed to load risk config from DB: " + str(e)
+            ) from e
         logger.warning(f"Failed to load risk config from DB: {e}. Using hardcoded defaults.")
     return None
 
@@ -1891,6 +1971,12 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
                     app_id, _re_err,
                 )
 
+    except RiskConfigUnavailable:
+        # DCI-008: a fail-closed risk-config condition must never degrade into
+        # a silent {"recomputed": False} no-op — the caller's decision path
+        # (edit, KYC submit, screening disposition, periodic review) would
+        # proceed with the STALE stored risk level while returning success.
+        raise
     except Exception as e:
         logger.warning("recompute_risk failed for app_id=%s: %s", app_id, e)
 
