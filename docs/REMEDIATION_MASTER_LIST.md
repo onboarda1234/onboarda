@@ -23,10 +23,10 @@ latest `origin/main`; backend `regmind-staging:796`, worker `regmind-verificatio
 Staging-only evidence — no production-readiness claim. **Wave B built
 (do-not-merge):** **#709 (P12-6 / DCI-007)**, **#710 (P12-3 / DCI-008+010+011)** — each
 implemented → SQLite + live-PostgreSQL → fresh-context adversarial review → folded → pushed.
-**Audit 4 (FEO) folded as Phase 13.** Consolidated 4-audit verdict: BLOCKED for
+**Audit 4 (FEO) folded as Phase 12.** Consolidated 4-audit verdict: BLOCKED for
 uncontrolled production, conditional for controlled pilot; only remaining CRITICALs =
 DCI-001 (P12-1) and DCI-027 (P9-8).
-**Phase 10 Wave-1 complete:** the three current-stage blocking CRITICALs are merged,
+**Phase 9 (RDI) Wave-1 complete:** the three current-stage blocking CRITICALs are merged,
 deployed (`regmind-staging:782` / worker `:230`, image `e66405a`), validated (PASS) —
 **P10-1 #697 (RDI-006), P10-3 #696 (RDI-004), P10-2 #698 (RDI-001/007/011)**; merge order
 #695 → #697 → #696 → #698. **#704 merged** (Codex): maker-checker narrowed to Tier 1 only
@@ -34,15 +34,16 @@ deployed (`regmind-staging:782` / worker `:230`, image `e66405a`), validated (PA
 merged/validated: #692/#690/#693/#691 (TDs 775/776/777), #687/#688/#689 (TDs 771/772/773),
 docs #695. Incorporates REGMIND-SYSTEM-READINESS-AUDIT-1 (P9-12/13/14 +
 CLIENT-PORTAL-RUNTIME-SMOKE-1 + PERIODIC-BASELINE-METHOD-HYGIENE-1), an Optional/
-Post-Production Modernization section, Phase 10 (RDI audit), **Phase 11 (BSA / Audit 2 —
-19 findings)**, **Phase 12 (DCI / Audit 3 — 30 findings, 6 blockers, schema UNSAFE)**, and
-**Phase 13 (FEO / Audit 4 — 15 findings)**. Section order places **Phase 9 (Production
-readiness) last**, after Phases 10/11/12/13. **PR #699** (Codex draft, P10-1
+Post-Production Modernization section, Phase 9 (RDI audit), **Phase 10 (BSA / Audit 2 —
+19 findings)**, **Phase 11 (DCI / Audit 3 — 30 findings, 6 blockers, schema UNSAFE)**, and
+**Phase 12 (FEO / Audit 4 — 15 findings)**. Section order places **Phase 14 (Production
+readiness) last**, after Phases 8–13 (sections renumbered per founder instruction
+2026-07-08; Phase 8 is now the Monitoring alerts stream, Phase 13 the Pilot Controls Pack). **PR #699** (Codex draft, P10-1
 closure-evidence docs) was **closed unmerged** — its closure record is carried here.
 
 > Maintenance: this is the single source of truth for remediation status. On any
 > request for PR/phase status, refresh the Status/GitHub columns from GitHub and
-> update this file. Item IDs (1–40, 33–38, P9-1…P9-14, P10-1…P10-7, P11-1…P11-9, P12-1…P12-10, P13-1…P13-7, PR-* slugs) are canonical.
+> update this file. Item IDs (1–40, 33–38, M-series, P9-1…P9-14, P10-1…P10-7, P11-1…P11-9, P12-1…P12-10, P13-1…P13-7, PR-* slugs) are canonical and NEVER renumbered — their numeric prefixes reflect the section numbering in force when each audit landed and are retained for continuity with merged PRs, audit reports, and closure evidence. Section headings were renumbered on 2026-07-08 (founder instruction), so item-ID prefixes intentionally do NOT match today's section numbers (e.g. P10-x items live in Phase 9 — RDI; P9-x items live in Phase 14 — Production readiness).
 
 **Legend:** ✅ merged · 🟢 PR open (built) · 🔨 in progress · 📋 scoped · ⏸ blocked · ⬜ pending
 
@@ -129,18 +130,23 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | PERIODIC-BASELINE-METHOD-HYGIENE-1 | P2 | Clean 405 on POST-only periodic-review baseline route *(audit REGMIND-P2-001)* | [#700](https://github.com/onboarda1234/onboarda/pull/700) | ✅ merged (SW-1) |
 | PR-RISK-SECTOR-CALIBRATION-1 | P2 | Recalibrate sector risk + "unknown≠high" defaults *(audit done; was "Backlog — after Phase 7"; also Audit-3 **DCI-009**: missing/unknown country defaults MEDIUM — treat as manual-review/HIGH)* | — | 📋 scoped |
 
-## Phase 8 — Pilot Controls Pack
-| # | Title | GitHub | Status |
-|---|-------|--------|:--:|
-| 33 | Pilot-scope guards (server-side) | — | ⬜ |
-| 34 | Dashboard API performance (15.1s → sub-2s) | — | ⬜ |
-| 35 | Screening full-evidence hydration performance | — | ⬜ |
-| 36 | Persisted negative-path fixtures | — | ⬜ |
-| 37 | Lower-privilege fixture authz regression tests | #692 | ✅ |
-| 38 | Pilot operations runbook | #689 | ✅ |
-| — | ComplyAdvantage production workspace validation | #498 | ⏸ blocked (dashboard-mode evidence) |
+## Phase 8 — Monitoring alerts Page
+> Monitoring-alerts remediation stream (M-series). Statuses per founder update
+> 2026-07-08; items below are the remaining fixes still pending.
 
-## Phase 10 — Regulatory Decision Integrity (RDI audit)
+| Item | Status |
+|------|--------|
+| M2.3 QA sampling implementation | 📋 Spec drafted, not implemented |
+| M1.2 status runtime audit/backfill | ⬜ Pending |
+| M1.3 status CHECK hardening | ⏸ Depends on M1.2 |
+| M2.4 status-sync on downstream close | ⬜ Pending |
+| M3.2 expiry-missing / coverage blind-spot report | ⬜ Pending |
+| M3.3 Monitoring UI cleanup | ⬜ Pending |
+| M3.4 Agent 1 verification for refreshed identity docs | 📋 Decision approved, not implemented |
+| Document-health scheduler Phase B/C/D rollout | ⏸ Pending explicit go/no-go |
+| M4.x screening-change monitoring phase | ⬜ Not yet fully decomposed |
+
+## Phase 9 — Regulatory Decision Integrity (RDI audit)
 > Source: **RegMind Production Audit 1 — Regulatory Decision Integrity**, run against
 > `c8b6dac` (current `main`, all merged remediation included). 13 findings.
 > **Management response 2026-07-07** formally reclassified two: **RDI-002** (LOW/MEDIUM
@@ -163,7 +169,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | P10-7 | PR-RDI-7 — Append-only audit at DB level | RDI-013 (non-SAR) | MEDIUM | Separate migration/admin DB role from runtime role; revoke runtime `UPDATE`/`DELETE` on `audit_log`/`decision_records`/`supervisor_audit_log`; stop cleanup code deleting those rows *(code half ships early; grants half is RDS/infra)* | — | 📋 scoped (part ops) |
 
 **Deferred (per management response 2026-07-07):**
-- **RDI-002** — by-design LOW/MEDIUM fast-path, HIGH policy-exception (not a code defect). **P10-DOC-1:** policy **✅ APPROVED & signed off** (Aisha Sudally, 2026-07-07) at [`docs/compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md`](compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md) (eligibility = all LOW/MEDIUM; disqualifiers = sanctioned/FATF, PEP, adverse hit, stale/incomplete screening, failed IDV; approver = Onboarding Officer alone; 20% QA sampling). **Residual code assertions** (decision-record eligibility-basis stamp + direct-route test that a disqualifying signal can never fast-track) folded into the Phase 10 approval-path PRs (P10-3 / P10-5) — ⬜.
+- **RDI-002** — by-design LOW/MEDIUM fast-path, HIGH policy-exception (not a code defect). **P10-DOC-1:** policy **✅ APPROVED & signed off** (Aisha Sudally, 2026-07-07) at [`docs/compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md`](compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md) (eligibility = all LOW/MEDIUM; disqualifiers = sanctioned/FATF, PEP, adverse hit, stale/incomplete screening, failed IDV; approver = Onboarding Officer alone; 20% QA sampling). **Residual code assertions** (decision-record eligibility-basis stamp + direct-route test that a disqualifying signal can never fast-track) folded into the RDI (Phase 9) approval-path PRs (P10-3 / P10-5) — ⬜.
 - **RDI-005** — SAR permanence (`ON DELETE CASCADE`, cleanup delete, mutable SAR content), HIGH **Enterprise pre-enable blocker**. Must be fixed **before** enabling Enterprise SAR/STR; safe to defer **only while SAR/STR feature flags stay disabled** (`ENABLE_SAR_WORKFLOW`, `ENABLE_SAR_STR` = false). Same guard covers the SAR slices of RDI-009/RDI-013. *(Re-confirmed by Audit-3 **DCI-002** — same cascade + pre-file overwrite findings; note the general SAR cleanup-delete surface is also covered by P12-1.)*
 
 **Wave order:** W1 P10-1 → P10-2 → P10-3 (all CRITICAL; P10-2 unblocks P10-5) · W2 P10-4, P10-5, P10-6 (HIGH) · W3 P10-7 (MED/infra). P10-1 and P10-6 are small quick wins slot-able anytime.
@@ -174,9 +180,9 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 - **P10-2 (#698)** — rebased onto #696-merged `main`, retargeted, CI green, **merged**, deployed (`regmind-staging:782` / `regmind-verification-worker:230`, image `e66405a`), validated. Targeted decision/memo/approval suite 263 passed / 2 skipped; full SQLite suite 6568 passed. Runtime probe: decision 201 persisted `decision_records_count=1` + audit + accepted governance; memo approve 200 with signoff audit; memo validate 200 persisted status+timestamp. **RDI-001 / RDI-007 / RDI-011 CLOSED/PASS.** Residual: live-DB fault injection not run (forced-failure covered by merged tests); memo-supervisor `decision_records` overlay stays scoped to P10-5/RDI-009.
 - Final staging aligned to #698 merge SHA `e66405a`; `/api/version` git_sha+image_tag match; liveness/health/readiness 200 (`ready=true`); both ALB targets healthy; 30-min CloudWatch window ERROR/Exception/Traceback/HTTP-5 = 0.
 
-**Audit-2 unpause status:** ✅ **all three current-stage blocking CRITICALs closed & validated** — RDI-006 (#697), RDI-004 (#696), RDI-001 (#698). Merge order on `main`: #695 → #697 → #696 → #698 (HEAD `e66405a`, deployed `regmind-staging:782`). The audit artifact's "remaining blockers RDI-001/RDI-004" note reflects the point-in-time when #697 was verified — both have since merged. **Audit 2 has since run** (see Phase 11). Remaining Phase 10 work is W2/W3 (HIGH/MED: P10-4 decision-gated, P10-5 dep-on-P10-2, P10-6, P10-7) plus the deferred RDI-002/005 items; the four-eyes scope decision is closed (#704, Tier-1-only maker-checker).
+**Audit-2 unpause status:** ✅ **all three current-stage blocking CRITICALs closed & validated** — RDI-006 (#697), RDI-004 (#696), RDI-001 (#698). Merge order on `main`: #695 → #697 → #696 → #698 (HEAD `e66405a`, deployed `regmind-staging:782`). The audit artifact's "remaining blockers RDI-001/RDI-004" note reflects the point-in-time when #697 was verified — both have since merged. **Audit 2 has since run** (see Phase 10 — BSA). Remaining RDI work is W2/W3 (HIGH/MED: P10-4 decision-gated, P10-5 dep-on-P10-2, P10-6, P10-7) plus the deferred RDI-002/005 items; the four-eyes scope decision is closed (#704, Tier-1-only maker-checker).
 
-## Phase 11 — Backend Security & Authorization (BSA audit)
+## Phase 10 — Backend Security & Authorization (BSA audit)
 > Source: **RegMind Production Audit 2 — Backend Security & Authorization**, run against
 > `e66405a` (PR #698 merge — post-Audit-1-closure). 19 findings (BSA-001…019).
 > **Verdict: REMEDIATE BEFORE PROCEEDING** — 2 HIGH blockers (BSA-001, BSA-015); rest MED/LOW.
@@ -204,7 +210,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 
 **Wave order:** W1 P11-1, P11-2 (both blockers — clear before pilot/prod) · W2 P11-3…P11-7 (MED) · W3 P11-8, P11-9 (LOW/supply-chain/CI).
 
-## Phase 12 — Data Integrity, Compliance Logic & Infrastructure (DCI audit)
+## Phase 11 — Data Integrity, Compliance Logic & Infrastructure (DCI audit)
 > Source: **RegMind Production Audit 3 — Data Integrity, Compliance Logic and Infrastructure**,
 > run against `956ed5b` (#704 merge). 30 findings (DCI-001…030). Schema safety rated
 > **UNSAFE** (regulated-record deletion paths + admitted schema drift). Verdict:
@@ -214,7 +220,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 > elevation/floor rules enumerated); supervisor contradiction logic VERIFIED; Agent 9
 > properly deferred/guarded; presigned-URL expiry bounded.
 > **11 of 30 findings are already tracked elsewhere** — cross-referenced, NOT duplicated:
-> DCI-002 = RDI-005 (deferred Enterprise SAR blocker, Phase 10) · DCI-009 =
+> DCI-002 = RDI-005 (deferred Enterprise SAR blocker, Phase 9 — RDI) · DCI-009 =
 > PR-RISK-SECTOR-CALIBRATION-1 (Phase 7) · DCI-017 → folded into P11-7 · DCI-018 =
 > Phase 4 item 21 (now an **Audit-3 BLOCKER**) · DCI-019 = P9-1 (now an **Audit-3
 > BLOCKER**) · DCI-022/024 = P11-8 · DCI-023 = P9-4 (IaC) · DCI-026 = P11-9 ·
@@ -238,7 +244,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 
 **Wave order:** W1 P12-1, P12-2 (code blockers) — the other Audit-3 blockers live elsewhere: item 21 (DCI-018), P9-1 (DCI-019), P9-8 (DCI-027) · W2 P12-3…P12-9 · W3 P12-10.
 
-## Phase 13 — Frontend & Operational Readiness (FEO audit)
+## Phase 12 — Frontend & Operational Readiness (FEO audit)
 > Source: **RegMind Production Audit 4 — Frontend & Operational Readiness**, run against
 > `57890e3` (#702 merge). 15 findings (FEO-001…015). Consolidated 4-audit verdict:
 > **BLOCKED** for uncontrolled production; **conditional for controlled pilot** with
@@ -269,7 +275,18 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 
 **Wave order:** W1 P13-1 (the two HIGH stored-XSS findings — officer-session code execution) · W2 P13-2…P13-6 · P13-7 alongside (docs, non-code).
 
-## Phase 9 — Production readiness
+## Phase 13 — Pilot Controls Pack
+| # | Title | GitHub | Status |
+|---|-------|--------|:--:|
+| 33 | Pilot-scope guards (server-side) | — | ⬜ |
+| 34 | Dashboard API performance (15.1s → sub-2s) | — | ⬜ |
+| 35 | Screening full-evidence hydration performance | — | ⬜ |
+| 36 | Persisted negative-path fixtures | — | ⬜ |
+| 37 | Lower-privilege fixture authz regression tests | #692 | ✅ |
+| 38 | Pilot operations runbook | #689 | ✅ |
+| — | ComplyAdvantage production workspace validation | #498 | ⏸ blocked (dashboard-mode evidence) |
+
+## Phase 14 — Production readiness
 | # | Item | Type | GitHub | Status |
 |---|------|:--:|:--:|:--:|
 | P9-1 | Enable live GDPR erasure (PC-4 control pack) *(= Audit-3 **DCI-019 BLOCKER**: dual-control live erasure incl. S3/file deletion)* | code | — | ⬜ |
@@ -353,33 +370,33 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 
 ---
 
-## Roll-up (104 remediation line items + optional modernization tracked separately)
+## Roll-up (113 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
 | ✅ merged | 47 |
 | 🟢 PR open (built) | 4 |
 | 🔨 in progress | 0 |
-| 📋 scoped | 24 |
-| ⏸ blocked | 1 |
-| ⬜ pending | 28 |
+| 📋 scoped | 26 |
+| ⏸ blocked | 3 |
+| ⬜ pending | 33 |
 
 **Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#709 (P12-6)** ·
 **#710 (P12-3)** · **#711 (P12-4, DCI-005 half)** · **#712 (P11-8)** · **Old blocked draft:** #498.
 **Merged + deployed + validated:** **#705/#706/#707/#708** (staging `fadf8a6` == main;
 backend TD `:796`, worker `:244`; #706/#708 PASS-with-limitation) · Wave A **#700/#701/#702/#703** (TDs
-784–789) · #704 (Tier-1-only maker-checker) · Phase 10 Wave 1 #696/#697/#698 · docs #695 ·
+784–789) · #704 (Tier-1-only maker-checker) · RDI (Phase 9) Wave 1 #696/#697/#698 · docs #695 ·
 #699 closed unmerged (redundant). Earlier code PRs (#687–#693) merged/validated.
 
 **Where things stand:** Phases 0–3 (except B7 #12) and 5–6 done. **Phase 4 fully
 built/merged** (only decision-gated #17/#21/#24/#26/#28 remain). Phase 7: status-canon
 done + audit-tamper (#691) merged; ownership gate not started (⬜). Phases 8–9 are the
-remaining body — overwhelmingly ops/vendor/legal, not code. **Phase 10 (RDI audit):**
+remaining body — overwhelmingly ops/vendor/legal, not code. **Phase 9 (RDI audit):**
 **all three current-stage CRITICALs closed & validated — P10-1 (#697, RDI-006) · P10-3
 (#696, RDI-004) · P10-2 (#698, RDI-001/007/011)**; P10-DOC-1 policy approved; W2/W3
-(P10-4…P10-7, HIGH/MED) and the deferred RDI-002/005 items remain. **Phase 11 (BSA audit,
+(P10-4…P10-7, HIGH/MED) and the deferred RDI-002/005 items remain. **Phase 10 (BSA audit,
 Audit 2 — run against `e66405a`):** 19 findings folded as P11-1…P11-9; 2 HIGH blockers
 (BSA-001 revocation fail-open, BSA-015 dependency CVEs) lead Wave 1; BSA-002 = existing
-item 26. **Phase 12 (DCI audit, Audit 3 — run against `956ed5b`):** 30 findings; 11 map to
+item 26. **Phase 11 (DCI audit, Audit 3 — run against `956ed5b`):** 30 findings; 11 map to
 existing items (incl. 3 blockers elevating item 21 / P9-1 / P9-8), 19 net-new folded as
 P12-1…P12-10; code blockers P12-1 (regulated-record deletion) + P12-2 (change-implementation
 recompute) lead Wave 1. **Section order:** phase sections now run …8 → 10 → 11 → 12 →
