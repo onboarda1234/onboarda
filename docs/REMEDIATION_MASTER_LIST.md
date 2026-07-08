@@ -120,7 +120,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | PR | Priority | Title | GitHub | Status |
 |----|:--:|-------|:--:|:--:|
 | PR-APP-STATUS-CANONICALIZATION-1 | P1 blocker | Canonical status labels + senior queue + parity | #685 | ✅ |
-| PR-APP-ACTION-OWNERSHIP-SCOPE-1 | P1/P2 | Terminal decision & memo-approval ownership gate *(= Audit-4 **FEO-013**)*: final approve/reject + pre-approval + memo approval owner-gated; admin/SCO override needs `ownership_override_reason`; unassigned → auto-claim at SUCCESS commit only (failed attempts can never seize ownership); dual second leg exempt only at current HIGH/VERY_HIGH; collaboration verbs stay open. Adversarial review: 2 blockers found + redesigned away; 26 tests incl. HTTP endpoint matrix; live-PG probe PASS | branch `claude/lucid-carson-ww52p3-app-ownership` (`9d61ad9`) | 🔨 built + reviewed — PR opening blocked on GitHub connector re-auth |
+| PR-APP-ACTION-OWNERSHIP-SCOPE-1 | P1/P2 | Terminal decision & memo-approval ownership gate *(= Audit-4 **FEO-013**)*: final approve/reject + pre-approval + memo approval owner-gated; admin/SCO override needs `ownership_override_reason`; unassigned → auto-claim at SUCCESS commit only (failed attempts can never seize ownership); dual second leg exempt only at current HIGH/VERY_HIGH; collaboration verbs stay open. Adversarial review: 2 blockers found + redesigned away; 26 tests incl. HTTP endpoint matrix; live-PG probe PASS | [#713](https://github.com/onboarda1234/onboarda/pull/713) | 🟢 PR open (sign-off memo in `docs/compliance/OWNERSHIP_GATE_SIGNOFF_MEMO.md`, awaiting founder signature) |
 | ops-enforce-staging-sha-alignment-gate | P0 | Staging-SHA gate + delete test logins | [#702](https://github.com/onboarda1234/onboarda/pull/702) | ✅ code half merged (SW-3; gate exercises on next deploy) · delete-test-logins half ⬜ ops-side |
 | perf-applications-default-list-projection | P2 | Slim default list payload | — | ⬜ |
 | audit-log-tamper-evidence-1 | P2 | *(= Phase 4 #27)* | #691 | ✅ |
@@ -374,14 +374,16 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | Status | Count |
 |--------|:--:|
 | ✅ merged | 47 |
-| 🟢 PR open (built) | 4 |
+| 🟢 PR open (built) | 5 |
 | 🔨 in progress | 0 |
 | 📋 scoped | 26 |
 | ⏸ blocked | 3 |
-| ⬜ pending | 33 |
+| ⬜ pending | 32 |
 
-**Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#709 (P12-6)** ·
-**#710 (P12-3)** · **#711 (P12-4, DCI-005 half)** · **#712 (P11-8)** · **Old blocked draft:** #498.
+**Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#709 (P12-6,
+head `43e0b8d` — CI-flake retrigger; full local suite 6656-green on identical content)** ·
+**#710 (P12-3)** · **#711 (P12-4, DCI-005 half)** · **#712 (P11-8)** ·
+**#713 (PR-APP-ACTION-OWNERSHIP-SCOPE-1 / FEO-013)** · **Old blocked draft:** #498.
 **Merged + deployed + validated:** **#705/#706/#707/#708** (staging `fadf8a6` == main;
 backend TD `:796`, worker `:244`; #706/#708 PASS-with-limitation) · Wave A **#700/#701/#702/#703** (TDs
 784–789) · #704 (Tier-1-only maker-checker) · RDI (Phase 9) Wave 1 #696/#697/#698 · docs #695 ·
