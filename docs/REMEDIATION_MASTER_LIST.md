@@ -10,29 +10,30 @@ Legend: ✅ merged · 🟢 PR open (built, awaiting merge) · 🔨 in progress �
 
 # Onboarda / RegMind — Audit-Remediation Master List
 
-**Last reconciled:** 2026-07-07 late (base `main` = `0edee4d`, HEAD after #700 merged —
-SW-1 is now ✅; SW-2 #701 and SW-4 #703 remain the open CI-green PRs). **Audit 4 (FEO)
-folded as Phase 13**; consolidated 4-audit verdict: BLOCKED for uncontrolled production,
-conditional for controlled pilot; only remaining CRITICALs = DCI-001 (P12-1) and
-DCI-027 (P9-8). P11-1 (BSA-001/014) implementation is in progress on branch
-`claude/lucid-carson-ww52p3-p11-1`.
-**Phase 10 Wave-1 complete:** all three current-stage blocking CRITICALs are merged,
-deployed to AWS staging (`regmind-staging:782` / worker `:230`, image `e66405a`), and
-validated (PASS) — **P10-1 #697 (RDI-006), P10-3 #696 (RDI-004), P10-2 #698
-(RDI-001/007/011)**; merge order #695 → #697 → #696 → #698. Audits 2 (BSA) and 3 (DCI)
-have since RUN — folded below as Phases 11 and 12. **#704 merged** (Codex): maker-checker
-narrowed to Tier 1 only — closes the approved four-eyes scope change that #697 had left
-outstanding. **#702 (SW-3) merged**: staging-SHA alignment gate now enforced in the deploy
-workflow. Small-wins **#700 (SW-1) · #701 (SW-2) · #703 (SW-4)** remain open, CI-green,
-awaiting review + Codex handover. Prior batches all merged/validated: #692/#690/#693/#691
-(TDs 775/776/777), #687/#688/#689 (TDs 771/772/773), docs #695. Incorporates
-REGMIND-SYSTEM-READINESS-AUDIT-1 (P9-12/13/14 + CLIENT-PORTAL-RUNTIME-SMOKE-1 +
-PERIODIC-BASELINE-METHOD-HYGIENE-1), an Optional/Post-Production Modernization section,
-Phase 10 (RDI audit), **Phase 11 (BSA audit / Audit 2 — 19 findings)**, and **Phase 12
-(DCI audit / Audit 3 — 30 findings, 6 blockers, schema safety rated UNSAFE)**. Section
-order now places **Phase 9 (Production readiness) last**, after Phases 10/11/12.
-**PR #699** (Codex draft, P10-1 closure-evidence docs) was **closed unmerged** — its closure
-record is carried here instead.
+**Last reconciled:** 2026-07-08 (base `main` = `daab2bb`, HEAD after #703 merged).
+**Wave A fully closed:** all four small-wins merged + deployed to AWS staging + validated
+(PASS) — **#700 (SW-1)**, **#701 (SW-2, `dd28a79`, TD 788)**, **#702 (SW-3, staging-SHA
+gate)**, **#703 (SW-4, `daab2bb`, TD 789)**; staging == `origin/main` == `daab2bb`.
+**Overnight audit-remediation batch built (do-not-merge, CI-green, awaiting review + Codex
+handover):** **#705 (P11-1 / BSA-001+014)**, **#706 (P11-3 / BSA-006+007+013)**,
+**#707 (P11-9 / BSA-018)**, **#708 (P10-6 / RDI-012)** — each implemented → SQLite +
+(where relevant) live-PostgreSQL → fresh-context adversarial review → folded → pushed.
+**Audit 4 (FEO) folded as Phase 13.** Consolidated 4-audit verdict: BLOCKED for
+uncontrolled production, conditional for controlled pilot; only remaining CRITICALs =
+DCI-001 (P12-1) and DCI-027 (P9-8).
+**Phase 10 Wave-1 complete:** the three current-stage blocking CRITICALs are merged,
+deployed (`regmind-staging:782` / worker `:230`, image `e66405a`), validated (PASS) —
+**P10-1 #697 (RDI-006), P10-3 #696 (RDI-004), P10-2 #698 (RDI-001/007/011)**; merge order
+#695 → #697 → #696 → #698. **#704 merged** (Codex): maker-checker narrowed to Tier 1 only
+— closes the approved four-eyes scope change #697 had left outstanding. Prior batches all
+merged/validated: #692/#690/#693/#691 (TDs 775/776/777), #687/#688/#689 (TDs 771/772/773),
+docs #695. Incorporates REGMIND-SYSTEM-READINESS-AUDIT-1 (P9-12/13/14 +
+CLIENT-PORTAL-RUNTIME-SMOKE-1 + PERIODIC-BASELINE-METHOD-HYGIENE-1), an Optional/
+Post-Production Modernization section, Phase 10 (RDI audit), **Phase 11 (BSA / Audit 2 —
+19 findings)**, **Phase 12 (DCI / Audit 3 — 30 findings, 6 blockers, schema UNSAFE)**, and
+**Phase 13 (FEO / Audit 4 — 15 findings)**. Section order places **Phase 9 (Production
+readiness) last**, after Phases 10/11/12/13. **PR #699** (Codex draft, P10-1
+closure-evidence docs) was **closed unmerged** — its closure record is carried here.
 
 > Maintenance: this is the single source of truth for remediation status. On any
 > request for PR/phase status, refresh the Status/GitHub columns from GitHub and
@@ -357,11 +358,11 @@ record is carried here instead.
 | ⏸ blocked | 1 |
 | ⬜ pending | 28 |
 
-**Open PRs:** Wave-A small-wins **#700 (SW-1) · #701 (SW-2) · #703 (SW-4)** — CI-green,
-do-not-merge, awaiting review + Codex handover · **Old blocked draft:** #498.
-**Recently merged:** #702 (SW-3, staging-SHA gate) · #704 (Tier-1-only maker-checker) ·
-Phase 10 Wave 1 #696/#697/#698 (deployed + validated PASS) · docs #695 · #699 closed
-unmerged (redundant). Earlier code PRs (#687–#693) merged/validated.
+**Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#705 (P11-1)** ·
+**#706 (P11-3)** · **#707 (P11-9)** · **#708 (P10-6)** — CI-green · **Old blocked draft:** #498.
+**Recently merged + validated:** Wave A **#700/#701/#702/#703** (staging == `daab2bb`, TDs
+784–789) · #704 (Tier-1-only maker-checker) · Phase 10 Wave 1 #696/#697/#698 · docs #695 ·
+#699 closed unmerged (redundant). Earlier code PRs (#687–#693) merged/validated.
 
 **Where things stand:** Phases 0–3 (except B7 #12) and 5–6 done. **Phase 4 fully
 built/merged** (only decision-gated #17/#21/#24/#26/#28 remain). Phase 7: status-canon
