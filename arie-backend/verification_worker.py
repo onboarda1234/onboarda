@@ -48,6 +48,8 @@ from verification_state import (
 
 logger = logging.getLogger(__name__)
 
+from observability import clear_request_id, set_request_id
+
 TERMINAL_DOCUMENT_STATES = (STATE_VERIFIED, STATE_FLAGGED, STATE_FAILED, STATE_SKIPPED)
 DEFAULT_POLL_INTERVAL_SECONDS = 1.0
 DEFAULT_OBSERVABILITY_INTERVAL_SECONDS = 60.0
@@ -634,6 +636,9 @@ def run_once(
         screening_job = claim_next_screening_job(db, worker_id)
         db.commit()
         if screening_job:
+            # P12-9 / DCI-028: bind the job id as the correlation id so every
+            # structured log emitted while processing this job carries it.
+            set_request_id(f"job-screening-{screening_job['id']}")
             logger.info(
                 "screening_worker_job_claimed job_id=%s application_id=%s worker_id=%s attempt_count=%s %s",
                 screening_job["id"],
@@ -659,6 +664,7 @@ def run_once(
                 "stuck_jobs_failed": int(health.get("failed_jobs") or 0),
                 "screening_stuck_jobs_failed": int(screening_health.get("failed_jobs") or 0),
             }
+        set_request_id(f"job-verification-{job['id']}")
         logger.info(
             "verification_worker_job_claimed job_id=%s document_id=%s worker_id=%s attempt_count=%s %s",
             job["id"],
@@ -683,6 +689,7 @@ def run_once(
         logger.exception("verification_worker_run_once_failed worker_id=%s", worker_id)
         raise
     finally:
+        clear_request_id()
         if own_db:
             try:
                 db.close()

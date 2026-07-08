@@ -23,6 +23,12 @@ import tornado.web
 from auth import decode_token, RateLimiter
 from config import ALLOWED_ORIGIN, IS_DEVELOPMENT, IS_DEMO, ENVIRONMENT as _CFG_ENVIRONMENT
 from db import get_db as db_get_db
+from observability import (
+    clear_request_id,
+    get_request_id,
+    log_request_end,
+    set_request_id,
+)
 
 logger = logging.getLogger("arie")
 
@@ -126,10 +132,28 @@ def snapshot_app_state(app):
     return result
 
 
+# Health/poll endpoints are excluded from per-request structured logs —
+# ELB + schedulers hit them every few seconds and the lines carry no
+# incident-reconstruction value. Module-level so tests driving on_finish with
+# handler stand-ins resolve it without the class attribute chain.
+_REQUEST_LOG_EXCLUDED_PATHS = frozenset({
+    "/api/liveness", "/api/health", "/api/readiness",
+})
+
+
 class BaseHandler(tornado.web.RequestHandler):
     def prepare(self):
         """Enforce HTTPS in production via X-Forwarded-Proto from reverse proxy."""
         self._upload_latency_started_at = time.monotonic()
+        # P12-9 / DCI-028: bind the request correlation id FIRST so every log
+        # line (structured logs, audit rows, errors) emitted while handling
+        # this request carries it. Client-supplied X-Request-ID is sanitised;
+        # otherwise one is generated. Echoed back for client-side correlation.
+        self.request_id = set_request_id(self.request.headers.get("X-Request-ID"))
+        try:
+            self.set_header("X-Request-ID", self.request_id)
+        except Exception:
+            pass
         if ENVIRONMENT == "production":
             forwarded_proto = self.request.headers.get("X-Forwarded-Proto", "")
             if forwarded_proto == "http":
@@ -140,26 +164,44 @@ class BaseHandler(tornado.web.RequestHandler):
         self.check_xsrf_cookie()
 
     def on_finish(self):
-        """Emit parse-ready timing logs for upload-latency endpoints only."""
-        context = _upload_latency_route_context(self.request.method, self.request.path)
-        if not context:
-            return
+        """Emit the structured request log (P12-9 / DCI-028) and parse-ready
+        timing logs for upload-latency endpoints."""
+        try:
+            path = self.request.path
+            started_at = getattr(self, "_upload_latency_started_at", None)
+            if (
+                path.startswith("/api/")
+                and path not in _REQUEST_LOG_EXCLUDED_PATHS
+            ):
+                duration = (
+                    round((time.monotonic() - started_at) * 1000, 1)
+                    if started_at is not None else None
+                )
+                log_request_end(
+                    handler=type(self).__name__,
+                    status=self.get_status(),
+                    duration_ms=duration,
+                    method=self.request.method,
+                    path=path,
+                )
 
-        started_at = getattr(self, "_upload_latency_started_at", None)
-        if started_at is None:
-            return
-
-        duration_ms = (time.monotonic() - started_at) * 1000
-        request_bytes = _parse_content_length(self.request.headers.get("Content-Length"))
-        logger.info(
-            _format_upload_latency_log_line(
-                context=context,
-                status=self.get_status(),
-                duration_ms=duration_ms,
-                request_bytes=request_bytes,
-                environment=ENVIRONMENT,
-            )
-        )
+            context = _upload_latency_route_context(self.request.method, path)
+            if context and started_at is not None:
+                duration_ms = (time.monotonic() - started_at) * 1000
+                request_bytes = _parse_content_length(self.request.headers.get("Content-Length"))
+                logger.info(
+                    _format_upload_latency_log_line(
+                        context=context,
+                        status=self.get_status(),
+                        duration_ms=duration_ms,
+                        request_bytes=request_bytes,
+                        environment=ENVIRONMENT,
+                    )
+                )
+        finally:
+            # The correlation id must not leak into whatever this thread/task
+            # context executes next.
+            clear_request_id()
 
     def check_rate_limit(self, endpoint_key, max_attempts=30, window_seconds=60):
         """
@@ -669,9 +711,10 @@ class BaseHandler(tornado.web.RequestHandler):
             if own_db:
                 db = get_db()
             db.execute(
-                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state, request_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (user.get("sub",""), user.get("name",""), user.get("role",""), action, target, detail, self.get_client_ip(),
-                 _safe_json(before_state), _safe_json(after_state))
+                 _safe_json(before_state), _safe_json(after_state),
+                 get_request_id())
             )
             if own_db or commit:
                 db.commit()
@@ -725,6 +768,7 @@ class BaseHandler(tornado.web.RequestHandler):
             "payload_summary": summary,
             "path": str(path)[:512],
             "method": str(method)[:32],
+            "request_id": get_request_id(),
             "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         }
         detail = json.dumps(detail_obj, default=str)

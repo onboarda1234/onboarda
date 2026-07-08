@@ -4459,6 +4459,37 @@ class HealthHandler(BaseHandler):
         self.write(json.dumps(health, default=str))
 
 
+# P12-9 / DCI-029: cached, non-destructive S3 reachability probe. head_bucket
+# verifies credentials + bucket existence + network path without touching any
+# object. Cached so readiness polls (every few seconds behind an ALB) do not
+# hammer S3; a 60s stale window is acceptable for a readiness signal.
+_S3_READINESS_CACHE = {"at": 0.0, "result": None}
+S3_READINESS_CACHE_SECONDS = 60
+
+
+def _s3_readiness_status(force=False):
+    if not HAS_S3:
+        return {"status": "not_configured", "detail": "s3_client module unavailable"}
+    now_mono = time.monotonic()
+    cached = _S3_READINESS_CACHE.get("result")
+    if cached is not None and not force and (now_mono - _S3_READINESS_CACHE["at"]) < S3_READINESS_CACHE_SECONDS:
+        result = dict(cached)
+        result["cached"] = True
+        return result
+    try:
+        s3 = get_s3_client()
+        s3.s3_client.head_bucket(Bucket=s3.bucket_name)
+        result = {"status": "ok", "bucket": s3.bucket_name}
+    except Exception as e:
+        result = {
+            "status": "unreachable",
+            "detail": str(e)[:300],
+        }
+    _S3_READINESS_CACHE["at"] = now_mono
+    _S3_READINESS_CACHE["result"] = dict(result)
+    return result
+
+
 def _readiness_status_payload(probe_aml=False):
     """Return deep readiness status without writing to a handler.
 
@@ -4566,6 +4597,53 @@ def _readiness_status_payload(probe_aml=False):
         ready = False
     else:
         checks["config"] = {"status": "ok"}
+
+    # 3b. Local disk capacity (P12-9 / DCI-029): uploads always land on the
+    #     local disk first (S3 replication is a second step), and log/tmp
+    #     growth on an exhausted volume takes the whole task down. Gating.
+    try:
+        import shutil as _shutil
+        _disk_target = UPLOAD_DIR if os.path.isdir(UPLOAD_DIR) else "."
+        _usage = _shutil.disk_usage(_disk_target)
+        _free_mb = int(_usage.free // (1024 * 1024))
+        _min_free_mb = 500
+        try:
+            _min_free_mb = max(0, int(os.environ.get("READINESS_MIN_FREE_DISK_MB", "500")))
+        except (TypeError, ValueError):
+            pass
+        checks["disk"] = {
+            "status": "ok",
+            "path": _disk_target,
+            "free_mb": _free_mb,
+            "free_pct": round((_usage.free / _usage.total * 100.0), 1) if _usage.total else 0.0,
+            "min_free_mb": _min_free_mb,
+        }
+        if _free_mb < _min_free_mb:
+            checks["disk"]["status"] = "failed"
+            checks["disk"]["detail"] = (
+                f"free disk {_free_mb}MB below minimum {_min_free_mb}MB — "
+                "document uploads and local caching would fail"
+            )
+            ready = False
+    except Exception as _disk_exc:
+        checks["disk"] = {"status": "unknown", "detail": str(_disk_exc)[:300]}
+        if ENVIRONMENT in ("staging", "production", "prod"):
+            # A capacity check that cannot run must not report ready.
+            ready = False
+
+    # 3c. Document storage (S3) reachability (P12-9 / DCI-029). Gating in
+    #     deployed environments: /api/readiness must not report ready while
+    #     document storage is unavailable. Cached head_bucket — no object I/O.
+    _s3_status = _s3_readiness_status(force=probe_aml)
+    checks["document_storage_s3"] = _s3_status
+    if _s3_status.get("status") == "unreachable" and ENVIRONMENT in ("staging", "production", "prod"):
+        ready = False
+    if _s3_status.get("status") == "not_configured" and ENVIRONMENT in ("staging", "production", "prod"):
+        checks["document_storage_s3"]["detail"] = (
+            "S3 client unavailable in a deployed environment — document "
+            "storage durability depends on it"
+        )
+        ready = False
 
     # 4. AML screening readiness (audit B6/B5). Config-truth only by default —
     #    no external calls on an ordinary readiness poll. probe_aml=True adds
