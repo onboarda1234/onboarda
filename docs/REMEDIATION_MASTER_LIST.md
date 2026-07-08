@@ -120,7 +120,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | PR | Priority | Title | GitHub | Status |
 |----|:--:|-------|:--:|:--:|
 | PR-APP-STATUS-CANONICALIZATION-1 | P1 blocker | Canonical status labels + senior queue + parity | #685 | ✅ |
-| PR-APP-ACTION-OWNERSHIP-SCOPE-1 | P1/P2 | Act-only-as-owner + supervisor override *(= Audit-4 **FEO-013**: pilot runbook's named-owner control is manual, not code-enforced)* | — | ⬜ |
+| PR-APP-ACTION-OWNERSHIP-SCOPE-1 | P1/P2 | Terminal decision & memo-approval ownership gate *(= Audit-4 **FEO-013**)*: final approve/reject + pre-approval + memo approval owner-gated; admin/SCO override needs `ownership_override_reason`; unassigned → auto-claim at SUCCESS commit only (failed attempts can never seize ownership); dual second leg exempt only at current HIGH/VERY_HIGH; collaboration verbs stay open. Adversarial review: 2 blockers found + redesigned away; 26 tests incl. HTTP endpoint matrix; live-PG probe PASS | branch `claude/lucid-carson-ww52p3-app-ownership` (`9d61ad9`) | 🔨 built + reviewed — PR opening blocked on GitHub connector re-auth |
 | ops-enforce-staging-sha-alignment-gate | P0 | Staging-SHA gate + delete test logins | [#702](https://github.com/onboarda1234/onboarda/pull/702) | ✅ code half merged (SW-3; gate exercises on next deploy) · delete-test-logins half ⬜ ops-side |
 | perf-applications-default-list-projection | P2 | Slim default list payload | — | ⬜ |
 | audit-log-tamper-evidence-1 | P2 | *(= Phase 4 #27)* | #691 | ✅ |
