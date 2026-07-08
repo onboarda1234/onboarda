@@ -3364,6 +3364,15 @@ def init_db():
         db.commit()
         logger.info("startup: completed _ensure_supervisor_audit_log_schema")
 
+        # Migration v2.47 (P12-5 / DCI-006): enum CHECK constraints for
+        # workflow status/source columns.  Runs AFTER the supervisor audit
+        # schema repair so a rebuilt legacy table is constrained in the same
+        # boot rather than the next one.
+        logger.info("startup: entering _ensure_status_enum_constraints (v2.47)")
+        _ensure_status_enum_constraints(db)
+        db.commit()
+        logger.info("startup: completed _ensure_status_enum_constraints (v2.47)")
+
         # Ensure built-in resources exist for the back-office reference library.
         logger.info("startup: entering _ensure_default_compliance_resources")
         _ensure_default_compliance_resources(db)
@@ -8058,20 +8067,32 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
-    # Migration v2.47 (P12-5 / DCI-006): enum CHECK constraints for workflow
-    # status/source columns, with pre-constraint backfill/verification.
-    _ensure_status_enum_constraints(db)
+    # Migration v2.47 (P12-5 / DCI-006) runs from init_db AFTER
+    # _ensure_supervisor_audit_log_schema so a legacy-audit-schema database
+    # gets its rebuild first and the enum constraints in the same boot.
 
 
 # P12-5 / DCI-006 constraint-repair specs:
 # (table, column, allowed_values, null_backfill, set_not_null)
+#
+# Backfill policy decisions (adversarial review, P12-5):
+#   * clients.status NULL/blank -> 'inactive', NOT 'active': a NULL-status
+#     client cannot authenticate today (login filters on status='active'),
+#     so promoting the anomaly to 'active' would silently RE-ENABLE access.
+#     'inactive' is fail-closed — an operator reviews and re-enables.
+#   * supervisor_audit_log.severity is NOT backfilled here: severity is part
+#     of the v2 entry-hash payload on the hash-chained audit table, and this
+#     helper's contract is that evidence rows are never rewritten.  (The
+#     legacy schema-repair path owns its own pre-existing severity
+#     normalisation.)  NULL severity rows are CHECK-legal and simply keep
+#     their NULL.
 STATUS_ENUM_CONSTRAINT_SPECS = (
-    ("clients", "status", CLIENT_STATUS_VALUES, "active", True),
+    ("clients", "status", CLIENT_STATUS_VALUES, "inactive", True),
     ("agent_executions", "status", AGENT_EXECUTION_STATUS_VALUES, None, False),
     ("agent_executions", "source", AGENT_EXECUTION_SOURCE_VALUES, "ai", False),
     ("supervisor_pipeline_results", "status", SUPERVISOR_PIPELINE_STATUS_VALUES, None, False),
     ("supervisor_audit_log", "event_type", SUPERVISOR_AUDIT_EVENT_TYPE_VALUES, None, False),
-    ("supervisor_audit_log", "severity", SUPERVISOR_AUDIT_SEVERITY_VALUES, "info", False),
+    ("supervisor_audit_log", "severity", SUPERVISOR_AUDIT_SEVERITY_VALUES, None, False),
     ("compliance_memos", "supervisor_status", COMPLIANCE_MEMO_SUPERVISOR_STATUS_VALUES, "pending", False),
     ("compliance_memos", "rule_engine_status", COMPLIANCE_MEMO_RULE_ENGINE_STATUS_VALUES, "pending", False),
 )
@@ -8104,11 +8125,47 @@ def _ensure_status_enum_constraints(db: 'DBConnection'):
                 continue
             qt = _pg_quote_identifier(_tbl) if db.is_postgres else _tbl
             qc = _pg_quote_identifier(_col) if db.is_postgres else _col
+
+            existing_constraints = []
+            if db.is_postgres:
+                # Steady-state short-circuit (adversarial review M2): if the
+                # canonical constraint is already installed with exactly the
+                # canon values (and NOT NULL where required), skip the
+                # backfill UPDATE, the off-canon scan, and the DROP+ADD —
+                # otherwise every boot would take ACCESS EXCLUSIVE locks and
+                # full validation scans on unbounded tables
+                # (supervisor_audit_log is append-only and never purged).
+                existing_constraints = _postgres_check_constraints_for_column(db, _tbl, _col)
+                canonical = [
+                    c for c in existing_constraints
+                    if c.get("conname") == f"{_tbl}_{_col}_check"
+                    and set(re.findall(r"'([^']*)'", c.get("definition") or "")) == set(_allowed)
+                ]
+                if canonical and len(existing_constraints) == 1:
+                    if _set_not_null:
+                        nullable = db.execute(
+                            "SELECT is_nullable FROM information_schema.columns "
+                            "WHERE table_name = ? AND column_name = ?",
+                            (_tbl, _col),
+                        ).fetchone()
+                        if dict(nullable or {}).get("is_nullable") == "NO":
+                            continue
+                    else:
+                        continue
+
+            backfilled = 0
             if _null_fill is not None:
                 db.execute(
                     f"UPDATE {qt} SET {qc} = ? WHERE {qc} IS NULL OR TRIM({qc}) = ''",
                     (_null_fill,),
                 )
+                backfilled = getattr(getattr(db, "_cursor", None), "rowcount", 0) or 0
+                if backfilled:
+                    logger.warning(
+                        "Migration v2.47: backfilled %d NULL/blank %s.%s row(s) "
+                        "to %r (P12-5 / DCI-006)",
+                        backfilled, _tbl, _col, _null_fill,
+                    )
             placeholders = ", ".join("?" for _ in _allowed)
             bad = db.execute(
                 f"SELECT {qc} AS v, COUNT(*) AS c FROM {qt} "
@@ -8118,13 +8175,33 @@ def _ensure_status_enum_constraints(db: 'DBConnection'):
             ).fetchall()
             if bad:
                 offenders = {str(r["v"]): int(r["c"]) for r in (dict(x) for x in bad)}
-                logger.error(
-                    "Migration v2.47: %s.%s holds OFF-CANON values %s — rows "
-                    "preserved (never rewritten), CHECK constraint SKIPPED for "
-                    "this column; remediate the data and the constraint will "
-                    "install on the next boot (P12-5 / DCI-006)",
-                    _tbl, _col, offenders,
-                )
+                if db.is_postgres:
+                    # Surface any conflicting historical CHECK still installed
+                    # on the column (adversarial review m5): a stale
+                    # wrong-vocabulary constraint keeps REJECTING modern
+                    # writes while the off-canon rows block its replacement —
+                    # the operator needs both facts to break the deadlock.
+                    stale = {
+                        c.get("conname"): c.get("definition")
+                        for c in existing_constraints
+                    }
+                    logger.error(
+                        "Migration v2.47: %s.%s holds OFF-CANON values %s — rows "
+                        "preserved (never rewritten), CHECK constraint SKIPPED for "
+                        "this column; remediate the data and the constraint will "
+                        "install on the next boot. Existing CHECK constraint(s) "
+                        "still installed on the column: %s (P12-5 / DCI-006)",
+                        _tbl, _col, offenders, stale or "none",
+                    )
+                else:
+                    logger.error(
+                        "Migration v2.47: %s.%s holds OFF-CANON values %s — rows "
+                        "preserved. NOTE: SQLite cannot retrofit CHECK "
+                        "constraints; fresh schemas enforce via DDL, so "
+                        "remediate this data or recreate the dev database "
+                        "(P12-5 / DCI-006)",
+                        _tbl, _col, offenders,
+                    )
                 db.commit()
                 continue
             if db.is_postgres:
@@ -8137,11 +8214,13 @@ def _ensure_status_enum_constraints(db: 'DBConnection'):
                 )
                 if _set_not_null:
                     db.execute(f"ALTER TABLE {qt} ALTER COLUMN {qc} SET NOT NULL")
-            db.commit()
-            logger.info(
-                "Migration v2.47: %s.%s enum constraint ensured (%d values)",
-                _tbl, _col, len(_allowed),
-            )
+                db.commit()
+                logger.info(
+                    "Migration v2.47: %s.%s enum constraint installed (%d values)",
+                    _tbl, _col, len(_allowed),
+                )
+            else:
+                db.commit()
         except Exception as e:
             logger.error(
                 "Migration v2.47 failed for %s.%s: %s", _tbl, _col, e, exc_info=True
@@ -9980,17 +10059,48 @@ def migrate_sqlite_to_postgres(sqlite_path: str, pg_url: str):
             placeholders = ", ".join(["%s"] * len(columns))
             insert_sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"
 
-            # Insert rows into PostgreSQL
+            # Insert rows into PostgreSQL.  Each row runs under a SAVEPOINT
+            # (P12-5 review M3): a plain rollback() here used to discard EVERY
+            # previously-inserted row of the table and then claim
+            # "Migrated N rows" — with enum CHECK constraints now installed, a
+            # single off-canon legacy row would have silently destroyed the
+            # whole table's migration.
+            inserted = 0
+            failed = 0
             for row in rows:
                 values = tuple(row)
                 try:
+                    pg_cursor.execute("SAVEPOINT migrate_row")
                     pg_cursor.execute(insert_sql, values)
+                    pg_cursor.execute("RELEASE SAVEPOINT migrate_row")
+                    inserted += 1
                 except Exception as e:
-                    logger.warning(f"  Error inserting row into {table}: {e}")
-                    pg_conn.rollback()
+                    failed += 1
+                    logger.error(f"  Error inserting row into {table}: {e}")
+                    pg_cursor.execute("ROLLBACK TO SAVEPOINT migrate_row")
 
             pg_conn.commit()
-            logger.info(f"  Migrated {len(rows)} rows")
+            if failed:
+                logger.error(
+                    f"  Migrated {inserted} of {len(rows)} rows for {table} — "
+                    f"{failed} row(s) FAILED and were NOT migrated; review the "
+                    f"errors above before relying on this migration"
+                )
+            else:
+                logger.info(f"  Migrated {inserted} rows")
+
+            # Verify destination row count against the source (best effort).
+            try:
+                pg_cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                dest_count = pg_cursor.fetchone()
+                dest_count = list(dest_count.values())[0] if isinstance(dest_count, dict) else dest_count[0]
+                if int(dest_count) < len(rows):
+                    logger.error(
+                        f"  ROW COUNT MISMATCH for {table}: source={len(rows)} "
+                        f"destination={dest_count}"
+                    )
+            except Exception as count_err:
+                logger.warning(f"  Could not verify row count for {table}: {count_err}")
 
         logger.info("Migration completed successfully")
 

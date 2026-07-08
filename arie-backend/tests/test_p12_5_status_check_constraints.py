@@ -426,6 +426,80 @@ class TestPostgresConstraintRepair:
             pg_db.execute(f"DROP TABLE IF EXISTS {table}")
             pg_db.commit()
 
+    def test_steady_state_boot_is_a_no_op(self, pg_db, monkeypatch):
+        """Adversarial review M2: once the canonical constraint is installed,
+        subsequent boots must NOT drop+recreate it (ACCESS EXCLUSIVE lock +
+        full validation scan on unbounded tables). The constraint's oid must
+        survive a second run unchanged."""
+        import db as db_module
+        table = f"p125_ss_{uuid.uuid4().hex[:8]}"
+        self._fresh_table(pg_db, table)
+        try:
+            monkeypatch.setattr(
+                db_module, "STATUS_ENUM_CONSTRAINT_SPECS",
+                ((table, "status", ("active", "inactive"), "inactive", True),),
+            )
+            db_module._ensure_status_enum_constraints(pg_db)
+            oid_before = dict(pg_db.execute(
+                "SELECT oid FROM pg_constraint WHERE conname = ?",
+                (f"{table}_status_check",),
+            ).fetchone())["oid"]
+            db_module._ensure_status_enum_constraints(pg_db)
+            row = pg_db.execute(
+                "SELECT oid FROM pg_constraint WHERE conname = ?",
+                (f"{table}_status_check",),
+            ).fetchone()
+            assert row is not None, "constraint must still exist after second run"
+            assert dict(row)["oid"] == oid_before, (
+                "steady-state boot must not DROP+ADD the constraint"
+            )
+        finally:
+            pg_db.execute(f"DROP TABLE IF EXISTS {table}")
+            pg_db.commit()
+
+    def test_clients_null_backfill_is_fail_closed(self, pg_db, monkeypatch):
+        """Adversarial review M1: a NULL-status client cannot log in today
+        (login filters status='active'); the backfill must NOT silently
+        re-enable access — NULL goes to 'inactive', not 'active'."""
+        import db as db_module
+        table = f"p125_fc_{uuid.uuid4().hex[:8]}"
+        self._fresh_table(pg_db, table)
+        try:
+            pg_db.execute(f"INSERT INTO {table} (id, status) VALUES ('anom', NULL)")
+            pg_db.commit()
+            # Use the REAL clients spec shape: null_fill comes from the
+            # module constant tuple — assert the module-level policy first.
+            clients_spec = next(
+                s for s in db_module.STATUS_ENUM_CONSTRAINT_SPECS if s[0] == "clients"
+            )
+            assert clients_spec[3] == "inactive", (
+                "clients.status NULL backfill must be fail-closed ('inactive')"
+            )
+            monkeypatch.setattr(
+                db_module, "STATUS_ENUM_CONSTRAINT_SPECS",
+                ((table, "status", ("active", "inactive"), clients_spec[3], True),),
+            )
+            db_module._ensure_status_enum_constraints(pg_db)
+            row = dict(pg_db.execute(
+                f"SELECT status FROM {table} WHERE id = 'anom'"
+            ).fetchone())
+            assert row["status"] == "inactive"
+        finally:
+            pg_db.execute(f"DROP TABLE IF EXISTS {table}")
+            pg_db.commit()
+
+    def test_severity_is_not_backfilled_on_the_hash_chained_table(self):
+        """Adversarial review m4: severity participates in the supervisor
+        audit chain hash — the repair must never rewrite it."""
+        import db as db_module
+        spec = next(
+            s for s in db_module.STATUS_ENUM_CONSTRAINT_SPECS
+            if s[0] == "supervisor_audit_log" and s[1] == "severity"
+        )
+        assert spec[3] is None, (
+            "supervisor_audit_log.severity must not be backfilled (hash-chained)"
+        )
+
     def test_clean_table_gains_constraint_and_null_backfill(self, pg_db, monkeypatch):
         import db as db_module
         table = f"p125_ok_{uuid.uuid4().hex[:8]}"
