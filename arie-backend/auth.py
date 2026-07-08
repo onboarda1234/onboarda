@@ -25,6 +25,17 @@ logger = logging.getLogger("arie")
 SECRET_KEY = get_jwt_secret()
 TOKEN_EXPIRY_HOURS = 24
 
+class RevocationCheckUnavailable(Exception):
+    """Raised when a token's revocation status CANNOT be determined because the
+    persistent revocation store is unreachable (BSA-001 fail-closed read path).
+
+    Defined here — the zero-dependency module of the auth stack — so
+    security_hardening's TokenRevocationList can raise it via a function-level
+    import without creating an import cycle. decode_token() catches it and
+    rejects the token: an unverifiable session is treated as invalid, never as
+    valid."""
+
+
 # ── Token revocation (lazy import to avoid circular deps) ──
 _revocation_list = None
 
@@ -66,13 +77,38 @@ def create_token(user_id, role, name, token_type="officer"):
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
 
+def decode_token_unrevoked(token):
+    """Signature/expiry/issuer validation ONLY — deliberately SKIPS the
+    revocation checks. For logout idempotency (BSA-001 review fold B1): a
+    token already memory-revoked on this worker must still be re-processable
+    so a RETRIED logout (after a durable-write failure returned 503) can
+    ensure the durable revocation row exists — with the normal decode_token
+    the retry would see the token as invalid, skip it, and claim
+    "logged_out" without any durable revocation ever being written.
+    NEVER use this for authenticating requests."""
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"],
+                          issuer="arie-finance",
+                          options={"require": ["exp", "iat", "sub"]})
+    except jwt.InvalidTokenError:
+        return None
+
+
 def decode_token(token):
     """Decode and validate JWT with issuer verification."""
     try:
         decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"],
                           issuer="arie-finance",
                           options={"require": ["exp", "iat", "sub"]})
-        revocation = _get_revocation_list()
+    except jwt.ExpiredSignatureError:
+        logger.debug("Token expired")
+        return None
+    except jwt.InvalidTokenError as e:
+        logger.debug("Invalid token: %s", e)
+        return None
+
+    revocation = _get_revocation_list()
+    try:
         # Check per-token revocation (individual logout)
         if revocation.is_revoked(decoded.get("jti", "")):
             logger.debug("Token revoked")
@@ -100,13 +136,16 @@ def decode_token(token):
             if iat <= int(revocation_time):
                 logger.debug("Token revoked by user-level password change")
                 return None
-        return decoded
-    except jwt.ExpiredSignatureError:
-        logger.debug("Token expired")
+    except RevocationCheckUnavailable as exc:
+        # BSA-001 fail-closed read path: if the revocation store cannot be
+        # consulted we cannot prove this token was not revoked (logout /
+        # password change on another worker), so reject it rather than
+        # admit a possibly-killed session.
+        logger.warning(
+            "Revocation status unavailable — failing closed, token rejected: %s", exc
+        )
         return None
-    except jwt.InvalidTokenError as e:
-        logger.debug("Invalid token: %s", e)
-        return None
+    return decoded
 
 
 # ══════════════════════════════════════════════════════════
