@@ -10,14 +10,14 @@ Legend: ✅ merged · 🟢 PR open (built, awaiting merge) · 🔨 in progress �
 
 # Onboarda / RegMind — Audit-Remediation Master List
 
-**Last reconciled:** 2026-07-08 (base `main` = `daab2bb`, HEAD after #703 merged).
+**Last reconciled:** 2026-07-08 (base `main` = `5c7a3af`, HEAD after #708 merged).
 **Wave A fully closed:** all four small-wins merged + deployed to AWS staging + validated
 (PASS) — **#700 (SW-1)**, **#701 (SW-2, `dd28a79`, TD 788)**, **#702 (SW-3, staging-SHA
 gate)**, **#703 (SW-4, `daab2bb`, TD 789)**; staging == `origin/main` == `daab2bb`.
-**Overnight audit-remediation batch built (do-not-merge, CI-green, awaiting review + Codex
-handover):** **#705 (P11-1 / BSA-001+014)**, **#706 (P11-3 / BSA-006+007+013)**,
-**#707 (P11-9 / BSA-018)**, **#708 (P10-6 / RDI-012)** — each implemented → SQLite +
-(where relevant) live-PostgreSQL → fresh-context adversarial review → folded → pushed.
+**Overnight batch:** **#705 (P11-1)**, **#706 (P11-3)**, **#708 (P10-6)** MERGED
+(await Codex deploy/validate report); **#707 (P11-9)** still open. **Wave B built
+(do-not-merge):** **#709 (P12-6 / DCI-007)**, **#710 (P12-3 / DCI-008+010+011)** — each
+implemented → SQLite + live-PostgreSQL → fresh-context adversarial review → folded → pushed.
 **Audit 4 (FEO) folded as Phase 13.** Consolidated 4-audit verdict: BLOCKED for
 uncontrolled production, conditional for controlled pilot; only remaining CRITICALs =
 DCI-001 (P12-1) and DCI-027 (P9-8).
@@ -154,7 +154,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | P10-3 | PR-RDI-3 — Risk-staleness gate | RDI-004 | CRITICAL | Block final decisions when `risk_config_version` ≠ current or recompute failed; persist recompute failures | [#696](https://github.com/onboarda1234/onboarda/pull/696) | ✅ merged |
 | P10-4 | PR-RDI-4 — Per-decision-type gates | RDI-003, 008 | HIGH | Add required prerequisites for reject / escalate_edd / request_documents; block failed-validation memo from supervisor step **(needs policy decision on per-type prerequisites)** | — | 📋 scoped (decision-gated) |
 | P10-5 | PR-RDI-5 — Decision-record coverage + provenance | RDI-009 (non-SAR), 010 | HIGH | Write decision_records for EDD closure / monitoring actions / change approvals / risk changes; add AI-vs-rule source + `agent_executions` link. Depends on **P10-2** | — | 📋 scoped |
-| P10-6 | PR-RDI-6 — Sign-off IP attribution | RDI-012 | HIGH | Trust `X-Real-IP` only when the direct peer is a known proxy/ALB (stop browser spoofing) — XFF was already gated; the unconditional X-Real-IP fallback closed | [#708](https://github.com/onboarda1234/onboarda/pull/708) | 🟢 PR open (CI pending) |
+| P10-6 | PR-RDI-6 — Sign-off IP attribution | RDI-012 | HIGH | Trust `X-Real-IP` only when the direct peer is a known proxy/ALB (stop browser spoofing) — XFF was already gated; the unconditional X-Real-IP fallback closed | [#708](https://github.com/onboarda1234/onboarda/pull/708) | ✅ merged |
 | P10-7 | PR-RDI-7 — Append-only audit at DB level | RDI-013 (non-SAR) | MEDIUM | Separate migration/admin DB role from runtime role; revoke runtime `UPDATE`/`DELETE` on `audit_log`/`decision_records`/`supervisor_audit_log`; stop cleanup code deleting those rows *(code half ships early; grants half is RDS/infra)* | — | 📋 scoped (part ops) |
 
 **Deferred (per management response 2026-07-07):**
@@ -185,9 +185,9 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 
 | # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
 |---|----|----------|:--:|-----------------------|:--:|:--:|
-| P11-1 | Fail-closed revocation + post-await session re-validation | BSA-001, 014 | HIGH + MED | Make token-revocation persistence **mandatory** for logout / password-reset / password-change (503 + rollback, no false success); `is_revoked()`/`decode_token` fail-closed on store outage; logout-retry convergence (review fold B1); supervisor run re-validates actor post-await before persisting | [#705](https://github.com/onboarda1234/onboarda/pull/705) | 🟢 PR open (CI pending) |
+| P11-1 | Fail-closed revocation + post-await session re-validation | BSA-001, 014 | HIGH + MED | Make token-revocation persistence **mandatory** for logout / password-reset / password-change (503 + rollback, no false success); `is_revoked()`/`decode_token` fail-closed on store outage; logout-retry convergence (review fold B1); supervisor run re-validates actor post-await before persisting | [#705](https://github.com/onboarda1234/onboarda/pull/705) | ✅ merged |
 | P11-2 | Dependency CVE remediation + OSV/pip-audit CI gate | BSA-015 | HIGH | Upgrade Tornado ≥6.5.7, PyJWT ≥2.13.0, cryptography ≥48.0.1, WeasyPrint (upgrade/mitigate); add pip-audit / OSV scan that fails CI on HIGH/CRITICAL advisories | — | 📋 scoped (W1 blocker) |
-| P11-3 | Fail-closed inputs + AI budget | BSA-006, 007, 013 | MED + LOW | `get_json()` returns structured **400** on malformed body (both BaseHandler and supervisor API); bounded-int pagination everywhere (server + supervisor routes); Claude budget **fails closed** in staging/prod/demo incl. the raw `generate()` path | [#706](https://github.com/onboarda1234/onboarda/pull/706) | 🟢 PR open (CI pending) |
+| P11-3 | Fail-closed inputs + AI budget | BSA-006, 007, 013 | MED + LOW | `get_json()` returns structured **400** on malformed body (both BaseHandler and supervisor API); bounded-int pagination everywhere (server + supervisor routes); Claude budget **fails closed** in staging/prod/demo incl. the raw `generate()` path | [#706](https://github.com/onboarda1234/onboarda/pull/706) | ✅ merged |
 | P11-4 | Offload blocking I/O off the IOLoop | BSA-004, 005 | MED | Move WeasyPrint PDF render and in-request Claude document-verify to a worker/executor; replace `time.sleep` backoff; enforce per-user/app AI quotas *(coordinate with item 12 / B7)* | — | 📋 scoped |
 | P11-5 | AI prompt sanitisation + output schema + circuit breaker | BSA-011, 012 | MED | Apply the deep/3-pass sanitiser to **all** `generate()` inputs; replace raw-token enum parsing with Pydantic schemas (AI free-text advisory only); add source-controlled, DB-persisted circuit breaker around Anthropic/Sumsub/S3 | — | 📋 scoped |
 | P11-6 | AuthZ & audit hardening | BSA-003, 009 | MED | Require recent re-auth / second factor on admin password-reset (+ mandatory revocation); route all change-management 403 denials through `log_authz_denial()` | — | 📋 scoped |
@@ -222,10 +222,10 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 |---|----|----------|:--:|-----------------------|:--:|:--:|
 | P12-1 | Regulated-record deletion protection | DCI-001, 003 | CRITICAL + HIGH | App-delete cleanup + startup cleanup migration must NEVER delete regulated evidence (`sar_reports`, `compliance_memos`, `edd_cases`, `agent_executions`, `supervisor_audit_log`, `decision_records`) — soft-delete/tombstone with deletion marker instead; move fixture cleanup out of generic startup code | — | 📋 scoped (W1 blocker) |
 | P12-2 | Change-implementation fail-closed recompute + audit-in-transaction | DCI-012, 013 | HIGH + MED | Recompute risk (or write a `requires_recomputation` quarantine marker, P10-3-style) in the SAME transaction as implement — a swallowed recompute failure must not leave a live material change on a stale score; write CM approve/implement audit rows before commit, not after | — | 📋 scoped (W1 blocker) |
-| P12-3 | Compliance-logic corrections | DCI-008, 010, 011 | HIGH + HIGH + MED | Risk-config load failure fails CLOSED in staging/prod (no silent hardcoded-default model); memo `jur_rating` actually mutates to VERY_HIGH when `SANCTIONED_COUNTRY_FLOOR` is claimed; fix `MULTI_GAP_ESCALATION` branch order (≥4 checked before ≥3) | — | 📋 scoped |
+| P12-3 | Compliance-logic corrections | DCI-008, 010, 011 | HIGH + HIGH + MED | Risk-config load failure fails CLOSED in staging/prod (no silent hardcoded-default model); memo `jur_rating` actually mutates to VERY_HIGH when `SANCTIONED_COUNTRY_FLOOR` is claimed; fix `MULTI_GAP_ESCALATION` branch order (≥4 checked before ≥3). Review folds: PG/JSONB parse hole closed (`safe_json_loads` coerced malformed scalars to `{}` before validation); recompute/boot-repair/correction/EDD-tier laundering paths all re-raise; boot-time CRITICAL probe. **Deploy precondition: validate live staging risk_config row first (see PR)** | [#710](https://github.com/onboarda1234/onboarda/pull/710) | 🟢 PR open |
 | P12-4 | Migration hard-stops + schema-drift detection | DCI-005, 004 | HIGH | Reject `MIGRATION_FAILURE_MODE=continue` when ENVIRONMENT is staging/production; startup drift check comparing declared constraints/FKs/columns vs live schema, fail-closed in staging/prod (`CREATE TABLE IF NOT EXISTS` never alters existing FKs — drift already admitted in source) | — | 📋 scoped |
 | P12-5 | Status-column CHECK constraints | DCI-006 | MED | CHECK constraints/enums for `clients.status`, `agent_executions.status/source`, `supervisor_pipeline_results.status`, `supervisor_audit_log.event_type/severity`, `compliance_memos.supervisor_status/rule_engine_status` (backfill invalid data first) | — | 📋 scoped |
-| P12-6 | PG pool connection validation | DCI-007 | MED | Pre-ping (`SELECT 1`) on pool checkout; discard/retry stale connections after RDS failover | — | 📋 scoped |
+| P12-6 | PG pool connection validation | DCI-007 | MED | Pre-ping (`SELECT 1`) on pool checkout; discard/retry stale connections after RDS failover | [#709](https://github.com/onboarda1234/onboarda/pull/709) | 🟢 PR open |
 | P12-7 | Verification-matrix fidelity | DCI-014, 015 | MED + LOW | HYBRID checks go to Claude ONLY on deterministic INCONCLUSIVE (never override a deterministic FAIL), per the matrix policy; resolve the 5 TODO enhanced-requirement document mappings with compliance sign-off | — | 📋 scoped |
 | P12-8 | Retention purge enforceability + purge-log evidence | DCI-020, 021 | MED | Map (or explicitly mark manual-with-procedure) all retention categories beyond audit_logs/monitoring_alerts; add subject_id/application_id/tables_affected/per-table counts/batch id to `data_purge_log`, written atomically with the purge | — | 📋 scoped |
 | P12-9 | Observability hardening | DCI-028, 029 | MED | Force JSON logs + request-correlation IDs in staging/prod; readiness probes for S3 reachability and disk capacity | — | 📋 scoped |
@@ -351,16 +351,17 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 ## Roll-up (104 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
-| ✅ merged | 43 |
-| 🟢 PR open (built) | 4 |
+| ✅ merged | 46 |
+| 🟢 PR open (built) | 3 |
 | 🔨 in progress | 0 |
-| 📋 scoped | 28 |
+| 📋 scoped | 26 |
 | ⏸ blocked | 1 |
 | ⬜ pending | 28 |
 
-**Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#705 (P11-1)** ·
-**#706 (P11-3)** · **#707 (P11-9)** · **#708 (P10-6)** — CI-green · **Old blocked draft:** #498.
-**Recently merged + validated:** Wave A **#700/#701/#702/#703** (staging == `daab2bb`, TDs
+**Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#707 (P11-9)** ·
+**#709 (P12-6)** · **#710 (P12-3)** · **Old blocked draft:** #498.
+**Recently merged:** **#705 (P11-1)** · **#706 (P11-3)** · **#708 (P10-6)** — awaiting
+Codex deploy/validate report. **Merged + validated:** Wave A **#700/#701/#702/#703** (TDs
 784–789) · #704 (Tier-1-only maker-checker) · Phase 10 Wave 1 #696/#697/#698 · docs #695 ·
 #699 closed unmerged (redundant). Earlier code PRs (#687–#693) merged/validated.
 
