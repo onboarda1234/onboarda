@@ -19,3 +19,9 @@ node_modules/
 .mypy_cache/
 .vscode/
 .idea/
+# BSA-019: never bake local runtime data, uploads (PII), or logs into images
+uploads/
+data/
+logs/
+*.log
+requirements-dev.txt
