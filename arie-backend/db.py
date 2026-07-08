@@ -509,10 +509,56 @@ class DBConnection:
 # Main Database Interface
 # ============================================================================
 
+def _checkout_validated_pg_conn(max_attempts: int = 3):
+    """Borrow a PostgreSQL connection from the pool and validate it before use
+    (DCI-007 pre-ping).
+
+    A pooled connection can go stale after an RDS failover, network blip, or
+    idle-timeout — psycopg2's ThreadedConnectionPool does NOT check liveness on
+    checkout, so a dead connection would be handed to a request handler and fail
+    on its first statement. Here we run a lightweight ``SELECT 1``; if it fails
+    the connection is discarded from the pool (``putconn(close=True)``) and a
+    fresh one is fetched, up to ``max_attempts`` times. This turns a
+    once-per-failover request error into a transparent retry.
+    """
+    last_exc = None
+    for _attempt in range(max_attempts):
+        conn = _pg_pool.getconn()
+        try:
+            # Any leftover aborted-transaction state on a reused connection would
+            # make SELECT 1 raise; rolling back first makes the ping a true
+            # liveness check rather than a transaction-state check.
+            conn.rollback()
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+            finally:
+                cur.close()
+            return conn
+        except Exception as exc:  # noqa: BLE001 — any failure means discard+retry
+            last_exc = exc
+            logger.warning(
+                "Stale PostgreSQL connection discarded on checkout (attempt %d/%d): %s",
+                _attempt + 1, max_attempts, exc,
+            )
+            try:
+                _pg_pool.putconn(conn, close=True)
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    raise RuntimeError(
+        f"Could not obtain a live PostgreSQL connection after {max_attempts} "
+        f"attempts: {last_exc}"
+    )
+
+
 def get_db() -> DBConnection:
     """
     Get a database connection.
-    - For PostgreSQL: returns a connection from the pool
+    - For PostgreSQL: returns a validated (pre-pinged) connection from the pool
     - For SQLite: returns a new connection
 
     C-07: SQLite is BLOCKED in production. Production MUST use PostgreSQL.
@@ -521,7 +567,7 @@ def get_db() -> DBConnection:
 
     if USE_POSTGRESQL:
         init_pg_pool()
-        conn = _pg_pool.getconn()
+        conn = _checkout_validated_pg_conn()
         return DBConnection(conn, is_postgres=True)
     else:
         # C-07: Block SQLite in production — this is a CRITICAL safety guard
