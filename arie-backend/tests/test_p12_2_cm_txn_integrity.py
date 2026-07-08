@@ -4,12 +4,18 @@ DCI-012: ``implement_change_request`` used to commit the live profile update
 and the ``implemented`` status BEFORE post-change risk recomputation, and a
 recompute failure was only warning-logged — leaving an application approvable
 on its stale pre-change risk score. Now a quarantine sentinel
-(``stale:cm_recompute_pending``) is stamped on the application IN THE SAME
-TRANSACTION as the implementation; a successful post-commit recompute
-overwrites it with the real config version, and any failure (raise, soft
-``recomputed=False``, missing recompute function, crash between commits)
-leaves the sentinel durable so the decision-time staleness gate blocks
-approval until a successful re-score.
+(``stale:cm_recompute_pending:<request_id>``) is stamped on the application
+IN THE SAME TRANSACTION as the implementation whenever the change is
+risk-relevant (same predicate as the implementation gate:
+``_implementation_requires_risk`` — the explicit flag OR a risk-relevant
+canonical change key); a successful post-commit recompute overwrites it with
+the real config version, and any failure (raise, soft ``recomputed=False``,
+missing recompute function, crash between commits) leaves the sentinel
+durable so the decision-time staleness gate blocks approval until a
+successful re-score. The PATCH→implemented path carries the same recompute.
+``recompute_risk`` persists via a provenance compare-and-swap so an in-flight
+recompute cannot overwrite a concurrent implementation's fresher sentinel
+with a score computed from pre-change data.
 
 DCI-013: ``approve_change_request`` / ``implement_change_request`` (and the
 sibling ``reject_change_request``) used to write their audit rows AFTER
@@ -32,7 +38,12 @@ from tests.cm_evidence_test_helpers import attach_verified_cm_evidence
 ADMIN_USER = {"sub": "admin-1", "name": "Admin User", "role": "admin"}
 SCO_USER = {"sub": "sco-1", "name": "SCO User", "role": "sco"}
 
+# Sentinel PREFIX; the stored value is "<prefix>:<request_id>".
 CM_PENDING_SENTINEL = "stale:cm_recompute_pending"
+
+
+def _expected_sentinel(req_id):
+    return f"{CM_PENDING_SENTINEL}:{req_id}"
 
 
 def _get_cm():
@@ -176,7 +187,7 @@ class TestDci012RecomputeQuarantine:
             "SELECT status FROM change_requests WHERE id = ?", (req_id,)
         ).fetchone()
         assert cr["status"] == "implemented"
-        assert _risk_config_version(db, app_id) == CM_PENDING_SENTINEL
+        assert _risk_config_version(db, app_id) == _expected_sentinel(req_id)
 
     def test_soft_failed_recompute_keeps_sentinel(self, db):
         """recompute_risk swallows generic errors and returns recomputed=False
@@ -193,7 +204,7 @@ class TestDci012RecomputeQuarantine:
             wdb, req_id, ADMIN_USER, recompute_risk_fn=soft_fail_recompute,
         )
         assert ok, err
-        assert _risk_config_version(db, app_id) == CM_PENDING_SENTINEL
+        assert _risk_config_version(db, app_id) == _expected_sentinel(req_id)
 
     def test_missing_recompute_fn_still_quarantines(self, db):
         """No recompute function at all (rule engine unavailable) is the WORST
@@ -205,7 +216,7 @@ class TestDci012RecomputeQuarantine:
 
         ok, err, _ = cm.implement_change_request(wdb, req_id, ADMIN_USER)
         assert ok, err
-        assert _risk_config_version(db, app_id) == CM_PENDING_SENTINEL
+        assert _risk_config_version(db, app_id) == _expected_sentinel(req_id)
 
     def test_successful_recompute_clears_sentinel(self, db):
         """A successful recompute overwrites the sentinel with the real config
@@ -249,7 +260,7 @@ class TestDci012RecomputeQuarantine:
         assert ok, err
         # Sentinel remains because nothing overwrote it — and the staleness
         # gate therefore still blocks approval.
-        assert _risk_config_version(db, app_id) == CM_PENDING_SENTINEL
+        assert _risk_config_version(db, app_id) == _expected_sentinel(req_id)
 
     def test_sentinel_stamped_in_same_txn_as_implementation(self, db):
         """The quarantine marker must be part of the implementation commit —
@@ -290,17 +301,22 @@ class TestDci012RecomputeQuarantine:
         # Second connection saw the sentinel + implemented status ALREADY
         # committed before the recompute ran — a crash between the two
         # commits can never leave an unquarantined implemented change.
-        assert observed["version_at_recompute"] == CM_PENDING_SENTINEL
+        assert observed["version_at_recompute"] == _expected_sentinel(req_id)
         assert observed["cr_status_at_recompute"] == "implemented"
 
-    def test_no_risk_review_required_means_no_sentinel(self, db):
-        """tier3 / non-risk changes must NOT be quarantined."""
+    def test_genuinely_non_risk_change_means_no_sentinel(self, db):
+        """A change that is non-risk by BOTH predicates (flag off AND no
+        risk-relevant canonical change key — entity_type maps to no key) must
+        NOT be quarantined."""
         cm = _get_cm()
         wdb = _DBWrapper(db)
         original_version = "risk_config:2026-01-01T00:00:00Z"
         app_id = _setup_app(db, risk_config_version=original_version)
-        req_id = _make_approved_cr(cm, wdb, app_id)
-        # Force the flag off to isolate the sentinel behaviour.
+        req_id = _make_approved_cr(
+            cm, wdb, app_id,
+            field="entity_type", old="Limited Company", new="Public Company",
+        )
+        # Force the flag off to isolate the key-based predicate.
         db.execute(
             "UPDATE change_requests SET risk_review_required = 0 WHERE id = ?",
             (req_id,),
@@ -310,6 +326,142 @@ class TestDci012RecomputeQuarantine:
         ok, err, _ = cm.implement_change_request(wdb, req_id, ADMIN_USER)
         assert ok, err
         assert _risk_config_version(db, app_id) == original_version
+
+    def test_key_based_risk_relevance_quarantines_even_with_flag_off(self, db):
+        """M1 regression: quarantine must use the SAME risk-relevance
+        predicate as the implementation gate. A change whose canonical key is
+        risk-relevant (company_name → legal_name_change) must be quarantined
+        even when the materiality flag says risk_review_required=0 —
+        otherwise a risk-scoring input changes on the live profile with no
+        recompute and no quarantine (the original DCI-012 hole, surviving
+        through the predicate mismatch)."""
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id = _setup_app(db)
+        req_id = _make_approved_cr(cm, wdb, app_id)  # company_name change
+        db.execute(
+            "UPDATE change_requests SET risk_review_required = 0 WHERE id = ?",
+            (req_id,),
+        )
+        db.commit()
+
+        ok, err, _ = cm.implement_change_request(wdb, req_id, ADMIN_USER)
+        assert ok, err
+        assert _risk_config_version(db, app_id) == _expected_sentinel(req_id)
+
+    def test_patch_to_implemented_carries_recompute(self, db, monkeypatch):
+        """M2 regression: the PATCH→implemented path
+        (update_change_request_status) must resolve and pass the real
+        recompute function — not silently quarantine with no recompute
+        attempt."""
+        import rule_engine
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id = _setup_app(db)
+        req_id = _make_approved_cr(cm, wdb, app_id)
+
+        calls = []
+
+        def spy_recompute(db_, app_id_, reason, user, log_audit_fn):
+            calls.append((app_id_, reason))
+            db_.execute(
+                "UPDATE applications SET risk_config_version=? WHERE id=?",
+                ("risk_config:patched", app_id_),
+            )
+            return {"recomputed": True, "changed": True}
+
+        monkeypatch.setattr(rule_engine, "recompute_risk", spy_recompute)
+
+        ok, err = cm.update_change_request_status(wdb, req_id, "implemented", ADMIN_USER)
+        assert ok, err
+        assert len(calls) == 1, "PATCH→implemented must attempt the recompute"
+        assert calls[0][0] == app_id
+        cr = db.execute(
+            "SELECT status FROM change_requests WHERE id = ?", (req_id,)
+        ).fetchone()
+        assert cr["status"] == "implemented"
+        assert _risk_config_version(db, app_id) == "risk_config:patched"
+
+    def test_recompute_cas_does_not_clobber_concurrent_sentinel(self, temp_db, monkeypatch):
+        """Provenance compare-and-swap: a recompute in flight while ANOTHER
+        writer stamps fresh provenance (e.g. a concurrent change-request
+        implementation's quarantine sentinel) must NOT overwrite it with a
+        score computed from pre-change data — it must report failure."""
+        import json as _json
+        import uuid as _uuid
+        import rule_engine
+        from rule_engine import recompute_risk
+        from db import get_db
+
+        db = get_db()
+        # Scoreable app fixture (mirrors test_risk_recomputation).
+        suffix = _uuid.uuid4().hex[:8]
+        app_id = f"app-cas-{suffix}"
+        db.execute(
+            """INSERT INTO applications
+               (id, ref, company_name, country, sector, entity_type,
+                status, risk_score, risk_level, risk_dimensions,
+                onboarding_lane, prescreening_data, risk_config_version)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (app_id, f"CAS-{suffix}", "CAS Test Ltd", "Mauritius", "Banking",
+             "NBFI", "submitted", 45.0, "MEDIUM",
+             _json.dumps({"d1": 1.5, "d2": 1.5, "d3": 1.5, "d4": 1.5, "d5": 1.5}),
+             "Standard Review",
+             _json.dumps({
+                 "operating_countries": ["Mauritius"],
+                 "target_markets": ["Mauritius"],
+                 "source_of_wealth": "Business profits",
+                 "source_of_funds": "Revenue",
+                 "monthly_volume": "50000",
+                 "cross_border": False,
+                 "screening_report": {"total_hits": 0, "overall_flags": [],
+                                      "company_screening": {"found": True},
+                                      "director_screenings": [], "ubo_screenings": []},
+             }),
+             "risk_config:2026-01-01T00:00:00Z"),
+        )
+        db.commit()
+
+        concurrent_sentinel = "stale:cm_recompute_pending:CR-CONCURRENT"
+        real_floor = rule_engine._apply_screening_disposition_floor_for_recompute
+
+        def floor_with_concurrent_write(db_, app, risk):
+            # Runs between recompute's initial SELECT and its persistence
+            # UPDATE — the concurrent-implementation window.
+            other = get_db()
+            try:
+                other.execute(
+                    "UPDATE applications SET risk_config_version=? WHERE id=?",
+                    (concurrent_sentinel, app_id),
+                )
+                other.commit()
+            finally:
+                other.close()
+            return real_floor(db_, app, risk)
+
+        monkeypatch.setattr(
+            rule_engine,
+            "_apply_screening_disposition_floor_for_recompute",
+            floor_with_concurrent_write,
+        )
+
+        result = recompute_risk(db, app_id, "cas_race_test")
+        db.commit()
+
+        assert result["recomputed"] is False, (
+            "a recompute that lost the provenance CAS must report failure, "
+            "not a phantom success"
+        )
+        assert result.get("persist_conflict") is True
+        row = db.execute(
+            "SELECT risk_config_version FROM applications WHERE id=?", (app_id,)
+        ).fetchone()
+        assert dict(row)["risk_config_version"] == concurrent_sentinel, (
+            "the concurrent writer's sentinel must survive the losing recompute"
+        )
+        db.execute("DELETE FROM applications WHERE id=?", (app_id,))
+        db.commit()
+        db.close()
 
     def test_staleness_gate_blocks_on_cm_sentinel(self, db):
         """End-to-end: the sentinel left by a failed CM recompute must trip the
@@ -331,23 +483,30 @@ class TestDci012RecomputeQuarantine:
         ).fetchone())
         assert str(app_row["risk_config_version"]).startswith("stale:")
 
-        from rule_engine import _get_risk_config_version_strict
-        try:
-            current = _get_risk_config_version_strict(wdb)
-        except Exception:
-            current = "unreadable"  # gate fail-closes on unreadable provenance
-
+        # A quarantine sentinel blocks UNCONDITIONALLY — checked before the
+        # config-version lookup, so even an environment without config
+        # versioning cannot neutralise the quarantine.
         gate_error = server_mod._application_risk_staleness_error(
             wdb, app_row, action_label="approve"
         )
-        if current:
-            # Versioning in force (or unreadable): the sentinel must block.
-            assert gate_error is not None
-        else:
-            # No risk_config row in this fixture DB: versioning not in use —
-            # the gate's documented no-op branch. The sentinel is still
-            # stamped (asserted above) so any configured environment blocks.
-            assert gate_error is None
+        assert gate_error is not None
+        assert "quarantined" in gate_error.lower()
+        # CM-specific wording (distinguishes the pending-recompute case from
+        # the RDI-004 config-sweep failure case).
+        assert "material change" in gate_error.lower()
+
+    def test_gate_literal_matches_rule_engine_constant(self):
+        """server.py's gate matches the CM sentinel by a hardcoded literal
+        prefix (avoids a hot-path import) — keep it in sync with the constant
+        the stamping code uses."""
+        from rule_engine import RISK_CONFIG_VERSION_CM_RECOMPUTE_PENDING
+        assert RISK_CONFIG_VERSION_CM_RECOMPUTE_PENDING == "stale:cm_recompute_pending"
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(base, "server.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        assert 'startswith("stale:cm_recompute_pending")' in src, (
+            "the staleness gate must special-case the CM pending sentinel"
+        )
 
 
 # ============================================================================

@@ -1229,8 +1229,18 @@ def update_change_request_status(
     # as the dedicated endpoint.  A plain status flip would mark the request as
     # implemented without applying the controlled change.
     if new_status == "implemented":
+        # DCI-012: carry the same post-change risk recompute as the dedicated
+        # implement endpoint. Without it, every risk-relevant change
+        # implemented via PATCH would stamp a durable quarantine sentinel
+        # with no recompute even attempted.
+        recompute_fn = None
+        try:
+            from rule_engine import recompute_risk as recompute_fn
+        except ImportError:
+            recompute_fn = None
         success, err, _version_id = implement_change_request(
             db, request_id, user, log_audit_fn=log_audit_fn,
+            recompute_risk_fn=recompute_fn,
         )
         return success, err
 
@@ -2665,12 +2675,22 @@ def implement_change_request(
         # leaves the decision-time staleness gate blocking application
         # approval on the stale pre-change score. A successful recompute
         # below overwrites the sentinel with the real config version.
-        risk_recompute_pending = bool(request.get("risk_review_required"))
+        #
+        # Risk relevance uses the SAME predicate as the implementation gate
+        # (_implementation_requires_risk): the explicit flag OR a risk-relevant
+        # canonical change key. The flag alone would let a key-based
+        # risk-relevant change (e.g. a sector change filed under a tier3
+        # change_type) implement with no quarantine and no recompute.
+        risk_recompute_pending = _implementation_requires_risk(db, request)
         if risk_recompute_pending:
             from rule_engine import RISK_CONFIG_VERSION_CM_RECOMPUTE_PENDING
+            # Per-request suffix: records WHICH implementation is awaiting a
+            # re-score, and lets the recompute persistence CAS distinguish a
+            # concurrent implementation's fresher sentinel from this one.
+            quarantine_marker = f"{RISK_CONFIG_VERSION_CM_RECOMPUTE_PENDING}:{request_id}"
             db.execute(
                 "UPDATE applications SET risk_config_version=?, updated_at=datetime('now') WHERE id=?",
-                (RISK_CONFIG_VERSION_CM_RECOMPUTE_PENDING, application_id),
+                (quarantine_marker, application_id),
             )
 
         audit_msg = f"Profile version: {new_version_id}. Items applied: {len(applied_details)}"
@@ -2703,12 +2723,13 @@ def implement_change_request(
         db.commit()
 
         # DCI-012: attempt the recompute now that the implementation (and
-        # its quarantine marker) is durable. recompute_risk writes on this
-        # same connection and never commits — success is committed here and
-        # stamps the real config version over the sentinel; ANY failure
-        # keeps the sentinel, so application approval stays blocked until a
-        # successful re-score. The implementation itself remains committed
-        # either way, so failures here must not flip the result to an error.
+        # its quarantine marker) is durable. recompute_risk itself never
+        # commits (its optional audit hook may — safe here, post-main-commit)
+        # — success is committed below and stamps the real config version
+        # over the sentinel; ANY failure keeps the sentinel, so application
+        # approval stays blocked until a successful re-score. The
+        # implementation itself remains committed either way, so failures
+        # here must not flip the result to an error.
         if risk_recompute_pending:
             recompute_ok = False
             recompute_err = None
@@ -2723,13 +2744,14 @@ def implement_change_request(
                         # Verify ground truth: recompute_risk can report
                         # recomputed=True even when its persistence UPDATE
                         # failed (the flag is set before the write) — trust
-                        # only the stored provenance.
+                        # only the stored provenance. A missing row also
+                        # counts as unverified/not-ok.
                         check = db.execute(
                             "SELECT risk_config_version FROM applications WHERE id = ?",
                             (application_id,),
                         ).fetchone()
                         stored = str((dict(check) if check else {}).get("risk_config_version") or "")
-                        recompute_ok = not stored.startswith("stale:")
+                        recompute_ok = check is not None and not stored.startswith("stale:")
                     else:
                         db.rollback()
                 except Exception as e:
@@ -2742,9 +2764,11 @@ def implement_change_request(
                 recompute_err = "no recompute function available"
             if not recompute_ok:
                 logger.error(
-                    "Risk recomputation after change %s did not complete (%s); "
-                    "application %s stays quarantined (stale risk_config_version "
-                    "sentinel) and cannot be approved until re-scored.",
+                    "Risk recomputation after change %s did not verifiably "
+                    "complete (%s); unless the stored risk provenance shows a "
+                    "successful re-score, application %s remains quarantined "
+                    "(stale risk_config_version sentinel) and cannot be "
+                    "approved until re-scored.",
                     request_id, recompute_err or "recompute reported failure",
                     application_id,
                 )
