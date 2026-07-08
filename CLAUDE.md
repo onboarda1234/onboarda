@@ -137,6 +137,7 @@ Backend runs on port 10000. Portal and back office are static HTML — open dire
 
 ```bash
 cd arie-backend
+pip install -r requirements.txt -r requirements-dev.txt  # test deps live in requirements-dev.txt (BSA-017)
 python -m pytest tests/ -v
 ```
 

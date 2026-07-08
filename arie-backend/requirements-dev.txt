@@ -1,0 +1,6 @@
+# ARIE Finance — Dev/Test Dependencies (BSA-017: NOT installed in production images)
+# Install for CI / local development:  pip install -r requirements.txt -r requirements-dev.txt
+pytest==9.0.2
+pytest-cov==7.1.0
+pytest-asyncio==1.3.0
+flake8==7.3.0

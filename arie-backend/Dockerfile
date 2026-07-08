@@ -7,7 +7,12 @@
 # Run:     docker run -p 10000:10000 --env-file .env arie-backend
 # Compose: docker compose up -d
 #
-FROM python:3.11-slim AS base
+# BSA-019: base image pinned by digest — a mutable tag can silently change
+# between builds. This digest is the python:3.11-slim multi-arch manifest list
+# (verified 2026-07-08). To update: pick the new tag's digest via
+#   docker buildx imagetools inspect python:3.11-slim
+# and replace BOTH the comment date and the digest below in one reviewed change.
+FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3 AS base
 
 ARG GIT_SHA=unknown
 ARG BUILD_TIME=unknown
