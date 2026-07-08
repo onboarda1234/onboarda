@@ -223,7 +223,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | P12-1 | Regulated-record deletion protection | DCI-001, 003 | CRITICAL + HIGH | App-delete cleanup + startup cleanup migration must NEVER delete regulated evidence (`sar_reports`, `compliance_memos`, `edd_cases`, `agent_executions`, `supervisor_audit_log`, `decision_records`) — soft-delete/tombstone with deletion marker instead; move fixture cleanup out of generic startup code | — | 📋 scoped (W1 blocker) |
 | P12-2 | Change-implementation fail-closed recompute + audit-in-transaction | DCI-012, 013 | HIGH + MED | Recompute risk (or write a `requires_recomputation` quarantine marker, P10-3-style) in the SAME transaction as implement — a swallowed recompute failure must not leave a live material change on a stale score; write CM approve/implement audit rows before commit, not after | — | 📋 scoped (W1 blocker) |
 | P12-3 | Compliance-logic corrections | DCI-008, 010, 011 | HIGH + HIGH + MED | Risk-config load failure fails CLOSED in staging/prod (no silent hardcoded-default model); memo `jur_rating` actually mutates to VERY_HIGH when `SANCTIONED_COUNTRY_FLOOR` is claimed; fix `MULTI_GAP_ESCALATION` branch order (≥4 checked before ≥3). Review folds: PG/JSONB parse hole closed (`safe_json_loads` coerced malformed scalars to `{}` before validation); recompute/boot-repair/correction/EDD-tier laundering paths all re-raise; boot-time CRITICAL probe. **Deploy precondition: validate live staging risk_config row first (see PR)** | [#710](https://github.com/onboarda1234/onboarda/pull/710) | 🟢 PR open |
-| P12-4 | Migration hard-stops + schema-drift detection | DCI-005, 004 | HIGH | Reject `MIGRATION_FAILURE_MODE=continue` when ENVIRONMENT is staging/production; startup drift check comparing declared constraints/FKs/columns vs live schema, fail-closed in staging/prod (`CREATE TABLE IF NOT EXISTS` never alters existing FKs — drift already admitted in source) | — | 📋 scoped |
+| P12-4 | Migration hard-stops + schema-drift detection | DCI-005, 004 | HIGH | Reject `MIGRATION_FAILURE_MODE=continue` when ENVIRONMENT is staging/production — **DCI-005 half shipped in [#711](https://github.com/onboarda1234/onboarda/pull/711)** (override ignored + ERROR on every boot; dev/test/demo keep it; clean adversarial review). Still scoped: DCI-004 startup drift check comparing declared constraints/FKs/columns vs live schema, fail-closed in staging/prod | [#711](https://github.com/onboarda1234/onboarda/pull/711) | 🟢 PR open (DCI-005 half; DCI-004 still 📋) |
 | P12-5 | Status-column CHECK constraints | DCI-006 | MED | CHECK constraints/enums for `clients.status`, `agent_executions.status/source`, `supervisor_pipeline_results.status`, `supervisor_audit_log.event_type/severity`, `compliance_memos.supervisor_status/rule_engine_status` (backfill invalid data first) | — | 📋 scoped |
 | P12-6 | PG pool connection validation | DCI-007 | MED | Pre-ping (`SELECT 1`) on pool checkout; discard/retry stale connections after RDS failover | [#709](https://github.com/onboarda1234/onboarda/pull/709) | 🟢 PR open |
 | P12-7 | Verification-matrix fidelity | DCI-014, 015 | MED + LOW | HYBRID checks go to Claude ONLY on deterministic INCONCLUSIVE (never override a deterministic FAIL), per the matrix policy; resolve the 5 TODO enhanced-requirement document mappings with compliance sign-off | — | 📋 scoped |
@@ -352,14 +352,14 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | Status | Count |
 |--------|:--:|
 | ✅ merged | 46 |
-| 🟢 PR open (built) | 3 |
+| 🟢 PR open (built) | 4 |
 | 🔨 in progress | 0 |
-| 📋 scoped | 26 |
+| 📋 scoped | 25 |
 | ⏸ blocked | 1 |
 | ⬜ pending | 28 |
 
 **Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#707 (P11-9)** ·
-**#709 (P12-6)** · **#710 (P12-3)** · **Old blocked draft:** #498.
+**#709 (P12-6)** · **#710 (P12-3)** · **#711 (P12-4, DCI-005 half)** · **Old blocked draft:** #498.
 **Recently merged:** **#705 (P11-1)** · **#706 (P11-3)** · **#708 (P10-6)** — awaiting
 Codex deploy/validate report. **Merged + validated:** Wave A **#700/#701/#702/#703** (TDs
 784–789) · #704 (Tier-1-only maker-checker) · Phase 10 Wave 1 #696/#697/#698 · docs #695 ·
