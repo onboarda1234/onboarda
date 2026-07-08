@@ -26,6 +26,10 @@ The runner is **loud** and **fail-closed** by default:
   that was not attempted and returns the count of successfully applied
   migrations instead of raising.  This override is intended only for
   non-production debugging and CI bring-up.
+* P12-4 / DCI-005: the ``continue`` override is REJECTED when
+  ``ENVIRONMENT`` is staging or production — the variable is ignored
+  with a loud ERROR log and the fail-closed default applies.  A
+  partially-migrated schema must never serve regulated traffic.
 """
 
 import hashlib
@@ -62,8 +66,27 @@ class MigrationFailure(RuntimeError):
 
 
 def _failure_mode_continue() -> bool:
-    """Return True iff ``MIGRATION_FAILURE_MODE=continue`` is set."""
-    return (os.environ.get(MIGRATION_FAILURE_MODE_ENV, "") or "").strip().lower() == "continue"
+    """Return True iff ``MIGRATION_FAILURE_MODE=continue`` is set AND the
+    environment permits it.
+
+    DCI-005 (P12-4): ``continue`` is a debugging/CI-bring-up override only.
+    In staging/production a partially-migrated schema must never serve
+    regulated traffic, so the override is REJECTED there — the variable is
+    ignored, a loud error is logged, and the default fail-closed policy
+    (raise ``MigrationFailure``, halt startup) applies.
+    """
+    if (os.environ.get(MIGRATION_FAILURE_MODE_ENV, "") or "").strip().lower() != "continue":
+        return False
+    from environment import get_environment
+    env = get_environment()
+    if env in ("staging", "production"):
+        logger.error(
+            "MIGRATION_FAILURE_MODE=continue is NOT permitted when ENVIRONMENT=%s "
+            "— ignoring the override; migration failures will halt startup (DCI-005)",
+            env,
+        )
+        return False
+    return True
 
 
 def _safe_rollback(db) -> None:
@@ -210,6 +233,11 @@ def run_all_migrations_with_connection(db):
     ensure_schema_version_table(db)
     pending = get_pending_migrations(db)
 
+    # Evaluate the failure policy BEFORE the no-pending early exit so a
+    # staging/production box with the continue override wrongly set gets the
+    # rejection ERROR on every boot — not only once a migration is pending.
+    continue_on_failure = _failure_mode_continue()
+
     if not pending:
         logger.info("Database schema is up to date")
         return 0
@@ -220,7 +248,6 @@ def run_all_migrations_with_connection(db):
     applied = 0
     failed = []   # list of failed version strings
     skipped = []  # list of unattempted version strings (continue mode)
-    continue_on_failure = _failure_mode_continue()
 
     for index, (version, filepath, description) in enumerate(pending):
         if failed and not continue_on_failure:

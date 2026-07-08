@@ -195,6 +195,67 @@ class TestRunnerContinueMode(_RunnerFixtureBase):
         ))
 
 
+class TestContinueModeRejectedInFailClosedEnvs(_RunnerFixtureBase):
+    """P12-4 / DCI-005: ``MIGRATION_FAILURE_MODE=continue`` is a debugging /
+    CI-bring-up override only. In staging/production the override must be
+    REJECTED (ignored, with a loud ERROR) so a partially-migrated schema can
+    never serve regulated traffic."""
+
+    def test_continue_rejected_in_staging_full_runner(self):
+        os.environ["MIGRATION_FAILURE_MODE"] = "continue"
+
+        _write_sql(self._tmp_dir, "990", "CREATE TABLE t990 (id INTEGER);")
+        _write_sql(self._tmp_dir, "991", "THIS IS NOT VALID SQL;")
+        _write_sql(self._tmp_dir, "992", "CREATE TABLE t992 (id INTEGER);")
+
+        with mock.patch.dict(os.environ, {"ENVIRONMENT": "staging"}):
+            with self.assertLogs("arie.migrations", level="DEBUG") as cm:
+                with self.assertRaises(self._runner.MigrationFailure):
+                    self._runner.run_all_migrations_with_connection(self._conn)
+
+        # The override rejection must be logged loudly.
+        self.assertTrue(any(
+            r.levelno == logging.ERROR
+            and "MIGRATION_FAILURE_MODE=continue is NOT permitted" in r.getMessage()
+            for r in cm.records
+        ), f"missing rejection ERROR log: {cm.output}")
+
+        # Fail-closed semantics apply: 992 skipped, not applied.
+        applied = {r["version"] for r in self._conn.execute(
+            "SELECT version FROM schema_version ORDER BY version"
+        ).fetchall()}
+        self.assertIn("990", applied)
+        self.assertNotIn("991", applied)
+        self.assertNotIn("992", applied)
+        self.assertTrue(any(
+            "Skipped migration 992 due to earlier failure" in m for m in cm.output
+        ))
+
+    def test_failure_mode_helper_rejects_staging_and_production(self):
+        os.environ["MIGRATION_FAILURE_MODE"] = "continue"
+        for env in ("staging", "production"):
+            with mock.patch.dict(os.environ, {"ENVIRONMENT": env}):
+                self.assertFalse(
+                    self._runner._failure_mode_continue(),
+                    f"continue must be rejected when ENVIRONMENT={env}",
+                )
+
+    def test_failure_mode_helper_honoured_in_dev_environments(self):
+        os.environ["MIGRATION_FAILURE_MODE"] = "continue"
+        for env in ("development", "testing", "demo"):
+            with mock.patch.dict(os.environ, {"ENVIRONMENT": env}):
+                self.assertTrue(
+                    self._runner._failure_mode_continue(),
+                    f"continue must stay honoured when ENVIRONMENT={env}",
+                )
+
+    def test_unset_variable_unaffected_by_environment(self):
+        os.environ.pop("MIGRATION_FAILURE_MODE", None)
+        for env in ("staging", "production", "development"):
+            with mock.patch.dict(os.environ, {"ENVIRONMENT": env}):
+                self.assertFalse(self._runner._failure_mode_continue())
+
+
 class TestRunnerHandlesPgFailedTransactionShape(_RunnerFixtureBase):
     """Simulate a psycopg2 ``InFailedSqlTransaction`` -- the symptom #127
     blames -- by raising it from ``run_migration``.  The runner must log

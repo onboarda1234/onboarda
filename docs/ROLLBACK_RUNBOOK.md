@@ -160,7 +160,9 @@ guarantees one exists), push that SHA, register task-defs, redeploy. Slower.
   image showing fewer known files than applied rows is **expected, not an error**.
 - **`MIGRATION_FAILURE_MODE=continue` must NEVER be set in staging/prod** — it
   would let a partially-migrated schema boot, defeating the clean-rollback-target
-  guarantee.
+  guarantee. *(Since P12-4 / DCI-005 this is enforced in code: the runner
+  ignores the override in staging/production, logs an ERROR, and keeps the
+  fail-closed halt-on-failure policy.)*
 
 ---
 
