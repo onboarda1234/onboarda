@@ -185,6 +185,7 @@ In demo mode, all external APIs are simulated — no keys required.
 
 ```bash
 cd arie-backend
+pip install -r requirements.txt -r requirements-dev.txt  # test deps live in requirements-dev.txt (BSA-017)
 python -m pytest tests/ -v
 ```
 

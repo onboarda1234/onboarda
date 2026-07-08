@@ -101,11 +101,17 @@ class TestRequirementsSplit:
         )
 
     def test_dockerfile_installs_only_prod_requirements(self):
-        df = open(os.path.join(BACKEND_DIR, "Dockerfile"), encoding="utf-8").read()
-        assert "requirements-dev.txt" not in df.replace(".dockerignore", ""), (
-            "production image must not install requirements-dev.txt"
+        """Only instruction lines matter — a COMMENT mentioning the dev file is
+        fine; a COPY or pip install of it is not."""
+        instructions = [
+            l.strip() for l in open(os.path.join(BACKEND_DIR, "Dockerfile"), encoding="utf-8")
+            if l.strip() and not l.strip().startswith("#")
+        ]
+        offenders = [l for l in instructions if "requirements-dev.txt" in l]
+        assert not offenders, (
+            f"production image must not touch requirements-dev.txt: {offenders}"
         )
-        assert re.search(r"pip install [^\n]*-r requirements\.txt", df)
+        assert any(re.search(r"pip install .*-r requirements\.txt", l) for l in instructions)
 
 
 # ══════════════════════════════════════════════════════════
