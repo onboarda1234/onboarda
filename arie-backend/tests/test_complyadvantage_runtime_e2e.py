@@ -17,9 +17,15 @@ from screening_complyadvantage.webhook_storage import (
 class NoCloseDB:
     def __init__(self, conn):
         self.conn = conn
+        # Mirror db.DBConnection: keep the last cursor on ``_cursor`` so the
+        # webhook claim's compare-and-swap can read ``_cursor.rowcount``. Without
+        # this the claim sees rowcount == -1 and mis-classifies a real claim as a
+        # duplicate.
+        self._cursor = None
 
     def execute(self, *args):
-        return self.conn.execute(*args)
+        self._cursor = self.conn.execute(*args)
+        return self._cursor
 
     def commit(self):
         self.conn.commit()
