@@ -25,6 +25,20 @@ BACKOFFICE_PATH = os.path.join(
 SERVER_PATH = os.path.join(os.path.dirname(__file__), '..', 'server.py')
 
 
+
+def _region_to_next_class(src, start):
+    """Slice from a handler's class start to the next class definition.
+
+    Fixed-size character windows (the previous approach) silently drift
+    whenever unrelated code is inserted earlier in the handler — the
+    ownership-gate insert (PR-APP-ACTION-OWNERSHIP-SCOPE-1) pushed the
+    guarded markers past the old 3000/5000-char cutoffs while every guarded
+    property still held. Marker-bounded slicing checks the WHOLE handler.
+    """
+    nxt = src.find("\nclass ", start + 1)
+    return src[start:nxt if nxt != -1 else len(src)]
+
+
 @pytest.fixture(scope='module')
 def backoffice_html():
     with open(BACKOFFICE_PATH, 'r', encoding='utf-8') as f:
@@ -269,26 +283,26 @@ class TestPartA_BackendEnforcement:
     def test_decision_handler_validates_signoff(self, server_py):
         # Decision handler must call _validate_officer_signoff
         handler_start = server_py.index('class ApplicationDecisionHandler')
-        handler_region = server_py[handler_start:handler_start + 5000]
+        handler_region = _region_to_next_class(server_py, handler_start)
         assert '_validate_officer_signoff' in handler_region, \
             "Decision handler must call _validate_officer_signoff"
         assert 'officer_signoff' in handler_region
 
     def test_decision_handler_rejects_missing_signoff(self, server_py):
         handler_start = server_py.index('class ApplicationDecisionHandler')
-        handler_region = server_py[handler_start:handler_start + 5000]
+        handler_region = _region_to_next_class(server_py, handler_start)
         assert 'signoff_error' in handler_region, \
             "Decision handler must check signoff validation errors"
 
     def test_memo_handler_validates_signoff(self, server_py):
         handler_start = server_py.index('class MemoApproveHandler')
-        handler_region = server_py[handler_start:handler_start + 3000]
+        handler_region = _region_to_next_class(server_py, handler_start)
         assert '_validate_officer_signoff' in handler_region, \
             "Memo approval handler must call _validate_officer_signoff"
 
     def test_memo_handler_rejects_missing_signoff(self, server_py):
         handler_start = server_py.index('class MemoApproveHandler')
-        handler_region = server_py[handler_start:handler_start + 3000]
+        handler_region = _region_to_next_class(server_py, handler_start)
         assert 'signoff_error' in handler_region
 
     def test_signoff_validation_function_exists(self, server_py):
@@ -306,7 +320,7 @@ class TestPartA_BackendEnforcement:
     def test_decision_handler_sets_override_scope(self, server_py):
         """Override decisions must use scope='override', not scope='decision'."""
         handler_start = server_py.index('class ApplicationDecisionHandler')
-        handler_region = server_py[handler_start:handler_start + 5000]
+        handler_region = _region_to_next_class(server_py, handler_start)
         assert 'override' in handler_region
 
     def test_decision_persists_signoff_audit(self, server_py):
@@ -542,22 +556,22 @@ class TestPartE_Regression:
 
     def test_backend_decision_still_validates_reason(self, server_py):
         handler_start = server_py.index('class ApplicationDecisionHandler')
-        handler_region = server_py[handler_start:handler_start + 5000]
+        handler_region = _region_to_next_class(server_py, handler_start)
         assert 'decision_reason is required' in handler_region
 
     def test_backend_decision_still_validates_override_reason(self, server_py):
         handler_start = server_py.index('class ApplicationDecisionHandler')
-        handler_region = server_py[handler_start:handler_start + 5000]
+        handler_region = _region_to_next_class(server_py, handler_start)
         assert 'override_reason is required when override_ai is true' in handler_region
 
     def test_backend_memo_still_checks_validation_status(self, server_py):
         handler_start = server_py.index('class MemoApproveHandler')
-        handler_region = server_py[handler_start:handler_start + 5000]
+        handler_region = _region_to_next_class(server_py, handler_start)
         assert 'validation_status' in handler_region
 
     def test_backend_memo_still_checks_supervisor_verdict(self, server_py):
         handler_start = server_py.index('class MemoApproveHandler')
-        handler_region = server_py[handler_start:handler_start + 5000]
+        handler_region = _region_to_next_class(server_py, handler_start)
         assert 'supervisor_verdict' in handler_region
 
     def test_simulated_labeling_preserved(self, backoffice_html):

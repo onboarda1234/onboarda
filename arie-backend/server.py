@@ -10701,6 +10701,24 @@ class PreApprovalDecisionHandler(BaseHandler):
                 db.close()
                 return self.error(risk_error, 400)
 
+            # ── PR-APP-ACTION-OWNERSHIP-SCOPE-1 (FEO-013): sign-off owner gate ──
+            # Pre-approval is admin/SCO-only (like memo approval), so the case
+            # owner is usually a line officer; use the peer-supervisor-only
+            # variant — gate only when ANOTHER supervisor owns the case — so the
+            # normal flow stays frictionless and early-stage cases aren't
+            # reassigned. REQUEST_INFO stays open.
+            ownership_error = authorize_signoff_ownership(
+                self, db, app, user,
+                action="application.pre_approval_decision." + decision.lower(),
+                override_reason=data.get("ownership_override_reason"),
+                attempt_summary=attempt_summary,
+                peer_supervisor_only=True,
+            )
+            if ownership_error:
+                status_code, reason = ownership_error
+                db.close()
+                return self.error(reason, status_code)
+
         # Idempotency: check if a decision was already recorded
         if app.get("pre_approval_decision"):
             reason = (
@@ -30224,6 +30242,23 @@ class MemoApproveHandler(BaseHandler):
         if risk_error:
             return reject_memo_approval(risk_error, 400)
 
+        # ── PR-APP-ACTION-OWNERSHIP-SCOPE-1 (FEO-013): sign-off owner gate ──
+        # Memo approval is admin/SCO-only, so a supervisor approving a
+        # line-officer-owned memo is the normal four-eyes flow. The
+        # peer-supervisor-only variant gates ONLY when the case is owned by
+        # ANOTHER supervisor; it never reassigns the line officer's case.
+        ownership_error = authorize_signoff_ownership(
+            self, db, app_row, user,
+            action="memo.approve",
+            override_reason=body.get("ownership_override_reason"),
+            attempt_summary=attempt_summary,
+            peer_supervisor_only=True,
+        )
+        if ownership_error:
+            status_code, reason = ownership_error
+            db.close()
+            return self.error(reason, status_code)
+
         stale = _ensure_memo_fresh_or_mark_stale(
             db,
             app_row,
@@ -31341,6 +31376,120 @@ class SubmitToComplianceHandler(BaseHandler):
         }, 200)
 
 
+# ══════════════════════════════════════════════════════════
+# PR-APP-ACTION-OWNERSHIP-SCOPE-1 (Audit-4 FEO-013)
+# Terminal decision & memo-approval ownership gate.
+#
+# Enforces the pilot runbook's named-owner control IN CODE for TERMINAL
+# sign-off actions ONLY — final approve/reject, pre-approval approve/reject,
+# and memo approval. Collaborative / risk-tightening actions (document review,
+# RMI/request_documents, screening review + clearance, escalate_edd, memo
+# generation/validation, supervisor run) are intentionally NOT routed through
+# this gate so officers can prepare files together.
+#
+# This gate is ADDITIVE: every existing gate (role/risk authority, memo
+# freshness/validation, supervisor status, screening blocks, dual approval,
+# evidence gates, decision-record persistence) still runs unchanged.
+# ══════════════════════════════════════════════════════════
+SIGNOFF_SUPERVISOR_ROLES = ("admin", "sco")
+
+
+def _lookup_user_role(db, user_id):
+    """Return the lowercased role for a user id, or '' if not found."""
+    uid = (user_id or "").strip()
+    if not uid:
+        return ""
+    try:
+        row = db.execute("SELECT role FROM users WHERE id = ?", (uid,)).fetchone()
+    except Exception:
+        return ""
+    if not row:
+        return ""
+    role = row["role"] if hasattr(row, "__getitem__") else row.get("role")
+    return (role or "").strip().lower()
+
+
+def authorize_signoff_ownership(handler, db, app, user, *, action, override_reason,
+                                attempt_summary, peer_supervisor_only=False):
+    """Enforce named-owner accountability for a TERMINAL sign-off action.
+
+    Returns ``None`` when the actor may proceed. Side effects (all written on the
+    caller's ``db`` connection — which the caller holds under its FOR UPDATE /
+    BEGIN IMMEDIATE lock — and left UNCOMMITTED so they are atomic with the
+    caller's decision transaction):
+      * unassigned decision-mode case → the actor is auto-claimed as owner and
+        a ``<action>.ownership_claimed`` governance row is written (commit=False);
+      * supervisor override → a ``<action>.ownership_override`` row (commit=False).
+
+    Returns ``(status_code, reason)`` and writes (and commits) a
+    ``<action>.ownership_denied`` governance row when the actor is blocked; the
+    caller must then roll back / close and surface the error.
+
+    peer_supervisor_only=True (memo approval): the gate fires ONLY when the case
+    is owned by another admin/SCO. Memo approval is already admin/SCO-restricted,
+    so a supervisor approving a line-officer-owned memo is the normal four-eyes
+    flow and stays frictionless; no auto-claim happens (the line officer keeps
+    ownership of their case).
+    """
+    owner = ((app.get("assigned_to") if hasattr(app, "get") else app["assigned_to"]) or "").strip()
+    actor = (user.get("sub") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    ref = (app.get("ref") if hasattr(app, "get") else app["ref"]) or actor
+    app_id = app.get("id") if hasattr(app, "get") else app["id"]
+    is_supervisor = role in SIGNOFF_SUPERVISOR_ROLES
+
+    # 1. The assigned owner is always allowed.
+    if owner and actor and owner == actor:
+        return None
+
+    # 2. Unassigned case.
+    if not owner:
+        if peer_supervisor_only:
+            # Memo-approval mode: no owner to step on — allow, do not reassign.
+            return None
+        # Decision mode: first-touch ownership. Auto-claim the acting officer so
+        # every terminal decision has a named owner behind it.
+        db.execute(
+            "UPDATE applications SET assigned_to=?, updated_at=datetime('now') WHERE id=?",
+            (actor, app_id),
+        )
+        handler.log_governance_attempt(
+            user, action + ".ownership_claimed", ref, "accepted", 200,
+            "Unassigned case auto-claimed by acting officer at terminal sign-off",
+            attempt_summary, db=db, commit=False,
+        )
+        return None
+
+    # 3. Case owned by someone else.
+    if peer_supervisor_only and _lookup_user_role(db, owner) not in SIGNOFF_SUPERVISOR_ROLES:
+        # Memo approval on a line-officer-owned case — the normal supervisory
+        # four-eyes flow. Not gated.
+        return None
+
+    if is_supervisor:
+        # Admin/SCO may override, but MUST record an explicit reason.
+        if not (override_reason or "").strip():
+            reason = ("Supervisor override reason is required to perform this sign-off "
+                      "action on a case assigned to another officer.")
+            handler.log_governance_attempt(
+                user, action + ".ownership_denied", ref, "rejected", 403,
+                reason, attempt_summary, db=db)
+            return (403, reason)
+        handler.log_governance_attempt(
+            user, action + ".ownership_override", ref, "accepted", 200,
+            "Supervisor override on a case owned by another officer (" + owner + ")",
+            attempt_summary, db=db, commit=False)
+        return None
+
+    # 4. Line officer (co/analyst) acting on another officer's case → denied.
+    reason = ("This case is assigned to another officer. Only the assigned officer "
+              "or a supervisor override may perform this sign-off action.")
+    handler.log_governance_attempt(
+        user, action + ".ownership_denied", ref, "rejected", 403,
+        reason, attempt_summary, db=db)
+    return (403, reason)
+
+
 class ApplicationDecisionHandler(BaseHandler):
     """POST /api/applications/:id/decision — Submit application decision with override support"""
     # Static governance guards assert these decision-path invariants remain in
@@ -31497,6 +31646,37 @@ class ApplicationDecisionHandler(BaseHandler):
                 signoff_error, attempt_summary, db=db)
             db.close()
             return self.error(signoff_error, 400)
+
+        # ── PR-APP-ACTION-OWNERSHIP-SCOPE-1 (FEO-013): terminal sign-off owner gate ──
+        # Only the final approve/reject verbs are owner-gated here; escalate_edd
+        # and request_documents stay open for collaboration.
+        #
+        # Dual-approval second-leg exemption: HIGH/VERY_HIGH dual approval
+        # REQUIRES a distinct second approver, so the completing leg can never
+        # be the owner when the owner made the first approval. The gate does
+        # not demand an "override" for a step the dual-approval control itself
+        # mandates — ownership accountability is carried by the first leg
+        # (owner or auto-claim) plus the dual-approval audit trail, which
+        # records the distinct second approver's identity.
+        if decision in ("approve", "reject"):
+            _first_approver = ((app.get("first_approver_id") if hasattr(app, "get")
+                                else app["first_approver_id"]) or "").strip()
+            _is_dual_second_leg = (
+                decision == "approve"
+                and _first_approver
+                and _first_approver != (user.get("sub") or "").strip()
+            )
+            if not _is_dual_second_leg:
+                ownership_error = authorize_signoff_ownership(
+                    self, db, app, user,
+                    action="application.decision." + decision,
+                    override_reason=data.get("ownership_override_reason"),
+                    attempt_summary=attempt_summary,
+                )
+                if ownership_error:
+                    status_code, reason = ownership_error
+                    db.close()
+                    return self.error(reason, status_code)
 
         if decision in ("approve", "reject"):
             risk_error = _application_risk_integrity_error(app, "submit final decision")
