@@ -108,6 +108,13 @@ class StructuredFormatter(logging.Formatter):
         # Merge any extra structured fields
         if hasattr(record, "structured_data"):
             log_entry.update(record.structured_data)
+        # P12-9 / DCI-028: formatter-level injection so records from ANY
+        # logger routed through this formatter correlate — unless the record
+        # explicitly opted out (low-cardinality metric lines).
+        if "request_id" not in log_entry and not getattr(record, "suppress_request_id", False):
+            rid = get_request_id()
+            if rid:
+                log_entry["request_id"] = rid
         if record.exc_info and record.exc_info[0]:
             log_entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_entry, default=str)
@@ -147,14 +154,20 @@ def _log(level, message, **kwargs):
     """Emit a structured log entry with arbitrary key-value fields.
 
     P12-9 / DCI-028: the context correlation id is injected automatically —
-    callers no longer need to remember to thread request ids through."""
-    kwargs.setdefault("request_id", get_request_id())
+    callers no longer need to remember to thread request ids through.
+    Passing request_id=None explicitly OPTS OUT (used by the
+    low-cardinality CloudWatch metric lines, whose documented invariant
+    excludes per-request identifiers)."""
+    suppress = "request_id" in kwargs and kwargs["request_id"] is None
+    if not suppress:
+        kwargs.setdefault("request_id", get_request_id())
     record = arie_logger.makeRecord(
         name=arie_logger.name,
         level=level,
         fn="", lno=0, msg=message, args=(), exc_info=None,
     )
     record.structured_data = {k: v for k, v in kwargs.items() if v is not None}
+    record.suppress_request_id = suppress
     arie_logger.handle(record)
 
 
@@ -248,7 +261,9 @@ def emit_cloudwatch_metric_log(
     }
     if service:
         payload["service"] = service
-    _log(logging.INFO, "cloudwatch_metric", **payload)
+    # request_id=None: metric lines keep their documented low-cardinality
+    # invariant (no per-request identifiers) — P12-9 review m4.
+    _log(logging.INFO, "cloudwatch_metric", request_id=None, **payload)
 
 
 # ── Timer decorator for handler methods ──

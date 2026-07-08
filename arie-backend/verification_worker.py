@@ -16,6 +16,11 @@ from typing import Any, Callable, Dict, Optional
 
 from base_handler import _safe_json
 from db import get_db
+from observability import (
+    StructuredFormatter,
+    clear_request_id,
+    set_request_id,
+)
 from observability import emit_cloudwatch_metric_log
 from screening_jobs import (
     claim_next_screening_job,
@@ -47,8 +52,6 @@ from verification_state import (
 )
 
 logger = logging.getLogger(__name__)
-
-from observability import clear_request_id, set_request_id
 
 TERMINAL_DOCUMENT_STATES = (STATE_VERIFIED, STATE_FLAGGED, STATE_FAILED, STATE_SKIPPED)
 DEFAULT_POLL_INTERVAL_SECONDS = 1.0
@@ -717,6 +720,16 @@ def main(argv=None) -> int:
         level=os.getenv("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # P12-9 / DCI-028: the worker process must emit JSON in deployed
+    # environments too (forced, same policy as the API), so its lines
+    # correlate in Logs Insights.
+    try:
+        from environment import get_environment as _ge
+        if _ge() in ("staging", "production"):
+            for _h in logging.root.handlers:
+                _h.setFormatter(StructuredFormatter())
+    except Exception:
+        pass
 
     if args.once:
         result = run_once(worker_id=args.worker_id)

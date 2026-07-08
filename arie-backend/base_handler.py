@@ -149,7 +149,11 @@ class BaseHandler(tornado.web.RequestHandler):
         # line (structured logs, audit rows, errors) emitted while handling
         # this request carries it. Client-supplied X-Request-ID is sanitised;
         # otherwise one is generated. Echoed back for client-side correlation.
-        self.request_id = set_request_id(self.request.headers.get("X-Request-ID"))
+        _client_rid = self.request.headers.get("X-Request-ID")
+        # Client-supplied ids are prefixed so they can never impersonate
+        # server-generated or worker (job-*) correlation ids in the audit
+        # trail (P12-9 review m3).
+        self.request_id = set_request_id(f"c-{_client_rid}" if _client_rid else None)
         try:
             self.set_header("X-Request-ID", self.request_id)
         except Exception:
@@ -239,7 +243,8 @@ class BaseHandler(tornado.web.RequestHandler):
             # In staging/production with no explicit origin, same-origin only (most secure)
             logger.warning("ALLOWED_ORIGIN not configured for %s — defaulting to same-origin only", ENVIRONMENT)
         self.set_header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-        self.set_header("Access-Control-Allow-Headers", "Content-Type,Authorization,X-CSRF-Token,X-Idempotency-Key")
+        self.set_header("Access-Control-Allow-Headers", "Content-Type,Authorization,X-CSRF-Token,X-Idempotency-Key,X-Request-ID")
+        self.set_header("Access-Control-Expose-Headers", "X-Request-ID")
         self.set_header("Access-Control-Max-Age", "3600")
         self.set_header("Content-Type", "application/json")
         self.set_header("Server", "RegMind")
