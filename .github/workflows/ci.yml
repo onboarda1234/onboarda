@@ -141,10 +141,17 @@ jobs:
         run: |
           COV=$(pytest tests/ --ignore=tests/test_pdf_generator.py --cov=. --cov-config=.coveragerc --cov-report=term -q 2>&1 | grep "^TOTAL" | awk '{print $NF}' | tr -d '%')
           echo "Coverage: ${COV}%"
-          if [ -z "$COV" ]; then
-            echo "WARNING: Could not determine coverage percentage"
-            exit 0
-          fi
+          # BSA-018 (fail-closed): an unparseable coverage value means the
+          # threshold was NOT enforced — that is a CI failure, not a warning.
+          # Guards empty AND non-numeric COV (review fold: '[ "$COV" -lt 30 ]'
+          # errors on garbage inside an if-condition, which errexit exempts —
+          # so garbage used to fall through to the PASS echo).
+          case "$COV" in
+            ''|*[!0-9]*)
+              echo "FAIL: Could not determine a numeric coverage percentage (got '$COV') — gate failure (BSA-018)"
+              exit 1
+              ;;
+          esac
           if [ "$COV" -lt 30 ]; then
             echo "FAIL: Coverage ${COV}% is below 30% minimum"
             exit 1
