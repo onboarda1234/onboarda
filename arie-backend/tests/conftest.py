@@ -450,3 +450,45 @@ def _deep_merge(base, override):
             _deep_merge(base[k], v)
         else:
             base[k] = v
+
+
+def shutdown_test_http_server(thread, server_ref, timeout=15.0):
+    """Stop a background test HTTP server thread and FAIL LOUDLY if it leaks.
+
+    The historical copy-pasted teardown used ``thread.join(timeout=2)`` with no
+    liveness check: on a slow runner the join expired and a live Tornado server
+    (whose handlers resolve db.DB_PATH at call time) silently survived into
+    later test files, racing their databases — the mechanism behind the
+    order-dependent "seeded rows came back empty" flakes
+    (test_directors_ubos_report, test_rmi_requests).
+    """
+    io_loop = server_ref.get("loop")
+    srv = server_ref.get("server")
+    if io_loop and srv:
+        io_loop.add_callback(srv.stop)
+        io_loop.add_callback(io_loop.stop)
+    thread.join(timeout=timeout)
+    if thread.is_alive():
+        raise AssertionError(
+            "Background test HTTP server thread failed to stop within "
+            f"{timeout}s — a leaked server poisons every later test file "
+            "(it reads/writes whatever DB_PATH the current test has bound). "
+            "Fix the hang instead of lowering this timeout."
+        )
+
+
+@pytest.fixture(autouse=True)
+def _reset_shared_rate_limiter():
+    """base_handler.rate_limiter is a process-global singleton keyed by client
+    IP + endpoint — and every in-process test server sees 127.0.0.1. Any suite
+    that drives real HTTP (test_api, the monitoring/API suites) consumes later
+    suites' budget for the same endpoint, producing wall-clock-dependent 429
+    flakes (e.g. test_rmi_requests' decision calls failing after test_api).
+    Clearing between tests keeps within-test rate-limit assertions intact while
+    removing cross-file coupling."""
+    try:
+        import base_handler
+        base_handler.rate_limiter._attempts.clear()
+    except Exception:
+        pass
+    yield

@@ -89,7 +89,12 @@ def test_pg_waiter_proceeds_after_holder_releases(pg_dsn):
         result["elapsed"] = time.monotonic() - t0
         lease.release()
 
-    thread = threading.Thread(target=waiter)
+    # daemon=True: this was the ONLY non-daemon thread in the test suite. If
+    # the waiter ever wedges inside pg_advisory_lock (service hiccup), the
+    # join below times out, the assert fails the TEST — but a non-daemon
+    # thread would then block interpreter exit forever, hanging the whole
+    # pytest process (observed as CI's coverage step running for hours).
+    thread = threading.Thread(target=waiter, daemon=True)
     thread.start()
     time.sleep(1.2)  # generous: waiter must reach pg_advisory_lock under CI load
     holder.release()

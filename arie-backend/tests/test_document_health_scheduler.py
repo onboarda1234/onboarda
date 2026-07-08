@@ -455,13 +455,9 @@ def sweep_api_server():
         time.sleep(0.2)
         yield f"http://127.0.0.1:{port}", db_module
     finally:
-        loop = server_ref.get("loop")
-        http_server = server_ref.get("server")
-        if loop and http_server:
-            loop.add_callback(http_server.stop)
-            loop.add_callback(loop.stop)
         if thread:
-            thread.join(timeout=2)
+            from tests.conftest import shutdown_test_http_server
+            shutdown_test_http_server(thread, server_ref)
         if previous_env["DB_PATH"] is None:
             os.environ.pop("DB_PATH", None)
         else:

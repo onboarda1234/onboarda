@@ -125,13 +125,9 @@ def overdue_escalation_server():
         time.sleep(0.2)
         yield f"http://127.0.0.1:{port}", db_module
     finally:
-        loop = server_ref.get("loop")
-        srv = server_ref.get("server")
-        if loop and srv:
-            loop.add_callback(srv.stop)
-            loop.add_callback(loop.stop)
         if thread:
-            thread.join(timeout=2)
+            from tests.conftest import shutdown_test_http_server
+            shutdown_test_http_server(thread, server_ref)
         for k, v in prev.items():
             if v is None:
                 os.environ.pop(k, None)
