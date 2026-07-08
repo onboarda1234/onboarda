@@ -14955,13 +14955,18 @@ class EnhancedRequirementRuleDetailHandler(BaseHandler):
         if not user:
             return
 
+        # BSA-006 review fold (B2): parse the body BEFORE checking out a DB
+        # connection — get_json raises HTTPError(400) on a malformed body,
+        # which would otherwise skip db.close() and leak a pool connection.
+        payload = self.get_json()
+
         db = get_db()
         before = _load_enhanced_requirement_rule(db, rule_id)
         if not before:
             db.close()
             return self.error("Rule not found", 404)
 
-        normalized, error = validate_enhanced_requirement_rule_payload(self.get_json(), existing=before)
+        normalized, error = validate_enhanced_requirement_rule_payload(payload, existing=before)
         if error:
             db.close()
             return self.error(error, 400)
@@ -18099,8 +18104,10 @@ class ApplicationAuditLogHandler(BaseHandler):
         if not app:
             db.close()
             return self.error("Application not found", 404)
-        limit = min(int(self.get_argument("limit", "200")), 500)
-        offset = max(0, int(self.get_argument("offset", "0")))
+        # BSA-007: bounded parse — malformed pagination is a client mistake,
+        # not a 500 (same _bounded_int convention as every other list route).
+        limit = _bounded_int(self.get_argument("limit", "200"), 200, min_value=1, max_value=500)
+        offset = _bounded_int(self.get_argument("offset", "0"), 0, min_value=0, max_value=100000000)
         targets = _application_audit_targets(db, app)
         placeholders = ",".join(["?"] * len(targets))
         category = self.get_argument("category", "").strip().lower()
@@ -37847,8 +37854,9 @@ class ChangeAlertsListHandler(BaseHandler):
 
         application_id = self.get_argument("application_id", None)
         status = self.get_argument("status", None)
-        limit = int(self.get_argument("limit", "50"))
-        offset = int(self.get_argument("offset", "0"))
+        # BSA-007: bounded parse — malformed pagination must not 500.
+        limit = _bounded_int(self.get_argument("limit", "50"), 50, min_value=1, max_value=500)
+        offset = _bounded_int(self.get_argument("offset", "0"), 0, min_value=0, max_value=100000000)
         show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
         fixture_filter_sql = None
         fixture_filter_params = []
@@ -38016,8 +38024,9 @@ class ChangeRequestsListHandler(BaseHandler):
         status = self.get_argument("status", None)
         materiality = self.get_argument("materiality", None)
         source = self.get_argument("source", None)
-        limit = int(self.get_argument("limit", "50"))
-        offset = int(self.get_argument("offset", "0"))
+        # BSA-007: bounded parse — malformed pagination must not 500.
+        limit = _bounded_int(self.get_argument("limit", "50"), 50, min_value=1, max_value=500)
+        offset = _bounded_int(self.get_argument("offset", "0"), 0, min_value=0, max_value=100000000)
         show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
         fixture_filter_sql = None
         fixture_filter_params = []
@@ -39388,6 +39397,15 @@ class PortalApplicationEnhancedRequirementResponseHandler(BaseHandler):
                 "status": "submitted",
                 "requirement": safe_after,
             })
+        except tornado.web.HTTPError:
+            # BSA-006: a malformed request body raises HTTPError(400) from
+            # get_json — that is a CLIENT error and must surface as the
+            # structured 400, not be swallowed into the generic 500 below.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
         except Exception as exc:
             try:
                 db.rollback()
