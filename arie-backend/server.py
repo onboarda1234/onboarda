@@ -10701,24 +10701,6 @@ class PreApprovalDecisionHandler(BaseHandler):
                 db.close()
                 return self.error(risk_error, 400)
 
-            # ── PR-APP-ACTION-OWNERSHIP-SCOPE-1 (FEO-013): sign-off owner gate ──
-            # Pre-approval is admin/SCO-only (like memo approval), so the case
-            # owner is usually a line officer; use the peer-supervisor-only
-            # variant — gate only when ANOTHER supervisor owns the case — so the
-            # normal flow stays frictionless and early-stage cases aren't
-            # reassigned. REQUEST_INFO stays open.
-            ownership_error = authorize_signoff_ownership(
-                self, db, app, user,
-                action="application.pre_approval_decision." + decision.lower(),
-                override_reason=data.get("ownership_override_reason"),
-                attempt_summary=attempt_summary,
-                peer_supervisor_only=True,
-            )
-            if ownership_error:
-                status_code, reason = ownership_error
-                db.close()
-                return self.error(reason, status_code)
-
         # Idempotency: check if a decision was already recorded
         if app.get("pre_approval_decision"):
             reason = (
@@ -10730,6 +10712,27 @@ class PreApprovalDecisionHandler(BaseHandler):
                 reason, attempt_summary, db=db)
             db.close()
             return self.error(reason, 409)
+
+        if decision in ("PRE_APPROVE", "REJECT"):
+            # ── PR-APP-ACTION-OWNERSHIP-SCOPE-1 (FEO-013): sign-off owner gate ──
+            # Pre-approval is admin/SCO-only (like memo approval), so the case
+            # owner is usually a line officer; use the peer-supervisor-only
+            # variant — gate only when ANOTHER supervisor owns the case — so the
+            # normal flow stays frictionless and early-stage cases aren't
+            # reassigned. REQUEST_INFO stays open. Runs AFTER the idempotency
+            # check so a replayed decision gets the truthful 409, not a
+            # misleading ownership 403.
+            ownership_error = authorize_signoff_ownership(
+                self, db, app, user,
+                action="application.pre_approval_decision." + decision.lower(),
+                override_reason=data.get("ownership_override_reason"),
+                attempt_summary=attempt_summary,
+                peer_supervisor_only=True,
+            )
+            if ownership_error:
+                status_code, reason = ownership_error
+                db.close()
+                return self.error(reason, status_code)
 
         # Apply decision
         if decision == "PRE_APPROVE":
@@ -10836,6 +10839,9 @@ class PreApprovalDecisionHandler(BaseHandler):
         self.log_governance_attempt(
             user, "application.pre_approval_decision", attempt_target, "accepted", 201,
             "", attempt_summary, db=db, commit=False)
+        # Ownership-gate deferred effects (peer-supervisor override audit)
+        # persist atomically with the recorded decision.
+        apply_pending_signoff_ownership(self, db, user)
         db.commit()
         db.close()
 
@@ -30221,6 +30227,10 @@ class MemoApproveHandler(BaseHandler):
             body = json.loads(self.request.body or b"{}")
         except (json.JSONDecodeError, TypeError):
             pass
+        if not isinstance(body, dict):
+            # A JSON array/scalar body must not crash .get() consumers below
+            # (ownership_override_reason, approval_reason, officer_signoff).
+            body = {}
         attempt_summary = _governance_summary(
             body,
             ("approval_reason", "officer_signoff"),
@@ -30495,6 +30505,9 @@ class MemoApproveHandler(BaseHandler):
             self.log_governance_attempt(
                 user, "memo.approve", attempt_target, "accepted", 200,
                 "", attempt_summary, db=db, commit=False, best_effort=False)
+            # Ownership-gate deferred effects (peer-supervisor override audit)
+            # persist atomically with the approval itself.
+            apply_pending_signoff_ownership(self, db, user, best_effort=False)
 
             db.commit()
         except Exception as e:
@@ -31392,50 +31405,61 @@ class SubmitToComplianceHandler(BaseHandler):
 # evidence gates, decision-record persistence) still runs unchanged.
 # ══════════════════════════════════════════════════════════
 SIGNOFF_SUPERVISOR_ROLES = ("admin", "sco")
+SIGNOFF_LINE_ROLES = ("co", "analyst")
 
 
 def _lookup_user_role(db, user_id):
-    """Return the lowercased role for a user id, or '' if not found."""
+    """Return the lowercased role for a user id, or None when the role CANNOT
+    be determined (blank id, missing users row, or lookup error).
+
+    Callers gating on the owner's role must treat None as INDETERMINATE and
+    fail closed — a transient lookup failure or a dangling/deleted owner must
+    never silently soften a control (adversarial-review fold S1).
+    """
     uid = (user_id or "").strip()
     if not uid:
-        return ""
+        return None
     try:
         row = db.execute("SELECT role FROM users WHERE id = ?", (uid,)).fetchone()
     except Exception:
-        return ""
+        logger.warning("signoff ownership: role lookup failed for owner %s", uid)
+        return None
     if not row:
-        return ""
+        return None
     role = row["role"] if hasattr(row, "__getitem__") else row.get("role")
-    return (role or "").strip().lower()
+    role = (role or "").strip().lower()
+    return role or None
 
 
 def authorize_signoff_ownership(handler, db, app, user, *, action, override_reason,
                                 attempt_summary, peer_supervisor_only=False):
     """Enforce named-owner accountability for a TERMINAL sign-off action.
 
-    Returns ``None`` when the actor may proceed. Side effects (all written on the
-    caller's ``db`` connection — which the caller holds under its FOR UPDATE /
-    BEGIN IMMEDIATE lock — and left UNCOMMITTED so they are atomic with the
-    caller's decision transaction):
-      * unassigned decision-mode case → the actor is auto-claimed as owner and
-        a ``<action>.ownership_claimed`` governance row is written (commit=False);
-      * supervisor override → a ``<action>.ownership_override`` row (commit=False).
+    Returns ``None`` when the actor may proceed; ``(status_code, reason)`` when
+    blocked (a ``<action>.ownership_denied`` governance row is written and
+    committed immediately — denials must persist).
 
-    Returns ``(status_code, reason)`` and writes (and commits) a
-    ``<action>.ownership_denied`` governance row when the actor is blocked; the
-    caller must then roll back / close and surface the error.
+    DEFERRED side effects (adversarial-review fold B1): passing the gate never
+    writes anything. The auto-claim (unassigned decision-mode case → acting
+    officer becomes owner) and the supervisor-override audit row are recorded
+    as PENDING intents on the handler and are executed by
+    ``apply_pending_signoff_ownership()``, which each sign-off handler calls
+    immediately before its SUCCESS commit. A decision attempt that fails any
+    downstream gate therefore leaves ownership and the override audit
+    untouched — a failed or unauthorized attempt can never seize a case or
+    record an "accepted override" for an action that did not happen.
 
-    peer_supervisor_only=True (memo approval): the gate fires ONLY when the case
-    is owned by another admin/SCO. Memo approval is already admin/SCO-restricted,
-    so a supervisor approving a line-officer-owned memo is the normal four-eyes
-    flow and stays frictionless; no auto-claim happens (the line officer keeps
-    ownership of their case).
+    peer_supervisor_only=True (pre-approval / memo approval — both already
+    admin/SCO-restricted routes): the gate fires only when the case is owned
+    by ANOTHER supervisor (or the owner's role is indeterminate — fail
+    closed); a supervisor signing off a line-officer-owned case is the normal
+    four-eyes flow and no auto-claim ever happens in this mode.
     """
     owner = ((app.get("assigned_to") if hasattr(app, "get") else app["assigned_to"]) or "").strip()
     actor = (user.get("sub") or "").strip()
     role = (user.get("role") or "").strip().lower()
-    ref = (app.get("ref") if hasattr(app, "get") else app["ref"]) or actor
     app_id = app.get("id") if hasattr(app, "get") else app["id"]
+    ref = ((app.get("ref") if hasattr(app, "get") else app["ref"]) or app_id)
     is_supervisor = role in SIGNOFF_SUPERVISOR_ROLES
 
     # 1. The assigned owner is always allowed.
@@ -31445,26 +31469,24 @@ def authorize_signoff_ownership(handler, db, app, user, *, action, override_reas
     # 2. Unassigned case.
     if not owner:
         if peer_supervisor_only:
-            # Memo-approval mode: no owner to step on — allow, do not reassign.
+            # No owner to step on — allow, never reassign in this mode.
             return None
-        # Decision mode: first-touch ownership. Auto-claim the acting officer so
-        # every terminal decision has a named owner behind it.
-        db.execute(
-            "UPDATE applications SET assigned_to=?, updated_at=datetime('now') WHERE id=?",
-            (actor, app_id),
-        )
-        handler.log_governance_attempt(
-            user, action + ".ownership_claimed", ref, "accepted", 200,
-            "Unassigned case auto-claimed by acting officer at terminal sign-off",
-            attempt_summary, db=db, commit=False,
-        )
+        # Decision mode: first-touch ownership, DEFERRED to the success commit.
+        _pending_signoff_intents(handler).append({
+            "kind": "claim", "action": action, "app_id": app_id, "ref": ref,
+            "actor": actor,
+            "attempt_summary": attempt_summary,
+        })
         return None
 
     # 3. Case owned by someone else.
-    if peer_supervisor_only and _lookup_user_role(db, owner) not in SIGNOFF_SUPERVISOR_ROLES:
-        # Memo approval on a line-officer-owned case — the normal supervisory
-        # four-eyes flow. Not gated.
-        return None
+    if peer_supervisor_only:
+        owner_role = _lookup_user_role(db, owner)
+        if owner_role in SIGNOFF_LINE_ROLES:
+            # Line-officer-owned case — the normal supervisory four-eyes flow.
+            return None
+        # Owner is a peer supervisor OR indeterminate (missing/dangling user,
+        # lookup failure) → fail closed: require the override path below.
 
     if is_supervisor:
         # Admin/SCO may override, but MUST record an explicit reason.
@@ -31475,10 +31497,11 @@ def authorize_signoff_ownership(handler, db, app, user, *, action, override_reas
                 user, action + ".ownership_denied", ref, "rejected", 403,
                 reason, attempt_summary, db=db)
             return (403, reason)
-        handler.log_governance_attempt(
-            user, action + ".ownership_override", ref, "accepted", 200,
-            "Supervisor override on a case owned by another officer (" + owner + ")",
-            attempt_summary, db=db, commit=False)
+        _pending_signoff_intents(handler).append({
+            "kind": "override", "action": action, "app_id": app_id, "ref": ref,
+            "actor": actor, "owner": owner, "reason": (override_reason or "").strip(),
+            "attempt_summary": attempt_summary,
+        })
         return None
 
     # 4. Line officer (co/analyst) acting on another officer's case → denied.
@@ -31488,6 +31511,46 @@ def authorize_signoff_ownership(handler, db, app, user, *, action, override_reas
         user, action + ".ownership_denied", ref, "rejected", 403,
         reason, attempt_summary, db=db)
     return (403, reason)
+
+
+def _pending_signoff_intents(handler):
+    """Per-request stash of deferred ownership side effects (see B1 fold)."""
+    if not hasattr(handler, "_pending_signoff_ownership"):
+        handler._pending_signoff_ownership = []
+    return handler._pending_signoff_ownership
+
+
+def apply_pending_signoff_ownership(handler, db, user, best_effort=True):
+    """Execute the gate's deferred side effects; call IMMEDIATELY BEFORE a
+    sign-off handler's SUCCESS commit so the claim/override rows ride the same
+    transaction as the decision itself (atomic: both persist or neither does).
+
+    No-op when the gate recorded nothing. Clears the stash either way so a
+    handler that both records a first dual-approval leg and later completes
+    cannot double-apply.
+    """
+    intents = getattr(handler, "_pending_signoff_ownership", None)
+    if not intents:
+        return
+    handler._pending_signoff_ownership = []
+    for intent in intents:
+        if intent["kind"] == "claim":
+            db.execute(
+                "UPDATE applications SET assigned_to=?, updated_at=datetime('now') WHERE id=?",
+                (intent["actor"], intent["app_id"]),
+            )
+            handler.log_governance_attempt(
+                user, intent["action"] + ".ownership_claimed", intent["ref"], "accepted", 200,
+                "Unassigned case auto-claimed by acting officer at terminal sign-off",
+                intent["attempt_summary"], db=db, commit=False, best_effort=best_effort,
+            )
+        elif intent["kind"] == "override":
+            handler.log_governance_attempt(
+                user, intent["action"] + ".ownership_override", intent["ref"], "accepted", 200,
+                "Supervisor override on a case owned by another officer ("
+                + intent["owner"] + "): " + intent["reason"],
+                intent["attempt_summary"], db=db, commit=False, best_effort=best_effort,
+            )
 
 
 class ApplicationDecisionHandler(BaseHandler):
@@ -31658,13 +31721,23 @@ class ApplicationDecisionHandler(BaseHandler):
         # mandates — ownership accountability is carried by the first leg
         # (owner or auto-claim) plus the dual-approval audit trail, which
         # records the distinct second approver's identity.
+        #
+        # Review fold B2: the exemption applies ONLY while the dual control
+        # actually applies at decision time — i.e. the case's CURRENT risk is
+        # HIGH/VERY_HIGH (the same discriminator the dual-approval branch
+        # below uses). first_approver_id is never cleared, so a stale value
+        # from an abandoned dual flow (case later re-scored to MEDIUM, EDD
+        # cycles, reopen) must not become a standing ownership-gate bypass on
+        # a case where no dual control will run.
         if decision in ("approve", "reject"):
             _first_approver = ((app.get("first_approver_id") if hasattr(app, "get")
                                 else app["first_approver_id"]) or "").strip()
+            _gate_risk_level, _ = _application_risk_snapshot(app)
             _is_dual_second_leg = (
                 decision == "approve"
                 and _first_approver
                 and _first_approver != (user.get("sub") or "").strip()
+                and _gate_risk_level in ("HIGH", "VERY_HIGH")
             )
             if not _is_dual_second_leg:
                 ownership_error = authorize_signoff_ownership(
@@ -31932,6 +32005,9 @@ class ApplicationDecisionHandler(BaseHandler):
                         user, "application.decision", attempt_target, "accepted", 202,
                         "First approval recorded; awaiting second approver", attempt_summary,
                         db=db, commit=False)
+                    # Ownership-gate deferred effects (auto-claim / override
+                    # audit) persist atomically with the recorded first leg.
+                    apply_pending_signoff_ownership(self, db, user)
                     db.commit()
                     db.close()
                     return self.success({"status": "first_approval_recorded", "message": dual_error}, 202)
@@ -32155,6 +32231,10 @@ class ApplicationDecisionHandler(BaseHandler):
             self.log_governance_attempt(
                 user, "application.decision", attempt_target, "accepted", 201,
                 "", attempt_summary, db=db, commit=False, best_effort=False)
+            # Ownership-gate deferred effects (auto-claim / override audit)
+            # persist atomically with the decision itself — a rejected attempt
+            # never reaches this point, so it can never seize ownership.
+            apply_pending_signoff_ownership(self, db, user, best_effort=False)
             db.commit()
         except Exception as decision_commit_error:
             logger.error(

@@ -6855,21 +6855,27 @@ class TestGovernanceAttemptAudit:
         assert resp.status_code == 202
 
         conn = get_db()
-        row = conn.execute(
+        rows = conn.execute(
             """
             SELECT detail FROM audit_log
             WHERE target = ? AND action = 'Governance Attempt'
-            ORDER BY id DESC LIMIT 1
+            ORDER BY id DESC
             """,
             (app_ref,),
-        ).fetchone()
+        ).fetchall()
         conn.close()
 
-        assert row is not None
-        detail = json.loads(row["detail"])
-        assert detail["action"] == "application.decision"
+        details = [json.loads(r["detail"]) for r in rows]
+        # The ownership gate (PR-APP-ACTION-OWNERSHIP-SCOPE-1) writes an
+        # ownership_claimed row alongside the 202 on an unassigned case, so
+        # select the decision row explicitly instead of assuming it is newest.
+        decision_rows = [d for d in details if d["action"] == "application.decision"]
+        assert decision_rows, details
+        detail = decision_rows[0]
         assert detail["outcome"] == "accepted"
         assert detail["response_code"] == 202
+        # And the auto-claim itself is audited (unassigned case, first leg).
+        assert any(d["action"].endswith(".ownership_claimed") for d in details)
 
     def test_failed_memo_approval_attempt_is_audited(self, api_server):
         """Memo approval gate rejections must leave a Governance Attempt row."""

@@ -208,7 +208,10 @@ def test_approval_gate_requires_reason_for_canonical_approved_memo(db):
 def test_memo_approval_handler_requires_and_persists_approval_reason_static():
     server_py = _read("arie-backend/server.py")
     handler_start = server_py.index("class MemoApproveHandler")
-    handler_region = server_py[handler_start : handler_start + 16000]
+    # Marker-bounded (next class), not a fixed window — fixed windows drift
+    # whenever unrelated code is inserted earlier in the handler.
+    _next_class = server_py.find("\nclass ", handler_start + 1)
+    handler_region = server_py[handler_start : _next_class if _next_class != -1 else len(server_py)]
 
     assert 'body.get("approval_reason")' in handler_region
     assert "approval_reason is required" in handler_region
