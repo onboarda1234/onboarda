@@ -639,7 +639,12 @@ class BaseHandler(tornado.web.RequestHandler):
                 if _is_valid_ip(candidate):
                     return candidate
 
-        if x_real_ip and _is_valid_ip(x_real_ip):
+        # RDI-012 / P10-6: X-Real-IP is exactly as forgeable as X-Forwarded-For
+        # — honour it only when the direct peer is a trusted proxy, same as the
+        # XFF branch above. Previously this fallback was UNCONDITIONAL, so a
+        # direct public caller could stamp any IP into officer sign-off audit
+        # provenance simply by sending the header.
+        if x_real_ip and _is_valid_ip(x_real_ip) and _is_trusted_proxy(remote_ip):
             return x_real_ip
         return remote_ip
 
