@@ -50,6 +50,14 @@ SYSTEM_ACTOR_ID = "system:verification-worker"
 SYSTEM_ACTOR_NAME = "Verification Worker"
 
 
+class VerificationJobMissing(LookupError):
+    """Raised when a verification job was already cleaned up."""
+
+    def __init__(self, job_id: str):
+        self.job_id = job_id
+        super().__init__(f"Verification job not found: {job_id}")
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -141,6 +149,15 @@ def serialize_verification_job(row: Optional[Dict[str, Any]]) -> Optional[Dict[s
     elif metadata is None:
         job["job_metadata"] = {}
     job["timing_ms"] = verification_job_timing_ms(job)
+    return job
+
+
+def get_verification_job_or_raise(db, job_id: str) -> Dict[str, Any]:
+    job = serialize_verification_job(
+        db.execute("SELECT * FROM verification_jobs WHERE id=?", (job_id,)).fetchone()
+    )
+    if not job:
+        raise VerificationJobMissing(job_id)
     return job
 
 
@@ -472,11 +489,7 @@ def mark_verification_job_succeeded(
         """,
         (worker_id, job_id),
     )
-    job = serialize_verification_job(
-        db.execute("SELECT * FROM verification_jobs WHERE id=?", (job_id,)).fetchone()
-    )
-    if not job:
-        raise ValueError(f"Verification job not found: {job_id}")
+    job = get_verification_job_or_raise(db, job_id)
     if transition_document:
         _transition_document_for_job(
             db,
@@ -497,11 +510,7 @@ def mark_verification_job_failed(
     error: str,
     retryable: bool,
 ) -> Dict[str, Any]:
-    job = serialize_verification_job(
-        db.execute("SELECT * FROM verification_jobs WHERE id=?", (job_id,)).fetchone()
-    )
-    if not job:
-        raise ValueError(f"Verification job not found: {job_id}")
+    job = get_verification_job_or_raise(db, job_id)
 
     attempts = int(job.get("attempt_count") or 0)
     max_attempts = int(job.get("max_attempts") or MAX_ATTEMPTS)

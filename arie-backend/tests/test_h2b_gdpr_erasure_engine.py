@@ -163,7 +163,7 @@ def test_ledger_retained_entries_cite_a_basis(db):
         "(id, timestamp, event_type, action, application_id, entry_hash) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         ("sup-h2b-ret", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
-         "decision", "approve", "a-h2b-ret", "deadbeef"),
+         "human_review_completed", "approve", "a-h2b-ret", "deadbeef"),
     )
     db.commit()
     ledger = ge.build_erasure_ledger(db, "c-h2b-ret")
@@ -482,7 +482,7 @@ def test_plan_survives_missing_peripheral_policy_with_retained_row(db):
     _seed_subject(db, "c-h2b-n4", "a-h2b-n4", 4000)
     db.execute(
         "INSERT INTO supervisor_audit_log (id, timestamp, event_type, action, application_id, entry_hash) "
-        "VALUES (?, ?, 'decision', 'approve', ?, 'h')",
+        "VALUES (?, ?, 'human_review_completed', 'approve', ?, 'h')",
         ("sup-n4", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"), "a-h2b-n4"),
     )
     db.commit()

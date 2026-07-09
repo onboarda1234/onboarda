@@ -113,7 +113,7 @@ class _AuditExportTestBase(AsyncHTTPTestCase):
                 (
                     row_id,
                     datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                    "pipeline_run",
+                    "pipeline_completed",
                     "info",
                     actor_id,
                     "Admin",

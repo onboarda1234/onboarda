@@ -638,14 +638,19 @@ def _application_risk_staleness_error(db, app, action_label="approve"):
     trusted, else ``None``.
 
     Blocking rules (deliberate):
+      * Blocks FIRST on any ``stale:`` quarantine sentinel — affirmative
+        evidence of a failed (``stale:recompute_failed``, RDI-004 sweep) or
+        pending (``stale:cm_recompute_pending:<request_id>``, P12-2/DCI-012
+        change implementation) recompute. Checked before the current-version
+        read so an environment without config versioning cannot neutralise a
+        quarantine.
       * Blocks on a *present-and-different* stored version — the precise RDI-004
         scenario (the app was scored, the config then changed, and the app was
         not re-scored to the new version). After a config change,
         ``recompute_risk_for_active_apps`` stamps the current version on every
         app it successfully re-scores and stamps the quarantine sentinel
         ``RISK_CONFIG_VERSION_RECOMPUTE_FAILED`` on every app whose re-score
-        failed — so failed apps are blocked here regardless of their prior
-        (possibly NULL) provenance.
+        failed.
       * Blocks (fail-closed) when the current config version cannot be READ —
         a provenance check that errors must not silently allow approval.
       * A missing/blank ``risk_config_version`` (unknown provenance) is NOT
@@ -654,14 +659,33 @@ def _application_risk_staleness_error(db, app, action_label="approve"):
         unguarded only until the next risk-config update — the update sweep
         re-stamps it (current version on success, quarantine sentinel on
         failure), after which it is fully covered.
-      * Returns ``None`` when versioning is genuinely not in use (no
-        ``risk_config`` row), so environments without a configured risk model
-        are unaffected.
+      * Returns ``None`` for version-comparison purposes when versioning is
+        genuinely not in use (no ``risk_config`` row), so environments without
+        a configured risk model are unaffected — except for quarantine
+        sentinels, which block regardless (see first rule).
       * Scoped to approval only: rejection/escalation tighten the outcome and
         must remain available even when a re-score is pending.
     """
     if not app:
         return None
+    stored_version = dict(app).get("risk_config_version")
+    stored_text = str(stored_version) if stored_version else ""
+    if stored_text.startswith("stale:"):
+        # Quarantine sentinel — blocks unconditionally, before any config
+        # version lookup (a quarantine is meaningful even where versioning
+        # is not in use).
+        if stored_text.startswith("stale:cm_recompute_pending"):
+            return (
+                "Cannot " + action_label + ": a material change was implemented "
+                "for this application and its risk score has not yet been "
+                "successfully recomputed, so the stored risk score is "
+                "quarantined. Recompute risk successfully before approving."
+            )
+        return (
+            "Cannot " + action_label + ": the last risk recomputation for this "
+            "application FAILED after a risk-configuration change, so its stored "
+            "risk score is quarantined. Recompute risk successfully before approving."
+        )
     try:
         from rule_engine import _get_risk_config_version_strict
         current_version = _get_risk_config_version_strict(db)
@@ -679,18 +703,11 @@ def _application_risk_staleness_error(db, app, action_label="approve"):
     if not current_version:
         # Versioning not established (no risk_config row) — nothing to compare.
         return None
-    stored_version = dict(app).get("risk_config_version")
     if not stored_version:
         # Unknown provenance — not blocked (see blocking rules above).
         return None
     if stored_version == current_version:
         return None
-    if str(stored_version).startswith("stale:"):
-        return (
-            "Cannot " + action_label + ": the last risk recomputation for this "
-            "application FAILED after a risk-configuration change, so its stored "
-            "risk score is quarantined. Recompute risk successfully before approving."
-        )
     return (
         "Cannot " + action_label + ": the stored risk score was computed against "
         "an older risk-config version (the risk configuration has changed since "
@@ -38410,6 +38427,30 @@ class ChangeRequestsListHandler(BaseHandler):
             db.close()
 
 
+def _cm_risk_quarantine_flag(db, request_id):
+    """Best-effort read of the DCI-012 risk-quarantine state for a change
+    request's application. Returns True/False, or None when it cannot be
+    determined (missing rows / read failure) — callers omit the response
+    field on None rather than reporting a false 'not quarantined'."""
+    try:
+        row = db.execute(
+            """SELECT a.risk_config_version FROM applications a
+               JOIN change_requests cr ON cr.application_id = a.id
+               WHERE cr.id = ?""",
+            (request_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        rcv = str(dict(row).get("risk_config_version") or "")
+        return rcv.startswith("stale:")
+    except Exception as flag_err:
+        logger.warning(
+            "change-management: could not read risk quarantine flag for %s: %s",
+            request_id, flag_err,
+        )
+        return None
+
+
 class ChangeRequestDetailHandler(BaseHandler):
     """GET/PATCH /api/change-management/requests/:id — Request detail and status"""
     def get(self, request_id):
@@ -38477,7 +38518,14 @@ class ChangeRequestDetailHandler(BaseHandler):
                 status_code = 403 if "not permitted" in err.lower() else 400
                 self.error(err, status_code)
                 return
-            self.success({"status": "updated", "new_status": new_status})
+            resp = {"status": "updated", "new_status": new_status}
+            if new_status == "implemented":
+                # DCI-012: the PATCH→implemented path surfaces the same
+                # quarantine flag as the dedicated implement endpoint.
+                quarantined = _cm_risk_quarantine_flag(db, request_id)
+                if quarantined is not None:
+                    resp["risk_recompute_quarantined"] = quarantined
+            self.success(resp)
         finally:
             db.close()
 
@@ -38563,7 +38611,9 @@ class ChangeRequestApproveHandler(BaseHandler):
                         "blockers": blockers,
                     }, default=str))
                     return
-                self.error(err, 400 if "not found" not in err.lower() else 404)
+                # Precise 404 match: wrapped internal failures ("Approval
+                # failed: <exception text>") must not sniff-match to 404.
+                self.error(err, 404 if err.lower().startswith("request not found") else 400)
                 return
             self.success({"status": "approved"})
         finally:
@@ -38592,7 +38642,9 @@ class ChangeRequestRejectHandler(BaseHandler):
             if not success:
                 if "not permitted" in err.lower():
                     status_code = 403
-                elif "not found" in err.lower():
+                elif err.lower().startswith("request not found"):
+                    # Precise match: wrapped internal failures ("Rejection
+                    # failed: <exception text>") must not sniff-match to 404.
                     status_code = 404
                 else:
                     status_code = 400
@@ -38706,7 +38758,16 @@ class ChangeRequestImplementHandler(BaseHandler):
                     status_code = 400
                 self.error(err, status_code)
                 return
-            self.success({"status": "implemented", "profile_version_id": version_id})
+            resp = {"status": "implemented", "profile_version_id": version_id}
+            # DCI-012: surface the risk-quarantine outcome so the officer UI
+            # can explain up front that application approval is blocked until
+            # a successful re-score (staleness gate). Informational only —
+            # never fails the implemented response; the flag is omitted (not
+            # False) when it cannot be determined.
+            quarantined = _cm_risk_quarantine_flag(db, request_id)
+            if quarantined is not None:
+                resp["risk_recompute_quarantined"] = quarantined
+            self.success(resp)
         finally:
             db.close()
 

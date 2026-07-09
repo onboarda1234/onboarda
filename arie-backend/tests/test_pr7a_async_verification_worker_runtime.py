@@ -1,10 +1,13 @@
 """PR7A async verification worker-runtime guards."""
 
 import json
+import logging
 import os
 import sys
 from datetime import timedelta
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -127,6 +130,163 @@ def test_worker_claims_queued_job_and_completes_verified_with_system_audit(tmp_p
         ]
         assert {detail["actor_type"] for detail in details} == {"system"}
         assert {detail["worker_id"] for detail in details} == {"worker-pr7a-success"}
+
+
+def test_missing_verification_job_skips_cleanly_without_executor_or_retry(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    from verification_worker import process_claimed_job
+
+    with fresh_migration_db(tmp_path, monkeypatch) as db:
+        app, doc = _seed_doc(db)
+        job = _enqueue(db, app, doc)
+        db.execute("DELETE FROM verification_jobs WHERE id=?", (job["id"],))
+        db.commit()
+
+        calls = {"count": 0}
+
+        def should_not_run(db, job, worker_id):
+            calls["count"] += 1
+            raise AssertionError("executor should not run for a missing verification job")
+
+        caplog.set_level(logging.INFO)
+        result = process_claimed_job(
+            db,
+            job,
+            worker_id="worker-pr7a-missing-pre",
+            verification_executor=should_not_run,
+        )
+
+        assert result == {
+            "processed": True,
+            "outcome": "skipped",
+            "reason": "job_not_found",
+            "action": "skip",
+            "job_id": job["id"],
+            "document_id": doc["id"],
+            "worker_id": "worker-pr7a-missing-pre",
+            "stage": "pre_executor",
+        }
+        assert calls["count"] == 0
+        assert db.execute(
+            "SELECT COUNT(*) AS c FROM verification_jobs WHERE id=?",
+            (job["id"],),
+        ).fetchone()["c"] == 0
+        assert db.execute(
+            "SELECT COUNT(*) AS c FROM verification_jobs WHERE status IN ('pending','retrying','in_progress')",
+        ).fetchone()["c"] == 0
+        stored = db.execute(
+            "SELECT verification_status, verification_results FROM documents WHERE id=?",
+            (doc["id"],),
+        ).fetchone()
+        assert stored["verification_status"] == "pending"
+        assert stored["verification_results"] in (None, "", "{}")
+        assert any("verification_job_missing_skip" in record.getMessage() for record in caplog.records)
+        assert any("reason=job_not_found" in record.getMessage() for record in caplog.records)
+        assert all(record.levelno < logging.ERROR for record in caplog.records)
+
+
+def test_run_once_skips_missing_job_after_cleanup_race_without_traceback(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    from verification_worker import run_once
+
+    with fresh_migration_db(tmp_path, monkeypatch) as db:
+        app, doc = _seed_doc(db)
+        job = _enqueue(db, app, doc)
+
+        def cleanup_race_executor(db, claimed_job, worker_id):
+            db.execute("DELETE FROM verification_jobs WHERE id=?", (claimed_job["id"],))
+            db.commit()
+            return {
+                "verification_status": "verified",
+                "verification_results": {"overall": "verified", "checks": []},
+            }
+
+        caplog.set_level(logging.INFO)
+        result = run_once(
+            db=db,
+            worker_id="worker-pr7a-missing-completion",
+            verification_executor=cleanup_race_executor,
+        )
+
+        assert result["outcome"] == "skipped"
+        assert result["reason"] == "job_not_found"
+        assert result["action"] == "skip"
+        assert result["job_id"] == job["id"]
+        assert result["stage"] == "completion"
+        assert db.execute(
+            "SELECT COUNT(*) AS c FROM verification_jobs WHERE id=?",
+            (job["id"],),
+        ).fetchone()["c"] == 0
+        assert db.execute(
+            "SELECT COUNT(*) AS c FROM verification_jobs WHERE status IN ('pending','retrying','in_progress')",
+        ).fetchone()["c"] == 0
+        stored = db.execute(
+            "SELECT verification_status, verification_results FROM documents WHERE id=?",
+            (doc["id"],),
+        ).fetchone()
+        assert stored["verification_status"] == "in_progress"
+        assert stored["verification_results"] in (None, "", "{}")
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("verification_job_missing_skip" in message for message in messages)
+        assert not any("verification_worker_run_once_failed" in message for message in messages)
+        assert not any("Verification job not found" in message for message in messages)
+        assert all(record.levelno < logging.ERROR for record in caplog.records)
+
+
+def test_missing_job_guard_does_not_swallow_database_failures():
+    from verification_worker import process_claimed_job
+
+    class FailingDB:
+        def execute(self, *args, **kwargs):
+            raise RuntimeError("database unavailable")
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        process_claimed_job(
+            FailingDB(),
+            {"id": "vjob_db_failure", "document_id": "doc_db_failure"},
+            worker_id="worker-pr7a-db-failure",
+            verification_executor=_executor("verified"),
+        )
+
+
+def test_executor_failure_with_cleanup_still_errors_instead_of_skip(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    from verification_worker import run_once
+
+    with fresh_migration_db(tmp_path, monkeypatch) as db:
+        app, doc = _seed_doc(db)
+        _enqueue(db, app, doc)
+
+        def failing_cleanup_executor(db, claimed_job, worker_id):
+            db.execute("DELETE FROM verification_jobs WHERE id=?", (claimed_job["id"],))
+            db.commit()
+            raise RuntimeError("provider unavailable")
+
+        caplog.set_level(logging.INFO)
+        with pytest.raises(RuntimeError, match="provider unavailable"):
+            run_once(
+                db=db,
+                worker_id="worker-pr7a-provider-error",
+                verification_executor=failing_cleanup_executor,
+            )
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("verification_worker_run_once_failed" in message for message in messages)
+        assert any(
+            "verification_worker_failure_state_missing_job" in message
+            and "original_error_type=RuntimeError" in message
+            for message in messages
+        )
+        assert not any("verification_job_missing_skip" in message for message in messages)
 
 
 def test_verification_job_timing_metrics_are_internally_consistent(tmp_path, monkeypatch):
