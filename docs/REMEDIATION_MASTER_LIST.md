@@ -120,11 +120,11 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | PR | Priority | Title | GitHub | Status |
 |----|:--:|-------|:--:|:--:|
 | PR-APP-STATUS-CANONICALIZATION-1 | P1 blocker | Canonical status labels + senior queue + parity | #685 | ✅ |
-| PR-APP-ACTION-OWNERSHIP-SCOPE-1 | P1/P2 | Terminal decision & memo-approval ownership gate *(= Audit-4 **FEO-013**)*: final approve/reject + pre-approval + memo approval owner-gated; admin/SCO override needs `ownership_override_reason`; unassigned → auto-claim at SUCCESS commit only (failed attempts can never seize ownership); dual second leg exempt only at current HIGH/VERY_HIGH; collaboration verbs stay open. Adversarial review: 2 blockers found + redesigned away; 26 tests incl. HTTP endpoint matrix; live-PG probe PASS | [#713](https://github.com/onboarda1234/onboarda/pull/713) | 🟢 PR open (sign-off memo in `docs/compliance/OWNERSHIP_GATE_SIGNOFF_MEMO.md`, awaiting founder signature) |
+| PR-APP-ACTION-OWNERSHIP-SCOPE-1 | P1/P2 | Terminal decision & memo-approval ownership gate *(= Audit-4 **FEO-013**)*: final approve/reject + pre-approval + memo approval owner-gated; admin/SCO override needs `ownership_override_reason`; unassigned → auto-claim at SUCCESS commit only (failed attempts can never seize ownership); dual second leg exempt only at current HIGH/VERY_HIGH; collaboration verbs stay open. Adversarial review: 2 blockers found + redesigned away; 26 tests incl. HTTP endpoint matrix; live-PG probe PASS | [#713](https://github.com/onboarda1234/onboarda/pull/713) | ✅ merged (main `074607d`; sign-off memo in `docs/compliance/OWNERSHIP_GATE_SIGNOFF_MEMO.md`, awaiting founder signature) |
 | ops-enforce-staging-sha-alignment-gate | P0 | Staging-SHA gate + delete test logins | [#702](https://github.com/onboarda1234/onboarda/pull/702) | ✅ code half merged (SW-3; gate exercises on next deploy) · delete-test-logins half ⬜ ops-side |
-| perf-applications-default-list-projection | P2 | Slim default list payload | — | ⬜ |
+| perf-applications-default-list-projection | P2 | Slim paginated projection is the DEFAULT `/api/applications` payload (was: full `a.*` + child hydration for 5000 rows to any caller omitting `?view=`); `?view=full` unchanged opt-in. Review fold: periodic_review projection stays a full/detail-surface field (attaching it to the auto-refreshing list would regress the hot path). Full suite 6748-green on the stack | branch `claude/lucid-carson-ww52p3-apps-perf` | 🔨 built + pushed (PR pending connector re-auth) |
 | audit-log-tamper-evidence-1 | P2 | *(= Phase 4 #27)* | #691 | ✅ |
-| ux-applications-list-sort-status-tabs | P3 | Sortable headers + status tabs | — | ⬜ |
+| ux-applications-list-sort-status-tabs | P3 | Whitelisted server-side sort (8 columns; COALESCE NULL-score parity SQLite↔PG, severity-rank risk_level, unique `a.id` pagination tiebreaker) + comma-status filter backing 6 grouped status tabs (proper tab ARIA); dropdown-wins conflict resolution; off-canon "(non-standard)" status safety net wired to the real load path; **fake-AI "Quick Reference" chat removed wholesale** (canned "All checks passed" responses were a misleading-claims liability). Adversarial review: 4 MAJOR folds; 13 API tests + 24-check headless-Chromium run | branch `claude/lucid-carson-ww52p3-apps-cleanup` (stacked on apps-perf) | 🔨 built + pushed (PR pending connector re-auth) |
 | chore-applications-deadcode-cleanup | P3 | Delete dead approval branches | [#701](https://github.com/onboarda1234/onboarda/pull/701) | ✅ merged (SW-2; merge `dd28a79`, TD 788, validated PASS) |
 | CLIENT-PORTAL-RUNTIME-SMOKE-1 | P1 | Live client-credential smoke: status/upload/logout/**cross-tenant denial** *(audit REGMIND-P1-006)* | — | ⬜ |
 | PERIODIC-BASELINE-METHOD-HYGIENE-1 | P2 | Clean 405 on POST-only periodic-review baseline route *(audit REGMIND-P2-001)* | [#700](https://github.com/onboarda1234/onboarda/pull/700) | ✅ merged (SW-1) |
@@ -232,14 +232,14 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
 |---|----|----------|:--:|-----------------------|:--:|:--:|
 | P12-1 | Regulated-record deletion protection | DCI-001, 003 | CRITICAL + HIGH | App-delete cleanup + startup cleanup migration must NEVER delete regulated evidence (`sar_reports`, `compliance_memos`, `edd_cases`, `agent_executions`, `supervisor_audit_log`, `decision_records`) — soft-delete/tombstone with deletion marker instead; move fixture cleanup out of generic startup code | — | 📋 scoped (W1 blocker) |
-| P12-2 | Change-implementation fail-closed recompute + audit-in-transaction | DCI-012, 013 | HIGH + MED | Recompute risk (or write a `requires_recomputation` quarantine marker, P10-3-style) in the SAME transaction as implement — a swallowed recompute failure must not leave a live material change on a stale score; write CM approve/implement audit rows before commit, not after | — | 📋 scoped (W1 blocker) |
+| P12-2 | Change-implementation fail-closed recompute + audit-in-transaction | DCI-012, 013 | HIGH + MED | Per-request quarantine sentinel `stale:cm_recompute_pending:<id>` stamped in the SAME txn as implement whenever the change requires risk (staleness gate blocks approvals until recompute verifies against stored provenance); CAS-guarded recompute persistence; approve/reject/implement audit rows written pre-commit. Review folds: predicate parity (M1), PATCH-path recompute (M2), gate hoist. 18 tests; live-PG probe 17-green. Residual follow-up: no enforcement path for already-approved applications (M3) | [#715](https://github.com/onboarda1234/onboarda/pull/715) | 🟢 PR open |
 | P12-3 | Compliance-logic corrections | DCI-008, 010, 011 | HIGH + HIGH + MED | Risk-config load failure fails CLOSED in staging/prod (no silent hardcoded-default model); memo `jur_rating` actually mutates to VERY_HIGH when `SANCTIONED_COUNTRY_FLOOR` is claimed; fix `MULTI_GAP_ESCALATION` branch order (≥4 checked before ≥3). Review folds: PG/JSONB parse hole closed (`safe_json_loads` coerced malformed scalars to `{}` before validation); recompute/boot-repair/correction/EDD-tier laundering paths all re-raise; boot-time CRITICAL probe. **Deploy precondition: validate live staging risk_config row first (see PR)** | [#710](https://github.com/onboarda1234/onboarda/pull/710) | 🟢 PR open |
 | P12-4 | Migration hard-stops + schema-drift detection | DCI-005, 004 | HIGH | Reject `MIGRATION_FAILURE_MODE=continue` when ENVIRONMENT is staging/production — **DCI-005 half shipped in [#711](https://github.com/onboarda1234/onboarda/pull/711)** (override ignored + ERROR on every boot; dev/test/demo keep it; clean adversarial review). Still scoped: DCI-004 startup drift check comparing declared constraints/FKs/columns vs live schema, fail-closed in staging/prod | [#711](https://github.com/onboarda1234/onboarda/pull/711) | 🟢 PR open (DCI-005 half; DCI-004 still 📋) |
-| P12-5 | Status-column CHECK constraints | DCI-006 | MED | CHECK constraints/enums for `clients.status`, `agent_executions.status/source`, `supervisor_pipeline_results.status`, `supervisor_audit_log.event_type/severity`, `compliance_memos.supervisor_status/rule_engine_status` (backfill invalid data first) | — | 📋 scoped |
+| P12-5 | Status-column CHECK constraints | DCI-006 | MED | Canon-constant CHECK constraints for all 8 status/enum columns (Migration v2.47, steady-state no-op boots via constraint-def comparison; fail-closed `clients.status` backfill; SQLite→PG migrator per-row SAVEPOINTs). Bonus repair: `Severity.WARNING` added to supervisor enum — 6 call sites crashed with AttributeError before their audit INSERT. 20 tests; live-PG probe 19-green | branch `claude/lucid-carson-ww52p3-p12-5` | 🔨 built + pushed (PR pending connector re-auth) |
 | P12-6 | PG pool connection validation | DCI-007 | MED | Pre-ping (`SELECT 1`) on pool checkout; discard/retry stale connections after RDS failover | [#709](https://github.com/onboarda1234/onboarda/pull/709) | 🟢 PR open |
 | P12-7 | Verification-matrix fidelity | DCI-014, 015 | MED + LOW | HYBRID checks go to Claude ONLY on deterministic INCONCLUSIVE (never override a deterministic FAIL), per the matrix policy; resolve the 5 TODO enhanced-requirement document mappings with compliance sign-off | — | 📋 scoped |
-| P12-8 | Retention purge enforceability + purge-log evidence | DCI-020, 021 | MED | Map (or explicitly mark manual-with-procedure) all retention categories beyond audit_logs/monitoring_alerts; add subject_id/application_id/tables_affected/per-table counts/batch id to `data_purge_log`, written atomically with the purge | — | 📋 scoped |
-| P12-9 | Observability hardening | DCI-028, 029 | MED | Force JSON logs + request-correlation IDs in staging/prod; readiness probes for S3 reachability and disk capacity | — | 📋 scoped |
+| P12-8 | Retention purge enforceability + purge-log evidence | DCI-020, 021 | MED | 7 manual categories documented (`docs/compliance/MANUAL_PURGE_PROCEDURE.md` + CLI recorder); `data_purge_log` gains subject/application/tables/per-table-counts/batch-id/evidence columns (Migration v2.48) written in ONE txn with the DELETE. Review MAJOR fold: legacy `purged_by`→users FK dropped — the scheduler identity would have failed EVERY PG purge forever. 21 tests; live-PG probe 8-green | branch `claude/lucid-carson-ww52p3-p12-8` | 🔨 built + pushed (PR pending connector re-auth) |
+| P12-9 | Observability hardening | DCI-028, 029 | MED | Forced JSON logs in staging/prod across BOTH pipelines (kills staging double-emission); contextvar request-correlation ids (sanitised `c-` prefixed `X-Request-ID`, echoed header, auto-injected into structured + root-logger lines, persisted on `audit_log` rows — Migration v2.49, worker `job-*` ids); readiness gains disk-capacity gate + tight-timeout S3 probe (403 = reachable_permission_limited, non-gating). 30 tests; live-PG probe 5-green. Residual: legacy direct `INSERT INTO audit_log` sites keep request_id NULL | branch `claude/lucid-carson-ww52p3-p12-9` | 🔨 built + pushed (PR pending connector re-auth) |
 | P12-10 | Infra guards | DCI-016, 025 | MED + LOW | Enforce upload body-size before full buffering (server/proxy level; handler check stays as second line); deploy workflow FAILS when ECS `services-stable` times out *(partially mitigated by #702's SHA-alignment gate — stability half still open)* | — | 📋 scoped |
 
 **Wave order:** W1 P12-1, P12-2 (code blockers) — the other Audit-3 blockers live elsewhere: item 21 (DCI-018), P9-1 (DCI-019), P9-8 (DCI-027) · W2 P12-3…P12-9 · W3 P12-10.
@@ -373,25 +373,30 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 ## Roll-up (113 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
-| ✅ merged | 47 |
+| ✅ merged | 48 |
 | 🟢 PR open (built) | 5 |
-| 🔨 in progress | 0 |
-| 📋 scoped | 26 |
+| 🔨 built + pushed (PR pending) | 5 |
+| 📋 scoped | 22 |
 | ⏸ blocked | 3 |
-| ⬜ pending | 32 |
+| ⬜ pending | 30 |
 
 **Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#709 (P12-6,
 head `43e0b8d` — CI-flake retrigger; full local suite 6656-green on identical content)** ·
-**#710 (P12-3)** · **#711 (P12-4, DCI-005 half)** · **#712 (P11-8)** ·
-**#713 (PR-APP-ACTION-OWNERSHIP-SCOPE-1 / FEO-013)** · **Old blocked draft:** #498.
-**Merged + deployed + validated:** **#705/#706/#707/#708** (staging `fadf8a6` == main;
+**#710 (P12-3)** · **#711 (P12-4, DCI-005 half)** · **#712 (P11-8)** · **#715 (P12-2)** ·
+**Old blocked draft:** #498. **Built + pushed, PR creation blocked on GitHub connector re-auth**
+(bodies ready in session scratchpad): `p12-5` · `p12-8` · `p12-9` · `apps-perf` ·
+`apps-cleanup` (stacked on apps-perf). **De-flake backlog:** `test_fresh_install_pg_chain`
+shared-DSN schema_version order-coupling · `test_evidence_pack_supervisor_chain` ad-hoc
+batch flake.
+**Merged + deployed + validated:** **#713** (ownership gate, merged 2026-07-08; staging validation pending next deploy) · **#705/#706/#707/#708** (staging `fadf8a6` == main;
 backend TD `:796`, worker `:244`; #706/#708 PASS-with-limitation) · Wave A **#700/#701/#702/#703** (TDs
 784–789) · #704 (Tier-1-only maker-checker) · RDI (Phase 9) Wave 1 #696/#697/#698 · docs #695 ·
 #699 closed unmerged (redundant). Earlier code PRs (#687–#693) merged/validated.
 
 **Where things stand:** Phases 0–3 (except B7 #12) and 5–6 done. **Phase 4 fully
 built/merged** (only decision-gated #17/#21/#24/#26/#28 remain). Phase 7: status-canon
-done + audit-tamper (#691) merged; ownership gate not started (⬜). Phases 8–9 are the
+done + audit-tamper (#691) merged; **ownership gate merged (#713)**; Applications-page
+perf + sort/tabs/chat-removal pair built + pushed (PRs pending connector re-auth). Phases 8–9 are the
 remaining body — overwhelmingly ops/vendor/legal, not code. **Phase 9 (RDI audit):**
 **all three current-stage CRITICALs closed & validated — P10-1 (#697, RDI-006) · P10-3
 (#696, RDI-004) · P10-2 (#698, RDI-001/007/011)**; P10-DOC-1 policy approved; W2/W3
@@ -400,7 +405,9 @@ Audit 2 — run against `e66405a`):** 19 findings folded as P11-1…P11-9; 2 HIG
 (BSA-001 revocation fail-open, BSA-015 dependency CVEs) lead Wave 1; BSA-002 = existing
 item 26. **Phase 11 (DCI audit, Audit 3 — run against `956ed5b`):** 30 findings; 11 map to
 existing items (incl. 3 blockers elevating item 21 / P9-1 / P9-8), 19 net-new folded as
-P12-1…P12-10; code blockers P12-1 (regulated-record deletion) + P12-2 (change-implementation
-recompute) lead Wave 1. **Section order:** phase sections now run …8 → 10 → 11 → 12 →
+P12-1…P12-10; code blockers: P12-1 (regulated-record deletion) remains (supervised session); P12-2
+(change-implementation recompute) built as #715. Overnight queue 2026-07-08/09 delivered
+P12-2/P12-5/P12-8/P12-9 + the Applications-page pair, each with fresh-context adversarial
+review folds and 6,7xx-green full suites. **Section order:** phase sections now run …8 → 10 → 11 → 12 →
 **9 (Production readiness, last)**. Pilot-readiness ≈ 88–92%; production-readiness ≈ 30–35%
 (Audit 3 verdict: REMEDIATE BEFORE PROCEEDING).
