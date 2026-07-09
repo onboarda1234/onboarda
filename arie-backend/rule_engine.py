@@ -1526,6 +1526,19 @@ def compute_risk_score(app_data, config_override=None):
 # a successful re-score stamps the real current version.
 RISK_CONFIG_VERSION_RECOMPUTE_FAILED = "stale:recompute_failed"
 
+# P12-2 / DCI-012: sentinel PREFIX stamped onto an application IN THE SAME
+# TRANSACTION as a change-request implementation that requires risk review
+# (change_management.implement_change_request). The stored value is
+# "<prefix>:<request_id>" — the suffix records which implementation is awaiting
+# a re-score and makes concurrent implementations' sentinels distinguishable
+# for the recompute persistence CAS below. It becomes durable atomically with
+# the implemented change, so a post-commit recompute that fails — or never
+# runs at all (process crash between commits, rule engine unavailable) — leaves
+# the application quarantined behind the same decision-time staleness gate
+# instead of approvable on its stale pre-change score. A successful recompute
+# overwrites it with the real current config version.
+RISK_CONFIG_VERSION_CM_RECOMPUTE_PENDING = "stale:cm_recompute_pending"
+
 
 def _get_risk_config_version_strict(db):
     """Return the current risk-config version, raising on lookup failure.
@@ -1824,6 +1837,12 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         old_level = app["risk_level"]
         result["old_score"] = old_score
         result["old_level"] = old_level
+        # Captured for the compare-and-swap persistence below: if another
+        # writer changes the risk provenance while this recompute is in
+        # flight (e.g. a concurrent change-request implementation stamps its
+        # quarantine sentinel), this result was computed from pre-change data
+        # and must not overwrite the fresher marker.
+        old_provenance = app.get("risk_config_version")
 
         # Build scorer input from current app data plus controlled officer
         # working-value overlays. The original prescreening_data JSON remains
@@ -1872,13 +1891,21 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         config_version = _get_risk_config_version(db)
         now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        db.execute(
+        # Compare-and-swap on the provenance read at the start of this
+        # recompute: a concurrent writer (another recompute, or a
+        # change-request implementation stamping its per-request quarantine
+        # sentinel) means this result was computed from stale reads and must
+        # NOT overwrite the fresher provenance. 0 rows matched -> report
+        # failure so callers quarantine/log instead of trusting a phantom
+        # success; a later recompute (run against the current data) clears it.
+        cur = db.execute(
             """UPDATE applications SET
                 risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
                 risk_computed_at=?, risk_config_version=?,
                 risk_escalations=?,
                 base_risk_level=?, final_risk_level=?, elevation_reason_text=?,
-                updated_at=datetime('now') WHERE id=?""",
+                updated_at=datetime('now')
+                WHERE id=? AND COALESCE(risk_config_version,'') = COALESCE(?,'')""",
             (new_score, new_level,
              json.dumps(new_risk.get("dimensions", {})),
              new_risk.get("lane", "Standard Review"),
@@ -1887,7 +1914,22 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
              new_risk.get("base_risk_level", new_level),
              new_risk.get("final_risk_level", new_level),
              new_risk.get("elevation_reason_text", ""),
-             app_id))
+             app_id, old_provenance))
+        rowcount = getattr(cur, "rowcount", None)
+        if rowcount is None:
+            # DBConnection.execute returns the wrapper; the count lives on
+            # the underlying cursor (established repo pattern).
+            rowcount = getattr(getattr(db, "_cursor", None), "rowcount", None)
+        if rowcount == 0:
+            logger.error(
+                "recompute_risk: risk provenance for app_id=%s changed "
+                "concurrently (was %r) — not persisting a score computed from "
+                "pre-change data; a re-score against current data is required.",
+                app_id, old_provenance)
+            result["recomputed"] = False
+            result["changed"] = False
+            result["persist_conflict"] = True
+            return result
 
         if result["changed"]:
             logger.info(
