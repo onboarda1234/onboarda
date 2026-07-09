@@ -27,9 +27,11 @@ from screening_jobs import (
     screening_queue_observability_snapshot,
 )
 from verification_jobs import (
+    VerificationJobMissing,
     format_async_job_health_log_line,
     format_verification_job_timing_log_fields,
     claim_next_verification_job,
+    get_verification_job_or_raise,
     mark_verification_job_failed,
     mark_verification_job_succeeded,
     recover_stuck_verification_jobs,
@@ -359,6 +361,31 @@ def default_verification_executor(db, job: Dict[str, Any], worker_id: str) -> Di
 VerificationExecutor = Callable[[Any, Dict[str, Any], str], Dict[str, Any]]
 
 
+def _missing_verification_job_skip_result(
+    job: Dict[str, Any],
+    *,
+    worker_id: str,
+    stage: str,
+) -> Dict[str, Any]:
+    logger.info(
+        "verification_job_missing_skip event=verification_job_missing_skip job_id=%s document_id=%s worker_id=%s reason=job_not_found action=skip stage=%s",
+        job.get("id"),
+        job.get("document_id"),
+        worker_id,
+        stage,
+    )
+    return {
+        "processed": True,
+        "outcome": "skipped",
+        "reason": "job_not_found",
+        "action": "skip",
+        "job_id": job.get("id"),
+        "document_id": job.get("document_id"),
+        "worker_id": worker_id,
+        "stage": stage,
+    }
+
+
 def default_screening_executor(db, job: Dict[str, Any], worker_id: str) -> Dict[str, Any]:
     """Run the submit-time provider screening path outside the HTTP request."""
     from server import process_async_screening_job
@@ -463,6 +490,15 @@ def process_claimed_job(
 ) -> Dict[str, Any]:
     executor = verification_executor or default_verification_executor
     try:
+        get_verification_job_or_raise(db, job["id"])
+    except VerificationJobMissing:
+        return _missing_verification_job_skip_result(
+            job,
+            worker_id=worker_id,
+            stage="pre_executor",
+        )
+
+    try:
         result = executor(db, job, worker_id)
         status = normalize_verification_state(
             result.get("verification_status") or result.get("status")
@@ -475,14 +511,25 @@ def process_claimed_job(
             "overall": status,
             "checks": [],
         }
-        updated = mark_verification_job_succeeded(
-            db,
-            job["id"],
-            worker_id=worker_id,
-            verification_status=status,
-            verification_results=verification_results,
-            transition_document=not bool(result.get("document_already_updated")),
-        )
+        try:
+            updated = mark_verification_job_succeeded(
+                db,
+                job["id"],
+                worker_id=worker_id,
+                verification_status=status,
+                verification_results=verification_results,
+                transition_document=not bool(result.get("document_already_updated")),
+            )
+        except VerificationJobMissing:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return _missing_verification_job_skip_result(
+                job,
+                worker_id=worker_id,
+                stage="completion",
+            )
         db.commit()
         try:
             timing = verification_job_timing_ms(updated)
@@ -514,13 +561,27 @@ def process_claimed_job(
         except Exception:
             pass
         retryable = _is_retryable_exception(exc)
-        failed = mark_verification_job_failed(
-            db,
-            job["id"],
-            worker_id=worker_id,
-            error=str(exc),
-            retryable=retryable,
-        )
+        try:
+            failed = mark_verification_job_failed(
+                db,
+                job["id"],
+                worker_id=worker_id,
+                error=str(exc),
+                retryable=retryable,
+            )
+        except VerificationJobMissing:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.warning(
+                "verification_worker_failure_state_missing_job job_id=%s document_id=%s worker_id=%s reason=job_not_found action=preserve_error original_error_type=%s",
+                job.get("id"),
+                job.get("document_id"),
+                worker_id,
+                type(exc).__name__,
+            )
+            raise exc from None
         db.commit()
         _safe_emit_worker_metric("VerificationWorkerFailures", 1)
         logger.warning(
