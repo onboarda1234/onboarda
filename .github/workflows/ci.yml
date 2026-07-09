@@ -2,10 +2,25 @@ name: Onboarda CI
 
 on:
   push:
-    branches: [main, develop]
+    # `main` is intentionally excluded: every push to main triggers
+    # deploy-staging.yml, which runs THIS workflow via `uses:` (its deploy job
+    # is gated `needs: ci`). Listing main here too ran ci.yml twice per merge —
+    # doubling runner load and cancelling the redundant standalone run's
+    # lightweight jobs (pdf-tests/docker-validate) under runner contention,
+    # which surfaced as a red/"failed" run even though the tests passed.
+    # PRs still get full CI via the pull_request trigger below.
+    branches: [develop]
   pull_request:
     branches: [main, develop]
   workflow_call:  # Allow deploy-staging.yml to reuse this workflow
+
+# Cancel a superseded run when new commits land on the same PR/branch, so a
+# merge-heavy stretch doesn't pile up queued jobs and starve runners. Keyed on
+# workflow+ref so the reusable invocation from deploy-staging (a different
+# github.workflow) never collides with a standalone run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint-and-test:
