@@ -14,13 +14,16 @@ on:
     branches: [main, develop]
   workflow_call:  # Allow deploy-staging.yml to reuse this workflow
 
-# Cancel a superseded run when new commits land on the same PR/branch, so a
-# merge-heavy stretch doesn't pile up queued jobs and starve runners. Keyed on
-# workflow+ref so the reusable invocation from deploy-staging (a different
-# github.workflow) never collides with a standalone run.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+# NOTE: no workflow-level `concurrency` here. An earlier attempt added
+# `group: ${{ github.workflow }}-${{ github.ref }}` with cancel-in-progress —
+# but when this workflow is invoked via `uses:` from deploy-staging.yml,
+# github.workflow resolves to the CALLER ("Deploy to Staging"), so the group
+# collapsed onto deploy-staging's own (workflow, ref) and its cancel-happy
+# semantics cancelled the deploy-path CI job while a prior deploy was still
+# holding deploy-staging's `cancel-in-progress: false` queue lock (run #978
+# on 18b8d68: lint-and-test cancelled, deploy skipped). Deploy serialization
+# already lives in deploy-staging.yml (`group: deploy-staging`); PR runs do
+# not need supersede-cancel badly enough to risk the deploy pipeline.
 
 jobs:
   lint-and-test:
