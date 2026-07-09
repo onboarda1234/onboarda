@@ -156,7 +156,13 @@ jobs:
           ADMIN_INITIAL_PASSWORD: CITestPassword123
           COVERAGE_FILE: /tmp/.coverage
         run: |
-          COV=$(pytest tests/ --ignore=tests/test_pdf_generator.py --cov=. --cov-config=.coveragerc --cov-report=term -q 2>&1 | grep "^TOTAL" | awk '{print $NF}' | tr -d '%')
+          # Reuse the coverage data already written by "Run tests with coverage"
+          # (COVERAGE_FILE=/tmp/.coverage) instead of re-running the whole suite
+          # a second time just to scrape the TOTAL %. --rcfile=.coveragerc keeps
+          # the omit/include config identical to the run, so the % matches.
+          # If /tmp/.coverage is absent, `coverage report` prints "No data to
+          # report." -> COV empty -> the BSA-018 fail-closed guard below fires.
+          COV=$(coverage report --rcfile=.coveragerc 2>/dev/null | grep "^TOTAL" | awk '{print $NF}' | tr -d '%')
           echo "Coverage: ${COV}%"
           # BSA-018 (fail-closed): an unparseable coverage value means the
           # threshold was NOT enforced — that is a CI failure, not a warning.
