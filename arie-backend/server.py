@@ -5278,8 +5278,14 @@ class ApplicationsHandler(BaseHandler):
         risk = self.get_argument("risk", None)
         assigned = self.get_argument("assigned", None)
         query_text = (self.get_argument("q", "") or "").strip()
-        view = (self.get_argument("view", "full") or "full").strip().lower()
-        list_view = view == "list"
+        # perf-applications-default-list-projection: the SLIM paginated list
+        # projection is the default — the previous default returned a.* for
+        # up to 5000 rows plus batched child records (documents, parties,
+        # memos) to every caller that omitted ?view=. The full hydrated view
+        # remains available via explicit ?view=full (the shape is unchanged);
+        # any unrecognised value falls back to the cheap projection.
+        view = (self.get_argument("view", "list") or "list").strip().lower()
+        list_view = view != "full"
         enhanced_review = (self.get_argument("enhanced_review", None) or "").strip().lower()
         default_limit = 20 if list_view else 5000
         max_limit = 100 if list_view else 5000

@@ -69,7 +69,11 @@ class TestPhase1PeriodicReviewHandlers(_PRReviewHandlerBase):
         self.assertEqual(detail_body["periodic_review"]["status_label"], "Blocked")
         self.assertEqual(detail_body["periodic_reviews"][0]["status_label"], "Blocked")
 
-        listing = self._get("/api/applications")
+        # periodic_review is a full/detail-surface field: the slim default
+        # list projection intentionally omits it (building the projection
+        # costs several queries per active review and the list UI never
+        # renders it).
+        listing = self._get("/api/applications?view=full")
         self.assertEqual(listing.code, 200)
         listing_body = json.loads(listing.body)
         app_row = next(app for app in listing_body["applications"] if app["id"] == self._app_id)
