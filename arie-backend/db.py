@@ -1852,7 +1852,11 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_dsr_status ON data_subject_requests(status);
     CREATE INDEX IF NOT EXISTS idx_dsr_client ON data_subject_requests(client_id);
     CREATE INDEX IF NOT EXISTS idx_purge_log_category ON data_purge_log(data_category);
-    CREATE INDEX IF NOT EXISTS idx_purge_log_batch ON data_purge_log(purge_batch_id);
+    -- idx_purge_log_batch on purge_batch_id is created by Migration v2.48
+    -- (_ensure_data_purge_log_evidence_columns) AFTER that column is added.
+    -- It must NOT be created here: on an EXISTING data_purge_log the CREATE
+    -- TABLE above is a no-op, the column doesn't exist yet, and this index
+    -- statement crashed schema init on upgrade (P12-8 hotfix).
 
     -- Rate limiting persistence (survives restarts for auth-critical keys)
     CREATE TABLE IF NOT EXISTS rate_limits (
@@ -3116,7 +3120,11 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_dsr_status ON data_subject_requests(status);
     CREATE INDEX IF NOT EXISTS idx_dsr_client ON data_subject_requests(client_id);
     CREATE INDEX IF NOT EXISTS idx_purge_log_category ON data_purge_log(data_category);
-    CREATE INDEX IF NOT EXISTS idx_purge_log_batch ON data_purge_log(purge_batch_id);
+    -- idx_purge_log_batch on purge_batch_id is created by Migration v2.48
+    -- (_ensure_data_purge_log_evidence_columns) AFTER that column is added.
+    -- It must NOT be created here: on an EXISTING data_purge_log the CREATE
+    -- TABLE above is a no-op, the column doesn't exist yet, and this index
+    -- statement crashed schema init on upgrade (P12-8 hotfix).
 
     -- Rate limiting persistence (survives restarts for auth-critical keys)
     CREATE TABLE IF NOT EXISTS rate_limits (

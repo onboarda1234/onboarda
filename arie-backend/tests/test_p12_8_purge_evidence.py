@@ -103,6 +103,51 @@ class TestPurgeEvidenceSchema:
             assert col in cols
         conn.close()
 
+    def test_full_schema_ddl_runs_over_legacy_table_without_crashing(self):
+        """P12-8 hotfix regression: the up-front schema DDL must run cleanly on
+        an EXISTING data_purge_log that predates the evidence columns.
+
+        `CREATE TABLE IF NOT EXISTS` is a no-op on an already-present table, so
+        any index the up-front DDL builds on a new column (e.g. purge_batch_id)
+        crashes schema init on upgrade (`column "purge_batch_id" does not
+        exist`). The batch index must instead be created by v2.48 AFTER the
+        column is added. The direct-helper test above passed while real init_db
+        crashed precisely because it skipped this up-front DDL path."""
+        from db import (
+            DBConnection,
+            _get_sqlite_schema,
+            _ensure_data_purge_log_evidence_columns,
+        )
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        # Pre-existing legacy data_purge_log (no evidence columns), mirroring a
+        # long-lived staging/production database.
+        conn.execute(
+            """CREATE TABLE data_purge_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                data_category TEXT NOT NULL,
+                record_count INTEGER NOT NULL,
+                purge_reason TEXT NOT NULL,
+                purged_by TEXT,
+                purged_at TEXT DEFAULT (datetime('now'))
+            )"""
+        )
+        conn.commit()
+        db = DBConnection(conn, is_postgres=False)
+        # This is exactly what init_db runs first; it must NOT raise on the
+        # legacy table. (Would raise "no such column: purge_batch_id" pre-fix.)
+        db.executescript(_get_sqlite_schema())
+        # Then the v2.48 repair adds the columns + the batch index.
+        _ensure_data_purge_log_evidence_columns(db)
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(data_purge_log)").fetchall()}
+        for col in EVIDENCE_COLUMNS:
+            assert col in cols
+        idx = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_purge_log_batch'"
+        ).fetchone()
+        assert idx is not None, "idx_purge_log_batch should be created by the v2.48 repair"
+        conn.close()
+
 
 class TestEnrichedAtomicPurgeLog:
 
