@@ -1,0 +1,32 @@
+-- Migration 043 (P12-8 / DCI-020, DCI-021): purge-evidence marker.
+-- ==========================================================================
+-- Fresh schemas (both dialects) carry the enriched data_purge_log columns
+-- inline:
+--   subject_id        TEXT  -- GDPR subject scoping (nullable)
+--   application_id    TEXT  -- application scoping (nullable)
+--   tables_affected   TEXT  -- JSON array of table names
+--   per_table_counts  TEXT  -- JSON object {table: deleted_rowcount}
+--   purge_batch_id    TEXT  -- shared id: sched-* (scheduler) / manual-* (CLI)
+--   evidence_json     TEXT  -- full evidence payload (approver, criteria, ...)
+-- plus an index on purge_batch_id, and purged_by is a plain TEXT
+-- attribution column (the legacy REFERENCES users(id) FK is REMOVED — the
+-- retention scheduler writes 'system-scheduler', which is not a users row;
+-- on PostgreSQL the FK made every scheduled purge's evidence INSERT fail,
+-- and the new purge+evidence single-transaction atomicity would have rolled
+-- the purge back daily, forever).
+--
+-- Existing deployments are repaired by the inline startup migration v2.48
+-- in db.py (_ensure_data_purge_log_evidence_columns): additive nullable
+-- TEXT columns (rollback-safe) + the batch-id index, and on PostgreSQL the
+-- legacy data_purge_log.purged_by -> users(id) FK is dropped. SQLite
+-- long-lived dev DBs cannot ALTER their FK away in place and are covered
+-- by the fresh DDL (migration_028/042 dialect precedent).
+--
+-- Behavioural contract shipped with this schema (gdpr.py):
+--   * DELETE + evidence row are written in ONE transaction — an
+--     evidence-write failure rolls the deletion back.
+--   * Evidence records the ACTUAL deleted rowcount, not the pre-count.
+--   * All retention categories beyond audit_logs/monitoring_alerts are
+--     explicitly manual-with-procedure (MANUAL_PURGE_CATEGORIES;
+--     docs/compliance/MANUAL_PURGE_PROCEDURE.md; record_manual_purge CLI).
+SELECT 1;

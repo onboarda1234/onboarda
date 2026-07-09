@@ -12,6 +12,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 logger = logging.getLogger("arie")
 
@@ -188,6 +189,55 @@ CATEGORY_TABLE_MAP = {
     "monitoring_alerts": ("monitoring_alerts", "created_at"),
 }
 
+# ══════════════════════════════════════════════════════════
+# P12-8 / DCI-020: categories WITHOUT a direct table mapping are explicitly
+# MANUAL-WITH-PROCEDURE — not silently unenforceable.  Each entry documents
+# WHY an age-based automatic sweep cannot safely enforce the policy; the
+# operational procedure (approval + evidence requirements + the
+# record_manual_purge() evidence writer) lives in MANUAL_PURGE_PROCEDURE_REF.
+# Deliberate posture: bulk deletion of client PII / KYC evidence is a
+# subject- and relationship-anchored legal decision (see the H2B erasure
+# engine, wired-but-OFF pending the PC-4 control pack), never an unattended
+# age sweep.
+# ══════════════════════════════════════════════════════════
+MANUAL_PURGE_PROCEDURE_REF = "docs/compliance/MANUAL_PURGE_PROCEDURE.md"
+
+MANUAL_PURGE_CATEGORIES = {
+    "client_pii": (
+        "Client PII spans clients/applications/directors/ubos rows plus "
+        "uploaded files and S3 objects; retention anchors to relationship "
+        "END (not row age), which no age-based sweep can compute. "
+        "Subject-scoped deletion belongs to the erasure engine (H2B/PC-4)."
+    ),
+    "kyc_documents": (
+        "Document rows reference physical files/S3 objects and anchor to "
+        "relationship end; deleting DB rows without the artefacts (or vice "
+        "versa) would corrupt evidence. Requires per-case legal-hold review."
+    ),
+    "screening_results": (
+        "Screening results are decision evidence for onboarding outcomes; "
+        "purge requires per-application legal-hold and SAR-linkage review."
+    ),
+    "compliance_memos": (
+        "Memos are decision evidence anchored to decision date; approval "
+        "chains reference them. Requires per-case review."
+    ),
+    "application_data": (
+        "Application retention anchors to decision date and cascades to "
+        "child tables (directors, ubos, documents, screenings); requires "
+        "case-by-case verification and legal-hold review."
+    ),
+    "sar_reports": (
+        "Suspicious Activity Reports: 10-year FIU obligation; deletion "
+        "requires FIU-coordination sign-off. Never automatic."
+    ),
+    "session_tokens": (
+        "Documentation-only policy (audit finding B1): deliberately mapped "
+        "to no table so token retention can never resolve to the audit "
+        "trail. Nothing to purge through this engine."
+    ),
+}
+
 # Tables that hold AML-retention evidence and must be protected from this engine.
 #   * _NEVER_PURGE_TABLES: never deletable by ANY path (manual or scheduled).
 #     The supervisor audit log is the tamper-evident decision chain; deleting
@@ -247,7 +297,27 @@ def get_expired_data_summary(db) -> List[Dict]:
 
         mapping = CATEGORY_TABLE_MAP.get(category)
         if not mapping:
-            continue  # Skip categories without direct table mapping (handled manually)
+            # P12-8 / DCI-020: manual-with-procedure categories are REPORTED,
+            # not silently skipped — the ops view must show that these
+            # policies exist and are enforced by procedure, not scheduler.
+            expired.append({
+                "category": category,
+                "table": None,
+                "expired_count": None,
+                "oldest_record": None,
+                "retention_days": retention_days,
+                "cutoff_date": cutoff,
+                "auto_purge": bool(policy.get("auto_purge")),
+                "requires_review": bool(policy.get("requires_review")),
+                "auto_purge_supported": False,
+                "manual_purge_required": True,
+                "manual_reason": MANUAL_PURGE_CATEGORIES.get(
+                    category,
+                    "No direct table mapping; enforce via the manual procedure.",
+                ),
+                "manual_procedure": MANUAL_PURGE_PROCEDURE_REF,
+            })
+            continue
 
         table, date_col = mapping
         _assert_safe_sql_identifier(table, _ALLOWED_GDPR_TABLES, "table")
@@ -285,6 +355,7 @@ def purge_expired_data(
     category: str,
     purged_by: Optional[str] = None,
     dry_run: bool = True,
+    purge_batch_id: Optional[str] = None,
 ) -> Dict:
     """
     Purge records past retention for a specific data category.
@@ -294,9 +365,15 @@ def purge_expired_data(
         category: Data category (must match data_retention_policies.data_category)
         purged_by: User ID of the person authorizing the purge
         dry_run: If True, only count — do not delete. Default True for safety.
+        purge_batch_id: Optional batch identifier shared across the categories
+            of a single scheduled run (P12-8 / DCI-021) so a regulator can
+            reconstruct the whole run from data_purge_log alone. Generated
+            when omitted.
 
     Returns:
         {category, records_deleted, oldest_record, newest_record, dry_run}
+        — or, for manual-with-procedure categories, a structured
+        manual_purge_required result (P12-8 / DCI-020).
     """
     # Fetch policy
     policy = db.execute(
@@ -310,6 +387,23 @@ def purge_expired_data(
 
     mapping = CATEGORY_TABLE_MAP.get(category)
     if not mapping:
+        manual_reason = MANUAL_PURGE_CATEGORIES.get(category)
+        if manual_reason:
+            # P12-8 / DCI-020: auto-purge is EXPLICITLY unsupported for this
+            # category — a deliberate posture, not a gap. Enforcement is the
+            # documented manual procedure (approval + record_manual_purge
+            # evidence), not this engine.
+            return {
+                "category": category,
+                "status": "manual_purge_required",
+                "auto_purge_supported": False,
+                "manual_reason": manual_reason,
+                "manual_procedure": MANUAL_PURGE_PROCEDURE_REF,
+                "retention_days": retention_days,
+                "cutoff_date": cutoff,
+                "records_deleted": 0,
+                "dry_run": dry_run,
+            }
         return {"error": f"Category '{category}' has no direct table mapping — requires manual purge"}
 
     table, date_col = mapping
@@ -357,21 +451,53 @@ def purge_expired_data(
     if dry_run:
         return result
 
-    # Execute purge
-    db.execute(f"DELETE FROM {table} WHERE {date_col} < ?", (cutoff,))
+    # Execute purge + evidence log in ONE transaction (P12-8 / DCI-021):
+    # a purge whose evidence row cannot be written must not commit — the
+    # exception propagates uncommitted. On PostgreSQL the wrapper rolls the
+    # transaction back at statement-error time; on SQLite the uncommitted
+    # DELETE dies with the connection — callers must not reuse the
+    # connection for a later commit after catching this (the scheduler
+    # closes it in a finally). The log row carries batch id, per-table
+    # counts and structured evidence so a regulator can reconstruct the
+    # purge from the log alone.
+    batch_id = purge_batch_id or f"purge-{uuid4().hex[:12]}"
+    cur = db.execute(f"DELETE FROM {table} WHERE {date_col} < ?", (cutoff,))
+    deleted = getattr(cur, "rowcount", None)
+    if deleted is None:
+        deleted = getattr(getattr(db, "_cursor", None), "rowcount", None)
+    if deleted is None or deleted < 0:
+        deleted = count  # engine did not report a rowcount — fall back to precount
 
-    # Log purge in immutable audit trail
+    evidence = {
+        "engine": "gdpr.purge_expired_data",
+        "cutoff_date": cutoff,
+        "retention_days": retention_days,
+        "policy_id": policy["id"],
+        "auto_purge_policy": bool(policy["auto_purge"]),
+        "requires_review_policy": bool(policy["requires_review"]),
+        "precount": count,
+        "deleted_rowcount": deleted,
+        "oldest_record_date": oldest,
+        "newest_record_date": newest,
+    }
     db.execute(
-        "INSERT INTO data_purge_log (data_category, record_count, oldest_record_date, newest_record_date, retention_policy_id, purge_reason, purged_by) VALUES (?,?,?,?,?,?,?)",
-        (category, count, oldest, newest, policy["id"],
+        "INSERT INTO data_purge_log (data_category, record_count, oldest_record_date, "
+        "newest_record_date, retention_policy_id, purge_reason, purged_by, "
+        "subject_id, application_id, tables_affected, per_table_counts, "
+        "purge_batch_id, evidence_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (category, deleted, oldest, newest, policy["id"],
          f"Retention policy enforcement: {retention_days} days exceeded (cutoff: {cutoff})",
-         purged_by or "system")
+         purged_by or "system",
+         None, None,  # age-based bulk purge: not subject/application scoped
+         json.dumps([table]), json.dumps({table: deleted}),
+         batch_id, json.dumps(evidence, default=str))
     )
     db.commit()
 
-    result["records_deleted"] = count
-    logger.info("GDPR purge: %d records deleted from %s (category: %s, cutoff: %s)",
-                count, table, category, cutoff)
+    result["records_deleted"] = deleted
+    result["purge_batch_id"] = batch_id
+    logger.info("GDPR purge: %d records deleted from %s (category: %s, cutoff: %s, batch: %s)",
+                deleted, table, category, cutoff, batch_id)
     return result
 
 
@@ -388,6 +514,11 @@ def run_scheduled_purge(db, purged_by: str = "system") -> List[Dict]:
     policies = db.execute(
         "SELECT * FROM data_retention_policies WHERE auto_purge = TRUE"
     ).fetchall()
+
+    # One batch id per scheduled run (P12-8 / DCI-021): every category purged
+    # in this run shares it, so the whole run is reconstructable from
+    # data_purge_log alone.
+    batch_id = f"sched-{uuid4().hex[:12]}"
 
     results = []
     for policy in policies:
@@ -412,10 +543,146 @@ def run_scheduled_purge(db, purged_by: str = "system") -> List[Dict]:
             })
             continue
 
-        result = purge_expired_data(db, category, purged_by=purged_by, dry_run=False)
+        # P12-8 / DCI-020: a manual-with-procedure category carrying
+        # auto_purge=TRUE is a policy MISCONFIGURATION — the scheduler cannot
+        # enforce it and silence would look like enforcement. Loud every run.
+        if not mapping and category in MANUAL_PURGE_CATEGORIES:
+            logger.error(
+                "Retention policy misconfiguration: category %r has "
+                "auto_purge=TRUE but is manual-with-procedure (no table "
+                "mapping). The scheduler CANNOT enforce it — follow %s. "
+                "Reason: %s",
+                category, MANUAL_PURGE_PROCEDURE_REF,
+                MANUAL_PURGE_CATEGORIES[category],
+            )
+            results.append({
+                "category": category,
+                "status": "manual_purge_required",
+                "auto_purge_supported": False,
+                "misconfigured_auto_purge_flag": True,
+                "manual_procedure": MANUAL_PURGE_PROCEDURE_REF,
+                "records_deleted": 0,
+            })
+            continue
+
+        try:
+            result = purge_expired_data(
+                db, category, purged_by=purged_by, dry_run=False,
+                purge_batch_id=batch_id,
+            )
+        except Exception as e:
+            # Per-category isolation: one category's failure (e.g. its
+            # evidence INSERT) must not abort the remaining categories or
+            # discard the results already gathered. The failed category's
+            # transaction was rolled back; its data survives.
+            logger.error(
+                "Scheduled purge failed for category %s (batch %s): %s",
+                category, batch_id, e, exc_info=True,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            result = {
+                "category": category,
+                "error": f"purge failed: {e}",
+                "records_deleted": 0,
+                "purge_batch_id": batch_id,
+            }
         results.append(result)
 
     return results
+
+
+def record_manual_purge(
+    db,
+    category: str,
+    per_table_counts: Dict[str, int],
+    purge_reason: str,
+    purged_by: str,
+    approved_by: str,
+    subject_id: Optional[str] = None,
+    application_id: Optional[str] = None,
+    oldest_record_date: Optional[str] = None,
+    newest_record_date: Optional[str] = None,
+    evidence: Optional[Dict[str, Any]] = None,
+) -> Dict:
+    """Record evidence for an operator-performed MANUAL retention purge
+    (P12-8 / DCI-020+021).
+
+    The manual procedure (MANUAL_PURGE_PROCEDURE_REF) requires this call
+    immediately after the approved deletion, on the same change window.  It
+    writes the same enriched data_purge_log evidence the automatic engine
+    writes — batch id, per-table counts, subject/application scoping and a
+    structured evidence document naming the approver.
+
+    Refuses to record deletions from _NEVER_PURGE_TABLES: those may not be
+    deleted by ANY path, so evidence of such a deletion indicates an
+    incident, not a procedure.
+    """
+    if not per_table_counts or not isinstance(per_table_counts, dict):
+        return {"error": "per_table_counts must be a non-empty {table: count} mapping"}
+    if not (purge_reason or "").strip():
+        return {"error": "purge_reason is required"}
+    if not (purged_by or "").strip() or not (approved_by or "").strip():
+        return {"error": "purged_by and approved_by are both required"}
+    normalized_names = {str(t).strip().lower() for t in per_table_counts}
+    forbidden = sorted(normalized_names & _NEVER_PURGE_TABLES)
+    if forbidden:
+        return {
+            "error": (
+                f"Tables {forbidden} are never-purge protected; a deletion "
+                "there is an incident, not a manual purge — do not record it "
+                "here"
+            )
+        }
+    if any(isinstance(c, bool) or not isinstance(c, int) for c in per_table_counts.values()):
+        return {"error": "per_table_counts values must be integers"}
+    counts = {str(t).strip(): int(c) for t, c in per_table_counts.items()}
+    if any(c < 0 for c in counts.values()):
+        return {"error": "per_table_counts values must be >= 0"}
+    if any(not t for t in counts):
+        return {"error": "per_table_counts table names must be non-empty"}
+
+    policy = db.execute(
+        "SELECT * FROM data_retention_policies WHERE data_category = ?", (category,)
+    ).fetchone()
+    if not policy:
+        return {"error": f"No retention policy found for category '{category}'"}
+
+    batch_id = f"manual-{uuid4().hex[:12]}"
+    total = sum(counts.values())
+    evidence_doc = {
+        "engine": "gdpr.record_manual_purge",
+        "procedure": MANUAL_PURGE_PROCEDURE_REF,
+        "approved_by": approved_by,
+        "per_table_counts": counts,
+        "operator_evidence": evidence or {},
+    }
+    db.execute(
+        "INSERT INTO data_purge_log (data_category, record_count, oldest_record_date, "
+        "newest_record_date, retention_policy_id, purge_reason, purged_by, "
+        "subject_id, application_id, tables_affected, per_table_counts, "
+        "purge_batch_id, evidence_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (category, total, oldest_record_date, newest_record_date, policy["id"],
+         f"MANUAL purge per {MANUAL_PURGE_PROCEDURE_REF}: {purge_reason.strip()}",
+         purged_by, subject_id, application_id,
+         json.dumps(sorted(counts.keys())), json.dumps(counts),
+         batch_id, json.dumps(evidence_doc, default=str))
+    )
+    db.commit()
+    logger.info(
+        "GDPR manual purge recorded: category=%s total=%d tables=%s batch=%s "
+        "purged_by=%s approved_by=%s",
+        category, total, sorted(counts.keys()), batch_id, purged_by, approved_by,
+    )
+    return {
+        "status": "recorded",
+        "purge_batch_id": batch_id,
+        "category": category,
+        "record_count": total,
+        "tables_affected": sorted(counts.keys()),
+    }
 
 
 # ══════════════════════════════════════════════════════════
