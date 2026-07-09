@@ -429,7 +429,7 @@ def test_evidence_pack_and_compliance_memo_use_only_current_documents(document_v
         return (
             memo,
             {"violations": [], "engine_status": "CLEAN"},
-            {"verdict": "PASS", "recommendation": "Proceed"},
+            {"verdict": "CONSISTENT", "recommendation": "Proceed"},
             {"quality_score": 9, "validation_status": "pass"},
         )
 

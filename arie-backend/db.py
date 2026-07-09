@@ -35,6 +35,117 @@ RMI_REQUEST_STATUS_VALUES = (
     "cancelled",
 )
 
+# ── P12-5 / DCI-006: closed value canons for workflow status/source columns ──
+# Each tuple is the COMPLETE set of values any production code path writes
+# (traced writer-by-writer; see migration_042 marker for the mapping).  These
+# feed the CHECK constraints in both CREATE TABLE schemas and the v2.47
+# constraint repair for existing PostgreSQL databases.  Adding a new status
+# value REQUIRES updating the matching tuple here — the fresh-install CHECK
+# will reject it in CI otherwise.
+
+# clients.status: signup omits it (default), demo seed + smoke script write
+# 'active'; 'inactive' is read-path-supported (login/reset filter on
+# status='active') and is the operator deactivation state.  Mirrors the
+# existing users.status CHECK.
+CLIENT_STATUS_VALUES = ("active", "inactive")
+
+# agent_executions.status: 'verified'/'flagged' (document verification),
+# 'skipped' (agent disabled / no stored data), 'completed' (agent-3).  The
+# remaining members are the canonical verification-state family
+# (verification_state.py: 'pending','in_progress','failed') plus legacy
+# 'error' — log_agent_execution is a public helper and demo/staging rows from
+# older revisions may carry them.
+AGENT_EXECUTION_STATUS_VALUES = (
+    "verified",
+    "flagged",
+    "skipped",
+    "completed",
+    "pending",
+    "in_progress",
+    "failed",
+    "error",
+)
+
+# agent_executions.source: 'ai' (DDL default, document verification) and
+# agent-3's stored-screening interpretation source.
+AGENT_EXECUTION_SOURCE_VALUES = ("ai", "stored_screening_results")
+
+# supervisor_pipeline_results.status: single writer funnel
+# (supervisor/supervisor.py run_pipeline → persist_pipeline_result); 'running'
+# is the DDL default and must stay legal for any INSERT omitting the column.
+SUPERVISOR_PIPELINE_STATUS_VALUES = (
+    "running",
+    "completed",
+    "completed_with_errors",
+    "awaiting_review",
+    "failed",
+)
+
+# supervisor_audit_log.event_type: the full AuditEventType enum
+# (supervisor/schemas.py) — every writer funnels through AuditLogger/pydantic
+# or the verdict-chain helper, both enum-bound; the startup repair fallback
+# writes 'system_error' (in the enum).  Kept in lockstep by a static test.
+SUPERVISOR_AUDIT_EVENT_TYPE_VALUES = (
+    "agent_run_started",
+    "agent_run_completed",
+    "agent_run_failed",
+    "schema_validation_passed",
+    "schema_validation_failed",
+    "confidence_calculated",
+    "confidence_routing",
+    "contradiction_detected",
+    "contradiction_resolved",
+    "rule_triggered",
+    "rule_overridden",
+    "escalation_created",
+    "escalation_assigned",
+    "escalation_resolved",
+    "human_review_started",
+    "human_review_completed",
+    "ai_override",
+    "pipeline_started",
+    "pipeline_completed",
+    "pipeline_failed",
+    "supervisor_verdict",
+    "config_changed",
+    "agent_version_changed",
+    "prompt_version_changed",
+    "system_error",
+)
+
+# supervisor_audit_log.severity: the Severity enum (supervisor/schemas.py)
+# including 'warning' — six audit paths (ai_override, escalation_created,
+# override human reviews, schema_validation_failed, contradiction/rule
+# fallbacks) always intended to write it; the missing enum member is fixed in
+# the same change (P12-5).
+SUPERVISOR_AUDIT_SEVERITY_VALUES = (
+    "critical",
+    "high",
+    "medium",
+    "low",
+    "info",
+    "warning",
+)
+
+# compliance_memos.supervisor_status: 'pending' default + the closed
+# run_memo_supervisor verdict enum; 'approved' is written by the gated staging
+# fixture seeder (fixtures/seeder.py) against the real staging database.
+COMPLIANCE_MEMO_SUPERVISOR_STATUS_VALUES = (
+    "pending",
+    "CONSISTENT",
+    "CONSISTENT_WITH_WARNINGS",
+    "INCONSISTENT",
+    "approved",
+)
+
+# compliance_memos.rule_engine_status: only the DDL default and the staging
+# fixture seeder's 'pass' ever reach this column today.  NOTE: the memo JSON
+# carries a SAME-NAMED key with a different vocabulary
+# ('CLEAN'/'ENFORCED'/'VIOLATIONS_DETECTED', memo_handler.py) — if that value
+# is ever wired into this COLUMN, this canon (and the CHECKs) must be updated
+# first; the fresh-install CHECK will fail CI on such a change by design.
+COMPLIANCE_MEMO_RULE_ENGINE_STATUS_VALUES = ("pending", "pass")
+
 FILE_MIGRATIONS_REQUIRING_RUNNER = frozenset({
     # Migration 020 is a data backfill. It is not represented by init_db's
     # schema DDL, so long-lived databases must let the file runner execute it.
@@ -610,7 +721,8 @@ def _get_postgres_schema() -> str:
         email TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         company_name TEXT,
-        status TEXT DEFAULT 'active',
+        -- P12-5 / DCI-006: CLIENT_STATUS_VALUES (kept in lockstep by test)
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','inactive')),
         password_reset_token TEXT,
         password_reset_expires TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -1038,11 +1150,16 @@ def _get_postgres_schema() -> str:
         document_id TEXT,
         agent_name TEXT NOT NULL,
         agent_number INTEGER,
-        status TEXT NOT NULL,
+        -- P12-5 / DCI-006: AGENT_EXECUTION_STATUS_VALUES (lockstep test)
+        status TEXT NOT NULL CHECK(status IN (
+            'verified','flagged','skipped','completed',
+            'pending','in_progress','failed','error'
+        )),
         checks_json JSONB,
         flags_json JSONB,
         requires_review BOOLEAN DEFAULT false,
-        source TEXT DEFAULT 'ai',
+        -- P12-5 / DCI-006: AGENT_EXECUTION_SOURCE_VALUES (lockstep test)
+        source TEXT DEFAULT 'ai' CHECK(source IN ('ai','stored_screening_results')),
         started_at TIMESTAMP,
         completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         error_message TEXT
@@ -1572,11 +1689,18 @@ def _get_postgres_schema() -> str:
         raw_output_hash TEXT,
         approved_by TEXT REFERENCES users(id),
         approved_at TIMESTAMP,
-        supervisor_status TEXT DEFAULT 'pending',
+        -- P12-5 / DCI-006: COMPLIANCE_MEMO_SUPERVISOR_STATUS_VALUES (lockstep test)
+        supervisor_status TEXT DEFAULT 'pending' CHECK(supervisor_status IN (
+            'pending','CONSISTENT','CONSISTENT_WITH_WARNINGS','INCONSISTENT','approved'
+        )),
         supervisor_summary TEXT,
         supervisor_contradictions TEXT DEFAULT '[]',
         rule_violations TEXT DEFAULT '[]',
-        rule_engine_status TEXT DEFAULT 'pending',
+        -- P12-5 / DCI-006: COMPLIANCE_MEMO_RULE_ENGINE_STATUS_VALUES (lockstep
+        -- test).  The memo JSON's same-named KEY uses a different vocabulary
+        -- (CLEAN/ENFORCED/VIOLATIONS_DETECTED) — widen this canon FIRST if that
+        -- value is ever wired into the column.
+        rule_engine_status TEXT DEFAULT 'pending' CHECK(rule_engine_status IN ('pending','pass')),
         blocked BOOLEAN DEFAULT FALSE,
         block_reason TEXT,
         is_stale BOOLEAN DEFAULT FALSE,
@@ -1739,7 +1863,10 @@ def _get_postgres_schema() -> str:
         id TEXT PRIMARY KEY,
         pipeline_id TEXT NOT NULL UNIQUE,
         application_id TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'running',
+        -- P12-5 / DCI-006: SUPERVISOR_PIPELINE_STATUS_VALUES (lockstep test)
+        status TEXT NOT NULL DEFAULT 'running' CHECK(status IN (
+            'running','completed','completed_with_errors','awaiting_review','failed'
+        )),
         trigger_type TEXT,
         trigger_source TEXT,
         started_at TIMESTAMP,
@@ -1755,8 +1882,26 @@ def _get_postgres_schema() -> str:
     CREATE TABLE IF NOT EXISTS supervisor_audit_log (
         id TEXT PRIMARY KEY,
         timestamp TIMESTAMP NOT NULL,
-        event_type TEXT NOT NULL,
-        severity TEXT DEFAULT 'info',
+        -- P12-5 / DCI-006: SUPERVISOR_AUDIT_EVENT_TYPE_VALUES /
+        -- SUPERVISOR_AUDIT_SEVERITY_VALUES (lockstep test).  The legacy-repair
+        -- creator (_create_supervisor_audit_log_table) deliberately carries NO
+        -- CHECKs so historical rows can be rehashed; v2.47 constrains PG after
+        -- verifying the data is clean.
+        event_type TEXT NOT NULL CHECK(event_type IN (
+            'agent_run_started','agent_run_completed','agent_run_failed',
+            'schema_validation_passed','schema_validation_failed',
+            'confidence_calculated','confidence_routing',
+            'contradiction_detected','contradiction_resolved',
+            'rule_triggered','rule_overridden',
+            'escalation_created','escalation_assigned','escalation_resolved',
+            'human_review_started','human_review_completed','ai_override',
+            'pipeline_started','pipeline_completed','pipeline_failed',
+            'supervisor_verdict','config_changed',
+            'agent_version_changed','prompt_version_changed','system_error'
+        )),
+        severity TEXT DEFAULT 'info' CHECK(severity IN (
+            'critical','high','medium','low','info','warning'
+        )),
         pipeline_id TEXT,
         application_id TEXT,
         run_id TEXT,
@@ -1889,7 +2034,8 @@ def _get_sqlite_schema() -> str:
         email TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         company_name TEXT,
-        status TEXT DEFAULT 'active',
+        -- P12-5 / DCI-006: CLIENT_STATUS_VALUES (kept in lockstep by test)
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','inactive')),
         password_reset_token TEXT,
         password_reset_expires TEXT,
         created_at TEXT DEFAULT (datetime('now'))
@@ -2317,11 +2463,16 @@ def _get_sqlite_schema() -> str:
         document_id TEXT,
         agent_name TEXT NOT NULL,
         agent_number INTEGER,
-        status TEXT NOT NULL,
+        -- P12-5 / DCI-006: AGENT_EXECUTION_STATUS_VALUES (lockstep test)
+        status TEXT NOT NULL CHECK(status IN (
+            'verified','flagged','skipped','completed',
+            'pending','in_progress','failed','error'
+        )),
         checks_json TEXT,
         flags_json TEXT,
         requires_review INTEGER DEFAULT 0,
-        source TEXT DEFAULT 'ai',
+        -- P12-5 / DCI-006: AGENT_EXECUTION_SOURCE_VALUES (lockstep test)
+        source TEXT DEFAULT 'ai' CHECK(source IN ('ai','stored_screening_results')),
         started_at TEXT,
         completed_at TEXT DEFAULT (datetime('now')),
         error_message TEXT
@@ -2796,11 +2947,18 @@ def _get_sqlite_schema() -> str:
         raw_output_hash TEXT,
         approved_by TEXT REFERENCES users(id),
         approved_at TEXT,
-        supervisor_status TEXT DEFAULT 'pending',
+        -- P12-5 / DCI-006: COMPLIANCE_MEMO_SUPERVISOR_STATUS_VALUES (lockstep test)
+        supervisor_status TEXT DEFAULT 'pending' CHECK(supervisor_status IN (
+            'pending','CONSISTENT','CONSISTENT_WITH_WARNINGS','INCONSISTENT','approved'
+        )),
         supervisor_summary TEXT,
         supervisor_contradictions TEXT DEFAULT '[]',
         rule_violations TEXT DEFAULT '[]',
-        rule_engine_status TEXT DEFAULT 'pending',
+        -- P12-5 / DCI-006: COMPLIANCE_MEMO_RULE_ENGINE_STATUS_VALUES (lockstep
+        -- test).  The memo JSON's same-named KEY uses a different vocabulary
+        -- (CLEAN/ENFORCED/VIOLATIONS_DETECTED) — widen this canon FIRST if that
+        -- value is ever wired into the column.
+        rule_engine_status TEXT DEFAULT 'pending' CHECK(rule_engine_status IN ('pending','pass')),
         blocked INTEGER DEFAULT 0,
         block_reason TEXT,
         is_stale INTEGER DEFAULT 0,
@@ -2956,7 +3114,10 @@ def _get_sqlite_schema() -> str:
         id TEXT PRIMARY KEY,
         pipeline_id TEXT NOT NULL UNIQUE,
         application_id TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'running',
+        -- P12-5 / DCI-006: SUPERVISOR_PIPELINE_STATUS_VALUES (lockstep test)
+        status TEXT NOT NULL DEFAULT 'running' CHECK(status IN (
+            'running','completed','completed_with_errors','awaiting_review','failed'
+        )),
         trigger_type TEXT,
         trigger_source TEXT,
         started_at TEXT,
@@ -2972,8 +3133,26 @@ def _get_sqlite_schema() -> str:
     CREATE TABLE IF NOT EXISTS supervisor_audit_log (
         id TEXT PRIMARY KEY,
         timestamp TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        severity TEXT DEFAULT 'info',
+        -- P12-5 / DCI-006: SUPERVISOR_AUDIT_EVENT_TYPE_VALUES /
+        -- SUPERVISOR_AUDIT_SEVERITY_VALUES (lockstep test).  The legacy-repair
+        -- creator (_create_supervisor_audit_log_table) deliberately carries NO
+        -- CHECKs so historical rows can be rehashed; v2.47 constrains PG after
+        -- verifying the data is clean.
+        event_type TEXT NOT NULL CHECK(event_type IN (
+            'agent_run_started','agent_run_completed','agent_run_failed',
+            'schema_validation_passed','schema_validation_failed',
+            'confidence_calculated','confidence_routing',
+            'contradiction_detected','contradiction_resolved',
+            'rule_triggered','rule_overridden',
+            'escalation_created','escalation_assigned','escalation_resolved',
+            'human_review_started','human_review_completed','ai_override',
+            'pipeline_started','pipeline_completed','pipeline_failed',
+            'supervisor_verdict','config_changed',
+            'agent_version_changed','prompt_version_changed','system_error'
+        )),
+        severity TEXT DEFAULT 'info' CHECK(severity IN (
+            'critical','high','medium','low','info','warning'
+        )),
         pipeline_id TEXT,
         application_id TEXT,
         run_id TEXT,
@@ -3184,6 +3363,15 @@ def init_db():
         _ensure_supervisor_audit_log_schema(db)
         db.commit()
         logger.info("startup: completed _ensure_supervisor_audit_log_schema")
+
+        # Migration v2.47 (P12-5 / DCI-006): enum CHECK constraints for
+        # workflow status/source columns.  Runs AFTER the supervisor audit
+        # schema repair so a rebuilt legacy table is constrained in the same
+        # boot rather than the next one.
+        logger.info("startup: entering _ensure_status_enum_constraints (v2.47)")
+        _ensure_status_enum_constraints(db)
+        db.commit()
+        logger.info("startup: completed _ensure_status_enum_constraints (v2.47)")
 
         # Ensure built-in resources exist for the back-office reference library.
         logger.info("startup: entering _ensure_default_compliance_resources")
@@ -7879,6 +8067,169 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.47 (P12-5 / DCI-006) runs from init_db AFTER
+    # _ensure_supervisor_audit_log_schema so a legacy-audit-schema database
+    # gets its rebuild first and the enum constraints in the same boot.
+
+
+# P12-5 / DCI-006 constraint-repair specs:
+# (table, column, allowed_values, null_backfill, set_not_null)
+#
+# Backfill policy decisions (adversarial review, P12-5):
+#   * clients.status NULL/blank -> 'inactive', NOT 'active': a NULL-status
+#     client cannot authenticate today (login filters on status='active'),
+#     so promoting the anomaly to 'active' would silently RE-ENABLE access.
+#     'inactive' is fail-closed — an operator reviews and re-enables.
+#   * supervisor_audit_log.severity is NOT backfilled here: severity is part
+#     of the v2 entry-hash payload on the hash-chained audit table, and this
+#     helper's contract is that evidence rows are never rewritten.  (The
+#     legacy schema-repair path owns its own pre-existing severity
+#     normalisation.)  NULL severity rows are CHECK-legal and simply keep
+#     their NULL.
+STATUS_ENUM_CONSTRAINT_SPECS = (
+    ("clients", "status", CLIENT_STATUS_VALUES, "inactive", True),
+    ("agent_executions", "status", AGENT_EXECUTION_STATUS_VALUES, None, False),
+    ("agent_executions", "source", AGENT_EXECUTION_SOURCE_VALUES, "ai", False),
+    ("supervisor_pipeline_results", "status", SUPERVISOR_PIPELINE_STATUS_VALUES, None, False),
+    ("supervisor_audit_log", "event_type", SUPERVISOR_AUDIT_EVENT_TYPE_VALUES, None, False),
+    ("supervisor_audit_log", "severity", SUPERVISOR_AUDIT_SEVERITY_VALUES, None, False),
+    ("compliance_memos", "supervisor_status", COMPLIANCE_MEMO_SUPERVISOR_STATUS_VALUES, "pending", False),
+    ("compliance_memos", "rule_engine_status", COMPLIANCE_MEMO_RULE_ENGINE_STATUS_VALUES, "pending", False),
+)
+
+
+def _ensure_status_enum_constraints(db: 'DBConnection'):
+    """Migration v2.47 (P12-5 / DCI-006): workflow status/source enum repair.
+
+    Fresh installs get identical CHECKs from the CREATE TABLE DDL in both
+    schemas; this helper repairs LONG-LIVED databases every boot:
+
+    1. NULL/blank backfill (portable UPDATE, both engines) where the column
+       is semantically non-null and has a DDL default.
+    2. Off-canon detection: rows carrying values outside the canon are NEVER
+       rewritten (agent_executions / supervisor_audit_log rows are evidence;
+       supervisor_audit_log is additionally hash-chained) — instead the
+       constraint for that column is SKIPPED with a loud ERROR listing the
+       offending values, and retried on the next boot after operator
+       remediation.
+    3. Constraint installation is PostgreSQL-only (SQLite cannot
+       ALTER TABLE ... ADD CONSTRAINT; dev/test SQLite databases are
+       recreated freshly and covered by the DDL CHECKs).  Stale/conflicting
+       historical CHECKs on the column are dropped and replaced.
+
+    clients.status additionally gains NOT NULL (mirrors users.status).
+    """
+    for _tbl, _col, _allowed, _null_fill, _set_not_null in STATUS_ENUM_CONSTRAINT_SPECS:
+        try:
+            if not _safe_column_exists(db, _tbl, _col):
+                continue
+            qt = _pg_quote_identifier(_tbl) if db.is_postgres else _tbl
+            qc = _pg_quote_identifier(_col) if db.is_postgres else _col
+
+            existing_constraints = []
+            if db.is_postgres:
+                # Steady-state short-circuit (adversarial review M2): if the
+                # canonical constraint is already installed with exactly the
+                # canon values (and NOT NULL where required), skip the
+                # backfill UPDATE, the off-canon scan, and the DROP+ADD —
+                # otherwise every boot would take ACCESS EXCLUSIVE locks and
+                # full validation scans on unbounded tables
+                # (supervisor_audit_log is append-only and never purged).
+                existing_constraints = _postgres_check_constraints_for_column(db, _tbl, _col)
+                canonical = [
+                    c for c in existing_constraints
+                    if c.get("conname") == f"{_tbl}_{_col}_check"
+                    and set(re.findall(r"'([^']*)'", c.get("definition") or "")) == set(_allowed)
+                ]
+                if canonical and len(existing_constraints) == 1:
+                    if _set_not_null:
+                        nullable = db.execute(
+                            "SELECT is_nullable FROM information_schema.columns "
+                            "WHERE table_name = ? AND column_name = ?",
+                            (_tbl, _col),
+                        ).fetchone()
+                        if dict(nullable or {}).get("is_nullable") == "NO":
+                            continue
+                    else:
+                        continue
+
+            backfilled = 0
+            if _null_fill is not None:
+                db.execute(
+                    f"UPDATE {qt} SET {qc} = ? WHERE {qc} IS NULL OR TRIM({qc}) = ''",
+                    (_null_fill,),
+                )
+                backfilled = getattr(getattr(db, "_cursor", None), "rowcount", 0) or 0
+                if backfilled:
+                    logger.warning(
+                        "Migration v2.47: backfilled %d NULL/blank %s.%s row(s) "
+                        "to %r (P12-5 / DCI-006)",
+                        backfilled, _tbl, _col, _null_fill,
+                    )
+            placeholders = ", ".join("?" for _ in _allowed)
+            bad = db.execute(
+                f"SELECT {qc} AS v, COUNT(*) AS c FROM {qt} "
+                f"WHERE {qc} IS NOT NULL AND {qc} NOT IN ({placeholders}) "
+                f"GROUP BY {qc} LIMIT 20",
+                tuple(_allowed),
+            ).fetchall()
+            if bad:
+                offenders = {str(r["v"]): int(r["c"]) for r in (dict(x) for x in bad)}
+                if db.is_postgres:
+                    # Surface any conflicting historical CHECK still installed
+                    # on the column (adversarial review m5): a stale
+                    # wrong-vocabulary constraint keeps REJECTING modern
+                    # writes while the off-canon rows block its replacement —
+                    # the operator needs both facts to break the deadlock.
+                    stale = {
+                        c.get("conname"): c.get("definition")
+                        for c in existing_constraints
+                    }
+                    logger.error(
+                        "Migration v2.47: %s.%s holds OFF-CANON values %s — rows "
+                        "preserved (never rewritten), CHECK constraint SKIPPED for "
+                        "this column; remediate the data and the constraint will "
+                        "install on the next boot. Existing CHECK constraint(s) "
+                        "still installed on the column: %s (P12-5 / DCI-006)",
+                        _tbl, _col, offenders, stale or "none",
+                    )
+                else:
+                    logger.error(
+                        "Migration v2.47: %s.%s holds OFF-CANON values %s — rows "
+                        "preserved. NOTE: SQLite cannot retrofit CHECK "
+                        "constraints; fresh schemas enforce via DDL, so "
+                        "remediate this data or recreate the dev database "
+                        "(P12-5 / DCI-006)",
+                        _tbl, _col, offenders,
+                    )
+                db.commit()
+                continue
+            if db.is_postgres:
+                _replace_postgres_column_check_constraint(
+                    db,
+                    table=_tbl,
+                    column=_col,
+                    constraint_name=f"{_tbl}_{_col}_check",
+                    allowed_values=_allowed,
+                )
+                if _set_not_null:
+                    db.execute(f"ALTER TABLE {qt} ALTER COLUMN {qc} SET NOT NULL")
+                db.commit()
+                logger.info(
+                    "Migration v2.47: %s.%s enum constraint installed (%d values)",
+                    _tbl, _col, len(_allowed),
+                )
+            else:
+                db.commit()
+        except Exception as e:
+            logger.error(
+                "Migration v2.47 failed for %s.%s: %s", _tbl, _col, e, exc_info=True
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
 
 def _ensure_change_request_precondition_schema(db: 'DBConnection'):
     """Add CM approval-precondition result storage (PR-CM-APPROVAL-PRECONDITIONS-1).
@@ -9708,17 +10059,48 @@ def migrate_sqlite_to_postgres(sqlite_path: str, pg_url: str):
             placeholders = ", ".join(["%s"] * len(columns))
             insert_sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"
 
-            # Insert rows into PostgreSQL
+            # Insert rows into PostgreSQL.  Each row runs under a SAVEPOINT
+            # (P12-5 review M3): a plain rollback() here used to discard EVERY
+            # previously-inserted row of the table and then claim
+            # "Migrated N rows" — with enum CHECK constraints now installed, a
+            # single off-canon legacy row would have silently destroyed the
+            # whole table's migration.
+            inserted = 0
+            failed = 0
             for row in rows:
                 values = tuple(row)
                 try:
+                    pg_cursor.execute("SAVEPOINT migrate_row")
                     pg_cursor.execute(insert_sql, values)
+                    pg_cursor.execute("RELEASE SAVEPOINT migrate_row")
+                    inserted += 1
                 except Exception as e:
-                    logger.warning(f"  Error inserting row into {table}: {e}")
-                    pg_conn.rollback()
+                    failed += 1
+                    logger.error(f"  Error inserting row into {table}: {e}")
+                    pg_cursor.execute("ROLLBACK TO SAVEPOINT migrate_row")
 
             pg_conn.commit()
-            logger.info(f"  Migrated {len(rows)} rows")
+            if failed:
+                logger.error(
+                    f"  Migrated {inserted} of {len(rows)} rows for {table} — "
+                    f"{failed} row(s) FAILED and were NOT migrated; review the "
+                    f"errors above before relying on this migration"
+                )
+            else:
+                logger.info(f"  Migrated {inserted} rows")
+
+            # Verify destination row count against the source (best effort).
+            try:
+                pg_cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                dest_count = pg_cursor.fetchone()
+                dest_count = list(dest_count.values())[0] if isinstance(dest_count, dict) else dest_count[0]
+                if int(dest_count) < len(rows):
+                    logger.error(
+                        f"  ROW COUNT MISMATCH for {table}: source={len(rows)} "
+                        f"destination={dest_count}"
+                    )
+            except Exception as count_err:
+                logger.warning(f"  Could not verify row count for {table}: {count_err}")
 
         logger.info("Migration completed successfully")
 

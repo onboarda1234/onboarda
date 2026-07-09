@@ -430,6 +430,10 @@ class RulesEngine:
             Severity.HIGH: 3,
             Severity.MEDIUM: 2,
             Severity.LOW: 1,
+            # P12-5: WARNING ranks with LOW — added alongside the
+            # Severity.WARNING enum repair so a rule configured with
+            # 'warning' is not silently ranked below INFO.
+            Severity.WARNING: 1,
             Severity.INFO: 0,
         }
 

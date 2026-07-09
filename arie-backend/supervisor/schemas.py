@@ -78,6 +78,12 @@ class Severity(str, Enum):
     MEDIUM = "medium"
     LOW = "low"
     INFO = "info"
+    # P12-5: six audit paths (ai_override, escalation_created, override human
+    # reviews, schema_validation_failed and the contradiction/rule severity
+    # fallbacks) have referenced Severity.WARNING since they were written —
+    # without this member every one of them raised AttributeError BEFORE the
+    # audit INSERT, silently losing override/escalation audit evidence.
+    WARNING = "warning"
 
 
 class ConfidenceRouting(str, Enum):
