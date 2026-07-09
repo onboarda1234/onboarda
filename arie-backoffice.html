@@ -1426,15 +1426,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <option value="">All Officers</option>
       <option value="Unassigned">Unassigned</option>
     </select>
-    <select class="form-select" style="width:auto;" id="filter-enhanced" onchange="filterApplications()">
-      <option value="">All Enhanced Review</option>
-      <option value="active">Enhanced Review</option>
-      <option value="approval_blocked">Approval Blocked</option>
-      <option value="pending_client">Pending Client Submission</option>
-      <option value="awaiting_review">Submitted Awaiting Review</option>
-      <option value="resolved">Resolved Enhanced Review</option>
-    </select>
-    <input type="text" class="form-input" style="width:260px;" id="applications-search" placeholder="Search applications..." oninput="queueApplicationsSearch()" />
     <select class="form-select" style="width:auto;" id="applications-page-size" onchange="setApplicationsPageSize(this.value)" aria-label="Applications per page">
       <option value="10">10 per page</option>
       <option value="20" selected>20 per page</option>
@@ -1453,10 +1444,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <th class="app-sort-header" data-sort-key="company_name" onclick="setApplicationsSort('company_name')" style="cursor:pointer;">Company <span class="app-sort-indicator" data-indicator-for="company_name"></span></th>
           <th class="app-sort-header" data-sort-key="sector" onclick="setApplicationsSort('sector')" style="cursor:pointer;">Sector <span class="app-sort-indicator" data-indicator-for="sector"></span></th>
           <th class="app-sort-header" data-sort-key="risk_level" onclick="setApplicationsSort('risk_level')" style="cursor:pointer;">Risk Level <span class="app-sort-indicator" data-indicator-for="risk_level"></span></th>
-          <th class="app-sort-header" data-sort-key="risk_score" onclick="setApplicationsSort('risk_score')" style="cursor:pointer;">Score <span class="app-sort-indicator" data-indicator-for="risk_score"></span></th>
           <th>Review Route</th>
-          <th>Enhanced Status</th>
-          <th>Next Action</th>
           <th class="app-sort-header" data-sort-key="status" onclick="setApplicationsSort('status')" style="cursor:pointer;">Status <span class="app-sort-indicator" data-indicator-for="status"></span></th>
           <th class="app-sort-header" data-sort-key="assigned_name" onclick="setApplicationsSort('assigned_name')" style="cursor:pointer;">Assigned To <span class="app-sort-indicator" data-indicator-for="assigned_name"></span></th>
           <th class="app-sort-header" data-sort-key="created_at" onclick="setApplicationsSort('created_at')" style="cursor:pointer;">Date <span class="app-sort-indicator" data-indicator-for="created_at"></span></th>
@@ -5378,7 +5366,7 @@ function applicationsCurrentFilters() {
     risk: (document.getElementById('filter-risk') || {}).value || '',
     status: dropdownStatus || applicationsStatusTabValue,
     assigned: (document.getElementById('filter-assigned') || {}).value || '',
-    enhanced_review: (document.getElementById('filter-enhanced') || {}).value || '',
+    enhanced_review: applicationsEnhancedFilterValue || '',
     sort: applicationsSortKey,
     dir: applicationsSortKey ? applicationsSortDir : '',
     q: getApplicationsSearchText()
@@ -8349,11 +8337,17 @@ function applicationMatchesEnhancedFilter(app, enhancedFilter) {
   return true;
 }
 
+// Enhanced-review filter state. The visible dropdown was removed from the
+// Applications toolbar (UI declutter); the filter itself is preserved and is
+// still driven by the EDD deep-links (openApplicationsEnhancedReview) and the
+// #applications?enhanced_review= hash route. applicationsCurrentFilters() reads
+// this value, so the enhanced_review request param is unchanged.
+var applicationsEnhancedFilterValue = '';
+
 function setApplicationsEnhancedFilter(value) {
   var allowed = ['active','approval_blocked','pending_client','awaiting_review','resolved'];
   var normalized = allowed.indexOf(String(value || '')) >= 0 ? String(value || '') : '';
-  var filter = document.getElementById('filter-enhanced');
-  if (filter) filter.value = normalized;
+  applicationsEnhancedFilterValue = normalized;
   applicationsCurrentPage = 1;
   renderApplications();
 }
@@ -8389,7 +8383,7 @@ function renderApplications() {
   var prev = document.getElementById('applications-prev-page');
   var next = document.getElementById('applications-next-page');
   if (APPLICATIONS_LOAD_STATE === 'loading') {
-    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--text3);padding:24px;">Loading applications...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:24px;">Loading applications...</td></tr>';
     if (summary) summary.textContent = 'Loading applications...';
     if (indicator) indicator.textContent = 'Page ' + applicationsCurrentPage + ' of ' + Math.max(1, Math.ceil((applicationsApiTotal || 0) / applicationsPageSize));
     if (prev) prev.disabled = true;
@@ -8397,7 +8391,7 @@ function renderApplications() {
     return;
   }
   if (APPLICATIONS_LOAD_STATE === 'failed' && APPLICATIONS_LIST_ROWS.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--red);padding:24px;">Could not load applications. ' + escapeHtml(APPLICATIONS_LOAD_ERROR || 'Please try again.') + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--red);padding:24px;">Could not load applications. ' + escapeHtml(APPLICATIONS_LOAD_ERROR || 'Please try again.') + '</td></tr>';
     if (summary) summary.textContent = 'Could not load applications.';
     if (indicator) indicator.textContent = 'Page ' + applicationsCurrentPage + ' of 1';
     if (prev) prev.disabled = true;
@@ -8410,22 +8404,26 @@ function renderApplications() {
   tbody.innerHTML = '';
   if (!APPLICATIONS_LIST_ROWS.length) {
     var empty = document.createElement('tr');
-    empty.innerHTML = '<td colspan="11" style="text-align:center;color:var(--text3);padding:24px;">' + escapeHtml(applicationsEmptyStateMessage()) + '</td>';
+    empty.innerHTML = '<td colspan="8" style="text-align:center;color:var(--text3);padding:24px;">' + escapeHtml(applicationsEmptyStateMessage()) + '</td>';
     tbody.appendChild(empty);
   }
   APPLICATIONS_LIST_ROWS.forEach(function(app) {
     var tr = document.createElement('tr');
     var fixtureBadge = typeof fixtureRecordBadgeHtml === 'function' ? fixtureRecordBadgeHtml(app) : '';
     tr.onclick = function() { openAppDetail(app.ref); };
-    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + fixtureBadge + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadgeForRecord(app) + '</td><td style="font-weight:700;">' + escapeHtml(formatRiskScoreForRecord(app)) + '</td><td style="font-size:12px;">' + escapeHtml(applicationReviewRouteLabel(app)) + '</td><td>' + applicationEnhancedStatusBadge(app) + '</td><td style="font-size:12px;max-width:210px;white-space:normal;">' + escapeHtml(applicationEnhancedNextAction(app)) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
+    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + fixtureBadge + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadgeForRecord(app) + '</td><td style="font-size:12px;">' + escapeHtml(applicationReviewRouteLabel(app)) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
     tbody.appendChild(tr);
   });
   updateApplicationsPagination(totalPages);
 }
 
+// The Applications toolbar search box was removed as a duplicate. The top-bar
+// global search (#global-search) is the single search entry point and feeds
+// this value via handleGlobalSearch, so the q request param is unchanged.
+var applicationsSearchText = '';
+
 function getApplicationsSearchText() {
-  var input = document.getElementById('applications-search');
-  return String(input ? input.value : '').trim().toLowerCase();
+  return String(applicationsSearchText || '').trim().toLowerCase();
 }
 
 function applicationMatchesSearch(app, q) {
@@ -29290,14 +29288,13 @@ function handleGlobalSearch(q) {
     queueCaseWorklistSearch(query);
     return;
   }
-  var appSearch = document.getElementById('applications-search');
-  if (appSearch && appSearch.value !== query) appSearch.value = query;
+  applicationsSearchText = query;
   applicationsCurrentPage = 1;
-  if (query.trim()) {
+  var listView = document.getElementById('view-applications');
+  if (listView && listView.classList.contains('active')) {
+    queueApplicationsSearch();
+  } else if (query.trim()) {
     showView('applications');
-  } else {
-    var listView = document.getElementById('view-applications');
-    if (listView && listView.classList.contains('active')) renderApplications();
   }
 }
 
