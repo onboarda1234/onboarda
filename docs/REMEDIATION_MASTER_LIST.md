@@ -45,7 +45,22 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 > request for PR/phase status, refresh the Status/GitHub columns from GitHub and
 > update this file. Item IDs (1–40, 33–38, M-series, P9-1…P9-14, P10-1…P10-7, P11-1…P11-9, P12-1…P12-10, P13-1…P13-7, PR-* slugs) are canonical and NEVER renumbered — their numeric prefixes reflect the section numbering in force when each audit landed and are retained for continuity with merged PRs, audit reports, and closure evidence. Section headings were renumbered on 2026-07-08 (founder instruction), so item-ID prefixes intentionally do NOT match today's section numbers (e.g. P10-x items live in Phase 9 — RDI; P9-x items live in Phase 14 — Production readiness).
 
-**Legend:** ✅ merged · 🟢 PR open (built) · 🔨 in progress · 📋 scoped · ⏸ blocked · ⬜ pending
+**Legend:** ✅ merged · 🟢 PR open (built) · 🔨 in progress · 📋 scoped · ⏸ blocked · ⬜ pending · 🔴 **controlled-pilot blocker (code)** · 🟠 **controlled-pilot operational gate**
+
+> 🔴 **Controlled-pilot blockers (code) — must close before a controlled regulated pilot.** These four rows are flagged 🔴 inline throughout the tables below:
+> - 🔴 **P12-1** — Regulated-record deletion protection (DCI-001/003, CRITICAL) — Phase 11
+> - 🔴 **P11-2** — Dependency CVE remediation + OSV/pip-audit CI gate (BSA-015, HIGH) — Phase 10
+> - 🔴 **P13-1** — Back-office stored-XSS elimination (FEO-001/002, HIGH) — Phase 12
+> - 🔴 **item 26** — Shared, fail-closed rate limiter (BSA-002) — Phase 4
+>
+> These are the *code* blockers. A controlled pilot also has 🟠 **operational gates**, flagged 🟠 inline where they exist as rows:
+> - 🟠 **item 33** — Pilot-scope guards (server-side) — Phase 13
+> - 🟠 **item 36** — Persisted negative-path fixtures — Phase 13
+> - 🟠 **P13-7** — Compliance-officer SOP pack (+ refresh the pilot runbook, item 38 ✅) — Phase 13
+> - 🟠 **ComplyAdvantage production workspace validation** (#498) — complete OR explicitly exclude from pilot scope — Phase 13
+> - 🟠 **ops-enforce-staging-sha-alignment-gate** — staging SHA aligned + smoke-tested — Phase 7
+>
+> Two operational gates are **not discrete rows** (activities/decisions, not tracked items): the **Applications-page readiness audit** clear of P0/P1 (run after #719/#720), and the **PII-encryption deferral recorded as a signed risk-acceptance** (PII field encryption is a *production* item — deferred for pilot with compensating controls, not a pilot blocker). P13-1 may alternatively be *formally accepted with compensating controls* rather than fully closed.
 
 ---
 
@@ -94,7 +109,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | 23 | Session revocation | #687 | ✅ |
 | 24 | CA webhook retry idempotency | [#703](https://github.com/onboarda1234/onboarda/pull/703) | ✅ merged (SW-4; merge `daab2bb`, TD 789, validated PASS; reconciler wiring = item 24b residual) |
 | 25 | Unique seeded-account secrets (M14) — P0 | #681 | ✅ |
-| 26 | Shared rate limiter *(= Audit-2 **BSA-002**: persist forgot-pw/doc-upload/AI keys across ECS tasks, fail-closed)* | — | ⬜ |
+| 🔴 26 | Shared rate limiter *(= Audit-2 **BSA-002**: persist forgot-pw/doc-upload/AI keys across ECS tasks, fail-closed)* **— controlled-pilot blocker** | — | ⬜ |
 | 27 | audit_log tamper-evidence (core; wiring deferred) | #691 | ✅ |
 | 28 | Misc M7–M12 | — | ⬜ (skip) |
 | 40 | Close last silent fail-open (dead code) | #680 | ✅ |
@@ -120,13 +135,13 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | PR | Priority | Title | GitHub | Status |
 |----|:--:|-------|:--:|:--:|
 | PR-APP-STATUS-CANONICALIZATION-1 | P1 blocker | Canonical status labels + senior queue + parity | #685 | ✅ |
-| PR-APP-ACTION-OWNERSHIP-SCOPE-1 | P1/P2 | Terminal decision & memo-approval ownership gate *(= Audit-4 **FEO-013**)*: final approve/reject + pre-approval + memo approval owner-gated; admin/SCO override needs `ownership_override_reason`; unassigned → auto-claim at SUCCESS commit only (failed attempts can never seize ownership); dual second leg exempt only at current HIGH/VERY_HIGH; collaboration verbs stay open. Adversarial review: 2 blockers found + redesigned away; 26 tests incl. HTTP endpoint matrix; live-PG probe PASS | [#713](https://github.com/onboarda1234/onboarda/pull/713) | 🟢 PR open (sign-off memo in `docs/compliance/OWNERSHIP_GATE_SIGNOFF_MEMO.md`, awaiting founder signature) |
-| ops-enforce-staging-sha-alignment-gate | P0 | Staging-SHA gate + delete test logins | [#702](https://github.com/onboarda1234/onboarda/pull/702) | ✅ code half merged (SW-3; gate exercises on next deploy) · delete-test-logins half ⬜ ops-side |
-| perf-applications-default-list-projection | P2 | Slim default list payload | — | ⬜ |
+| PR-APP-ACTION-OWNERSHIP-SCOPE-1 | P1/P2 | Terminal decision & memo-approval ownership gate *(= Audit-4 **FEO-013**)*: final approve/reject + pre-approval + memo approval owner-gated; admin/SCO override needs `ownership_override_reason`; unassigned → auto-claim at SUCCESS commit only (failed attempts can never seize ownership); dual second leg exempt only at current HIGH/VERY_HIGH; collaboration verbs stay open. Adversarial review: 2 blockers found + redesigned away; 26 tests incl. HTTP endpoint matrix; live-PG probe PASS | [#713](https://github.com/onboarda1234/onboarda/pull/713) | ✅ merged + Codex-validated PASS WITH LIMITATION (staging `074607d`; browser smoke clean; live ownership-denial not exercised — no safe assigned fixture, RDS private; TOCTOU + assigned_to-validation residuals stand; sign-off memo awaiting founder signature) |
+| 🟠 ops-enforce-staging-sha-alignment-gate | P0 | Staging-SHA gate + delete test logins | [#702](https://github.com/onboarda1234/onboarda/pull/702) | ✅ code half merged (SW-3; gate exercises on next deploy) · delete-test-logins half ⬜ ops-side · 🟠 **pilot operational gate** (staging SHA aligned + smoke-tested) |
+| perf-applications-default-list-projection | P2 | Slim paginated projection is the DEFAULT `/api/applications` payload (was: full `a.*` + child hydration for 5000 rows to any caller omitting `?view=`); `?view=full` unchanged opt-in. Review fold: periodic_review projection stays a full/detail-surface field (attaching it to the auto-refreshing list would regress the hot path). Full suite 6748-green on the stack | [#719](https://github.com/onboarda1234/onboarda/pull/719) | 🟢 PR open |
 | audit-log-tamper-evidence-1 | P2 | *(= Phase 4 #27)* | #691 | ✅ |
-| ux-applications-list-sort-status-tabs | P3 | Sortable headers + status tabs | — | ⬜ |
+| ux-applications-list-sort-status-tabs | P3 | Whitelisted server-side sort (8 columns; COALESCE NULL-score parity SQLite↔PG, severity-rank risk_level, unique `a.id` pagination tiebreaker) + comma-status filter backing 6 grouped status tabs (proper tab ARIA); dropdown-wins conflict resolution; off-canon "(non-standard)" status safety net wired to the real load path; **fake-AI "Quick Reference" chat removed wholesale** (canned "All checks passed" responses were a misleading-claims liability). Adversarial review: 4 MAJOR folds; 13 API tests + 24-check headless-Chromium run | [#720](https://github.com/onboarda1234/onboarda/pull/720) (stacked on #719) | 🟢 PR open |
 | chore-applications-deadcode-cleanup | P3 | Delete dead approval branches | [#701](https://github.com/onboarda1234/onboarda/pull/701) | ✅ merged (SW-2; merge `dd28a79`, TD 788, validated PASS) |
-| CLIENT-PORTAL-RUNTIME-SMOKE-1 | P1 | Live client-credential smoke: status/upload/logout/**cross-tenant denial** *(audit REGMIND-P1-006)* | — | ⬜ |
+| CLIENT-PORTAL-RUNTIME-SMOKE-1 | P1 | Live client-credential smoke: status/upload/logout/**cross-tenant denial** *(audit REGMIND-P1-006)* — Codex-executed 2026-07-08 against staging `d4fdb3f`: full cross-tenant matrix denied (A↔B apps/docs/uploads 403; no list leakage), logout token replay 401, rate-limit + upload rejections clean, no 5xx; synthetic fixtures fully cleaned incl. S3 | [#722](https://github.com/onboarda1234/onboarda/pull/722) (worker-trace fix) | ✅ PASS — the benign limitation (cleanup racing the async verification worker → `Verification job not found` traces) is now CLOSED by #722 (merged `dd7627f`, Codex-validated PASS 2026-07-09: worker treats a cleaned-up job as `verification_job_missing_skip`, real DB/provider failures still propagate; staging window ERROR/Exception/5xx/`job not found`=0) |
 | PERIODIC-BASELINE-METHOD-HYGIENE-1 | P2 | Clean 405 on POST-only periodic-review baseline route *(audit REGMIND-P2-001)* | [#700](https://github.com/onboarda1234/onboarda/pull/700) | ✅ merged (SW-1) |
 | PR-RISK-SECTOR-CALIBRATION-1 | P2 | Recalibrate sector risk + "unknown≠high" defaults *(audit done; was "Backlog — after Phase 7"; also Audit-3 **DCI-009**: missing/unknown country defaults MEDIUM — treat as manual-review/HIGH)* | — | 📋 scoped |
 
@@ -197,13 +212,13 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
 |---|----|----------|:--:|-----------------------|:--:|:--:|
 | P11-1 | Fail-closed revocation + post-await session re-validation | BSA-001, 014 | HIGH + MED | Make token-revocation persistence **mandatory** for logout / password-reset / password-change (503 + rollback, no false success); `is_revoked()`/`decode_token` fail-closed on store outage; logout-retry convergence (review fold B1); supervisor run re-validates actor post-await before persisting | [#705](https://github.com/onboarda1234/onboarda/pull/705) | ✅ merged |
-| P11-2 | Dependency CVE remediation + OSV/pip-audit CI gate | BSA-015 | HIGH | Upgrade Tornado ≥6.5.7, PyJWT ≥2.13.0, cryptography ≥48.0.1, WeasyPrint (upgrade/mitigate); add pip-audit / OSV scan that fails CI on HIGH/CRITICAL advisories | — | 📋 scoped (W1 blocker) |
+| 🔴 P11-2 | Dependency CVE remediation + OSV/pip-audit CI gate | BSA-015 | HIGH | Upgrade Tornado ≥6.5.7, PyJWT ≥2.13.0, cryptography ≥48.0.1, WeasyPrint (upgrade/mitigate); add pip-audit / OSV scan that fails CI on HIGH/CRITICAL advisories | — | 📋 scoped (W1 blocker) · 🔴 **controlled-pilot blocker** |
 | P11-3 | Fail-closed inputs + AI budget | BSA-006, 007, 013 | MED + LOW | `get_json()` returns structured **400** on malformed body (both BaseHandler and supervisor API); bounded-int pagination everywhere (server + supervisor routes); Claude budget **fails closed** in staging/prod/demo incl. the raw `generate()` path | [#706](https://github.com/onboarda1234/onboarda/pull/706) | ✅ merged |
 | P11-4 | Offload blocking I/O off the IOLoop | BSA-004, 005 | MED | Move WeasyPrint PDF render and in-request Claude document-verify to a worker/executor; replace `time.sleep` backoff; enforce per-user/app AI quotas *(coordinate with item 12 / B7)* | — | 📋 scoped |
 | P11-5 | AI prompt sanitisation + output schema + circuit breaker | BSA-011, 012 | MED | Apply the deep/3-pass sanitiser to **all** `generate()` inputs; replace raw-token enum parsing with Pydantic schemas (AI free-text advisory only); add source-controlled, DB-persisted circuit breaker around Anthropic/Sumsub/S3 | — | 📋 scoped |
 | P11-6 | AuthZ & audit hardening | BSA-003, 009 | MED | Require recent re-auth / second factor on admin password-reset (+ mandatory revocation); route all change-management 403 denials through `log_authz_denial()` | — | 📋 scoped |
 | P11-7 | Document-download attachment + webhook signature hygiene | BSA-008, 010 (+ DCI-017) | MED + LOW | Force `Content-Disposition: attachment` on all uploaded-doc downloads (separate sanitised preview endpoint if previews needed); document/opaque webhook invalid-sig response; remove ComplyAdvantage legacy signature fallback; *(DCI-017)* no silent local-disk fallback when S3 fails in staging/prod + MIME from server allowlist not stored value | — | 📋 scoped |
-| P11-8 | Supply-chain pinning | BSA-016, 017, 019 (= DCI-022/024) | MED + LOW | SHA-pin GitHub Actions (all 4 workflows, exact-release comments, annotated tags peeled); split test deps into `requirements-dev.txt` (flake8 now pinned too); pin Docker base image by manifest-list digest + `.dockerignore` excludes uploads/data/logs; 8 guard tests prevent regression. Residual: CI service container + dev compose still on mutable postgres tags (out of scope) | [#712](https://github.com/onboarda1234/onboarda/pull/712) | 🟢 PR open |
+| P11-8 | Supply-chain pinning | BSA-016, 017, 019 (= DCI-022/024) | MED + LOW | SHA-pin GitHub Actions (all 4 workflows, exact-release comments, annotated tags peeled); split test deps into `requirements-dev.txt` (flake8 now pinned too); pin Docker base image by manifest-list digest + `.dockerignore` excludes uploads/data/logs; 8 guard tests prevent regression. Residual: CI service container + dev compose still on mutable postgres tags (out of scope) | [#712](https://github.com/onboarda1234/onboarda/pull/712) | ✅ merged + Codex-validated PASS (2026-07-08; BSA-016/017/019 CLOSED; SHA-refresh process + CI service-container pinning remain ops decisions) |
 | P11-9 | CI coverage-gate fail-closed | BSA-018 (= DCI-026) | LOW | Unparseable coverage now FAILS the build (empty-COV branch exits 1) | [#707](https://github.com/onboarda1234/onboarda/pull/707) | ✅ merged + deployed (`fadf8a6`, PASS) |
 
 **Cross-ref:** **BSA-002** (share/persist rate limits across ECS tasks — forgot-pw, doc-upload, AI keys, fail-closed) = existing **Phase 4 item 26 "Shared rate limiter"** (⬜). Fold BSA-002's specifics there rather than duplicate here.
@@ -231,15 +246,15 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 
 | # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
 |---|----|----------|:--:|-----------------------|:--:|:--:|
-| P12-1 | Regulated-record deletion protection | DCI-001, 003 | CRITICAL + HIGH | App-delete cleanup + startup cleanup migration must NEVER delete regulated evidence (`sar_reports`, `compliance_memos`, `edd_cases`, `agent_executions`, `supervisor_audit_log`, `decision_records`) — soft-delete/tombstone with deletion marker instead; move fixture cleanup out of generic startup code | — | 📋 scoped (W1 blocker) |
-| P12-2 | Change-implementation fail-closed recompute + audit-in-transaction | DCI-012, 013 | HIGH + MED | Recompute risk (or write a `requires_recomputation` quarantine marker, P10-3-style) in the SAME transaction as implement — a swallowed recompute failure must not leave a live material change on a stale score; write CM approve/implement audit rows before commit, not after | — | 📋 scoped (W1 blocker) |
-| P12-3 | Compliance-logic corrections | DCI-008, 010, 011 | HIGH + HIGH + MED | Risk-config load failure fails CLOSED in staging/prod (no silent hardcoded-default model); memo `jur_rating` actually mutates to VERY_HIGH when `SANCTIONED_COUNTRY_FLOOR` is claimed; fix `MULTI_GAP_ESCALATION` branch order (≥4 checked before ≥3). Review folds: PG/JSONB parse hole closed (`safe_json_loads` coerced malformed scalars to `{}` before validation); recompute/boot-repair/correction/EDD-tier laundering paths all re-raise; boot-time CRITICAL probe. **Deploy precondition: validate live staging risk_config row first (see PR)** | [#710](https://github.com/onboarda1234/onboarda/pull/710) | 🟢 PR open |
-| P12-4 | Migration hard-stops + schema-drift detection | DCI-005, 004 | HIGH | Reject `MIGRATION_FAILURE_MODE=continue` when ENVIRONMENT is staging/production — **DCI-005 half shipped in [#711](https://github.com/onboarda1234/onboarda/pull/711)** (override ignored + ERROR on every boot; dev/test/demo keep it; clean adversarial review). Still scoped: DCI-004 startup drift check comparing declared constraints/FKs/columns vs live schema, fail-closed in staging/prod | [#711](https://github.com/onboarda1234/onboarda/pull/711) | 🟢 PR open (DCI-005 half; DCI-004 still 📋) |
-| P12-5 | Status-column CHECK constraints | DCI-006 | MED | CHECK constraints/enums for `clients.status`, `agent_executions.status/source`, `supervisor_pipeline_results.status`, `supervisor_audit_log.event_type/severity`, `compliance_memos.supervisor_status/rule_engine_status` (backfill invalid data first) | — | 📋 scoped |
-| P12-6 | PG pool connection validation | DCI-007 | MED | Pre-ping (`SELECT 1`) on pool checkout; discard/retry stale connections after RDS failover | [#709](https://github.com/onboarda1234/onboarda/pull/709) | 🟢 PR open |
+| 🔴 P12-1 | Regulated-record deletion protection | DCI-001, 003 | CRITICAL + HIGH | App-delete cleanup + startup cleanup migration must NEVER delete regulated evidence (`sar_reports`, `compliance_memos`, `edd_cases`, `agent_executions`, `supervisor_audit_log`, `decision_records`) — soft-delete/tombstone with deletion marker instead; move fixture cleanup out of generic startup code | — | 📋 scoped (W1 blocker) · 🔴 **controlled-pilot blocker** (supervised implementation) |
+| P12-2 | Change-implementation fail-closed recompute + audit-in-transaction | DCI-012, 013 | HIGH + MED | Per-request quarantine sentinel `stale:cm_recompute_pending:<id>` stamped in the SAME txn as implement whenever the change requires risk (staleness gate blocks approvals until recompute verifies against stored provenance); CAS-guarded recompute persistence; approve/reject/implement audit rows written pre-commit. Review folds: predicate parity (M1), PATCH-path recompute (M2), gate hoist. 18 tests; live-PG probe 17-green. Residual follow-up: no enforcement path for already-approved applications (M3) | [#715](https://github.com/onboarda1234/onboarda/pull/715) | ✅ merged + Codex-validated PASS WITH LIMITATION (2026-07-09, staging `02f5538`; DCI-012/013 **CLOSED**; live runtime: risk-relevant CR implemented with `risk_recompute_quarantined:false` + sentinel-stamped app blocked from approval with 409; fault-injection paths source/test-validated only; M3 already-approved-apps residual stands) |
+| P12-3 | Compliance-logic corrections | DCI-008, 010, 011 | HIGH + HIGH + MED | Risk-config load failure fails CLOSED in staging/prod (no silent hardcoded-default model); memo `jur_rating` actually mutates to VERY_HIGH when `SANCTIONED_COUNTRY_FLOOR` is claimed; fix `MULTI_GAP_ESCALATION` branch order (≥4 checked before ≥3). Review folds: PG/JSONB parse hole closed (`safe_json_loads` coerced malformed scalars to `{}` before validation); recompute/boot-repair/correction/EDD-tier laundering paths all re-raise; boot-time CRITICAL probe. **Deploy precondition: validate live staging risk_config row first (see PR)** | [#710](https://github.com/onboarda1234/onboarda/pull/710) | ✅ merged (2026-07-08; deploy precondition — validate live staging risk_config row — remains for Codex sign-off) |
+| P12-4 | Migration hard-stops + schema-drift detection | DCI-005, 004 | HIGH | Reject `MIGRATION_FAILURE_MODE=continue` when ENVIRONMENT is staging/production — **DCI-005 half shipped in [#711](https://github.com/onboarda1234/onboarda/pull/711)** (override ignored + ERROR on every boot; dev/test/demo keep it; clean adversarial review). Still scoped: DCI-004 startup drift check comparing declared constraints/FKs/columns vs live schema, fail-closed in staging/prod | [#711](https://github.com/onboarda1234/onboarda/pull/711) | ✅ DCI-005 half merged (2026-07-08); DCI-004 drift check still 📋 |
+| P12-5 | Status-column CHECK constraints | DCI-006 | MED | Canon-constant CHECK constraints for all 8 status/enum columns (Migration v2.47, steady-state no-op boots via constraint-def comparison; fail-closed `clients.status` backfill; SQLite→PG migrator per-row SAVEPOINTs). Bonus repair: `Severity.WARNING` added to supervisor enum — 6 call sites crashed with AttributeError before their audit INSERT. 20 tests; live-PG probe 19-green | [#716](https://github.com/onboarda1234/onboarda/pull/716) | 🟢 PR open |
+| P12-6 | PG pool connection validation | DCI-007 | MED | Pre-ping (`SELECT 1`) on pool checkout; discard/retry stale connections after RDS failover | [#709](https://github.com/onboarda1234/onboarda/pull/709) | ✅ merged (2026-07-08) |
 | P12-7 | Verification-matrix fidelity | DCI-014, 015 | MED + LOW | HYBRID checks go to Claude ONLY on deterministic INCONCLUSIVE (never override a deterministic FAIL), per the matrix policy; resolve the 5 TODO enhanced-requirement document mappings with compliance sign-off | — | 📋 scoped |
-| P12-8 | Retention purge enforceability + purge-log evidence | DCI-020, 021 | MED | Map (or explicitly mark manual-with-procedure) all retention categories beyond audit_logs/monitoring_alerts; add subject_id/application_id/tables_affected/per-table counts/batch id to `data_purge_log`, written atomically with the purge | — | 📋 scoped |
-| P12-9 | Observability hardening | DCI-028, 029 | MED | Force JSON logs + request-correlation IDs in staging/prod; readiness probes for S3 reachability and disk capacity | — | 📋 scoped |
+| P12-8 | Retention purge enforceability + purge-log evidence | DCI-020, 021 | MED | 7 manual categories documented (`docs/compliance/MANUAL_PURGE_PROCEDURE.md` + CLI recorder); `data_purge_log` gains subject/application/tables/per-table-counts/batch-id/evidence columns (Migration v2.48) written in ONE txn with the DELETE. Review MAJOR fold: legacy `purged_by`→users FK dropped — the scheduler identity would have failed EVERY PG purge forever. 21 tests; live-PG probe 8-green | [#717](https://github.com/onboarda1234/onboarda/pull/717) | 🟢 PR open |
+| P12-9 | Observability hardening | DCI-028, 029 | MED | Forced JSON logs in staging/prod across BOTH pipelines (kills staging double-emission); contextvar request-correlation ids (sanitised `c-` prefixed `X-Request-ID`, echoed header, auto-injected into structured + root-logger lines, persisted on `audit_log` rows — Migration v2.49, worker `job-*` ids); readiness gains disk-capacity gate + tight-timeout S3 probe (403 = reachable_permission_limited, non-gating). 30 tests; live-PG probe 5-green. Residual: legacy direct `INSERT INTO audit_log` sites keep request_id NULL | [#718](https://github.com/onboarda1234/onboarda/pull/718) | 🟢 PR open |
 | P12-10 | Infra guards | DCI-016, 025 | MED + LOW | Enforce upload body-size before full buffering (server/proxy level; handler check stays as second line); deploy workflow FAILS when ECS `services-stable` times out *(partially mitigated by #702's SHA-alignment gate — stability half still open)* | — | 📋 scoped |
 
 **Wave order:** W1 P12-1, P12-2 (code blockers) — the other Audit-3 blockers live elsewhere: item 21 (DCI-018), P9-1 (DCI-019), P9-8 (DCI-027) · W2 P12-3…P12-9 · W3 P12-10.
@@ -265,26 +280,26 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 
 | # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
 |---|----|----------|:--:|-----------------------|:--:|:--:|
-| P13-1 | Backoffice stored-XSS elimination | FEO-001, 002 | HIGH | Escape (or DOM-construct with `textContent`) every API-interpolated field in the memo renderer (`renderMemoSections`) and supervisor/audit renderers (contradictions, rules, audit entries, chain errors); fixed enum→class maps for status/risk badges; XSS regression fixtures (payload in company name, memo section, red flag, supervisor recommendation, audit detail, error string) | — | 📋 scoped (W1) |
+| 🔴 P13-1 | Backoffice stored-XSS elimination | FEO-001, 002 | HIGH | Escape (or DOM-construct with `textContent`) every API-interpolated field in the memo renderer (`renderMemoSections`) and supervisor/audit renderers (contradictions, rules, audit entries, chain errors); fixed enum→class maps for status/risk badges; XSS regression fixtures (payload in company name, memo section, red flag, supervisor recommendation, audit detail, error string) | — | 📋 scoped (W1) · 🔴 **controlled-pilot blocker** (or formally accept with compensating controls) |
 | P13-2 | Single API wrapper + consistent CSRF | FEO-003 | MED | Route all 23 backoffice + portal raw `fetch()` sites through `boApiCall`/`apiCall`; state-changing calls fail closed client-side without a CSRF token; consistent `credentials: 'include'` (incl. logout + uploads + supervisor-run) | — | 📋 scoped |
 | P13-3 | Defensive API response parsing | FEO-004 | MED | Check status + `Content-Type` BEFORE `res.json()` in both wrappers; handle 401 before JSON-dependent logic; text/error-envelope fallback for ALB/proxy HTML errors | — | 📋 scoped |
 | P13-4 | App-detail render race guard | FEO-005 | MED | Monotonic request nonce / expected-ref check in `openAppDetail`→`renderAuthoritativeAppDetail`; ignore stale responses so Application A can never render over Application B's context | — | 📋 scoped |
 | P13-5 | Role-UI fail-closed until matrix loads | FEO-006 | LOW | Privileged controls hidden/disabled with a loading/retry state until the RBAC matrix is fetched (today UI deliberately fails open; backend remains the gate) | — | 📋 scoped |
 | P13-6 | Portal intake PII out of sessionStorage | FEO-007 | MED | Persist company-intake state via the authenticated server-side save/resume path; keep only an opaque resume handle client-side; clear legacy `arie_company_intake_state` on load | — | 📋 scoped |
-| P13-7 | Compliance-officer SOP pack | FEO-014 | MED (ops/docs) | Officer onboarding/training SOP, pre-approval review checklist, `INCONSISTENT` supervisor-verdict handling, senior escalation, override + evidence-export procedures | — | 📋 scoped (ops/docs) |
+| 🟠 P13-7 | Compliance-officer SOP pack | FEO-014 | MED (ops/docs) | Officer onboarding/training SOP, pre-approval review checklist, `INCONSISTENT` supervisor-verdict handling, senior escalation, override + evidence-export procedures | — | 📋 scoped (ops/docs) · 🟠 **pilot operational gate** |
 
 **Wave order:** W1 P13-1 (the two HIGH stored-XSS findings — officer-session code execution) · W2 P13-2…P13-6 · P13-7 alongside (docs, non-code).
 
 ## Phase 13 — Pilot Controls Pack
 | # | Title | GitHub | Status |
 |---|-------|--------|:--:|
-| 33 | Pilot-scope guards (server-side) | — | ⬜ |
+| 🟠 33 | Pilot-scope guards (server-side) **— pilot operational gate** | — | ⬜ |
 | 34 | Dashboard API performance (15.1s → sub-2s) | — | ⬜ |
 | 35 | Screening full-evidence hydration performance | — | ⬜ |
-| 36 | Persisted negative-path fixtures | — | ⬜ |
+| 🟠 36 | Persisted negative-path fixtures **— pilot operational gate** | — | ⬜ |
 | 37 | Lower-privilege fixture authz regression tests | #692 | ✅ |
 | 38 | Pilot operations runbook | #689 | ✅ |
-| — | ComplyAdvantage production workspace validation | #498 | ⏸ blocked (dashboard-mode evidence) |
+| 🟠 — | ComplyAdvantage production workspace validation **— pilot operational gate** (complete OR explicitly exclude from pilot scope) | #498 | ⏸ blocked (dashboard-mode evidence) |
 
 ## Phase 14 — Production readiness
 | # | Item | Type | GitHub | Status |
@@ -373,25 +388,34 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 ## Roll-up (113 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
-| ✅ merged | 47 |
+| ✅ merged | 54 |
 | 🟢 PR open (built) | 5 |
 | 🔨 in progress | 0 |
-| 📋 scoped | 26 |
+| 📋 scoped | 22 |
 | ⏸ blocked | 3 |
-| ⬜ pending | 32 |
+| ⬜ pending | 29 |
 
-**Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#709 (P12-6,
-head `43e0b8d` — CI-flake retrigger; full local suite 6656-green on identical content)** ·
-**#710 (P12-3)** · **#711 (P12-4, DCI-005 half)** · **#712 (P11-8)** ·
-**#713 (PR-APP-ACTION-OWNERSHIP-SCOPE-1 / FEO-013)** · **Old blocked draft:** #498.
-**Merged + deployed + validated:** **#705/#706/#707/#708** (staging `fadf8a6` == main;
+**Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#716 (P12-5)** · **#717 (P12-8)** · **#718 (P12-9)** · **#719 (apps-perf)** ·
+**#720 (apps-cleanup, stacked on #719 — CI runs once #719 merges and the base retargets to main)** ·
+**Old blocked draft:** #498. **De-flake backlog:** `test_fresh_install_pg_chain`
+shared-DSN schema_version order-coupling · `test_evidence_pack_supervisor_chain` ad-hoc
+batch flake · `test_applications_list_includes_enhanced_operational_summary_and_filters`
+(view=list&limit=50 over the shared module DB + same-second created_at ties with no unique
+ORDER BY tiebreaker → seeded app can fall off page 1; server-side tiebreaker ships in #720,
+test-side q-scoping still wanted; hit #715 CI 2026-07-09) · CI infra: postgres
+service-container "PostgreSQL SSL restart timed out" (killed #717's first two runs in ~60s
+and masked a real ADR-0008 schema-policy gate failure — fixed by the `migration_043`
+marker commit `c3e0610`; #717 green as of 2026-07-09 04:31Z). All of #715-#719 reached
+green CI; #720 gets CI when #719 merges (workflow triggers on main-based PRs only).
+**Merged + deployed + validated:** **#722** (verification-worker missing-job hygiene — Codex PASS, staging `dd7627f`; closes the P1-006 worker-trace limitation) · **#715** (P12-2 — Codex PASS WITH LIMITATION, staging `02f5538`, DCI-012/013 CLOSED) · **#713** (ownership gate — Codex PASS WITH LIMITATION, staging `074607d`) · **#712** (P11-8 — Codex PASS, BSA-016/017/019 CLOSED) · **#709/#710/#711** (P12-6/P12-3/P12-4-half, merged 2026-07-08; #710's risk-config deploy precondition still needs explicit Codex sign-off) · **#705/#706/#707/#708** (staging `fadf8a6` == main;
 backend TD `:796`, worker `:244`; #706/#708 PASS-with-limitation) · Wave A **#700/#701/#702/#703** (TDs
 784–789) · #704 (Tier-1-only maker-checker) · RDI (Phase 9) Wave 1 #696/#697/#698 · docs #695 ·
 #699 closed unmerged (redundant). Earlier code PRs (#687–#693) merged/validated.
 
 **Where things stand:** Phases 0–3 (except B7 #12) and 5–6 done. **Phase 4 fully
 built/merged** (only decision-gated #17/#21/#24/#26/#28 remain). Phase 7: status-canon
-done + audit-tamper (#691) merged; ownership gate not started (⬜). Phases 8–9 are the
+done + audit-tamper (#691) merged; **ownership gate merged (#713)**; Applications-page
+perf + sort/tabs/chat-removal pair open as #719/#720 (stacked). Phases 8–9 are the
 remaining body — overwhelmingly ops/vendor/legal, not code. **Phase 9 (RDI audit):**
 **all three current-stage CRITICALs closed & validated — P10-1 (#697, RDI-006) · P10-3
 (#696, RDI-004) · P10-2 (#698, RDI-001/007/011)**; P10-DOC-1 policy approved; W2/W3
@@ -400,7 +424,9 @@ Audit 2 — run against `e66405a`):** 19 findings folded as P11-1…P11-9; 2 HIG
 (BSA-001 revocation fail-open, BSA-015 dependency CVEs) lead Wave 1; BSA-002 = existing
 item 26. **Phase 11 (DCI audit, Audit 3 — run against `956ed5b`):** 30 findings; 11 map to
 existing items (incl. 3 blockers elevating item 21 / P9-1 / P9-8), 19 net-new folded as
-P12-1…P12-10; code blockers P12-1 (regulated-record deletion) + P12-2 (change-implementation
-recompute) lead Wave 1. **Section order:** phase sections now run …8 → 10 → 11 → 12 →
+P12-1…P12-10; code blockers: P12-1 (regulated-record deletion) remains (supervised session); P12-2
+(change-implementation recompute) built as #715. Overnight queue 2026-07-08/09 delivered
+P12-2/P12-5/P12-8/P12-9 + the Applications-page pair, each with fresh-context adversarial
+review folds and 6,7xx-green full suites. **Section order:** phase sections now run …8 → 10 → 11 → 12 →
 **9 (Production readiness, last)**. Pilot-readiness ≈ 88–92%; production-readiness ≈ 30–35%
 (Audit 3 verdict: REMEDIATE BEFORE PROCEEDING).
