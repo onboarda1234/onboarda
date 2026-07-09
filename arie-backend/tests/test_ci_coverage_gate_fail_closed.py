@@ -54,12 +54,17 @@ def test_threshold_branch_still_enforces_minimum():
 
 
 def test_gate_logic_executes_fail_closed():
-    """Execute the gate's decision logic (COV stubbed, pytest line dropped)
-    under `bash -e` — GitHub's default run shell is `bash -e {0}`."""
+    """Execute the gate's decision logic (COV stubbed, the real COV-assignment
+    line dropped) under `bash -e` — GitHub's default run shell is `bash -e {0}`.
+
+    The dropped line is matched on the `COV=$(` command-substitution prefix, not
+    a specific command, so it keeps working whether the step scrapes coverage via
+    `pytest --cov-report=term` or reuses the data with `coverage report` — either
+    would otherwise clobber the stubbed COV and defeat the fail-closed cases."""
     script = _coverage_step_script()
     logic = "\n".join(
         line for line in script.splitlines()
-        if not line.strip().startswith("COV=$(pytest")
+        if not line.strip().startswith("COV=$(")
     )
     cases = (
         ("", 1),            # empty — the original BSA-018 hole
