@@ -45,7 +45,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 > request for PR/phase status, refresh the Status/GitHub columns from GitHub and
 > update this file. Item IDs (1–40, 33–38, M-series, P9-1…P9-14, P10-1…P10-7, P11-1…P11-9, P12-1…P12-10, P13-1…P13-7, PR-* slugs) are canonical and NEVER renumbered — their numeric prefixes reflect the section numbering in force when each audit landed and are retained for continuity with merged PRs, audit reports, and closure evidence. Section headings were renumbered on 2026-07-08 (founder instruction), so item-ID prefixes intentionally do NOT match today's section numbers (e.g. P10-x items live in Phase 9 — RDI; P9-x items live in Phase 14 — Production readiness).
 
-**Legend:** ✅ merged · 🟢 PR open (built) · 🔨 in progress · 📋 scoped · ⏸ blocked · ⬜ pending · 🔴 **controlled-pilot blocker**
+**Legend:** ✅ merged · 🟢 PR open (built) · 🔨 in progress · 📋 scoped · ⏸ blocked · ⬜ pending · 🔴 **controlled-pilot blocker (code)** · 🟠 **controlled-pilot operational gate**
 
 > 🔴 **Controlled-pilot blockers (code) — must close before a controlled regulated pilot.** These four rows are flagged 🔴 inline throughout the tables below:
 > - 🔴 **P12-1** — Regulated-record deletion protection (DCI-001/003, CRITICAL) — Phase 11
@@ -53,7 +53,14 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 > - 🔴 **P13-1** — Back-office stored-XSS elimination (FEO-001/002, HIGH) — Phase 12
 > - 🔴 **item 26** — Shared, fail-closed rate limiter (BSA-002) — Phase 4
 >
-> These are the *code* blockers. A controlled pilot also has **operational gates** (not marked 🔴 here): Applications-page readiness audit clear of P0/P1, CA production validation completed or explicitly excluded, officer SOP / pilot runbook updated, staging SHA aligned + smoke-tested, and the PII-encryption deferral recorded as a signed risk-acceptance (PII field encryption is a *production* item, deferred for pilot with compensating controls — not a pilot blocker). P13-1 may alternatively be *formally accepted with compensating controls* rather than fully closed.
+> These are the *code* blockers. A controlled pilot also has 🟠 **operational gates**, flagged 🟠 inline where they exist as rows:
+> - 🟠 **item 33** — Pilot-scope guards (server-side) — Phase 13
+> - 🟠 **item 36** — Persisted negative-path fixtures — Phase 13
+> - 🟠 **P13-7** — Compliance-officer SOP pack (+ refresh the pilot runbook, item 38 ✅) — Phase 13
+> - 🟠 **ComplyAdvantage production workspace validation** (#498) — complete OR explicitly exclude from pilot scope — Phase 13
+> - 🟠 **ops-enforce-staging-sha-alignment-gate** — staging SHA aligned + smoke-tested — Phase 7
+>
+> Two operational gates are **not discrete rows** (activities/decisions, not tracked items): the **Applications-page readiness audit** clear of P0/P1 (run after #719/#720), and the **PII-encryption deferral recorded as a signed risk-acceptance** (PII field encryption is a *production* item — deferred for pilot with compensating controls, not a pilot blocker). P13-1 may alternatively be *formally accepted with compensating controls* rather than fully closed.
 
 ---
 
@@ -129,7 +136,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 |----|:--:|-------|:--:|:--:|
 | PR-APP-STATUS-CANONICALIZATION-1 | P1 blocker | Canonical status labels + senior queue + parity | #685 | ✅ |
 | PR-APP-ACTION-OWNERSHIP-SCOPE-1 | P1/P2 | Terminal decision & memo-approval ownership gate *(= Audit-4 **FEO-013**)*: final approve/reject + pre-approval + memo approval owner-gated; admin/SCO override needs `ownership_override_reason`; unassigned → auto-claim at SUCCESS commit only (failed attempts can never seize ownership); dual second leg exempt only at current HIGH/VERY_HIGH; collaboration verbs stay open. Adversarial review: 2 blockers found + redesigned away; 26 tests incl. HTTP endpoint matrix; live-PG probe PASS | [#713](https://github.com/onboarda1234/onboarda/pull/713) | ✅ merged + Codex-validated PASS WITH LIMITATION (staging `074607d`; browser smoke clean; live ownership-denial not exercised — no safe assigned fixture, RDS private; TOCTOU + assigned_to-validation residuals stand; sign-off memo awaiting founder signature) |
-| ops-enforce-staging-sha-alignment-gate | P0 | Staging-SHA gate + delete test logins | [#702](https://github.com/onboarda1234/onboarda/pull/702) | ✅ code half merged (SW-3; gate exercises on next deploy) · delete-test-logins half ⬜ ops-side |
+| 🟠 ops-enforce-staging-sha-alignment-gate | P0 | Staging-SHA gate + delete test logins | [#702](https://github.com/onboarda1234/onboarda/pull/702) | ✅ code half merged (SW-3; gate exercises on next deploy) · delete-test-logins half ⬜ ops-side · 🟠 **pilot operational gate** (staging SHA aligned + smoke-tested) |
 | perf-applications-default-list-projection | P2 | Slim paginated projection is the DEFAULT `/api/applications` payload (was: full `a.*` + child hydration for 5000 rows to any caller omitting `?view=`); `?view=full` unchanged opt-in. Review fold: periodic_review projection stays a full/detail-surface field (attaching it to the auto-refreshing list would regress the hot path). Full suite 6748-green on the stack | [#719](https://github.com/onboarda1234/onboarda/pull/719) | 🟢 PR open |
 | audit-log-tamper-evidence-1 | P2 | *(= Phase 4 #27)* | #691 | ✅ |
 | ux-applications-list-sort-status-tabs | P3 | Whitelisted server-side sort (8 columns; COALESCE NULL-score parity SQLite↔PG, severity-rank risk_level, unique `a.id` pagination tiebreaker) + comma-status filter backing 6 grouped status tabs (proper tab ARIA); dropdown-wins conflict resolution; off-canon "(non-standard)" status safety net wired to the real load path; **fake-AI "Quick Reference" chat removed wholesale** (canned "All checks passed" responses were a misleading-claims liability). Adversarial review: 4 MAJOR folds; 13 API tests + 24-check headless-Chromium run | [#720](https://github.com/onboarda1234/onboarda/pull/720) (stacked on #719) | 🟢 PR open |
@@ -279,20 +286,20 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | P13-4 | App-detail render race guard | FEO-005 | MED | Monotonic request nonce / expected-ref check in `openAppDetail`→`renderAuthoritativeAppDetail`; ignore stale responses so Application A can never render over Application B's context | — | 📋 scoped |
 | P13-5 | Role-UI fail-closed until matrix loads | FEO-006 | LOW | Privileged controls hidden/disabled with a loading/retry state until the RBAC matrix is fetched (today UI deliberately fails open; backend remains the gate) | — | 📋 scoped |
 | P13-6 | Portal intake PII out of sessionStorage | FEO-007 | MED | Persist company-intake state via the authenticated server-side save/resume path; keep only an opaque resume handle client-side; clear legacy `arie_company_intake_state` on load | — | 📋 scoped |
-| P13-7 | Compliance-officer SOP pack | FEO-014 | MED (ops/docs) | Officer onboarding/training SOP, pre-approval review checklist, `INCONSISTENT` supervisor-verdict handling, senior escalation, override + evidence-export procedures | — | 📋 scoped (ops/docs) |
+| 🟠 P13-7 | Compliance-officer SOP pack | FEO-014 | MED (ops/docs) | Officer onboarding/training SOP, pre-approval review checklist, `INCONSISTENT` supervisor-verdict handling, senior escalation, override + evidence-export procedures | — | 📋 scoped (ops/docs) · 🟠 **pilot operational gate** |
 
 **Wave order:** W1 P13-1 (the two HIGH stored-XSS findings — officer-session code execution) · W2 P13-2…P13-6 · P13-7 alongside (docs, non-code).
 
 ## Phase 13 — Pilot Controls Pack
 | # | Title | GitHub | Status |
 |---|-------|--------|:--:|
-| 33 | Pilot-scope guards (server-side) | — | ⬜ |
+| 🟠 33 | Pilot-scope guards (server-side) **— pilot operational gate** | — | ⬜ |
 | 34 | Dashboard API performance (15.1s → sub-2s) | — | ⬜ |
 | 35 | Screening full-evidence hydration performance | — | ⬜ |
-| 36 | Persisted negative-path fixtures | — | ⬜ |
+| 🟠 36 | Persisted negative-path fixtures **— pilot operational gate** | — | ⬜ |
 | 37 | Lower-privilege fixture authz regression tests | #692 | ✅ |
 | 38 | Pilot operations runbook | #689 | ✅ |
-| — | ComplyAdvantage production workspace validation | #498 | ⏸ blocked (dashboard-mode evidence) |
+| 🟠 — | ComplyAdvantage production workspace validation **— pilot operational gate** (complete OR explicitly exclude from pilot scope) | #498 | ⏸ blocked (dashboard-mode evidence) |
 
 ## Phase 14 — Production readiness
 | # | Item | Type | GitHub | Status |
