@@ -90,6 +90,10 @@ def test_cloudwatch_metric_log_is_low_cardinality(monkeypatch):
         "metric_unit": "Count",
         "environment": "staging",
         "service": "verification-worker",
+        # P12-9: explicit request_id=None is the low-cardinality OPT-OUT —
+        # it suppresses the automatic correlation-id injection so metric
+        # lines never carry per-request identifiers.
+        "request_id": None,
     }
     assert "application_id" not in captured["kwargs"]
     assert "document_id" not in captured["kwargs"]

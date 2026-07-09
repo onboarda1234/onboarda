@@ -59,6 +59,24 @@ def _env(monkeypatch, name):
     # Readiness requires deployed config to isolate the AML assertions.
     monkeypatch.setenv("PII_ENCRYPTION_KEY", "y" * 44)
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@db.example:5432/x")
+    # P12-9 gates: these tests exercise AML/retention readiness semantics —
+    # stub the storage probes healthy so they don't dominate the verdict.
+    import shutil as _shutil
+    class _OkBoto:
+        def head_bucket(self, Bucket):
+            return {}
+    class _OkS3:
+        bucket_name = "test-bucket"
+        s3_client = _OkBoto()
+    monkeypatch.setattr(server, "HAS_S3", True)
+    monkeypatch.setattr(server, "get_s3_client", lambda: _OkS3())
+    server._S3_READINESS_CACHE["at"] = 0.0
+    server._S3_READINESS_CACHE["result"] = None
+    class _Usage:
+        total = 100 * 1024**3
+        used = 10 * 1024**3
+        free = 90 * 1024**3
+    monkeypatch.setattr(_shutil, "disk_usage", lambda path: _Usage())
     return server
 
 

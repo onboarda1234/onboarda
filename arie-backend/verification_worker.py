@@ -16,6 +16,11 @@ from typing import Any, Callable, Dict, Optional
 
 from base_handler import _safe_json
 from db import get_db
+from observability import (
+    StructuredFormatter,
+    clear_request_id,
+    set_request_id,
+)
 from observability import emit_cloudwatch_metric_log
 from screening_jobs import (
     claim_next_screening_job,
@@ -634,6 +639,9 @@ def run_once(
         screening_job = claim_next_screening_job(db, worker_id)
         db.commit()
         if screening_job:
+            # P12-9 / DCI-028: bind the job id as the correlation id so every
+            # structured log emitted while processing this job carries it.
+            set_request_id(f"job-screening-{screening_job['id']}")
             logger.info(
                 "screening_worker_job_claimed job_id=%s application_id=%s worker_id=%s attempt_count=%s %s",
                 screening_job["id"],
@@ -659,6 +667,7 @@ def run_once(
                 "stuck_jobs_failed": int(health.get("failed_jobs") or 0),
                 "screening_stuck_jobs_failed": int(screening_health.get("failed_jobs") or 0),
             }
+        set_request_id(f"job-verification-{job['id']}")
         logger.info(
             "verification_worker_job_claimed job_id=%s document_id=%s worker_id=%s attempt_count=%s %s",
             job["id"],
@@ -683,6 +692,7 @@ def run_once(
         logger.exception("verification_worker_run_once_failed worker_id=%s", worker_id)
         raise
     finally:
+        clear_request_id()
         if own_db:
             try:
                 db.close()
@@ -710,6 +720,16 @@ def main(argv=None) -> int:
         level=os.getenv("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # P12-9 / DCI-028: the worker process must emit JSON in deployed
+    # environments too (forced, same policy as the API), so its lines
+    # correlate in Logs Insights.
+    try:
+        from environment import get_environment as _ge
+        if _ge() in ("staging", "production"):
+            for _h in logging.root.handlers:
+                _h.setFormatter(StructuredFormatter())
+    except Exception:
+        pass
 
     if args.once:
         result = run_once(worker_id=args.worker_id)

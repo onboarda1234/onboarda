@@ -75,6 +75,25 @@ class S3Client:
         else:
             # Fall back to IAM role / default credential chain (ECS Fargate, EC2, etc.)
             self.s3_client = boto3.client('s3', **client_kwargs)
+        self._client_kwargs = dict(client_kwargs)
+
+    def probe_client(self):
+        """Return a client for readiness probing (P12-9 / DCI-029).
+
+        Botocore's defaults (60s connect/read, retries) would block the
+        caller for minutes during exactly the outage the probe exists to
+        detect — and the readiness handler runs on the IOLoop thread, so
+        that would stall the whole API. Tight timeouts, one attempt.
+        """
+        kwargs = dict(self._client_kwargs)
+        kwargs['config'] = Config(
+            signature_version='s3v4',
+            s3={'addressing_style': 'virtual'},
+            connect_timeout=2,
+            read_timeout=3,
+            retries={'max_attempts': 1},
+        )
+        return boto3.client('s3', **kwargs)
 
     def upload_document(
         self,

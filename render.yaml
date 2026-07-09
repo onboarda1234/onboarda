@@ -31,6 +31,8 @@ services:
       mountPath: /data
       sizeGB: 1
     envVars:
+      - key: READINESS_MIN_FREE_DISK_MB
+        value: "100"
       - key: PORT
         value: 10000
       - key: ENV

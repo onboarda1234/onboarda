@@ -10,10 +10,13 @@ Usage:
     log_decision(decision="APPROVE", risk="MEDIUM", confidence=0.78, application_id="app123")
     log_request_end(handler="MemoGenerateHandler", application_id="app123", status=200, duration_ms=1523)
 """
+import contextvars
 import logging
 import json
+import re
 import time
 import os
+import uuid
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -21,8 +24,75 @@ from branding import BRAND
 
 # ── Configure structured JSON logger ──
 _LOG_LEVEL = os.environ.get("ARIE_LOG_LEVEL", "INFO").upper()
-_LOG_FORMAT = os.environ.get("ARIE_LOG_FORMAT", "json")  # "json" or "text"
 DEFAULT_CLOUDWATCH_NAMESPACE = f"{BRAND['backoffice_name']}/Pilot"
+
+
+def _resolve_log_format():
+    """Resolve the log format, FORCING JSON in staging/production.
+
+    P12-9 / DCI-028: CloudWatch Logs Insights queries and incident
+    reconstruction depend on single-line JSON. A deployed environment that
+    sets ARIE_LOG_FORMAT=text would silently lose every structured field, so
+    the override is honoured only outside staging/production.
+    """
+    fmt = (os.environ.get("ARIE_LOG_FORMAT", "json") or "json").strip().lower()
+    if fmt not in ("json", "text"):
+        fmt = "json"
+    try:
+        from environment import get_environment
+        env = get_environment()
+    except Exception:
+        env = ""
+    if env in ("staging", "production") and fmt != "json":
+        # The logger is not configured yet — plain logging is fine here.
+        logging.getLogger("arie").warning(
+            "ARIE_LOG_FORMAT=%s ignored: structured JSON logging is FORCED "
+            "in %s (DCI-028)", fmt, env,
+        )
+        return "json"
+    return fmt
+
+
+_LOG_FORMAT = _resolve_log_format()
+
+# ── Request correlation (P12-9 / DCI-028) ──
+# A contextvar-scoped correlation id: HTTP requests set it from the incoming
+# X-Request-ID header (or generate one) in BaseHandler.prepare; the
+# verification worker sets it per job. Every structured log line emitted via
+# _log() carries it automatically, so an incident can be reconstructed across
+# request logs, audit rows and worker logs with one Logs Insights filter.
+_REQUEST_ID: "contextvars.ContextVar" = contextvars.ContextVar("arie_request_id", default=None)
+_REQUEST_ID_MAX_LEN = 128
+_REQUEST_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9._:-]")
+
+
+def _sanitize_request_id(value):
+    """Return a safe correlation id string, or None if unusable.
+
+    Incoming X-Request-ID headers are attacker-controlled: strip anything
+    outside a conservative charset (defends log injection) and bound the
+    length (defends log bloat)."""
+    if not value:
+        return None
+    cleaned = _REQUEST_ID_SAFE_RE.sub("", str(value).strip())[:_REQUEST_ID_MAX_LEN]
+    return cleaned or None
+
+
+def set_request_id(value=None) -> str:
+    """Bind a correlation id to the current context; generates one if the
+    supplied value is missing/unusable. Returns the bound id."""
+    rid = _sanitize_request_id(value) or uuid.uuid4().hex
+    _REQUEST_ID.set(rid)
+    return rid
+
+
+def get_request_id():
+    """Return the current context's correlation id, or None."""
+    return _REQUEST_ID.get()
+
+
+def clear_request_id() -> None:
+    _REQUEST_ID.set(None)
 
 
 class StructuredFormatter(logging.Formatter):
@@ -38,6 +108,13 @@ class StructuredFormatter(logging.Formatter):
         # Merge any extra structured fields
         if hasattr(record, "structured_data"):
             log_entry.update(record.structured_data)
+        # P12-9 / DCI-028: formatter-level injection so records from ANY
+        # logger routed through this formatter correlate — unless the record
+        # explicitly opted out (low-cardinality metric lines).
+        if "request_id" not in log_entry and not getattr(record, "suppress_request_id", False):
+            rid = get_request_id()
+            if rid:
+                log_entry["request_id"] = rid
         if record.exc_info and record.exc_info[0]:
             log_entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_entry, default=str)
@@ -74,13 +151,23 @@ arie_logger = _make_logger("arie")
 # ── Structured log helpers ──
 
 def _log(level, message, **kwargs):
-    """Emit a structured log entry with arbitrary key-value fields."""
+    """Emit a structured log entry with arbitrary key-value fields.
+
+    P12-9 / DCI-028: the context correlation id is injected automatically —
+    callers no longer need to remember to thread request ids through.
+    Passing request_id=None explicitly OPTS OUT (used by the
+    low-cardinality CloudWatch metric lines, whose documented invariant
+    excludes per-request identifiers)."""
+    suppress = "request_id" in kwargs and kwargs["request_id"] is None
+    if not suppress:
+        kwargs.setdefault("request_id", get_request_id())
     record = arie_logger.makeRecord(
         name=arie_logger.name,
         level=level,
         fn="", lno=0, msg=message, args=(), exc_info=None,
     )
     record.structured_data = {k: v for k, v in kwargs.items() if v is not None}
+    record.suppress_request_id = suppress
     arie_logger.handle(record)
 
 
@@ -174,7 +261,9 @@ def emit_cloudwatch_metric_log(
     }
     if service:
         payload["service"] = service
-    _log(logging.INFO, "cloudwatch_metric", **payload)
+    # request_id=None: metric lines keep their documented low-cardinality
+    # invariant (no per-request identifiers) — P12-9 review m4.
+    _log(logging.INFO, "cloudwatch_metric", request_id=None, **payload)
 
 
 # ── Timer decorator for handler methods ──

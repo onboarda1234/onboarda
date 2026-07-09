@@ -1086,6 +1086,7 @@ def _actuate_edd_routing(db, app_row, edd_routing, supervisor_result, user, clie
         logger.error("EDD route actuation failed: %s", _err, exc_info=True)
     return result
 from branding import BRAND, get_risk_label, get_status_label
+from observability import get_request_id as _obs_get_request_id
 from party_utils import (
     _pii_encryptor, _pii_encryption_ok,
     extract_fernet_token, encrypt_pii_fields, decrypt_pii_fields,
@@ -1145,7 +1146,13 @@ except ImportError:
 _log_format = _CFG_LOG_FORMAT  # "json" or "text"
 
 class JSONFormatter(logging.Formatter):
-    """JSON structured log formatter for production log aggregation."""
+    """JSON structured log formatter for production log aggregation.
+
+    P12-9 / DCI-028: merges observability structured fields and the request
+    correlation id into EVERY record from ANY logger, so the ~300 plain
+    logger.* calls across the backend correlate in CloudWatch Logs Insights,
+    not just the observability channel.
+    """
     def format(self, record):
         log_entry = {
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -1156,16 +1163,35 @@ class JSONFormatter(logging.Formatter):
             "function": record.funcName,
             "line": record.lineno,
         }
+        structured = getattr(record, "structured_data", None)
+        if structured:
+            log_entry.update(structured)
+        if "request_id" not in log_entry and not getattr(record, "suppress_request_id", False):
+            try:
+                from observability import get_request_id as _grid
+                rid = _grid()
+                if rid:
+                    log_entry["request_id"] = rid
+            except Exception:
+                pass
         if record.exc_info and record.exc_info[0]:
             log_entry["exception"] = self.formatException(record.exc_info)
-        return json.dumps(log_entry)
+        return json.dumps(log_entry, default=str)
 
-if _log_format == "json" or _CFG_IS_PRODUCTION:
+# P12-9 / DCI-028: staging joins the forced-JSON branch — a deployed
+# environment must never fall back to unparseable text logs regardless of
+# how LOG_FORMAT is (un)set.
+if _log_format == "json" or _CFG_IS_PRODUCTION or _CFG_ENVIRONMENT == "staging":
     _handler = logging.StreamHandler()
     _handler.setFormatter(JSONFormatter())
     logging.root.handlers = []
     logging.root.addHandler(_handler)
     logging.root.setLevel(logging.INFO)
+    # The observability channel propagates to root; drop its private handler
+    # so each structured line is emitted exactly ONCE (previously: once as
+    # JSON with fields + once via root as text with the fields stripped).
+    # Propagation stays ON, so pytest caplog and root aggregation still work.
+    logging.getLogger("arie").handlers = []
 else:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -4459,6 +4485,66 @@ class HealthHandler(BaseHandler):
         self.write(json.dumps(health, default=str))
 
 
+# P12-9 / DCI-029: cached, non-destructive S3 reachability probe. head_bucket
+# verifies credentials + bucket existence + network path without touching any
+# object. Cached so readiness polls (every few seconds behind an ALB) do not
+# hammer S3; a 60s stale window is acceptable for a readiness signal.
+_S3_READINESS_CACHE = {"at": 0.0, "result": None}
+S3_READINESS_CACHE_SECONDS = 60
+
+
+def _s3_readiness_status(force=False):
+    if not HAS_S3:
+        return {"status": "not_configured", "detail": "s3_client module unavailable"}
+    now_mono = time.monotonic()
+    cached = _S3_READINESS_CACHE.get("result")
+    if cached is not None and not force and (now_mono - _S3_READINESS_CACHE["at"]) < S3_READINESS_CACHE_SECONDS:
+        result = dict(cached)
+        result["cached"] = True
+        return result
+    try:
+        s3 = get_s3_client()
+        probe = getattr(s3, "probe_client", None)
+        client = probe() if callable(probe) else s3.s3_client
+        client.head_bucket(Bucket=s3.bucket_name)
+        result = {"status": "ok", "bucket": s3.bucket_name}
+    except Exception as e:
+        # Distinguish an authoritative S3 answer from a connectivity failure
+        # (P12-9 review M4): a 403 PROVES S3 is reachable — the task role
+        # merely lacks s3:ListBucket for head_bucket. Report it loudly but
+        # non-gating; a 404 means the bucket itself is missing
+        # (misconfiguration — gating); anything else is unreachable (gating).
+        code = ""
+        try:
+            code = str(getattr(e, "response", {}).get("Error", {}).get("Code", ""))
+        except Exception:
+            code = ""
+        if code in ("403", "AccessDenied", "Forbidden"):
+            result = {
+                "status": "reachable_permission_limited",
+                "bucket": getattr(s3, "bucket_name", None),
+                "detail": (
+                    "S3 answered 403 to head_bucket — reachable, but the task "
+                    "role lacks s3:ListBucket; grant it (or accept this "
+                    "reduced probe) for a full reachability signal"
+                ),
+            }
+        elif code in ("404", "NoSuchBucket", "NotFound"):
+            result = {
+                "status": "failed",
+                "bucket": getattr(s3, "bucket_name", None),
+                "detail": "S3 bucket does not exist — document storage misconfigured",
+            }
+        else:
+            result = {
+                "status": "unreachable",
+                "detail": str(e)[:300],
+            }
+    _S3_READINESS_CACHE["at"] = now_mono
+    _S3_READINESS_CACHE["result"] = dict(result)
+    return result
+
+
 def _readiness_status_payload(probe_aml=False):
     """Return deep readiness status without writing to a handler.
 
@@ -4566,6 +4652,53 @@ def _readiness_status_payload(probe_aml=False):
         ready = False
     else:
         checks["config"] = {"status": "ok"}
+
+    # 3b. Local disk capacity (P12-9 / DCI-029): uploads always land on the
+    #     local disk first (S3 replication is a second step), and log/tmp
+    #     growth on an exhausted volume takes the whole task down. Gating.
+    try:
+        import shutil as _shutil
+        _disk_target = UPLOAD_DIR if os.path.isdir(UPLOAD_DIR) else "."
+        _usage = _shutil.disk_usage(_disk_target)
+        _free_mb = int(_usage.free // (1024 * 1024))
+        _min_free_mb = 500
+        try:
+            _min_free_mb = max(0, int(os.environ.get("READINESS_MIN_FREE_DISK_MB", "500")))
+        except (TypeError, ValueError):
+            pass
+        checks["disk"] = {
+            "status": "ok",
+            "path": _disk_target,
+            "free_mb": _free_mb,
+            "free_pct": round((_usage.free / _usage.total * 100.0), 1) if _usage.total else 0.0,
+            "min_free_mb": _min_free_mb,
+        }
+        if _free_mb < _min_free_mb:
+            checks["disk"]["status"] = "failed"
+            checks["disk"]["detail"] = (
+                f"free disk {_free_mb}MB below minimum {_min_free_mb}MB — "
+                "document uploads and local caching would fail"
+            )
+            ready = False
+    except Exception as _disk_exc:
+        checks["disk"] = {"status": "unknown", "detail": str(_disk_exc)[:300]}
+        if ENVIRONMENT in ("staging", "production", "prod"):
+            # A capacity check that cannot run must not report ready.
+            ready = False
+
+    # 3c. Document storage (S3) reachability (P12-9 / DCI-029). Gating in
+    #     deployed environments: /api/readiness must not report ready while
+    #     document storage is unavailable. Cached head_bucket — no object I/O.
+    _s3_status = _s3_readiness_status(force=probe_aml)
+    checks["document_storage_s3"] = _s3_status
+    if _s3_status.get("status") in ("unreachable", "failed") and ENVIRONMENT in ("staging", "production", "prod"):
+        ready = False
+    if _s3_status.get("status") == "not_configured" and ENVIRONMENT in ("staging", "production", "prod"):
+        checks["document_storage_s3"]["detail"] = (
+            "S3 client unavailable in a deployed environment — document "
+            "storage durability depends on it"
+        )
+        ready = False
 
     # 4. AML screening readiness (audit B6/B5). Config-truth only by default —
     #    no external calls on an ordinary readiness poll. probe_aml=True adds
@@ -4705,6 +4838,10 @@ class HardenedNotFoundHandler(BaseHandler):
     """Default 404 path with the same header posture as normal handlers."""
 
     def prepare(self):
+        # P12-9: unknown-path (scanner/probe) traffic still gets a
+        # correlation id; XSRF/redirect skipping stays deliberate.
+        from observability import set_request_id as _srid
+        self.request_id = _srid(self.request.headers.get("X-Request-ID"))
         self._upload_latency_started_at = time.monotonic()
 
     def _not_found(self, *args, **kwargs):
@@ -9768,7 +9905,7 @@ class SubmitApplicationHandler(BaseHandler):
                 user,
                 submit_attempt_id=submit_attempt_id,
                 provider="complyadvantage",
-                request_id=self.request.headers.get("X-Request-ID", "") if hasattr(self, "request") else "",
+                request_id=(_obs_get_request_id() or "") if hasattr(self, "request") else "",
                 ip_address=client_ip,
                 metadata={
                     "application_ref": app.get("ref", ""),
@@ -11387,7 +11524,7 @@ class DocumentUploadHandler(BaseHandler):
                         queued_doc,
                         dict(app),
                         user,
-                        request_id=self.request.headers.get("X-Request-ID", ""),
+                        request_id=(_obs_get_request_id() or ""),
                         ip_address=self.get_client_ip(),
                     )
                 except Exception as queue_err:
@@ -15627,7 +15764,7 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                         queued_doc,
                         dict(app),
                         user,
-                        request_id=self.request.headers.get("X-Request-ID", ""),
+                        request_id=(_obs_get_request_id() or ""),
                         ip_address=self.get_client_ip(),
                     )
                 except Exception as queue_err:
@@ -39538,7 +39675,7 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                         queued_doc,
                         dict(app),
                         user,
-                        request_id=self.request.headers.get("X-Request-ID", ""),
+                        request_id=(_obs_get_request_id() or ""),
                         ip_address=self.get_client_ip(),
                     )
                 except Exception as queue_err:

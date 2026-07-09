@@ -1199,7 +1199,9 @@ def _get_postgres_schema() -> str:
         action TEXT NOT NULL,
         target TEXT,
         detail TEXT,
-        ip_address TEXT
+        ip_address TEXT,
+        -- P12-9 / DCI-028: request correlation id (nullable; chain-safe)
+        request_id TEXT
     );
 
     -- Notifications
@@ -2529,7 +2531,9 @@ def _get_sqlite_schema() -> str:
         action TEXT NOT NULL,
         target TEXT,
         detail TEXT,
-        ip_address TEXT
+        ip_address TEXT,
+        -- P12-9 / DCI-028: request correlation id (nullable; chain-safe)
+        request_id TEXT
     );
 
     -- Notifications
@@ -8110,6 +8114,23 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.48: Ensured data_purge_log evidence columns")
     except Exception as e:
         logger.error("Migration v2.48 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.49 (P12-9 / DCI-028): request correlation id on audit_log.
+    # Additive nullable TEXT — old rows keep NULL, old images ignore it, and
+    # the hash chain (v2.46 / append_audit_log) computes from an explicit
+    # field list, so the new column does not affect chain verification.
+    # NOTE: v2.47/v2.48 are used by the P12-5 / P12-8 branches.
+    try:
+        if not _safe_column_exists(db, "audit_log", "request_id"):
+            db.execute("ALTER TABLE audit_log ADD COLUMN request_id TEXT")
+            db.commit()
+            logger.info("Migration v2.49: audit_log.request_id added")
+    except Exception as e:
+        logger.error("Migration v2.49 failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:
