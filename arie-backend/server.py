@@ -5332,8 +5332,17 @@ class ApplicationsHandler(BaseHandler):
             params.extend(fx_params)
 
         if status:
-            query += " AND a.status = ?"
-            params.append(status)
+            # ux-applications-list-sort-status-tabs: comma-separated status
+            # lists support the grouped status tabs (single value unchanged).
+            status_values = list(dict.fromkeys(
+                sv.strip() for sv in str(status).split(",") if sv.strip()
+            ))[:50]  # dedup (order-preserving) + cap well above any tab group
+            if len(status_values) == 1:
+                query += " AND a.status = ?"
+                params.append(status_values[0])
+            elif status_values:
+                query += " AND a.status IN (" + ",".join("?" for _ in status_values) + ")"
+                params.extend(status_values)
         if risk:
             normalized_risk = str(risk).strip().upper()
             if normalized_risk == "UNKNOWN":
@@ -5419,7 +5428,40 @@ class ApplicationsHandler(BaseHandler):
 
         total = db.execute(f"SELECT COUNT(*) AS c FROM ({query}) filtered", params).fetchone()["c"]
 
-        query += " ORDER BY a.created_at DESC LIMIT ? OFFSET ?"
+        # ux-applications-list-sort-status-tabs: server-side sort so column
+        # sorting works across the paginated list (client-side sorting would
+        # only reorder the current page). Identifiers come ONLY from this
+        # fixed whitelist — the user-supplied sort key is a dict lookup, and
+        # anything unrecognised falls back to the default ordering.
+        _APP_SORT_COLUMNS = {
+            "created_at": "a.created_at",
+            "ref": "a.ref",
+            "company_name": "LOWER(COALESCE(a.company_name, ''))",
+            "sector": "LOWER(COALESCE(a.sector, ''))",
+            "status": "a.status",
+            # COALESCE keeps NULL placement identical on SQLite and
+            # PostgreSQL (PG's bare DESC default is NULLS FIRST, which
+            # would bury real high-risk rows under unscored drafts).
+            "risk_score": "COALESCE(a.risk_score, -1)",
+            # Severity rank, not alphabetical (alphabetical would give
+            # HIGH < LOW < MEDIUM < VERY_HIGH).
+            "risk_level": (
+                "CASE UPPER(COALESCE(a.final_risk_level, a.risk_level, ''))"
+                " WHEN 'VERY_HIGH' THEN 4 WHEN 'HIGH' THEN 3"
+                " WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 0 END"
+            ),
+            "assigned_name": "LOWER(COALESCE(u.full_name, ''))",
+        }
+        sort_key = (self.get_argument("sort", "") or "").strip().lower()
+        sort_dir = "ASC" if (self.get_argument("dir", "") or "").strip().lower() == "asc" else "DESC"
+        order_col = _APP_SORT_COLUMNS.get(sort_key)
+        # a.id is the unique final tiebreaker: created_at alone is not unique
+        # (batch imports share timestamps), and OFFSET pagination over
+        # unspecified tie order can duplicate/skip rows between pages.
+        if order_col:
+            query += f" ORDER BY {order_col} {sort_dir}, a.created_at DESC, a.id DESC LIMIT ? OFFSET ?"
+        else:
+            query += " ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?"
         rows = db.execute(query, params + [limit, offset]).fetchall()
         db.close()
 

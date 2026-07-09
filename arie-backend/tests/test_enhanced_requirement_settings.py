@@ -651,9 +651,14 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "Only admins and senior compliance officers can waive enhanced requirements" in html
     assert "No enhanced requirements generated for this application." not in html
     assert "Enhanced requirement configuration is incomplete. Requirements may not be fully generated." in html
-    assert 'id="filter-enhanced"' in html
-    assert "Enhanced Status" in html
-    assert "Next Action" in html
+    # Applications toolbar decluttered (UI-only): the enhanced-review dropdown
+    # and the Score / Enhanced Status / Next Action columns were removed. The
+    # enhanced-review filter LOGIC is preserved — it is now driven by a variable
+    # via the EDD deep-links (setApplicationsEnhancedFilter) and the
+    # #applications?enhanced_review= hash route, not a visible dropdown.
+    assert 'id="filter-enhanced"' not in html
+    assert "setApplicationsEnhancedFilter" in html
+    assert "applicationsEnhancedFilterValue" in html
     assert "applicationMatchesEnhancedFilter" in html
     assert "buildEnhancedOperationalSummaryFallback" in html
     assert 'id="detail-enhanced-review-summary"' in html

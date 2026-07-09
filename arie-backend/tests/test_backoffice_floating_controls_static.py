@@ -57,20 +57,20 @@ def test_backoffice_toast_layer_does_not_block_bottom_right_controls():
     assert '<div class="toast" id="toast" role="alert" aria-live="polite"></div>' in html
 
 
-def test_backoffice_ai_chat_toggle_remains_available_without_duplicate_controls():
+def test_backoffice_ai_chat_removed_without_dangling_references():
+    # The "Quick Reference" fake-AI chat (and its floating toggle) was removed
+    # wholesale — its canned responses presented static text as AI assistance.
+    # Guard against any resurrection or dangling reference.
     html = _html()
-    toggle = _css_rule(html, ".ai-chat-toggle")
 
-    assert html.count('class="ai-chat-toggle"') == 1
-    assert "position:fixed" in toggle
-    assert "bottom:var(--bo-floating-bottom)" in toggle
-    assert "right:var(--bo-floating-right)" in toggle
-    assert "width:var(--bo-floating-size)" in toggle
-    assert "height:var(--bo-floating-size)" in toggle
-    assert "z-index:1001" in toggle
-    assert "bottom:24px" not in toggle
-    assert "right:24px" not in toggle
-    assert '<button class="ai-chat-toggle" onclick="toggleAIChat()">' in html
+    assert "ai-chat-toggle" not in html
+    assert "ai-chat-sidebar" not in html
+    for fn in ("toggleAIChat", "sendAIMessage", "sendQuickQuestion",
+               "addChatMessage", "generateAIResponse"):
+        assert fn not in html, f"dangling chat reference: {fn}"
+    # The floating-control geometry variables must survive for the toast layer.
+    assert "--bo-floating-bottom" in html
+    assert "--bo-floating-size" in html
 
 
 def test_monitoring_alerts_pagination_markup_still_uses_existing_navigation():
