@@ -232,7 +232,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | # | PR | Findings | Severity | What it fixes (plain) | GitHub | Status |
 |---|----|----------|:--:|-----------------------|:--:|:--:|
 | P12-1 | Regulated-record deletion protection | DCI-001, 003 | CRITICAL + HIGH | App-delete cleanup + startup cleanup migration must NEVER delete regulated evidence (`sar_reports`, `compliance_memos`, `edd_cases`, `agent_executions`, `supervisor_audit_log`, `decision_records`) — soft-delete/tombstone with deletion marker instead; move fixture cleanup out of generic startup code | — | 📋 scoped (W1 blocker) |
-| P12-2 | Change-implementation fail-closed recompute + audit-in-transaction | DCI-012, 013 | HIGH + MED | Per-request quarantine sentinel `stale:cm_recompute_pending:<id>` stamped in the SAME txn as implement whenever the change requires risk (staleness gate blocks approvals until recompute verifies against stored provenance); CAS-guarded recompute persistence; approve/reject/implement audit rows written pre-commit. Review folds: predicate parity (M1), PATCH-path recompute (M2), gate hoist. 18 tests; live-PG probe 17-green. Residual follow-up: no enforcement path for already-approved applications (M3) | [#715](https://github.com/onboarda1234/onboarda/pull/715) | 🟢 PR open |
+| P12-2 | Change-implementation fail-closed recompute + audit-in-transaction | DCI-012, 013 | HIGH + MED | Per-request quarantine sentinel `stale:cm_recompute_pending:<id>` stamped in the SAME txn as implement whenever the change requires risk (staleness gate blocks approvals until recompute verifies against stored provenance); CAS-guarded recompute persistence; approve/reject/implement audit rows written pre-commit. Review folds: predicate parity (M1), PATCH-path recompute (M2), gate hoist. 18 tests; live-PG probe 17-green. Residual follow-up: no enforcement path for already-approved applications (M3) | [#715](https://github.com/onboarda1234/onboarda/pull/715) | ✅ merged + Codex-validated PASS WITH LIMITATION (2026-07-09, staging `02f5538`; DCI-012/013 **CLOSED**; live runtime: risk-relevant CR implemented with `risk_recompute_quarantined:false` + sentinel-stamped app blocked from approval with 409; fault-injection paths source/test-validated only; M3 already-approved-apps residual stands) |
 | P12-3 | Compliance-logic corrections | DCI-008, 010, 011 | HIGH + HIGH + MED | Risk-config load failure fails CLOSED in staging/prod (no silent hardcoded-default model); memo `jur_rating` actually mutates to VERY_HIGH when `SANCTIONED_COUNTRY_FLOOR` is claimed; fix `MULTI_GAP_ESCALATION` branch order (≥4 checked before ≥3). Review folds: PG/JSONB parse hole closed (`safe_json_loads` coerced malformed scalars to `{}` before validation); recompute/boot-repair/correction/EDD-tier laundering paths all re-raise; boot-time CRITICAL probe. **Deploy precondition: validate live staging risk_config row first (see PR)** | [#710](https://github.com/onboarda1234/onboarda/pull/710) | ✅ merged (2026-07-08; deploy precondition — validate live staging risk_config row — remains for Codex sign-off) |
 | P12-4 | Migration hard-stops + schema-drift detection | DCI-005, 004 | HIGH | Reject `MIGRATION_FAILURE_MODE=continue` when ENVIRONMENT is staging/production — **DCI-005 half shipped in [#711](https://github.com/onboarda1234/onboarda/pull/711)** (override ignored + ERROR on every boot; dev/test/demo keep it; clean adversarial review). Still scoped: DCI-004 startup drift check comparing declared constraints/FKs/columns vs live schema, fail-closed in staging/prod | [#711](https://github.com/onboarda1234/onboarda/pull/711) | ✅ DCI-005 half merged (2026-07-08); DCI-004 drift check still 📋 |
 | P12-5 | Status-column CHECK constraints | DCI-006 | MED | Canon-constant CHECK constraints for all 8 status/enum columns (Migration v2.47, steady-state no-op boots via constraint-def comparison; fail-closed `clients.status` backfill; SQLite→PG migrator per-row SAVEPOINTs). Bonus repair: `Severity.WARNING` added to supervisor enum — 6 call sites crashed with AttributeError before their audit INSERT. 20 tests; live-PG probe 19-green | [#716](https://github.com/onboarda1234/onboarda/pull/716) | 🟢 PR open |
@@ -373,15 +373,14 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 ## Roll-up (113 remediation line items + optional modernization tracked separately)
 | Status | Count |
 |--------|:--:|
-| ✅ merged | 53 |
-| 🟢 PR open (built) | 6 |
+| ✅ merged | 54 |
+| 🟢 PR open (built) | 5 |
 | 🔨 in progress | 0 |
 | 📋 scoped | 22 |
 | ⏸ blocked | 3 |
 | ⬜ pending | 29 |
 
-**Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#715 (P12-2)** ·
-**#716 (P12-5)** · **#717 (P12-8)** · **#718 (P12-9)** · **#719 (apps-perf)** ·
+**Open PRs (built, do-not-merge, awaiting review + Codex handover):** **#716 (P12-5)** · **#717 (P12-8)** · **#718 (P12-9)** · **#719 (apps-perf)** ·
 **#720 (apps-cleanup, stacked on #719 — CI runs once #719 merges and the base retargets to main)** ·
 **Old blocked draft:** #498. **De-flake backlog:** `test_fresh_install_pg_chain`
 shared-DSN schema_version order-coupling · `test_evidence_pack_supervisor_chain` ad-hoc
@@ -389,8 +388,11 @@ batch flake · `test_applications_list_includes_enhanced_operational_summary_and
 (view=list&limit=50 over the shared module DB + same-second created_at ties with no unique
 ORDER BY tiebreaker → seeded app can fall off page 1; server-side tiebreaker ships in #720,
 test-side q-scoping still wanted; hit #715 CI 2026-07-09) · CI infra: postgres
-service-container "PostgreSQL SSL restart timed out" (killed #717's first run in 57s).
-**Merged + deployed + validated:** **#713** (ownership gate — Codex PASS WITH LIMITATION, staging `074607d`) · **#712** (P11-8 — Codex PASS, BSA-016/017/019 CLOSED) · **#709/#710/#711** (P12-6/P12-3/P12-4-half, merged 2026-07-08; #710's risk-config deploy precondition still needs explicit Codex sign-off) · **#705/#706/#707/#708** (staging `fadf8a6` == main;
+service-container "PostgreSQL SSL restart timed out" (killed #717's first two runs in ~60s
+and masked a real ADR-0008 schema-policy gate failure — fixed by the `migration_043`
+marker commit `c3e0610`; #717 green as of 2026-07-09 04:31Z). All of #715-#719 reached
+green CI; #720 gets CI when #719 merges (workflow triggers on main-based PRs only).
+**Merged + deployed + validated:** **#715** (P12-2 — Codex PASS WITH LIMITATION, staging `02f5538`, DCI-012/013 CLOSED) · **#713** (ownership gate — Codex PASS WITH LIMITATION, staging `074607d`) · **#712** (P11-8 — Codex PASS, BSA-016/017/019 CLOSED) · **#709/#710/#711** (P12-6/P12-3/P12-4-half, merged 2026-07-08; #710's risk-config deploy precondition still needs explicit Codex sign-off) · **#705/#706/#707/#708** (staging `fadf8a6` == main;
 backend TD `:796`, worker `:244`; #706/#708 PASS-with-limitation) · Wave A **#700/#701/#702/#703** (TDs
 784–789) · #704 (Tier-1-only maker-checker) · RDI (Phase 9) Wave 1 #696/#697/#698 · docs #695 ·
 #699 closed unmerged (redundant). Earlier code PRs (#687–#693) merged/validated.
