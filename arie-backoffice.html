@@ -25775,8 +25775,17 @@ var AUDIT_STATUS_CLASS_MAP = {
   needs_more_information: 'pending'
 };
 
+function auditEnumKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function auditMappedClass(value, map, fallbackClass) {
+  var key = auditEnumKey(value);
+  return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : fallbackClass;
+}
+
 function auditStatusClass(value) {
-  var key = normalizedEnumKey(value);
+  var key = auditEnumKey(value);
   if (key.indexOf('false_positive') >= 0) return 'cleared';
   if (key.indexOf('confirm') >= 0 || key.indexOf('accepted') >= 0) return 'accepted';
   if (key.indexOf('reject') >= 0 || key.indexOf('fail') >= 0 || key.indexOf('error') >= 0) return 'rejected';
@@ -25798,7 +25807,7 @@ var AUDIT_CATEGORY_CLASS_MAP = {
 };
 
 function auditCategoryClass(value) {
-  return mappedClass(value, AUDIT_CATEGORY_CLASS_MAP, 'system');
+  return auditMappedClass(value, AUDIT_CATEGORY_CLASS_MAP, 'system');
 }
 
 var ADMIN_AUDIT_ACTION_BADGE_CLASS_MAP = {
@@ -25811,7 +25820,7 @@ var ADMIN_AUDIT_ACTION_BADGE_CLASS_MAP = {
 };
 
 function adminAuditActionBadgeClass(value) {
-  return mappedClass(value, ADMIN_AUDIT_ACTION_BADGE_CLASS_MAP, 'pending');
+  return auditMappedClass(value, ADMIN_AUDIT_ACTION_BADGE_CLASS_MAP, 'pending');
 }
 
 function classifyAuditEvent(entry, detail, beforeState, afterState) {
