@@ -11,6 +11,7 @@ import os
 import uuid
 import time
 import html
+import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -34,6 +35,45 @@ class RevocationCheckUnavailable(Exception):
     import without creating an import cycle. decode_token() catches it and
     rejects the token: an unverifiable session is treated as invalid, never as
     valid."""
+
+
+class RateLimitBackendUnavailable(Exception):
+    """Raised when a fail-closed shared limiter cannot evaluate storage."""
+
+
+class SharedRateLimitResult:
+    """Result of one shared DB-backed rate-limit check."""
+
+    def __init__(self, allowed, attempts, limit, retry_after):
+        self.allowed = bool(allowed)
+        self.attempts = int(attempts)
+        self.limit = int(limit)
+        self.retry_after = int(retry_after)
+
+
+def _stable_limit_hash(value):
+    """Hash limiter dimensions so keys never persist raw tokens or payloads."""
+    normalized = str(value or "").strip().lower()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def build_shared_rate_limit_key(action, **dimensions):
+    """Build a namespaced fail-closed limiter key from hashed dimensions."""
+    safe_action = "".join(
+        ch if ch.isalnum() or ch in ("_", "-", ".") else "_"
+        for ch in str(action or "").strip().lower()
+    )[:80] or "unknown"
+    parts = ["shared", "v1", safe_action]
+    for name in sorted(dimensions):
+        value = dimensions.get(name)
+        if value in (None, ""):
+            continue
+        safe_name = "".join(
+            ch if ch.isalnum() or ch in ("_", "-") else "_"
+            for ch in str(name or "").strip().lower()
+        )[:40] or "dimension"
+        parts.extend([safe_name, _stable_limit_hash(value)])
+    return ":".join(parts)
 
 
 # ── Token revocation (lazy import to avoid circular deps) ──
@@ -192,6 +232,7 @@ class RateLimiter:
 
     def __init__(self):
         self._attempts = {}  # key → list of timestamps (in-memory hot path)
+        self._shared_next_cleanup_at = 0.0
 
     def _should_persist(self, key):
         """Returns True if this key should be persisted to DB."""
@@ -292,3 +333,75 @@ class RateLimiter:
         self._attempts.pop(key, None)
         if self._should_persist(key):
             self._db_delete(key)
+
+    def _cleanup_shared_limits_if_due(self, db, now):
+        if now < self._shared_next_cleanup_at:
+            return
+        db.execute("DELETE FROM shared_rate_limits WHERE expires_at <= ?", (now,))
+        self._shared_next_cleanup_at = now + 300
+
+    def check_shared_limit(self, key, max_attempts=10, window_seconds=900, now=None):
+        """
+        Atomically record and evaluate a shared DB-backed fixed-window limit.
+
+        This path is for low-frequency security-sensitive actions only. Any
+        storage exception raises RateLimitBackendUnavailable so callers can
+        fail closed instead of letting the sensitive action proceed.
+        """
+        now = float(time.time() if now is None else now)
+        limit = int(max_attempts)
+        window = int(window_seconds)
+        if not key or limit <= 0 or window <= 0:
+            raise ValueError("shared rate-limit key, limit, and window are required")
+        expires_at = now + window
+
+        db = None
+        try:
+            from db import get_db as _db_get
+            db = _db_get()
+            self._cleanup_shared_limits_if_due(db, now)
+            row = db.execute(
+                """
+                INSERT INTO shared_rate_limits
+                    (key, window_start, attempt_count, expires_at, updated_at)
+                VALUES (?, ?, 1, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET
+                    window_start = CASE
+                        WHEN shared_rate_limits.expires_at <= ? THEN excluded.window_start
+                        ELSE shared_rate_limits.window_start
+                    END,
+                    attempt_count = CASE
+                        WHEN shared_rate_limits.expires_at <= ? THEN 1
+                        ELSE shared_rate_limits.attempt_count + 1
+                    END,
+                    expires_at = CASE
+                        WHEN shared_rate_limits.expires_at <= ? THEN excluded.expires_at
+                        ELSE shared_rate_limits.expires_at
+                    END,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING attempt_count, expires_at
+                """,
+                (key, now, expires_at, now, now, now),
+            ).fetchone()
+            db.commit()
+            attempts = int(row["attempt_count"])
+            retry_after = max(1, int(float(row["expires_at"]) - now + 0.999))
+            return SharedRateLimitResult(
+                allowed=attempts <= limit,
+                attempts=attempts,
+                limit=limit,
+                retry_after=retry_after,
+            )
+        except Exception as exc:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            raise RateLimitBackendUnavailable(str(exc)) from exc
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass

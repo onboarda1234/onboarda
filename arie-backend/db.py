@@ -1870,6 +1870,16 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_rate_limits_key ON rate_limits(key);
     CREATE INDEX IF NOT EXISTS idx_rate_limits_attempted ON rate_limits(attempted_at);
 
+    -- Shared fail-closed limiter state for selected sensitive endpoints
+    CREATE TABLE IF NOT EXISTS shared_rate_limits (
+        key TEXT PRIMARY KEY,
+        window_start DOUBLE PRECISION NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        expires_at DOUBLE PRECISION NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_shared_rate_limits_expires_at ON shared_rate_limits(expires_at);
+
     -- Token revocation persistence (survives restarts)
     CREATE TABLE IF NOT EXISTS revoked_tokens (
         jti TEXT PRIMARY KEY,
@@ -3140,6 +3150,16 @@ def _get_sqlite_schema() -> str:
     );
     CREATE INDEX IF NOT EXISTS idx_rate_limits_key ON rate_limits(key);
     CREATE INDEX IF NOT EXISTS idx_rate_limits_attempted ON rate_limits(attempted_at);
+
+    -- Shared fail-closed limiter state for selected sensitive endpoints
+    CREATE TABLE IF NOT EXISTS shared_rate_limits (
+        key TEXT PRIMARY KEY,
+        window_start REAL NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        expires_at REAL NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_shared_rate_limits_expires_at ON shared_rate_limits(expires_at);
 
     -- Token revocation persistence (survives restarts)
     CREATE TABLE IF NOT EXISTS revoked_tokens (
@@ -8152,6 +8172,48 @@ def _run_migrations(db: DBConnection):
             logger.info("Migration v2.50: audit_log.application_id added")
     except Exception as e:
         logger.error("Migration v2.50 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.51 (BSA-002): shared DB-backed fail-closed rate limiter.
+    # Creates a keyed, atomic fixed-window counter table for selected
+    # low-frequency sensitive endpoints. Existing append-only rate_limits rows
+    # remain untouched for legacy best-effort limiter callers.
+    try:
+        if db.is_postgres:
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS shared_rate_limits (
+                    key TEXT PRIMARY KEY,
+                    window_start DOUBLE PRECISION NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    expires_at DOUBLE PRECISION NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_shared_rate_limits_expires_at
+                    ON shared_rate_limits(expires_at);
+                """
+            )
+        else:
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS shared_rate_limits (
+                    key TEXT PRIMARY KEY,
+                    window_start REAL NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    expires_at REAL NOT NULL,
+                    updated_at TEXT DEFAULT (datetime('now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_shared_rate_limits_expires_at
+                    ON shared_rate_limits(expires_at);
+                """
+            )
+        db.commit()
+        logger.info("Migration v2.51: shared_rate_limits table ensured")
+    except Exception as e:
+        logger.error("Migration v2.51 failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

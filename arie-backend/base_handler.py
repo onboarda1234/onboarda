@@ -20,7 +20,12 @@ import time
 
 import tornado.web
 
-from auth import decode_token, RateLimiter
+from auth import (
+    RateLimitBackendUnavailable,
+    RateLimiter,
+    build_shared_rate_limit_key,
+    decode_token,
+)
 from config import ALLOWED_ORIGIN, IS_DEVELOPMENT, IS_DEMO, ENVIRONMENT as _CFG_ENVIRONMENT
 from db import get_db as db_get_db
 from observability import (
@@ -301,6 +306,82 @@ class BaseHandler(tornado.web.RequestHandler):
                 self.write({"error": f"Rate limit exceeded. Try again later.", "retry_after": window_seconds})
                 return False
 
+        return True
+
+    def evaluate_sensitive_rate_limit(
+        self,
+        action,
+        max_attempts=30,
+        window_seconds=60,
+        *,
+        dimensions=None,
+        include_ip=True,
+        include_user=True,
+    ):
+        """Evaluate the shared fail-closed limiter for sensitive actions."""
+        key_dimensions = dict(dimensions or {})
+        if include_ip:
+            key_dimensions["ip"] = self.get_client_ip()
+        if include_user:
+            user = self.get_current_user_token()
+            if user and user.get("sub"):
+                key_dimensions["user"] = user.get("sub")
+        key = build_shared_rate_limit_key(action, **key_dimensions)
+        try:
+            return rate_limiter.check_shared_limit(
+                key,
+                max_attempts=max_attempts,
+                window_seconds=window_seconds,
+            )
+        except RateLimitBackendUnavailable:
+            logger.error(
+                "security_rate_limit_backend_unavailable action=%s path=%s request_id=%s",
+                action,
+                getattr(self.request, "path", ""),
+                getattr(self, "request_id", ""),
+                exc_info=True,
+            )
+            self.set_status(503)
+            self.write({"error": "Rate limiter unavailable. Try again later."})
+            return None
+
+    def check_sensitive_rate_limit(
+        self,
+        action,
+        max_attempts=30,
+        window_seconds=60,
+        *,
+        dimensions=None,
+        include_ip=True,
+        include_user=True,
+        error_message=None,
+        include_retry_after=True,
+    ):
+        """
+        Fail-closed shared limiter wrapper.
+
+        Returns True only when the DB-backed limiter was evaluated and the
+        action is under limit. Storage failures return 503 and block the action.
+        """
+        result = self.evaluate_sensitive_rate_limit(
+            action,
+            max_attempts=max_attempts,
+            window_seconds=window_seconds,
+            dimensions=dimensions,
+            include_ip=include_ip,
+            include_user=include_user,
+        )
+        if result is None:
+            return False
+        if not result.allowed:
+            self.set_status(429)
+            body = {
+                "error": error_message or f"Rate limit exceeded for {action}. Try again later."
+            }
+            if include_retry_after:
+                body["retry_after"] = result.retry_after
+            self.write(body)
+            return False
         return True
 
     def set_default_headers(self):
