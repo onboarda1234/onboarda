@@ -871,7 +871,12 @@ class TestPrePhaseSixBackofficeUX:
 
     def test_applications_page_has_search_and_page_size_controls(self):
         html = self._read_backoffice()
-        assert 'id="applications-search"' in html
+        # Search is consolidated into the shared top-bar global search
+        # (#global-search); the duplicate in-page Applications search box was
+        # removed. getApplicationsSearchText() sources the q value from it via
+        # handleGlobalSearch, so the q request param is unchanged.
+        assert 'id="global-search"' in html
+        assert 'id="applications-search"' not in html
         assert 'id="applications-page-size"' in html
         assert 'function setApplicationsPageSize(value)' in html
         assert 'function changeApplicationsPage(delta)' in html
@@ -885,7 +890,10 @@ class TestPrePhaseSixBackofficeUX:
         fn_start = html.index("function handleGlobalSearch(q)")
         fn_end = html.index("// ═══════════════════════════════════════════════════════════", fn_start)
         fn_region = html[fn_start:fn_end]
-        assert "applications-search" in fn_region
+        # handleGlobalSearch drives the applications list via the debounced
+        # queueApplicationsSearch reload (feeding applicationsSearchText), not by
+        # mirroring into a now-removed in-page box, and never opens a detail view.
+        assert "queueApplicationsSearch" in fn_region
         assert "showView('applications')" in fn_region
         assert "openAppDetail" not in fn_region
 
