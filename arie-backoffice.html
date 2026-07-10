@@ -6609,6 +6609,53 @@ function canApproveMemo() {
   return role === 'admin' || role === 'sco';
 }
 
+function terminalDecisionRoleBlockReason() {
+  // Mirrors security_hardening.DECISION_AUTHORITY_ROLES for UI state only.
+  // The backend remains the authorization boundary for every decision request.
+  var role = String(currentUserRole() || '').toLowerCase();
+  if (role === 'analyst') return 'Analyst role cannot make final decisions';
+  if (role && ['admin', 'sco', 'co'].indexOf(role) < 0) {
+    return 'Your role cannot make final decisions.';
+  }
+  return '';
+}
+
+var PERIODIC_REVIEWS_ROLE_ACCESS_MESSAGE = 'Periodic Reviews are not available for your role.';
+
+function canAccessApplicationPeriodicReviews() {
+  // Mirrors LifecycleApplicationSummaryHandler.require_auth roles.
+  var role = String(currentUserRole() || '').toLowerCase();
+  return ['admin', 'sco', 'co'].indexOf(role) >= 0;
+}
+
+function syncApplicationPeriodicReviewRoleAccessState(forceDenied) {
+  var denied = forceDenied === true || !canAccessApplicationPeriodicReviews();
+  var tab = document.getElementById('tab-lifecycle');
+  var container = document.getElementById('detail-tab-lifecycle');
+  if (tab) {
+    tab.setAttribute('data-role-restricted', denied ? 'true' : 'false');
+    if (denied) tab.title = PERIODIC_REVIEWS_ROLE_ACCESS_MESSAGE;
+    else if (tab.title === PERIODIC_REVIEWS_ROLE_ACCESS_MESSAGE) tab.title = '';
+  }
+  if (!container) return denied;
+  if (denied) {
+    container.setAttribute('data-role-access-state', 'denied');
+    container.innerHTML = '<div role="status" data-periodic-role-access-message="true" style="padding:16px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text2);">' +
+      '<strong style="display:block;color:var(--text1);margin-bottom:4px;">Periodic Reviews</strong>' +
+      PERIODIC_REVIEWS_ROLE_ACCESS_MESSAGE +
+      '</div>';
+    var summaryContainer = document.getElementById('detail-lifecycle-summary');
+    var baselineContainer = document.getElementById('detail-periodic-review-baseline');
+    if (summaryContainer) summaryContainer.innerHTML = '';
+    if (baselineContainer) baselineContainer.innerHTML = '';
+    window._detailLifecycleTabCache = null;
+  } else if (container.getAttribute('data-role-access-state') === 'denied') {
+    container.removeAttribute('data-role-access-state');
+    container.innerHTML = '';
+  }
+  return denied;
+}
+
 function approvalRoutePolicy(app) {
   app = app || currentApp || {};
   return app.approvalRoute || app.approval_route || {};
@@ -6627,16 +6674,16 @@ function approveBackendBlockReason(app) {
   app = app || currentApp;
   if (!app) return '';
   var role = String(currentUserRole() || '').toLowerCase();
+  var terminalRoleBlock = terminalDecisionRoleBlockReason();
+  if (terminalRoleBlock) return terminalRoleBlock;
   // Normalize risk so 'VERY HIGH', 'Very-High', 'very_high' all compare equal to
   // the canonical 'VERY_HIGH' (defensive — the API normally sends underscores).
   var risk = String(app.risk || app.risk_level || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
   var statusRaw = String(app.statusRaw || app.status_raw || '').trim().toLowerCase();
-  // Roles with no approval authority at all — assert this ONLY when the permission
-  // matrix is actually loaded. If it failed/has yet to load, do NOT hide Approve:
-  // fail OPEN to backend + click-time enforcement so legitimate approvers (e.g. an
-  // Onboarding Officer on a clean LOW/MEDIUM file) are never blocked by a UI
-  // data-load race. The role/risk/status blocks below use the role string + risk
-  // directly, so they remain reliable regardless of matrix load state.
+  // The role-direct check above handles known non-decision roles even if the
+  // permission matrix has not loaded. Keep the matrix check as a second policy
+  // mirror for future role changes while allowing known decision roles to rely on
+  // backend click-time enforcement during a matrix load race.
   if (rolePermissionsLoaded() && !hasPermission('approve_low_medium')) {
     return 'Your role cannot approve applications.';
   }
@@ -6722,6 +6769,7 @@ function buildApplicationActionState(app) {
   var role = String(currentUserRole() || '').toLowerCase();
   var statusRaw = normalizeApplicationStatusRaw(app);
   var terminalMessage = terminalActionStateMessage(statusRaw);
+  var terminalAuthorityReason = terminalDecisionRoleBlockReason();
   var readiness = getApprovalReadiness(app);
   var approveBlock = approveBackendBlockReason(app);
   var submitEligibleStates = ['pre_approval_review', 'compliance_review', 'in_review', 'under_review', 'kyc_submitted', 'edd_required'];
@@ -6769,6 +6817,9 @@ function buildApplicationActionState(app) {
   if (terminalMessage) {
     rejectDisabled = true;
     rejectReason = terminalMessage;
+  } else if (terminalAuthorityReason) {
+    rejectDisabled = true;
+    rejectReason = terminalAuthorityReason;
   } else if (rolePermissionsLoaded() && !hasPermission('reject_applications')) {
     rejectDisabled = true;
     rejectReason = 'Your role cannot reject applications.';
@@ -6797,7 +6848,7 @@ function buildApplicationActionState(app) {
       title: submitReason || submitTitle || 'Submit application to Compliance review.',
       text: submitLabel
     },
-    helper: terminalMessage || submitReason || submitTitle || approveReason || ''
+    helper: terminalMessage || terminalAuthorityReason || submitReason || submitTitle || approveReason || ''
   };
 }
 
@@ -12176,6 +12227,7 @@ function renderAuthoritativeAppDetail(app, options) {
   if (detailBaselineContainer) detailBaselineContainer.innerHTML = '';
   renderCaseCommandCentre(app);
   renderApprovalBlockersPanel(app);
+  syncApplicationPeriodicReviewRoleAccessState();
 
   switchDetailTab(options.initialTab || 'overview');
   showView('app-detail');
@@ -12183,7 +12235,9 @@ function renderAuthoritativeAppDetail(app, options) {
   // PR-B AC5: load lifecycle linkage summary (alert→review→EDD edges)
   // for this application. Soft-fails if endpoint is unavailable.
   window._detailLifecycleTabCache = null;
-  try { loadLifecycleApplicationSummary(app.id); } catch (e) { console.warn('Lifecycle summary call failed:', e); }
+  if (canAccessApplicationPeriodicReviews()) {
+    try { loadLifecycleApplicationSummary(app.id); } catch (e) { console.warn('Lifecycle summary call failed:', e); }
+  }
 }
 
 async function openAppDetail(ref, options) {
@@ -20044,6 +20098,7 @@ function renderLifecycleRows(items, include) {
 async function loadLifecycleApplicationSummary(applicationId) {
   var container = document.getElementById('detail-lifecycle-summary');
   if (!container || !applicationId) return;
+  if (syncApplicationPeriodicReviewRoleAccessState()) return;
   container.innerHTML = '';
   try {
     var resp = await fetchLifecycleApplicationSummary(applicationId);
@@ -20056,7 +20111,8 @@ async function loadLifecycleApplicationSummary(applicationId) {
   } catch (err) {
     // Soft-fail: do not block app detail rendering if the lifecycle
     // endpoint is unavailable. Keep this section out of the way.
-    console.warn('Lifecycle summary load failed:', err);
+    if (err && err.status === 403) syncApplicationPeriodicReviewRoleAccessState(true);
+    else console.warn('Lifecycle summary load failed:', err);
     detailLifecycleSummaryOverview = null;
     var baselineContainer = document.getElementById('detail-periodic-review-baseline');
     if (baselineContainer) baselineContainer.innerHTML = '';
@@ -20066,6 +20122,7 @@ async function loadLifecycleApplicationSummary(applicationId) {
 
 function fetchLifecycleApplicationSummary(applicationId, force) {
   if (!applicationId) return Promise.reject(new Error('applicationId is required'));
+  if (!canAccessApplicationPeriodicReviews()) return Promise.resolve(null);
   var cacheKey = String(applicationId);
   if (!force && LIFECYCLE_SUMMARY_CACHE[cacheKey]) {
     return LIFECYCLE_SUMMARY_CACHE[cacheKey];
@@ -22860,6 +22917,7 @@ async function loadLifecycleDetailTab(force) {
   var container = document.getElementById('detail-tab-lifecycle');
   var app = currentApp;
   if (!container) return;
+  if (syncApplicationPeriodicReviewRoleAccessState()) return;
   if (!app || !app.id) {
     container.innerHTML = '<div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Periodic Reviews detail is unavailable until an application is loaded.</div>';
     return;
@@ -22925,6 +22983,10 @@ async function loadLifecycleDetailTab(force) {
       try { refreshPeriodicReviewRiskActions(reviewDetail.id); } catch (e) {}
     }
   } catch (err) {
+    if (err && err.status === 403) {
+      syncApplicationPeriodicReviewRoleAccessState(true);
+      return;
+    }
     console.warn('Lifecycle detail tab load failed:', err);
     container.innerHTML = '<div style="padding:16px;border:1px solid rgba(239,68,68,0.25);border-radius:10px;background:rgba(239,68,68,0.05);font-size:12px;color:#991b1b;">Failed to load periodic reviews workspace: ' + escapeHtml(err.message || 'Unknown error') + '</div>';
   }
@@ -27646,13 +27708,13 @@ function renderDecisionReadiness(decision) {
 
 function approveApplication() {
   if (!currentApp) return;
-  if (!assertPermission('approve_low_medium')) return;
   var actionState = buildApplicationActionState(currentApp);
   if (actionState.approve.disabled) {
     showToast(disabledActionReason(actionState.approve, 'Approval is not available for this application.'), 'warn');
     if (disabledActionReason(actionState.approve) === APPROVAL_PENDING_ITEMS_MESSAGE) focusCaseCommandCentre();
     return;
   }
+  if (!assertPermission('approve_low_medium')) return;
   pendingDecision = 'Approve';
   document.getElementById('decision-type-display').textContent = 'Approve';
   document.getElementById('decision-reason').value = '';
