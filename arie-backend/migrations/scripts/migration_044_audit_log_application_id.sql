@@ -1,0 +1,16 @@
+-- Migration 044 (APP-727-001): application-scoped audit log marker.
+-- ==========================================================================
+-- Fresh PostgreSQL and SQLite schemas carry audit_log.application_id directly
+-- in db.py with idx_audit_log_application_id.
+--
+-- Existing deployments are repaired by the inline startup migration v2.50 in
+-- db.py. The repair is additive and dialect-safe:
+--   * adds nullable audit_log.application_id only when missing;
+--   * creates idx_audit_log_application_id idempotently;
+--   * does not backfill ref-only legacy rows, because those rows cannot be
+--     safely tied to an immutable application after refs are reused.
+--
+-- This file exists so the file-based migration ledger records the schema
+-- change required by ADR 0008 without racing the inline v2.50 repair on
+-- long-lived databases.
+SELECT 1;
