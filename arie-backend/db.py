@@ -1198,6 +1198,7 @@ def _get_postgres_schema() -> str:
         user_role TEXT,
         action TEXT NOT NULL,
         target TEXT,
+        application_id TEXT,
         detail TEXT,
         ip_address TEXT,
         -- P12-9 / DCI-028: request correlation id (nullable; chain-safe)
@@ -1789,6 +1790,7 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id);
     CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
     CREATE INDEX IF NOT EXISTS idx_audit_log_target ON audit_log(target);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_application_id ON audit_log(application_id);
     CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
 
     -- Sprint 3: GDPR Data Retention Policy
@@ -2530,6 +2532,7 @@ def _get_sqlite_schema() -> str:
         user_role TEXT,
         action TEXT NOT NULL,
         target TEXT,
+        application_id TEXT,
         detail TEXT,
         ip_address TEXT,
         -- P12-9 / DCI-028: request correlation id (nullable; chain-safe)
@@ -3042,6 +3045,7 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id);
     CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
     CREATE INDEX IF NOT EXISTS idx_audit_log_target ON audit_log(target);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_application_id ON audit_log(application_id);
     CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
     CREATE INDEX IF NOT EXISTS idx_applications_client_id ON applications(client_id);
     CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
@@ -8131,6 +8135,25 @@ def _run_migrations(db: DBConnection):
             logger.info("Migration v2.49: audit_log.request_id added")
     except Exception as e:
         logger.error("Migration v2.49 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.50 (APP-727-001): immutable application scope on audit_log.
+    # Additive nullable TEXT so legacy rows remain readable but application
+    # detail activity can reject rows that only match reused refs or text.
+    try:
+        changed = False
+        if not _safe_column_exists(db, "audit_log", "application_id"):
+            db.execute("ALTER TABLE audit_log ADD COLUMN application_id TEXT")
+            changed = True
+        db.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_application_id ON audit_log(application_id)")
+        db.commit()
+        if changed:
+            logger.info("Migration v2.50: audit_log.application_id added")
+    except Exception as e:
+        logger.error("Migration v2.50 failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

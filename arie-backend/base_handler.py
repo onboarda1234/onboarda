@@ -108,6 +108,76 @@ def _safe_json(obj):
         return None
 
 
+def _audit_log_has_application_id(db=None):
+    """Return True when audit_log has the immutable application scope column."""
+    probe_db = None
+    try:
+        probe_db = get_db()
+        if getattr(probe_db, "is_postgres", False):
+            row = probe_db.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = ? AND column_name = ?",
+                ("audit_log", "application_id"),
+            ).fetchone()
+            return row is not None
+        probe_db.execute("SELECT application_id FROM audit_log LIMIT 1")
+        return True
+    except Exception:
+        logger.debug("audit_application_id_schema_probe_failed", exc_info=True)
+        return False
+    finally:
+        if probe_db is not None:
+            try:
+                probe_db.close()
+            except Exception:
+                pass
+
+
+def _resolve_audit_application_id(db, target, application_id=None):
+    """Resolve an audit target to one immutable application id when unambiguous."""
+    if application_id:
+        return str(application_id).strip()[:128] or None
+
+    text = str(target or "").strip()
+    if not text:
+        return None
+
+    probe_db = None
+    try:
+        probe_db = get_db()
+        if text.startswith("periodic_review:"):
+            review_id = text.split("periodic_review:", 1)[1].strip()
+            if not review_id:
+                return None
+            row = probe_db.execute(
+                "SELECT application_id FROM periodic_reviews WHERE id = ?",
+                (review_id,),
+            ).fetchone()
+            if row and row["application_id"]:
+                return str(row["application_id"]).strip()[:128]
+            return None
+
+        if text.startswith("application:"):
+            text = text.split("application:", 1)[1].strip()
+
+        rows = probe_db.execute(
+            "SELECT id FROM applications WHERE id = ? OR ref = ? ORDER BY id ASC LIMIT 2",
+            (text, text),
+        ).fetchall()
+        ids = [str(row["id"]).strip() for row in rows if row["id"]]
+        if len(ids) == 1:
+            return ids[0][:128]
+    except Exception:
+        logger.debug("audit_application_id_resolution_failed target=%s", target, exc_info=True)
+    finally:
+        if probe_db is not None:
+            try:
+                probe_db.close()
+            except Exception:
+                pass
+    return None
+
+
 def snapshot_app_state(app):
     """Extract a non-PII workflow-focused snapshot from an application row.
 
@@ -704,7 +774,8 @@ class BaseHandler(tornado.web.RequestHandler):
         self.write({"error": message})
 
     def log_audit(self, user, action, target, detail, db=None,
-                  before_state=None, after_state=None, commit=True):
+                  before_state=None, after_state=None, commit=True,
+                  application_id=None):
         """Write a standard audit row.
 
         When a caller supplies db and commit=False, the caller must commit
@@ -715,12 +786,21 @@ class BaseHandler(tornado.web.RequestHandler):
         try:
             if own_db:
                 db = get_db()
-            db.execute(
-                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state, request_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (user.get("sub",""), user.get("name",""), user.get("role",""), action, target, detail, self.get_client_ip(),
-                 _safe_json(before_state), _safe_json(after_state),
-                 get_request_id())
-            )
+            if _audit_log_has_application_id(db):
+                scoped_application_id = _resolve_audit_application_id(db, target, application_id)
+                db.execute(
+                    "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, before_state, after_state, request_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (user.get("sub",""), user.get("name",""), user.get("role",""), action, target, scoped_application_id, detail, self.get_client_ip(),
+                     _safe_json(before_state), _safe_json(after_state),
+                     get_request_id())
+                )
+            else:
+                db.execute(
+                    "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state, request_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (user.get("sub",""), user.get("name",""), user.get("role",""), action, target, detail, self.get_client_ip(),
+                     _safe_json(before_state), _safe_json(after_state),
+                     get_request_id())
+                )
             if own_db or commit:
                 db.commit()
         finally:
@@ -735,7 +815,7 @@ class BaseHandler(tornado.web.RequestHandler):
 
     def log_governance_attempt(self, user, action, target, outcome, status_code,
                                reason="", payload_summary=None, db=None, commit=True,
-                               best_effort=True):
+                               best_effort=True, application_id=None):
         """Persist an audit row for success or rejection of governed actions.
 
         This is intentionally separate from the business-event audit rows
@@ -789,19 +869,36 @@ class BaseHandler(tornado.web.RequestHandler):
         try:
             if own_db:
                 db = get_db()
-            db.execute(
-                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (
-                    user.get("sub", "") if user else "",
-                    user.get("name", "") if user else "",
-                    user.get("role", "") if user else "",
-                    "Governance Attempt",
-                    target,
-                    detail,
-                    self.get_client_ip() if hasattr(self, "request") else "",
-                ),
-            )
+            if _audit_log_has_application_id(db):
+                scoped_application_id = _resolve_audit_application_id(db, target, application_id)
+                db.execute(
+                    "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (
+                        user.get("sub", "") if user else "",
+                        user.get("name", "") if user else "",
+                        user.get("role", "") if user else "",
+                        "Governance Attempt",
+                        target,
+                        scoped_application_id,
+                        detail,
+                        self.get_client_ip() if hasattr(self, "request") else "",
+                    ),
+                )
+            else:
+                db.execute(
+                    "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (
+                        user.get("sub", "") if user else "",
+                        user.get("name", "") if user else "",
+                        user.get("role", "") if user else "",
+                        "Governance Attempt",
+                        target,
+                        detail,
+                        self.get_client_ip() if hasattr(self, "request") else "",
+                    ),
+                )
             if own_db or commit:
                 db.commit()
         except Exception:

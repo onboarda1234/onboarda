@@ -10,9 +10,12 @@ Provides convenient methods for S3 operations:
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
 import json
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Tuple, Union
 from urllib.parse import quote as _url_quote
@@ -22,6 +25,134 @@ from botocore.exceptions import ClientError
 import logging
 
 logger = logging.getLogger(__name__)
+
+_S3_TAG_VALUE_UNSAFE_RE = re.compile(r"[^A-Za-z0-9 +\-=._:/@]")
+_S3_TAG_KEY_UNSAFE_RE = re.compile(r"[^A-Za-z0-9 +\-=._:/@]")
+_S3_KEY_COMPONENT_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._=-]")
+_S3_METADATA_VALUE_UNSAFE_RE = re.compile(r"[^A-Za-z0-9 +\-=._:/@]")
+_S3_MAX_OBJECT_TAGS = 10
+_S3_MAX_USER_METADATA_BYTES = 2048
+_S3_ORIGINAL_FILENAME_METADATA_KEY = "original-filename-b64"
+
+
+def _strip_control_chars(value: str) -> str:
+    return "".join(ch if ch.isprintable() and ch not in "\r\n\t" else "_" for ch in value)
+
+
+def _sanitize_s3_tag_value(value, max_length: int = 255, fallback: str = "unknown") -> str:
+    text = _strip_control_chars(str(value or ""))
+    text = _S3_TAG_VALUE_UNSAFE_RE.sub("_", text).strip()
+    return (text or fallback)[:max_length]
+
+
+def _sanitize_s3_tag_key(value, max_length: int = 128) -> str:
+    text = _strip_control_chars(str(value or "metadata"))
+    text = _S3_TAG_KEY_UNSAFE_RE.sub("_", text).strip()
+    return (text or "metadata")[:max_length]
+
+
+def _sanitize_s3_metadata_value(value, max_length: int = 1024) -> str:
+    text = _strip_control_chars(str(value or ""))
+    text = _S3_METADATA_VALUE_UNSAFE_RE.sub("_", text)
+    return text[:max_length]
+
+
+def _safe_s3_path_component(value, fallback: str) -> str:
+    raw = _strip_control_chars(str(value or "")).strip()
+    if not raw:
+        return fallback
+    normalized = raw.replace("\\", "_").replace("/", "_")
+    text = normalized.strip()
+    text = _S3_KEY_COMPONENT_UNSAFE_RE.sub("_", text).strip("._/")
+    if not text:
+        text = fallback
+    if normalized != raw or text != raw.strip("._/"):
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+        text = f"{text[:111]}_{digest}"
+    return text[:120]
+
+
+def _safe_s3_filename(filename: str) -> str:
+    text = str(filename or "").replace("\\", "/")
+    text = os.path.basename(text).strip()
+    text = _S3_KEY_COMPONENT_UNSAFE_RE.sub("_", text).strip("._/")
+    if not text:
+        return "document"
+    if len(text) <= 180:
+        return text
+    root, ext = os.path.splitext(text)
+    ext = ext[:20]
+    root_limit = max(1, 180 - len(ext))
+    return f"{root[:root_limit]}{ext}"
+
+
+def _encode_s3_metadata_text(value, max_length: int = 1024) -> str:
+    """Return URL-safe base64 ASCII metadata, truncating only for S3 limits."""
+    text = _strip_control_chars(str(value or ""))
+    while text:
+        encoded = base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii")
+        if len(encoded) <= max_length:
+            return encoded
+        text = text[: max(1, int(len(text) * 0.75))]
+    return ""
+
+
+def _decode_s3_metadata_text(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return base64.urlsafe_b64decode(text.encode("ascii")).decode("utf-8")
+    except Exception:
+        return ""
+
+
+def _s3_user_metadata_size(metadata: Dict[str, str]) -> int:
+    return sum(
+        len(str(key).encode("ascii", errors="ignore")) + len(str(value).encode("utf-8"))
+        for key, value in metadata.items()
+    )
+
+
+def _build_s3_metadata(client_id: str, doc_type: str, original_filename: str) -> Dict[str, str]:
+    metadata = {
+        'client-id': _sanitize_s3_metadata_value(client_id, 256),
+        'doc-type': _sanitize_s3_metadata_value(doc_type, 256),
+        'original-filename': _sanitize_s3_metadata_value(original_filename, 512),
+    }
+    encoded_original = _encode_s3_metadata_text(original_filename, 1024)
+    if encoded_original:
+        metadata[_S3_ORIGINAL_FILENAME_METADATA_KEY] = encoded_original
+
+    if _s3_user_metadata_size(metadata) > _S3_MAX_USER_METADATA_BYTES:
+        metadata.pop(_S3_ORIGINAL_FILENAME_METADATA_KEY, None)
+
+    if _s3_user_metadata_size(metadata) > _S3_MAX_USER_METADATA_BYTES:
+        metadata['original-filename'] = metadata['original-filename'][:128]
+        metadata['client-id'] = metadata['client-id'][:128]
+        metadata['doc-type'] = metadata['doc-type'][:128]
+
+    if _s3_user_metadata_size(metadata) > _S3_MAX_USER_METADATA_BYTES:
+        raise ValueError("S3 user metadata exceeds 2KB limit after sanitization")
+    return metadata
+
+
+def _append_s3_tag(tags_list: List[Dict[str, str]], seen_keys: set[str], key, value) -> None:
+    tag_key = _sanitize_s3_tag_key(key)
+    if tag_key in seen_keys:
+        return
+    if len(tags_list) >= _S3_MAX_OBJECT_TAGS:
+        raise ValueError("Too many S3 object tags after sanitization")
+    seen_keys.add(tag_key)
+    tags_list.append({'Key': tag_key, 'Value': _sanitize_s3_tag_value(value)})
+
+
+def _original_filename_from_metadata(metadata: Dict[str, str], fallback: str) -> str:
+    encoded = metadata.get(_S3_ORIGINAL_FILENAME_METADATA_KEY)
+    decoded = _decode_s3_metadata_text(encoded)
+    if decoded:
+        return decoded
+    return metadata.get('original-filename', fallback)
 
 
 class S3Client:
@@ -129,21 +260,26 @@ class S3Client:
             )
         """
         try:
-            # Build S3 key: clients/{client_id}/{doc_type}/{timestamp}_{filename}
+            # Build S3 key: clients/{client_id}/{doc_type}/{timestamp}_{upload_id}_{filename}
             timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-            key = f"clients/{client_id}/{doc_type}/{timestamp}_{filename}"
+            upload_id = uuid.uuid4().hex[:12]
+            safe_client_id = _safe_s3_path_component(client_id, "client")
+            safe_doc_type = _safe_s3_path_component(doc_type, "document")
+            safe_filename = _safe_s3_filename(filename)
+            key = f"clients/{safe_client_id}/{safe_doc_type}/{timestamp}_{upload_id}_{safe_filename}"
 
             # Prepare tags
             tags_list = [
-                {'Key': 'client_id', 'Value': client_id},
-                {'Key': 'doc_type', 'Value': doc_type},
+                {'Key': 'client_id', 'Value': _sanitize_s3_tag_value(client_id)},
+                {'Key': 'doc_type', 'Value': _sanitize_s3_tag_value(doc_type)},
                 {'Key': 'uploaded_at', 'Value': datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")},
-                {'Key': 'filename', 'Value': filename}
+                {'Key': 'filename', 'Value': _sanitize_s3_tag_value(safe_filename)}
             ]
+            seen_tag_keys = {tag['Key'] for tag in tags_list}
 
             if metadata:
                 for meta_key, meta_value in metadata.items():
-                    tags_list.append({'Key': meta_key, 'Value': str(meta_value)[:255]})
+                    _append_s3_tag(tags_list, seen_tag_keys, meta_key, meta_value)
 
             # URL-encode tag values for S3 Tagging header format
             tagging_str = '&'.join([
@@ -152,6 +288,8 @@ class S3Client:
             ])
 
             resolved_content_type = content_type or "application/octet-stream"
+            original_filename_for_storage = metadata.get("original_name", filename) if metadata else filename
+            s3_metadata = _build_s3_metadata(client_id, doc_type, original_filename_for_storage)
 
             # Upload with tags and encryption
             self.s3_client.put_object(
@@ -161,11 +299,7 @@ class S3Client:
                 ContentType=resolved_content_type,
                 ServerSideEncryption='AES256',
                 Tagging=tagging_str,
-                Metadata={
-                    'client-id': client_id,
-                    'doc-type': doc_type,
-                    'original-filename': filename
-                }
+                Metadata=s3_metadata
             )
 
             return True, key
@@ -241,9 +375,9 @@ class S3Client:
                     print(f"{doc['filename']} - {doc['size']} bytes")
         """
         try:
-            prefix = f"clients/{client_id}/"
+            prefix = f"clients/{_safe_s3_path_component(client_id, 'client')}/"
             if doc_type:
-                prefix += f"{doc_type}/"
+                prefix += f"{_safe_s3_path_component(doc_type, 'document')}/"
 
             documents = []
             paginator = self.s3_client.get_paginator('list_objects_v2')
@@ -263,9 +397,9 @@ class S3Client:
                             Bucket=self.bucket_name,
                             Key=obj['Key']
                         )
-                        original_filename = metadata_response['Metadata'].get(
-                            'original-filename',
-                            obj['Key'].split('/')[-1]
+                        original_filename = _original_filename_from_metadata(
+                            metadata_response.get('Metadata', {}),
+                            obj['Key'].split('/')[-1],
                         )
                     except:
                         original_filename = obj['Key'].split('/')[-1]

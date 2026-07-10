@@ -11491,7 +11491,15 @@ class DocumentUploadHandler(BaseHandler):
                 audit_detail += f" rmi_item_id={rmi_fulfilled_item_id}"
                 if rmi_upload_target.get("canonical_slot_key"):
                     audit_detail += f" canonical_slot={rmi_upload_target['canonical_slot_key']}"
-            self.log_audit(user, "Upload", app["ref"], audit_detail, db=db, commit=False)
+            self.log_audit(
+                user,
+                "Upload",
+                app["ref"],
+                audit_detail,
+                db=db,
+                commit=False,
+                application_id=app["id"],
+            )
             if rmi_fulfilled_item_id:
                 self.log_audit(
                     user,
@@ -11515,6 +11523,7 @@ class DocumentUploadHandler(BaseHandler):
                     }, sort_keys=True),
                     db=db,
                     commit=False,
+                    application_id=app["id"],
                     before_state=dict(rmi_target) if rmi_target else None,
                     after_state={
                         "document_id": doc_id,
@@ -11544,6 +11553,7 @@ class DocumentUploadHandler(BaseHandler):
                     }, sort_keys=True),
                     db=db,
                     commit=False,
+                    application_id=app["id"],
                     before_state={"documents": previous_documents},
                     after_state={"document_id": doc_id, "version": replacement["version"], "is_current": True},
                 )
@@ -18263,6 +18273,152 @@ def _application_audit_targets(db, app):
     return list(dict.fromkeys(target for target in targets if target))
 
 
+def _audit_log_has_column(db, column):
+    """Check audit_log column presence without poisoning PostgreSQL transactions."""
+    try:
+        if getattr(db, "is_postgres", False):
+            row = db.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = ? AND column_name = ?",
+                ("audit_log", column),
+            ).fetchone()
+            return row is not None
+        db.execute(f"SELECT {column} FROM audit_log LIMIT 1")
+        return True
+    except Exception:
+        return False
+
+
+def _audit_structured_value_contains_application_id(value, application_id):
+    """Return True only for exact ids in structured audit JSON fields."""
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if str(key).lower() in {"application_id", "app_id"} and str(nested) == application_id:
+                return True
+            if _audit_structured_value_contains_application_id(nested, application_id):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_audit_structured_value_contains_application_id(item, application_id) for item in value)
+    return isinstance(value, str) and value == application_id
+
+
+def _audit_field_contains_structured_application_id(raw_value, application_id):
+    if raw_value is None:
+        return False
+    if isinstance(raw_value, (dict, list)):
+        return _audit_structured_value_contains_application_id(raw_value, application_id)
+    if not isinstance(raw_value, str):
+        return False
+    text = raw_value.strip()
+    if not text or text[0] not in ("{", "["):
+        return False
+    try:
+        parsed = safe_json_loads(text)
+    except Exception:
+        return False
+    return _audit_structured_value_contains_application_id(parsed, application_id)
+
+
+def _audit_entry_scoped_to_application(entry, application_id, allowed_targets=None):
+    stored_application_id = str(entry.get("application_id") or "").strip()
+    if stored_application_id:
+        return stored_application_id == application_id
+    target = str(entry.get("target") or "").strip()
+    if target and target in (allowed_targets or set()):
+        return True
+    return any(
+        _audit_field_contains_structured_application_id(entry.get(field), application_id)
+        for field in ("detail", "before_state", "after_state")
+    )
+
+
+def _audit_entry_matches_category(entry, category):
+    if category not in ("ca_mesh", "complyadvantage", "ca"):
+        return True
+    haystack = f"{entry.get('action') or ''} {entry.get('detail') or ''}".lower()
+    return any(
+        marker in haystack
+        for marker in (
+            "ca_screening",
+            "complyadvantage",
+            "ca_mesh_screening",
+            "complyadvantage mesh",
+            '"provider": "complyadvantage"',
+        )
+    )
+
+
+def _load_application_audit_entries(db, app, *, limit, offset=0, category="", order="DESC"):
+    """Load application audit entries by immutable id, not by ref/target text."""
+    application_id = str(app["id"])
+    direction = "ASC" if str(order).upper() == "ASC" else "DESC"
+    has_application_id = _audit_log_has_column(db, "application_id")
+    legacy_fields = [
+        field
+        for field in ("detail", "before_state", "after_state")
+        if _audit_log_has_column(db, field)
+    ]
+
+    clauses = []
+    params = []
+    allowed_targets = {application_id, f"application:{application_id}"}
+    try:
+        review_rows = db.execute(
+            "SELECT id FROM periodic_reviews WHERE application_id = ? ORDER BY id ASC",
+            (application_id,),
+        ).fetchall()
+        allowed_targets.update(
+            f"periodic_review:{row['id']}"
+            for row in review_rows
+            if row["id"] is not None
+        )
+    except Exception:
+        logger.debug("audit_periodic_review_scope_lookup_failed app_id=%s", application_id, exc_info=True)
+
+    if has_application_id:
+        clauses.append("application_id = ?")
+        params.append(application_id)
+
+    if allowed_targets:
+        placeholders = ",".join(["?"] * len(allowed_targets))
+        clauses.append(f"target IN ({placeholders})")
+        params.extend(sorted(allowed_targets))
+
+    if legacy_fields:
+        legacy_like = " OR ".join([f"COALESCE({field}, '') LIKE ?" for field in legacy_fields])
+        if has_application_id:
+            clauses.append(f"(COALESCE(application_id, '') = '' AND ({legacy_like}))")
+        else:
+            clauses.append(f"({legacy_like})")
+        params.extend([f"%{application_id}%"] * len(legacy_fields))
+
+    if not clauses:
+        return [], 0
+
+    rows = db.execute(
+        f"""
+        SELECT *
+        FROM audit_log
+        WHERE {' OR '.join(clauses)}
+        ORDER BY timestamp {direction}, id {direction}
+        """,
+        tuple(params),
+    ).fetchall()
+
+    filtered = []
+    for row in rows:
+        entry = dict(row)
+        if not _audit_entry_scoped_to_application(entry, application_id, allowed_targets):
+            continue
+        if not _audit_entry_matches_category(entry, category):
+            continue
+        filtered.append(entry)
+
+    total = len(filtered)
+    return filtered[offset:offset + limit], total
+
+
 def _append_audit_filters(handler, query, params, *, exclude_fixtures=False):
     """Append safe audit_log filters shared by list/export endpoints."""
     start_date = handler.get_argument("from", None) or handler.get_argument("start_date", None)
@@ -18361,38 +18517,17 @@ class ApplicationAuditLogHandler(BaseHandler):
         # not a 500 (same _bounded_int convention as every other list route).
         limit = _bounded_int(self.get_argument("limit", "200"), 200, min_value=1, max_value=500)
         offset = _bounded_int(self.get_argument("offset", "0"), 0, min_value=0, max_value=100000000)
-        targets = _application_audit_targets(db, app)
-        placeholders = ",".join(["?"] * len(targets))
         category = self.get_argument("category", "").strip().lower()
-        category_clause = ""
-        category_params = []
-        if category in ("ca_mesh", "complyadvantage", "ca"):
-            category_clause = """
-                AND (
-                    LOWER(COALESCE(action, '')) LIKE ?
-                    OR LOWER(COALESCE(action, '')) LIKE ?
-                    OR LOWER(COALESCE(detail, '')) LIKE ?
-                    OR LOWER(COALESCE(detail, '')) LIKE ?
-                    OR LOWER(COALESCE(detail, '')) LIKE ?
-                )
-            """
-            category_params = [
-                "%ca_screening%",
-                "%complyadvantage%",
-                "%ca_mesh_screening%",
-                "%complyadvantage mesh%",
-                '%"provider": "complyadvantage"%',
-            ]
-        rows = db.execute(
-            f"SELECT * FROM audit_log WHERE target IN ({placeholders}) {category_clause} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-            (*targets, *category_params, limit, offset)
-        ).fetchall()
-        total = db.execute(
-            f"SELECT COUNT(*) as c FROM audit_log WHERE target IN ({placeholders}) {category_clause}",
-            tuple(targets + category_params)
-        ).fetchone()["c"]
+        entries, total = _load_application_audit_entries(
+            db,
+            app,
+            limit=limit,
+            offset=offset,
+            category=category,
+            order="DESC",
+        )
         db.close()
-        self.success({"entries": [dict(r) for r in rows], "total": total})
+        self.success({"entries": entries, "total": total, "limit": limit, "offset": offset})
 
 
 class ApplicationEvidencePackHandler(BaseHandler):
@@ -18568,20 +18703,13 @@ class ApplicationEvidencePackHandler(BaseHandler):
         )
 
         audit_limit = _bounded_int(self.get_argument("audit_limit", 1000), 1000, min_value=1, max_value=5000)
-        targets = _audit_target_values_for_ref(app_dict["ref"])
-        audit_rows = db.execute(
-            """
-            SELECT * FROM audit_log
-            WHERE target IN (?, ?)
-            ORDER BY timestamp ASC, id ASC
-            LIMIT ?
-            """,
-            (*targets, audit_limit)
-        ).fetchall()
-        audit_total = db.execute(
-            "SELECT COUNT(*) as c FROM audit_log WHERE target IN (?, ?)",
-            tuple(targets)
-        ).fetchone()["c"]
+        audit_rows, audit_total = _load_application_audit_entries(
+            db,
+            app_dict,
+            limit=audit_limit,
+            offset=0,
+            order="ASC",
+        )
         audit_entries = []
         for row in audit_rows:
             entry = dict(row)
@@ -18597,7 +18725,8 @@ class ApplicationEvidencePackHandler(BaseHandler):
             "scope": {
                 "application_id": app_dict["id"],
                 "application_ref": app_dict["ref"],
-                "audit_targets": targets,
+                "audit_scope": "application_id",
+                "audit_targets": _audit_target_values_for_ref(app_dict["ref"]),
                 "audit_limit": audit_limit,
             },
             "application": app_dict,

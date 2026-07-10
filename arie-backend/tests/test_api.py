@@ -1155,50 +1155,167 @@ class TestAuthenticatedAccess:
         assert admin_dashboard.status_code == 200
         assert admin_dashboard.json()["show_fixtures"] is True
 
-    def test_application_audit_log_includes_prefixed_application_targets(self, api_server):
-        """Case audit reconstruction must include bare and application: prefixed targets."""
+    def test_application_audit_log_filters_by_immutable_application_id(self, api_server):
+        """Case audit reconstruction must not leak rows from deleted same-ref apps."""
         from auth import create_token
         from db import get_db
 
+        old_app_id = "app_p3_audit_old"
+        current_app_id = "app_p3_audit_current"
+        app_ref = "ARF-P3-AUDIT"
         conn = get_db()
-        for target in ("ARF-P3-AUDIT", "application:ARF-P3-AUDIT", "ARF-P3-OTHER"):
-            conn.execute("DELETE FROM audit_log WHERE target = ?", (target,))
-        conn.execute("DELETE FROM applications WHERE id = ?", ("app_p3_audit",))
+        conn.execute("DELETE FROM audit_log WHERE action LIKE ?", ("P3 Immutable Audit%",))
+        conn.execute("DELETE FROM applications WHERE id IN (?, ?) OR ref = ?", (old_app_id, current_app_id, app_ref))
         conn.execute(
             """
             INSERT INTO applications
             (id, ref, client_id, company_name, country, sector, entity_type, status)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            ("app_p3_audit", "ARF-P3-AUDIT", "testclient001", "Audit Reconstruction Ltd",
+            (old_app_id, app_ref, "testclient001", "Old Audit Reconstruction Ltd",
              "Mauritius", "Technology", "SME", "in_review"),
         )
         conn.execute(
-            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-            ("admin001", "Test Admin", "admin", "Generate Memo", "ARF-P3-AUDIT", "bare", "127.0.0.1"),
+            """
+            INSERT INTO audit_log
+            (user_id, user_name, user_role, action, target, application_id, detail, ip_address)
+            VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                "admin001", "Test Admin", "admin", "P3 Immutable Audit Old",
+                app_ref, old_app_id, json.dumps({"application_id": old_app_id}), "127.0.0.1",
+            ),
+        )
+        conn.execute("DELETE FROM applications WHERE id = ?", (old_app_id,))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (current_app_id, app_ref, "testclient001", "Current Audit Reconstruction Ltd",
+             "Mauritius", "Technology", "SME", "in_review"),
         )
         conn.execute(
-            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-            ("admin001", "Test Admin", "admin", "edd_routing.evaluated", "application:ARF-P3-AUDIT", "prefixed", "127.0.0.1"),
+            """
+            INSERT INTO audit_log
+            (user_id, user_name, user_role, action, target, application_id, detail, ip_address)
+            VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                "admin001", "Test Admin", "admin", "P3 Immutable Audit Current",
+                app_ref, current_app_id, json.dumps({"application_id": current_app_id}), "127.0.0.1",
+            ),
         )
         conn.execute(
-            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-            ("admin001", "Test Admin", "admin", "Login", "ARF-P3-OTHER", "other", "127.0.0.1"),
+            """
+            INSERT INTO audit_log
+            (user_id, user_name, user_role, action, target, detail, ip_address)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                "admin001", "Test Admin", "admin", "P3 Immutable Audit Legacy Current",
+                f"application:{app_ref}", json.dumps({"application_id": current_app_id, "event": "legacy-current"}),
+                "127.0.0.1",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_log
+            (user_id, user_name, user_role, action, target, detail, ip_address)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                "admin001", "Test Admin", "admin", "P3 Immutable Audit Legacy Ref Only",
+                f"application:{app_ref}", json.dumps({"application_ref": app_ref, "event": "legacy-ref-only"}),
+                "127.0.0.1",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_log
+            (user_id, user_name, user_role, action, target, detail, ip_address)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                "admin001", "Test Admin", "admin", "P3 Immutable Audit Legacy Old",
+                f"application:{app_ref}", json.dumps({"application_id": old_app_id, "event": "legacy-old"}),
+                "127.0.0.1",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_log
+            (user_id, user_name, user_role, action, target, application_id, detail, ip_address)
+            VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                "admin001", "Test Admin", "admin", "P3 Immutable Audit Conflicting Target",
+                current_app_id, old_app_id, json.dumps({"application_id": old_app_id, "event": "conflict"}),
+                "127.0.0.1",
+            ),
         )
         conn.commit()
         conn.close()
 
         token = create_token("admin001", "admin", "Test Admin", "officer")
         resp = http_requests.get(
-            f"{api_server}/api/applications/ARF-P3-AUDIT/audit-log?limit=20",
+            f"{api_server}/api/applications/{app_ref}/audit-log?limit=20",
             headers={"Authorization": f"Bearer {token}"},
             timeout=3,
         )
         assert resp.status_code == 200
         data = resp.json()
-        targets = {e["target"] for e in data["entries"]}
         assert data["total"] == 2
-        assert targets == {"ARF-P3-AUDIT", "application:ARF-P3-AUDIT"}
+        actions = {e["action"] for e in data["entries"]}
+        assert actions == {"P3 Immutable Audit Current", "P3 Immutable Audit Legacy Current"}
+
+        by_id = http_requests.get(
+            f"{api_server}/api/applications/{current_app_id}/audit-log?limit=20",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert by_id.status_code == 200
+        assert {e["action"] for e in by_id.json()["entries"]} == actions
+
+        client_token = create_token("testclient001", "client", "Test Client", "client")
+        client_resp = http_requests.get(
+            f"{api_server}/api/applications/{current_app_id}/audit-log?limit=20",
+            headers={"Authorization": f"Bearer {client_token}"},
+            timeout=3,
+        )
+        assert client_resp.status_code == 403
+
+    def test_audit_application_id_probes_do_not_use_supplied_transaction(self, temp_db):
+        """Schema/id probes must not execute on a caller-owned transaction."""
+        from base_handler import _audit_log_has_application_id, _resolve_audit_application_id
+        from db import get_db
+
+        app_id = "app_probe_autonomous"
+        app_ref = "ARF-PROBE-AUTONOMOUS"
+        conn = get_db()
+        conn.execute("DELETE FROM applications WHERE id = ? OR ref = ?", (app_id, app_ref))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, app_ref, "testclient001", "Probe Autonomy Ltd",
+             "Mauritius", "Technology", "SME", "in_review"),
+        )
+        conn.commit()
+        conn.close()
+
+        class PoisonTransaction:
+            is_postgres = True
+
+            def execute(self, *_args, **_kwargs):
+                raise AssertionError("supplied transaction must not be used for audit probes")
+
+        supplied_transaction = PoisonTransaction()
+        assert _audit_log_has_application_id(supplied_transaction) is True
+        assert _resolve_audit_application_id(supplied_transaction, app_ref) == app_id
 
     def test_dashboard_reports_surface_unknown_risk_bucket(self, api_server):
         """Unknown risk must be explicit, not coerced into low/zero reporting."""
@@ -1276,7 +1393,7 @@ class TestAuthenticatedAccess:
         conn.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
         conn.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
         conn.execute("DELETE FROM decision_records WHERE application_ref = ?", (app_ref,))
-        conn.execute("DELETE FROM audit_log WHERE target IN (?, ?, ?)", (app_ref, f"application:{app_ref}", "ARF-P3-PACK-OTHER"))
+        conn.execute("DELETE FROM audit_log WHERE action LIKE ?", ("P3 Pack Audit%",))
         conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
         conn.execute(
             """
@@ -1312,12 +1429,37 @@ class TestAuthenticatedAccess:
             (app_id, "Evidence Pack Ltd", "HIGH", 72, "triggered", "officer_decision"),
         )
         conn.execute(
-            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-            ("admin001", "Test Admin", "admin", "Generate Memo", app_ref, json.dumps({"memo_version": "v1"}), "127.0.0.1"),
+            """
+            INSERT INTO audit_log
+            (user_id, user_name, user_role, action, target, application_id, detail, ip_address)
+            VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                "admin001", "Test Admin", "admin", "P3 Pack Audit Generate Memo",
+                app_ref, app_id, json.dumps({"memo_version": "v1", "application_id": app_id}), "127.0.0.1",
+            ),
         )
         conn.execute(
-            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-            ("admin001", "Test Admin", "admin", "edd_routing.actuated", f"application:{app_ref}", "prefixed", "127.0.0.1"),
+            """
+            INSERT INTO audit_log
+            (user_id, user_name, user_role, action, target, application_id, detail, ip_address)
+            VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                "admin001", "Test Admin", "admin", "P3 Pack Audit EDD Routed",
+                f"application:{app_ref}", app_id, "prefixed", "127.0.0.1",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO audit_log
+            (user_id, user_name, user_role, action, target, detail, ip_address)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                "admin001", "Test Admin", "admin", "P3 Pack Audit Legacy Ref Only",
+                app_ref, json.dumps({"application_ref": app_ref, "event": "legacy-ref-only"}), "127.0.0.1",
+            ),
         )
         conn.commit()
         conn.close()
@@ -1339,6 +1481,7 @@ class TestAuthenticatedAccess:
         targets = {e["target"] for e in pack["audit_log"]["entries"]}
         assert targets == {app_ref, f"application:{app_ref}"}
         assert pack["audit_log"]["entries"][0]["detail_json"]["memo_version"] == "v1"
+        assert all(entry["action"] != "P3 Pack Audit Legacy Ref Only" for entry in pack["audit_log"]["entries"])
 
     def test_application_export_pack_zip_succeeds_and_audits(self, api_server):
         """Admin/SCO can download an audited ZIP with PDFs, CSV, and app-scoped documents."""
