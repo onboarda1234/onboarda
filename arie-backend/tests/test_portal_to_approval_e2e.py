@@ -80,6 +80,7 @@ APPROVAL_CHECKLIST = [
     "real_decision_endpoint_writes_audit_and_decision_record",
 ]
 
+PORTALE2E_FIXTURE_ENVIRONMENTS = {"testing", "staging"}
 PDF_BYTES = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n"
 CLIENT_PASSWORD = "PortalE2EClient2026!"
 OFFICER_PASSWORD = "PortalE2EBackoffice2026!"
@@ -248,6 +249,14 @@ def _insert_audit(
     )
 
 
+def _assert_portale2e_fixture_environment():
+    environment = os.environ.get("ENVIRONMENT", "").strip().lower()
+    assert environment in PORTALE2E_FIXTURE_ENVIRONMENTS, (
+        "PORTALE2E fixture-assisted clearance helpers are only allowed in "
+        "testing/staging and must never be used in production or pilot runtime flows."
+    )
+
+
 def _seed_backoffice_user(db_path: str, suffix: str) -> dict:
     from tests.conftest import _sync_test_db_path
     from db import get_db
@@ -381,6 +390,7 @@ def _mark_uploaded_documents_verified(db_path: str, app_id: str, officer: dict, 
     from tests.conftest import _sync_test_db_path
     from db import get_db
 
+    _assert_portale2e_fixture_environment()
     _sync_test_db_path(db_path)
     verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     verification_results = {
@@ -478,13 +488,13 @@ def _clear_provider_gates(db_path: str, app_id: str, officer: dict, request_id: 
     from tests.conftest import _sync_test_db_path
     from db import get_db
 
+    _assert_portale2e_fixture_environment()
     _sync_test_db_path(db_path)
     now = datetime.now(timezone.utc).replace(microsecond=0)
     now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     valid_until_iso = (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
     db = get_db()
     try:
-        assert os.environ.get("ENVIRONMENT") != "production"
         app = dict(db.execute("SELECT * FROM applications WHERE id=?", (app_id,)).fetchone())
         client = dict(db.execute("SELECT * FROM clients WHERE id=?", (app["client_id"],)).fetchone())
         directors = [dict(row) for row in db.execute("SELECT * FROM directors WHERE application_id=?", (app_id,)).fetchall()]
@@ -645,6 +655,7 @@ def _insert_optional_direct_route_memo(db_path: str, app_id: str, officer: dict,
     from tests.conftest import _sync_test_db_path
     from db import get_db
 
+    _assert_portale2e_fixture_environment()
     _sync_test_db_path(db_path)
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     memo = {
