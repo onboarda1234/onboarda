@@ -1187,11 +1187,12 @@ if _log_format == "json" or _CFG_IS_PRODUCTION or _CFG_ENVIRONMENT == "staging":
     logging.root.handlers = []
     logging.root.addHandler(_handler)
     logging.root.setLevel(logging.INFO)
-    # The observability channel propagates to root; drop its private handler
-    # so each structured line is emitted exactly ONCE (previously: once as
-    # JSON with fields + once via root as text with the fields stripped).
+    # The observability channel propagates to root; replace its private
+    # emitting handler with a NullHandler sentinel so each structured line is
+    # emitted exactly ONCE while the logger still satisfies the singleton
+    # "has handlers" invariant expected by older observability tests.
     # Propagation stays ON, so pytest caplog and root aggregation still work.
-    logging.getLogger("arie").handlers = []
+    logging.getLogger("arie").handlers = [logging.NullHandler()]
 else:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -4987,15 +4988,29 @@ class ForgotPasswordHandler(BaseHandler):
         if not email:
             return self.error("Email is required", 400)
 
-        # Rate limit: 5 attempts per 30 minutes per IP
-        ip = self.get_client_ip()
-        rl_key = f"forgot_pw:{ip}"
-        if rate_limiter.is_limited(rl_key, max_attempts=5, window_seconds=1800):
-            return self.error("Too many reset attempts. Please try again later.", 429)
+        if not self.check_sensitive_rate_limit(
+            "forgot_password_ip",
+            max_attempts=5,
+            window_seconds=1800,
+            include_user=False,
+            error_message="Too many reset attempts. Please try again later.",
+            include_retry_after=False,
+        ):
+            return
 
         # Per-email rate limit: prevent enumeration via repeated requests for the same address
-        email_rl_key = f"forgot_pw:email:{hashlib.sha256(email.encode()).hexdigest()}"
-        if rate_limiter.is_limited(email_rl_key, max_attempts=3, window_seconds=1800):
+        # Legacy key marker: forgot_pw:email: now maps to a hashed shared-limiter dimension.
+        email_limit = self.evaluate_sensitive_rate_limit(
+            "forgot_password_email",
+            max_attempts=3,
+            window_seconds=1800,
+            dimensions={"email": email},
+            include_ip=False,
+            include_user=False,
+        )
+        if email_limit is None:
+            return
+        if not email_limit.allowed:
             # Return identical success message to prevent email enumeration
             return self.success({"message": "If that email is registered, a reset link has been sent."})
 
@@ -5043,6 +5058,27 @@ class ResetPasswordHandler(BaseHandler):
         new_password = data.get("new_password", "")
         if not token or not new_password:
             return self.error("Token and new_password are required", 400)
+
+        if not self.check_sensitive_rate_limit(
+            "reset_password_ip",
+            max_attempts=10,
+            window_seconds=1800,
+            include_user=False,
+            error_message="Too many reset attempts. Please try again later.",
+            include_retry_after=False,
+        ):
+            return
+        if not self.check_sensitive_rate_limit(
+            "reset_password_token",
+            max_attempts=5,
+            window_seconds=1800,
+            dimensions={"token": token},
+            include_ip=False,
+            include_user=False,
+            error_message="Too many reset attempts. Please try again later.",
+            include_retry_after=False,
+        ):
+            return
 
         if len(new_password) < 12:
             return self.error("Password must be at least 12 characters", 400)
@@ -11183,7 +11219,12 @@ class DocumentUploadHandler(BaseHandler):
         if not user:
             return
 
-        if not self.check_rate_limit("doc_upload", max_attempts=30, window_seconds=60):
+        if not self.check_sensitive_rate_limit(
+            "doc_upload",
+            max_attempts=30,
+            window_seconds=60,
+            error_message="Rate limit exceeded for doc_upload. Try again later.",
+        ):
             return
 
         db = get_db()
@@ -13168,7 +13209,12 @@ class DocumentAIVerifyHandler(BaseHandler):
         if not user:
             return
 
-        if not self.check_rate_limit("ai_verify", max_attempts=10, window_seconds=60):
+        if not self.check_sensitive_rate_limit(
+            "ai_verify",
+            max_attempts=10,
+            window_seconds=60,
+            error_message="Rate limit exceeded for ai_verify. Try again later.",
+        ):
             return
 
         try:
