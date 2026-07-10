@@ -1790,7 +1790,6 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id);
     CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
     CREATE INDEX IF NOT EXISTS idx_audit_log_target ON audit_log(target);
-    CREATE INDEX IF NOT EXISTS idx_audit_log_application_id ON audit_log(application_id);
     CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
 
     -- Sprint 3: GDPR Data Retention Policy
@@ -3045,7 +3044,6 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id);
     CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
     CREATE INDEX IF NOT EXISTS idx_audit_log_target ON audit_log(target);
-    CREATE INDEX IF NOT EXISTS idx_audit_log_application_id ON audit_log(application_id);
     CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
     CREATE INDEX IF NOT EXISTS idx_applications_client_id ON applications(client_id);
     CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
