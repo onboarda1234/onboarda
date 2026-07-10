@@ -99,13 +99,16 @@ def test_ca_screening_review_event_type_maps_officer_dispositions():
 
 
 def test_application_audit_log_supports_ca_mesh_category_filter():
-    from server import ApplicationAuditLogHandler
+    from server import ApplicationAuditLogHandler, _audit_entry_matches_category
 
-    source = inspect.getsource(ApplicationAuditLogHandler.get)
-    assert "ca_mesh" in source
-    assert "ca_screening" in source
-    assert "ca_mesh_screening" in source
-    assert "complyadvantage mesh" in source
-    assert "category_params" in source
-    assert "LIKE '%ca_screening%'" not in source
-    assert "LIKE '%complyadvantage%'" not in source
+    handler_source = inspect.getsource(ApplicationAuditLogHandler.get)
+    filter_source = inspect.getsource(_audit_entry_matches_category)
+
+    assert "_audit_entry_matches_category" not in handler_source
+    assert "_load_application_audit_entries" in handler_source
+    assert "ca_mesh" in filter_source
+    assert "ca_screening" in filter_source
+    assert "ca_mesh_screening" in filter_source
+    assert "complyadvantage mesh" in filter_source
+    assert "LIKE '%ca_screening%'" not in filter_source
+    assert "LIKE '%complyadvantage%'" not in filter_source

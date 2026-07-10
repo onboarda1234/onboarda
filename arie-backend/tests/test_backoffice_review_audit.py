@@ -505,13 +505,19 @@ class TestApplicationAuditLogEndpoint:
         matching = [p for p in patterns if "audit-log" in p]
         assert len(matching) > 0, "audit-log route not registered"
 
-    def test_handler_queries_by_ref(self):
-        """Handler must filter audit_log by application ref."""
+    def test_handler_queries_by_immutable_application_scope(self):
+        """Handler must use immutable application scoping, not ref target matching."""
         import inspect
-        from server import ApplicationAuditLogHandler
-        src = inspect.getsource(ApplicationAuditLogHandler.get)
-        assert "target" in src
-        assert "audit_log" in src
+        from server import ApplicationAuditLogHandler, _load_application_audit_entries
+
+        handler_src = inspect.getsource(ApplicationAuditLogHandler.get)
+        loader_src = inspect.getsource(_load_application_audit_entries)
+
+        assert "_load_application_audit_entries" in handler_src
+        assert "_application_audit_targets" not in handler_src
+        assert "target IN" not in handler_src
+        assert "application_id = ?" in loader_src
+        assert "_audit_entry_scoped_to_application" in loader_src
 
     def test_frontend_loads_activity_from_api(self):
         """Frontend must call the audit-log API endpoint."""
