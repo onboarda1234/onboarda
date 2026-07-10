@@ -18,6 +18,7 @@ import sqlite3
 import tempfile
 import pytest
 from unittest.mock import patch, MagicMock, call
+from urllib.parse import parse_qsl
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +38,15 @@ def _make_db_row(db, app_id="testapp_001", client_id="testclient001"):
 def _put_object_kwargs(mock_boto_client):
     put_call = mock_boto_client.put_object.call_args
     return put_call.kwargs or put_call[1]
+
+
+def _tagging_map(tagging_str):
+    return dict(parse_qsl(tagging_str, keep_blank_values=True))
+
+
+def _metadata_display_filename(metadata):
+    from s3_client import _decode_s3_metadata_text
+    return _decode_s3_metadata_text(metadata.get("original-filename-b64"))
 
 
 # ===========================================================================
@@ -210,13 +220,19 @@ class TestTagEncoding:
             assert key.endswith("_server_safe.pdf")
             kwargs = _put_object_kwargs(mock_boto_client)
             tagging_str = kwargs["Tagging"]
+            tags = _tagging_map(tagging_str)
             metadata = kwargs["Metadata"]
+            assert tags["client_id"] == "c1"
+            assert tags["doc_type"] == "kyc"
+            assert tags["filename"] == "server_safe.pdf"
+            assert tags["original_name"]
             assert "%3C" not in tagging_str
             assert "%3E" not in tagging_str
             assert "%22" not in tagging_str
             assert "<" not in metadata["original-filename"]
             assert ">" not in metadata["original-filename"]
             assert '"' not in metadata["original-filename"]
+            assert _metadata_display_filename(metadata) == hostile_name
 
     def test_filename_quotes_unicode_and_controls_do_not_reach_s3_tags_raw(self, temp_db):
         """Quotes, unicode, and control chars are storage-sanitized instead of causing S3 500s."""
@@ -238,7 +254,12 @@ class TestTagEncoding:
             assert success is True
             kwargs = _put_object_kwargs(mock_boto_client)
             tagging_str = kwargs["Tagging"]
+            tags = _tagging_map(tagging_str)
             metadata = kwargs["Metadata"]
+            assert tags["client_id"] == "client_1"
+            assert tags["doc_type"] == "kyc_docs"
+            assert tags["filename"] == "r_port.pdf"
+            assert tags["original_name"]
             assert "%22" not in tagging_str
             assert "%00" not in tagging_str
             assert "é" not in tagging_str
@@ -478,7 +499,10 @@ class TestUploadSuccessResponse:
             assert ".." not in key
             assert "<" not in key
             assert ">" not in key
-            assert key.startswith("clients/client/passport/")
+            key_parts = key.split("/")
+            assert key_parts[0] == "clients"
+            assert key_parts[1].startswith("client_")
+            assert key_parts[2].startswith("passport_")
             assert key.endswith("_evil_script_.pdf")
 
     def test_overlong_filename_is_truncated_for_s3_key_and_tags(self, temp_db):
@@ -500,10 +524,102 @@ class TestUploadSuccessResponse:
             )
 
             assert success is True
-            filename_suffix = key.rsplit("/", 1)[1].split("_", 2)[-1]
-            assert len(filename_suffix) <= 180
+            object_name = key.rsplit("/", 1)[1]
+            assert len(object_name) <= len("20260710_000000_") + 12 + 1 + 180
             kwargs = _put_object_kwargs(mock_boto_client)
+            from s3_client import _sanitize_s3_tag_value
+            tags = _tagging_map(kwargs["Tagging"])
+            assert tags["filename"]
+            assert tags["original_name"]
+            assert len(tags["filename"]) <= len(_sanitize_s3_tag_value(long_name))
+            assert len(tags["original_name"]) <= len(_sanitize_s3_tag_value(long_name))
             assert len(kwargs["Metadata"]["original-filename"]) <= 1024
+
+    def test_s3_keys_include_unique_upload_id_for_sanitized_filename_collisions(self, temp_db):
+        """Sanitized filename collisions in the same second must not overwrite S3 objects."""
+        from types import SimpleNamespace
+        from s3_client import S3Client
+        mock_boto_client = MagicMock()
+
+        def fixed_strftime(fmt):
+            if fmt == "%Y%m%d_%H%M%S":
+                return "20260710_050000"
+            return "2026-07-10T05:00:00"
+
+        with patch("s3_client.boto3") as mock_boto, \
+             patch("s3_client.datetime") as mock_datetime, \
+             patch("s3_client.uuid.uuid4", side_effect=[
+                 SimpleNamespace(hex="a" * 32),
+                 SimpleNamespace(hex="b" * 32),
+             ]):
+            mock_boto.client.return_value = mock_boto_client
+            mock_datetime.now.return_value.strftime.side_effect = fixed_strftime
+            client = S3Client(bucket_name="test-bucket")
+
+            first_success, first_key = client.upload_document(
+                file_data=b"%PDF-1.4\n",
+                client_id="client",
+                doc_type="passport",
+                filename="a?.pdf",
+                content_type="application/pdf",
+            )
+            second_success, second_key = client.upload_document(
+                file_data=b"%PDF-1.4\n",
+                client_id="client",
+                doc_type="passport",
+                filename="a*.pdf",
+                content_type="application/pdf",
+            )
+
+            assert first_success is True
+            assert second_success is True
+            assert first_key != second_key
+            assert first_key.endswith("_a_.pdf")
+            assert second_key.endswith("_a_.pdf")
+
+    def test_path_separators_in_client_and_doc_type_are_component_sanitized(self, temp_db):
+        """Path separators in key components must not basename-collapse tenant prefixes."""
+        from s3_client import S3Client
+        mock_boto_client = MagicMock()
+        with patch("s3_client.boto3") as mock_boto:
+            mock_boto.client.return_value = mock_boto_client
+            client = S3Client(bucket_name="test-bucket")
+
+            success, key = client.upload_document(
+                file_data=b"%PDF-1.4\n",
+                client_id="tenant/a",
+                doc_type="kyc/docs",
+                filename="doc.pdf",
+                content_type="application/pdf",
+            )
+
+            assert success is True
+            key_parts = key.split("/")
+            assert key_parts[0] == "clients"
+            assert key_parts[1].startswith("tenant_a_")
+            assert key_parts[2].startswith("kyc_docs_")
+            assert "/a/kyc/docs/" not in key
+
+    def test_excess_s3_tags_fail_before_put_object(self, temp_db):
+        """The S3 client should fail fast before sending more than 10 object tags."""
+        from s3_client import S3Client
+        mock_boto_client = MagicMock()
+        with patch("s3_client.boto3") as mock_boto:
+            mock_boto.client.return_value = mock_boto_client
+            client = S3Client(bucket_name="test-bucket")
+
+            success, message = client.upload_document(
+                file_data=b"%PDF-1.4\n",
+                client_id="client",
+                doc_type="passport",
+                filename="doc.pdf",
+                content_type="application/pdf",
+                metadata={f"custom_{idx}": f"value_{idx}" for idx in range(7)},
+            )
+
+            assert success is False
+            assert "Too many S3 object tags" in message
+            mock_boto_client.put_object.assert_not_called()
 
     def test_upload_returns_s3_key_not_error(self, temp_db):
         """On success, second element of tuple is the S3 key, not an error message."""

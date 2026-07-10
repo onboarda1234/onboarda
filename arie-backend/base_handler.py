@@ -108,20 +108,29 @@ def _safe_json(obj):
         return None
 
 
-def _audit_log_has_application_id(db):
+def _audit_log_has_application_id(db=None):
     """Return True when audit_log has the immutable application scope column."""
+    probe_db = None
     try:
-        if getattr(db, "is_postgres", False):
-            row = db.execute(
+        probe_db = get_db()
+        if getattr(probe_db, "is_postgres", False):
+            row = probe_db.execute(
                 "SELECT 1 FROM information_schema.columns "
                 "WHERE table_name = ? AND column_name = ?",
                 ("audit_log", "application_id"),
             ).fetchone()
             return row is not None
-        db.execute("SELECT application_id FROM audit_log LIMIT 1")
+        probe_db.execute("SELECT application_id FROM audit_log LIMIT 1")
         return True
     except Exception:
+        logger.debug("audit_application_id_schema_probe_failed", exc_info=True)
         return False
+    finally:
+        if probe_db is not None:
+            try:
+                probe_db.close()
+            except Exception:
+                pass
 
 
 def _resolve_audit_application_id(db, target, application_id=None):
@@ -133,12 +142,14 @@ def _resolve_audit_application_id(db, target, application_id=None):
     if not text:
         return None
 
+    probe_db = None
     try:
+        probe_db = get_db()
         if text.startswith("periodic_review:"):
             review_id = text.split("periodic_review:", 1)[1].strip()
             if not review_id:
                 return None
-            row = db.execute(
+            row = probe_db.execute(
                 "SELECT application_id FROM periodic_reviews WHERE id = ?",
                 (review_id,),
             ).fetchone()
@@ -149,7 +160,7 @@ def _resolve_audit_application_id(db, target, application_id=None):
         if text.startswith("application:"):
             text = text.split("application:", 1)[1].strip()
 
-        rows = db.execute(
+        rows = probe_db.execute(
             "SELECT id FROM applications WHERE id = ? OR ref = ? ORDER BY id ASC LIMIT 2",
             (text, text),
         ).fetchall()
@@ -158,6 +169,12 @@ def _resolve_audit_application_id(db, target, application_id=None):
             return ids[0][:128]
     except Exception:
         logger.debug("audit_application_id_resolution_failed target=%s", target, exc_info=True)
+    finally:
+        if probe_db is not None:
+            try:
+                probe_db.close()
+            except Exception:
+                pass
     return None
 
 

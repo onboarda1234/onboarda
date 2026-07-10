@@ -11491,7 +11491,15 @@ class DocumentUploadHandler(BaseHandler):
                 audit_detail += f" rmi_item_id={rmi_fulfilled_item_id}"
                 if rmi_upload_target.get("canonical_slot_key"):
                     audit_detail += f" canonical_slot={rmi_upload_target['canonical_slot_key']}"
-            self.log_audit(user, "Upload", app["ref"], audit_detail, db=db, commit=False)
+            self.log_audit(
+                user,
+                "Upload",
+                app["ref"],
+                audit_detail,
+                db=db,
+                commit=False,
+                application_id=app["id"],
+            )
             if rmi_fulfilled_item_id:
                 self.log_audit(
                     user,
@@ -11515,6 +11523,7 @@ class DocumentUploadHandler(BaseHandler):
                     }, sort_keys=True),
                     db=db,
                     commit=False,
+                    application_id=app["id"],
                     before_state=dict(rmi_target) if rmi_target else None,
                     after_state={
                         "document_id": doc_id,
@@ -11544,6 +11553,7 @@ class DocumentUploadHandler(BaseHandler):
                     }, sort_keys=True),
                     db=db,
                     commit=False,
+                    application_id=app["id"],
                     before_state={"documents": previous_documents},
                     after_state={"document_id": doc_id, "version": replacement["version"], "is_current": True},
                 )

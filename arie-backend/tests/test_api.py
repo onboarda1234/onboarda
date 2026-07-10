@@ -1286,6 +1286,37 @@ class TestAuthenticatedAccess:
         )
         assert client_resp.status_code == 403
 
+    def test_audit_application_id_probes_do_not_use_supplied_transaction(self, temp_db):
+        """Schema/id probes must not execute on a caller-owned transaction."""
+        from base_handler import _audit_log_has_application_id, _resolve_audit_application_id
+        from db import get_db
+
+        app_id = "app_probe_autonomous"
+        app_ref = "ARF-PROBE-AUTONOMOUS"
+        conn = get_db()
+        conn.execute("DELETE FROM applications WHERE id = ? OR ref = ?", (app_id, app_ref))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, app_ref, "testclient001", "Probe Autonomy Ltd",
+             "Mauritius", "Technology", "SME", "in_review"),
+        )
+        conn.commit()
+        conn.close()
+
+        class PoisonTransaction:
+            is_postgres = True
+
+            def execute(self, *_args, **_kwargs):
+                raise AssertionError("supplied transaction must not be used for audit probes")
+
+        supplied_transaction = PoisonTransaction()
+        assert _audit_log_has_application_id(supplied_transaction) is True
+        assert _resolve_audit_application_id(supplied_transaction, app_ref) == app_id
+
     def test_dashboard_reports_surface_unknown_risk_bucket(self, api_server):
         """Unknown risk must be explicit, not coerced into low/zero reporting."""
         from auth import create_token
