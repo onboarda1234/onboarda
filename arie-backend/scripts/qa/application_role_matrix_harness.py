@@ -27,6 +27,12 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
+
+from branding import BRAND  # noqa: E402
+
 
 CONFIRM_TOKEN = "I-UNDERSTAND-STAGING-ROLE-AUDIT-WRITES"
 ALLOW_ENV = "ALLOW_APPLICATION_ROLE_SEED"
@@ -35,6 +41,7 @@ OFFICER_ROLES = ("admin", "sco", "co", "analyst")
 ALL_ROLES = (*OFFICER_ROLES, "client")
 RUN_ID_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{6}$")
 PRODUCTION_MARKERS = ("production", "prod-db", "prod_", "-prod", ".prod.")
+DEFAULT_STAGING_BASE_URL = f"https://staging.{BRAND['system_id']}.co"
 
 
 def new_run_id() -> str:
@@ -168,7 +175,7 @@ def _secure_write_json(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 def _artifact_paths(out_dir: Optional[str], run_id: str) -> tuple[Path, Path]:
-    root = Path(out_dir or tempfile.gettempdir()) / f"onboarda-role-audit-{run_id}"
+    root = Path(out_dir or tempfile.gettempdir()) / f"{BRAND['system_id']}-role-audit-{run_id}"
     return root / "credentials.json", root / "seed-evidence.json"
 
 
@@ -554,13 +561,13 @@ def _parser() -> argparse.ArgumentParser:
     disable.add_argument("--confirm", required=True)
 
     validate = sub.add_parser("validate", help="run API role-matrix checks against staging")
-    validate.add_argument("--base-url", default=os.environ.get("STAGING_BASE_URL", "https://staging.regmind.co"))
+    validate.add_argument("--base-url", default=os.environ.get("STAGING_BASE_URL", DEFAULT_STAGING_BASE_URL))
     validate.add_argument("--manifest", required=True)
     validate.add_argument("--credentials", required=True)
     validate.add_argument("--out", required=True)
 
     browser = sub.add_parser("browser", help="run SCO/CO/analyst authenticated browser smoke")
-    browser.add_argument("--base-url", default=os.environ.get("STAGING_BASE_URL", "https://staging.regmind.co"))
+    browser.add_argument("--base-url", default=os.environ.get("STAGING_BASE_URL", DEFAULT_STAGING_BASE_URL))
     browser.add_argument("--manifest", required=True)
     browser.add_argument("--credentials", required=True)
     browser.add_argument("--out-dir", required=True)

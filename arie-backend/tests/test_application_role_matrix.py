@@ -210,7 +210,7 @@ def test_browser_runner_covers_sco_co_analyst_without_secret_command_arguments(t
     assert result["passed"] is True
     assert [row["role"] for row in result["roles"]] == ["sco", "co", "analyst"]
     assert len(calls) == 3
-    for call, role in zip(calls, ("sco", "co", "analyst")):
+    for call, role in zip(calls, ("sco", "co", "analyst"), strict=True):
         assert call["command"][0] == "node"
         assert passwords[role] not in " ".join(call["command"])
         assert call["env"]["STAGING_QA_PASSWORD"] == passwords[role]
