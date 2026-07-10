@@ -44,8 +44,9 @@ Design contract
 * ``fixture_request_opt_in`` normalises the accepted opt-in aliases
   (``show_fixtures`` and ``include_fixtures``) from request handlers.
 * ``should_show_fixtures`` encodes the access policy: fixture opt-in query
-  params are honoured ONLY for ``admin`` or ``sco`` users; silently ignored
-  for all others.
+  params are honoured for ``admin`` or ``sco`` users. In staging only, the
+  dedicated ``APPAUDIT_ROLE_*`` synthetic officers may also opt in so CO and
+  analyst role coverage can be tested without exposing fixtures to pilot users.
 
 Public surface
 --------------
@@ -60,6 +61,7 @@ Public surface
 
 from __future__ import annotations
 
+import os
 from typing import List, Optional, Tuple
 
 # The reserved application-id prefix.  All fixture scenario rows share
@@ -328,10 +330,27 @@ def _fixture_application_match_clause(
 
 
 _FIXTURE_TRUE_VALUES = ("true", "1", "yes", "on")
+_ROLE_AUDIT_USER_PREFIX = "appaudit_role_"
+_OFFICER_ROLES = ("admin", "sco", "co", "analyst")
 
 
 def _fixture_opt_in_truthy(value: Optional[str]) -> bool:
     return str(value or "").strip().lower() in _FIXTURE_TRUE_VALUES
+
+
+def _is_staging_role_audit_actor(user: Optional[dict]) -> bool:
+    """Return True only for a synthetic role-harness officer in staging."""
+    if not user or str(os.environ.get("ENVIRONMENT") or "").strip().lower() != "staging":
+        return False
+    if str(user.get("type") or "").strip().lower() != "officer":
+        return False
+    if str(user.get("role") or "").strip().lower() not in _OFFICER_ROLES:
+        return False
+    identity_values = (user.get("name"), user.get("email"))
+    return any(
+        str(value or "").strip().lower().startswith(_ROLE_AUDIT_USER_PREFIX)
+        for value in identity_values
+    )
 
 
 def fixture_request_opt_in(handler) -> Optional[str]:
@@ -355,11 +374,12 @@ def should_show_fixtures(
     user: Optional[dict],
     query_param_value: Optional[str],
 ) -> bool:
-    """Return True only when an admin/sco user explicitly opts in.
+    """Return True only when an authorized user explicitly opts in.
 
     Policy:
     * A fixture opt-in query parameter must be present.
-    * The authenticated user must have role ``admin`` or ``sco``.
+    * The authenticated user must have role ``admin`` or ``sco``; or be a
+      staging-only ``APPAUDIT_ROLE_*`` synthetic officer.
     * Any other combination silently returns False (fixtures excluded).
     * ``user=None`` is treated as non-admin (returns False).
 
@@ -377,4 +397,4 @@ def should_show_fixtures(
     if not _fixture_opt_in_truthy(query_param_value):
         return False
     role = user.get("role") or user.get("type") or ""
-    return role in ("admin", "sco")
+    return role in ("admin", "sco") or _is_staging_role_audit_actor(user)
