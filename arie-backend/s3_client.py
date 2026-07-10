@@ -23,6 +23,54 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+_S3_TAG_VALUE_UNSAFE_RE = re.compile(r"[^A-Za-z0-9 +\-=._:/@]")
+_S3_TAG_KEY_UNSAFE_RE = re.compile(r"[^A-Za-z0-9 +\-=._:/@]")
+_S3_KEY_COMPONENT_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._=-]")
+_S3_METADATA_VALUE_UNSAFE_RE = re.compile(r"[^A-Za-z0-9 +\-=._:/@]")
+
+
+def _strip_control_chars(value: str) -> str:
+    return "".join(ch if ch.isprintable() and ch not in "\r\n\t" else "_" for ch in value)
+
+
+def _sanitize_s3_tag_value(value, max_length: int = 255) -> str:
+    text = _strip_control_chars(str(value or ""))
+    text = _S3_TAG_VALUE_UNSAFE_RE.sub("_", text)
+    return text[:max_length]
+
+
+def _sanitize_s3_tag_key(value, max_length: int = 128) -> str:
+    text = _strip_control_chars(str(value or "metadata"))
+    text = _S3_TAG_KEY_UNSAFE_RE.sub("_", text).strip()
+    return (text or "metadata")[:max_length]
+
+
+def _sanitize_s3_metadata_value(value, max_length: int = 1024) -> str:
+    text = _strip_control_chars(str(value or ""))
+    text = _S3_METADATA_VALUE_UNSAFE_RE.sub("_", text)
+    return text[:max_length]
+
+
+def _safe_s3_path_component(value, fallback: str) -> str:
+    text = str(value or "").replace("\\", "/")
+    text = os.path.basename(text).strip()
+    text = _S3_KEY_COMPONENT_UNSAFE_RE.sub("_", text).strip("._/")
+    return (text or fallback)[:120]
+
+
+def _safe_s3_filename(filename: str) -> str:
+    text = str(filename or "").replace("\\", "/")
+    text = os.path.basename(text).strip()
+    text = _S3_KEY_COMPONENT_UNSAFE_RE.sub("_", text).strip("._/")
+    if not text:
+        return "document"
+    if len(text) <= 180:
+        return text
+    root, ext = os.path.splitext(text)
+    ext = ext[:20]
+    root_limit = max(1, 180 - len(ext))
+    return f"{root[:root_limit]}{ext}"
+
 
 class S3Client:
     """S3 client wrapper with document management functionality"""
@@ -131,19 +179,25 @@ class S3Client:
         try:
             # Build S3 key: clients/{client_id}/{doc_type}/{timestamp}_{filename}
             timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-            key = f"clients/{client_id}/{doc_type}/{timestamp}_{filename}"
+            safe_client_id = _safe_s3_path_component(client_id, "client")
+            safe_doc_type = _safe_s3_path_component(doc_type, "document")
+            safe_filename = _safe_s3_filename(filename)
+            key = f"clients/{safe_client_id}/{safe_doc_type}/{timestamp}_{safe_filename}"
 
             # Prepare tags
             tags_list = [
-                {'Key': 'client_id', 'Value': client_id},
-                {'Key': 'doc_type', 'Value': doc_type},
+                {'Key': 'client_id', 'Value': _sanitize_s3_tag_value(client_id)},
+                {'Key': 'doc_type', 'Value': _sanitize_s3_tag_value(doc_type)},
                 {'Key': 'uploaded_at', 'Value': datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")},
-                {'Key': 'filename', 'Value': filename}
+                {'Key': 'filename', 'Value': _sanitize_s3_tag_value(safe_filename)}
             ]
 
             if metadata:
                 for meta_key, meta_value in metadata.items():
-                    tags_list.append({'Key': meta_key, 'Value': str(meta_value)[:255]})
+                    tags_list.append({
+                        'Key': _sanitize_s3_tag_key(meta_key),
+                        'Value': _sanitize_s3_tag_value(meta_value),
+                    })
 
             # URL-encode tag values for S3 Tagging header format
             tagging_str = '&'.join([
@@ -152,6 +206,7 @@ class S3Client:
             ])
 
             resolved_content_type = content_type or "application/octet-stream"
+            original_filename_for_storage = metadata.get("original_name", filename) if metadata else filename
 
             # Upload with tags and encryption
             self.s3_client.put_object(
@@ -162,9 +217,9 @@ class S3Client:
                 ServerSideEncryption='AES256',
                 Tagging=tagging_str,
                 Metadata={
-                    'client-id': client_id,
-                    'doc-type': doc_type,
-                    'original-filename': filename
+                    'client-id': _sanitize_s3_metadata_value(client_id),
+                    'doc-type': _sanitize_s3_metadata_value(doc_type),
+                    'original-filename': _sanitize_s3_metadata_value(original_filename_for_storage)
                 }
             )
 
