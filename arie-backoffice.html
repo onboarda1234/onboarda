@@ -3717,6 +3717,101 @@ function escapeHtml(str) {
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
 
+function normalizedEnumKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function mappedClass(value, classMap, fallbackClass) {
+  var key = normalizedEnumKey(value);
+  return Object.prototype.hasOwnProperty.call(classMap, key) ? classMap[key] : fallbackClass;
+}
+
+var MEMO_RISK_BADGE_CLASS_MAP = {
+  low: 'low',
+  medium: 'medium',
+  moderate: 'medium',
+  high: 'high',
+  very_high: 'very_high',
+  veryhigh: 'very_high',
+  critical: 'very_high'
+};
+
+var MEMO_DECISION_BADGE_CLASS_MAP = {
+  approve: 'low',
+  approved: 'low',
+  approve_with_conditions: 'medium',
+  review: 'high',
+  reject: 'very_high',
+  rejected: 'very_high',
+  decline: 'very_high',
+  declined: 'very_high'
+};
+
+var MEMO_DECISION_BOX_CLASS_MAP = {
+  approve: 'approve',
+  approved: 'approve',
+  approve_with_conditions: 'approve_with_conditions',
+  review: 'review',
+  reject: 'reject',
+  rejected: 'reject',
+  decline: 'reject',
+  declined: 'reject'
+};
+
+var EXISTING_BADGE_CLASS_MAP = {
+  accepted: 'approved',
+  approve: 'approved',
+  approved: 'approved',
+  clear: 'approved',
+  completed: 'approved',
+  complete: 'approved',
+  generated: 'pending',
+  requested: 'pending',
+  pending: 'pending',
+  under_review: 'in-review',
+  in_review: 'in-review',
+  review: 'in-review',
+  rejected: 'rejected',
+  reject: 'rejected',
+  failed: 'rejected',
+  error: 'rejected',
+  draft: 'draft',
+  waived: 'draft',
+  cancelled: 'draft',
+  canceled: 'draft'
+};
+
+function memoRiskBadgeClass(value) {
+  return mappedClass(value, MEMO_RISK_BADGE_CLASS_MAP, 'medium');
+}
+
+function memoDecisionBadgeClass(value) {
+  return mappedClass(value, MEMO_DECISION_BADGE_CLASS_MAP, 'high');
+}
+
+function memoDecisionBoxClass(value) {
+  return mappedClass(value, MEMO_DECISION_BOX_CLASS_MAP, 'review');
+}
+
+function existingBadgeClass(value) {
+  return mappedClass(value, EXISTING_BADGE_CLASS_MAP, 'pending');
+}
+
+function knownStatusColor(value) {
+  var key = normalizedEnumKey(value);
+  if (key === 'completed' || key === 'clean' || key === 'clear' || key === 'passed') return 'var(--green)';
+  if (key === 'awaiting_review' || key === 'issues_found' || key === 'warning' || key === 'medium' || key === 'escalate') return 'var(--amber)';
+  if (key === 'completed_with_errors' || key === 'failed' || key === 'critical' || key === 'high' || key === 'reject' || key === 'block_approval') return 'var(--red)';
+  return 'var(--amber)';
+}
+
+function supervisorSeverityColor(value) {
+  var key = normalizedEnumKey(value);
+  if (key === 'critical' || key === 'reject' || key === 'rejected' || key === 'block_approval') return '#991b1b';
+  if (key === 'high' || key === 'failed' || key === 'error' || key === 'escalate') return '#dc2626';
+  return '#d97706';
+}
+
 var TEST_SMOKE_RECORD_TOGGLE_STORAGE_KEY = 'regmind.backoffice.showTestSmokeRecords';
 var SHOW_TEST_SMOKE_RECORDS = (function() {
   try { return window.sessionStorage && window.sessionStorage.getItem(TEST_SMOKE_RECORD_TOGGLE_STORAGE_KEY) === 'true'; }
@@ -13362,7 +13457,7 @@ function renderAudit() {
   }
   AUDIT_LOG.forEach(function(e) {
     var tr = document.createElement('tr');
-    tr.innerHTML = '<td style="font-size:12px;font-family:monospace;">' + escapeHtml(e.ts) + '</td><td>' + escapeHtml(e.user) + '</td><td style="font-size:12px;">' + escapeHtml(e.role) + '</td><td><span class="badge ' + (e.action==='Approve'?'approved':e.action==='Reject'?'rejected':e.action==='Login'?'in-review':'pending') + '">' + escapeHtml(e.action) + '</span></td><td style="font-family:monospace;font-size:12px;">' + escapeHtml(e.target) + '</td><td style="font-size:12px;color:var(--text2);">' + escapeHtml(e.detail) + '</td><td style="font-size:11px;font-family:monospace;color:var(--text3);">' + escapeHtml(e.ip) + '</td>';
+    tr.innerHTML = '<td style="font-size:12px;font-family:monospace;">' + escapeHtml(e.ts) + '</td><td>' + escapeHtml(e.user) + '</td><td style="font-size:12px;">' + escapeHtml(e.role) + '</td><td><span class="badge ' + adminAuditActionBadgeClass(e.action) + '">' + escapeHtml(e.action) + '</span></td><td style="font-family:monospace;font-size:12px;">' + escapeHtml(e.target) + '</td><td style="font-size:12px;color:var(--text2);">' + escapeHtml(e.detail) + '</td><td style="font-size:11px;font-family:monospace;color:var(--text3);">' + escapeHtml(e.ip) + '</td>';
     tbody.appendChild(tr);
   });
 }
@@ -25655,14 +25750,77 @@ function normalizeAuditStatusLabel(value) {
   return text.replace(/_/g, ' ').replace(/\b\w/g, function(ch) { return ch.toUpperCase(); });
 }
 
+var AUDIT_STATUS_CLASS_MAP = {
+  accepted: 'accepted',
+  approved: 'approved',
+  approve: 'approved',
+  pass: 'pass',
+  passed: 'pass',
+  complete: 'complete',
+  completed: 'complete',
+  cleared: 'cleared',
+  false_positive_cleared: 'cleared',
+  rejected: 'rejected',
+  reject: 'rejected',
+  failed: 'failed',
+  fail: 'fail',
+  error: 'error',
+  pending: 'pending',
+  warning: 'warning',
+  warn: 'warn',
+  high: 'high',
+  escalated: 'high',
+  review: 'pending',
+  awaiting_review: 'pending',
+  needs_more_information: 'pending'
+};
+
+function auditEnumKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function auditMappedClass(value, map, fallbackClass) {
+  var key = auditEnumKey(value);
+  return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : fallbackClass;
+}
+
 function auditStatusClass(value) {
-  var normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  if (!normalized) return '';
-  if (normalized.indexOf('false-positive') >= 0) return 'cleared';
-  if (normalized.indexOf('confirm') >= 0 || normalized.indexOf('accepted') >= 0) return 'accepted';
-  if (normalized.indexOf('reject') >= 0 || normalized.indexOf('fail') >= 0 || normalized.indexOf('error') >= 0) return 'rejected';
-  if (normalized.indexOf('pending') >= 0 || normalized.indexOf('warn') >= 0 || normalized.indexOf('high') >= 0) return 'pending';
-  return normalized;
+  var key = auditEnumKey(value);
+  if (key.indexOf('false_positive') >= 0) return 'cleared';
+  if (key.indexOf('confirm') >= 0 || key.indexOf('accepted') >= 0) return 'accepted';
+  if (key.indexOf('reject') >= 0 || key.indexOf('fail') >= 0 || key.indexOf('error') >= 0) return 'rejected';
+  if (key.indexOf('pending') >= 0 || key.indexOf('warn') >= 0 || key.indexOf('high') >= 0) return 'pending';
+  return Object.prototype.hasOwnProperty.call(AUDIT_STATUS_CLASS_MAP, key) ? AUDIT_STATUS_CLASS_MAP[key] : 'pending';
+}
+
+var AUDIT_CATEGORY_CLASS_MAP = {
+  all: 'system',
+  ca_mesh: 'screening',
+  risk: 'risk',
+  screening: 'screening',
+  documents: 'documents',
+  memo: 'memo',
+  edd: 'edd',
+  governance: 'governance',
+  decision: 'decision',
+  system: 'system'
+};
+
+function auditCategoryClass(value) {
+  return auditMappedClass(value, AUDIT_CATEGORY_CLASS_MAP, 'system');
+}
+
+var ADMIN_AUDIT_ACTION_BADGE_CLASS_MAP = {
+  approve: 'approved',
+  approved: 'approved',
+  reject: 'rejected',
+  rejected: 'rejected',
+  login: 'in-review',
+  logout: 'in-review'
+};
+
+function adminAuditActionBadgeClass(value) {
+  return auditMappedClass(value, ADMIN_AUDIT_ACTION_BADGE_CLASS_MAP, 'pending');
 }
 
 function classifyAuditEvent(entry, detail, beforeState, afterState) {
@@ -25816,9 +25974,9 @@ function renderAuditEventCard(entry, idx) {
   var role = entry && entry.user_role ? ' · ' + formatRoleLabel(entry.user_role) : '';
   var techId = 'audit-technical-' + idx;
   var technical = safeStringifyAuditValue(buildAuditTechnicalPayload(entry || {}, detail, beforeState, afterState));
-  var statusChip = status ? '<span class="audit-chip status ' + escapeHtml(auditStatusClass(status)) + '">' + escapeHtml(normalizeAuditStatusLabel(status)) + '</span>' : '';
+  var statusChip = status ? '<span class="audit-chip status ' + auditStatusClass(status) + '">' + escapeHtml(normalizeAuditStatusLabel(status)) + '</span>' : '';
 
-  return '<div class="audit-event-card ' + escapeHtml(category.toLowerCase()) + '" data-audit-category="' + escapeHtml(category) + '">' +
+  return '<div class="audit-event-card ' + auditCategoryClass(category) + '" data-audit-category="' + escapeHtml(category) + '">' +
     '<div class="audit-event-header">' +
       '<div class="audit-event-title-row">' +
         '<span class="audit-event-title">' + escapeHtml(action) + '</span>' +
@@ -33055,12 +33213,14 @@ function renderMemoDecisionSnapshot(data) {
   });
   if (meta.blocked) blockers.push(meta.block_reason || 'Memo controls blocked approval.');
   if (meta.is_stale) blockers.push(meta.stale_reason || 'Memo is stale.');
+  var riskRatingLabel = String(meta.risk_rating || 'UNKNOWN');
+  var riskRatingClass = memoRiskBadgeClass(riskRatingLabel);
   return '<div class="memo-section">' +
     '<div class="memo-section-title">Decision Summary</div>' +
     '<div class="memo-text">' + escapeHtml(String(summary)).slice(0, 1200) + '</div>' +
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">' +
       '<span style="font-size:11px;color:var(--text3);">Recommended decision</span><span class="memo-risk-badge medium">' + escapeHtml(String(decision).replace(/_/g, ' ')) + '</span>' +
-      '<span style="font-size:11px;color:var(--text3);">Risk</span><span class="memo-risk-badge ' + String(meta.risk_rating || 'medium').toLowerCase() + '">' + escapeHtml(String(meta.risk_rating || 'UNKNOWN')) + '</span>' +
+      '<span style="font-size:11px;color:var(--text3);">Risk</span><span class="memo-risk-badge ' + riskRatingClass + '">' + escapeHtml(riskRatingLabel) + '</span>' +
     '</div>' +
     '<div style="margin-top:12px;font-size:12px;color:var(--text2);"><strong>Key risks:</strong> ' + escapeHtml(risks.length ? risks.join(' ') : 'No key risk summary recorded.').slice(0, 900) + '</div>' +
     '<div style="margin-top:8px;font-size:12px;color:' + (blockers.length ? '#991b1b' : '#166534') + ';"><strong>Open blockers:</strong> ' + escapeHtml(blockers.length ? blockers.join('; ') : 'None recorded in memo metadata.') + '</div>' +
@@ -33127,16 +33287,17 @@ function renderMemoSections(data) {
     status: (window._currentDetailApp || {}).statusRaw || ''
   });
   var dec = (data.metadata||{}).approval_recommendation || 'REVIEW';
+  dec = String(dec || 'REVIEW');
   html += '<div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">';
   if (memoRiskState.hasRisk) {
-    html += '<span style="font-size:11px;color:var(--text3);">Risk Rating:</span><span class="memo-risk-badge ' + memoRiskState.level.toLowerCase() + '">' + memoRiskState.level.replace('_',' ') + ' (' + memoRiskState.score.toFixed(1) + '/100)</span>';
+    html += '<span style="font-size:11px;color:var(--text3);">Risk Rating:</span><span class="memo-risk-badge ' + memoRiskBadgeClass(memoRiskState.level) + '">' + escapeHtml(String(memoRiskState.level || '').replace('_',' ')) + ' (' + escapeHtml(memoRiskState.score.toFixed(1)) + '/100)</span>';
   } else {
     html += '<span style="font-size:11px;color:var(--text3);">Risk Rating:</span><span class="memo-risk-badge medium" style="background:#fee2e2;color:#991b1b;">' + escapeHtml(RISK_UNAVAILABLE_TEXT) + '</span>';
   }
-  html += '<span style="font-size:11px;color:var(--text3);margin-left:12px;">Decision:</span><span class="memo-risk-badge ' + (dec.indexOf('APPROVE')===0&&dec!=='APPROVE_WITH_CONDITIONS'?'low':dec==='APPROVE_WITH_CONDITIONS'?'medium':dec==='REVIEW'?'high':'very_high') + '">' + dec.replace(/_/g,' ') + '</span>';
+  html += '<span style="font-size:11px;color:var(--text3);margin-left:12px;">Decision:</span><span class="memo-risk-badge ' + memoDecisionBadgeClass(dec) + '">' + escapeHtml(dec.replace(/_/g,' ')) + '</span>';
   var conf = (data.metadata||{}).confidence_level;
   if (conf) { html += '<span style="font-size:11px;color:var(--text3);margin-left:12px;">Confidence:</span><span style="font-size:11px;font-weight:600;color:' + (conf>=0.8?'var(--green)':conf>=0.6?'var(--amber)':'var(--red)') + ';">' + Math.round(conf*100) + '%</span>'; }
-  html += '<span style="font-size:10px;color:var(--text3);margin-left:auto;">Ref: ' + (data.application_ref||'') + ' | Generated: ' + (data.memo_generated||'').substring(0,19).replace('T',' ') + '</span>';
+  html += '<span style="font-size:10px;color:var(--text3);margin-left:auto;">Ref: ' + escapeHtml(data.application_ref || '') + ' | Generated: ' + escapeHtml(String(data.memo_generated || '').substring(0,19).replace('T',' ')) + '</span>';
   html += '</div>';
 
   html += renderMemoDecisionSnapshot(data);
@@ -33148,18 +33309,18 @@ function renderMemoSections(data) {
     var sec = s[key];
     if (!sec) return;
     html += '<div class="memo-section">';
-    html += '<div class="memo-section-title"><span class="section-num">' + (idx+1) + '</span>' + (sec.title||key.replace(/_/g,' ')) + '</div>';
+    html += '<div class="memo-section-title"><span class="section-num">' + (idx+1) + '</span>' + escapeHtml(sec.title || key.replace(/_/g,' ')) + '</div>';
 
     // Risk Assessment has sub-sections
     if (key === 'risk_assessment' && sec.sub_sections) {
-      if (sec.content) html += '<div class="memo-text">' + sec.content + '</div>';
+      if (sec.content) html += '<div class="memo-text">' + escapeHtml(sec.content) + '</div>';
       var subOrder = ['jurisdiction_risk','business_risk','transaction_risk','ownership_risk','financial_crime_risk'];
       subOrder.forEach(function(sk) {
         var sub = sec.sub_sections[sk];
         if (!sub) return;
         html += '<div class="memo-sub-section">';
-        html += '<div class="memo-sub-title">' + (sub.title||sk.replace(/_/g,' ')) + ' <span class="memo-risk-badge ' + (sub.rating||'medium').toLowerCase() + '" style="margin-left:6px;">' + (sub.rating||'N/A') + '</span></div>';
-        html += '<div class="memo-text">' + (sub.content||'Information not provided') + '</div>';
+        html += '<div class="memo-sub-title">' + escapeHtml(sub.title || sk.replace(/_/g,' ')) + ' <span class="memo-risk-badge ' + memoRiskBadgeClass(sub.rating || 'medium') + '" style="margin-left:6px;">' + escapeHtml(sub.rating || 'N/A') + '</span></div>';
+        html += '<div class="memo-text">' + escapeHtml(sub.content || 'Information not provided') + '</div>';
         html += '</div>';
       });
     }
@@ -33167,10 +33328,10 @@ function renderMemoSections(data) {
     else if (key === 'red_flags_and_mitigants') {
       html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
       html += '<div><div style="font-size:10px;font-weight:700;color:var(--red);margin-bottom:6px;">⚠️ RED FLAGS</div>';
-      (sec.red_flags||['No red flags identified']).forEach(function(f) { html += '<div class="memo-red-flag">• ' + f + '</div>'; });
+      (sec.red_flags||['No red flags identified']).forEach(function(f) { html += '<div class="memo-red-flag">• ' + escapeHtml(f) + '</div>'; });
       html += '</div>';
       html += '<div><div style="font-size:10px;font-weight:700;color:var(--green);margin-bottom:6px;">✅ MITIGANTS</div>';
-      (sec.mitigants||['None identified']).forEach(function(m) { html += '<div class="memo-mitigant">• ' + m + '</div>'; });
+      (sec.mitigants||['None identified']).forEach(function(m) { html += '<div class="memo-mitigant">• ' + escapeHtml(m) + '</div>'; });
       html += '</div></div>';
     }
     // Onboarding Enhanced Review — deterministic lifecycle summary
@@ -33202,7 +33363,7 @@ function renderMemoSections(data) {
           html += '</div>';
           (group.requirements || []).slice(0, 10).forEach(function(item) {
             html += '<div style="display:flex;gap:8px;align-items:flex-start;border-top:1px solid var(--border1);padding-top:6px;margin-top:6px;">';
-            html += '<span class="status-pill ' + escapeHtml((item.status || 'generated').replace(/_/g, '-')) + '">' + escapeHtml(item.memo_status || item.status || 'Status not recorded') + '</span>';
+            html += '<span class="badge ' + existingBadgeClass(item.status || item.memo_status || 'generated') + '">' + escapeHtml(item.memo_status || item.status || 'Status not recorded') + '</span>';
             html += '<div style="font-size:11px;color:var(--text1);line-height:1.45;">';
             html += '<strong>' + escapeHtml(item.requirement_label || item.requirement_key || 'Requirement') + '</strong>';
             html += '<div style="font-size:10px;color:var(--text3);">Audience: ' + escapeHtml(item.audience || 'not recorded') + ' | Type: ' + escapeHtml(item.requirement_type || 'not recorded') + ' | Scope: ' + escapeHtml(item.subject_scope || 'not recorded') + '</div>';
@@ -33214,10 +33375,10 @@ function renderMemoSections(data) {
     }
     // Compliance Decision — highlighted box
     else if (key === 'compliance_decision') {
-      var d = sec.decision||'REVIEW';
-      var dClass = d==='APPROVE'?'approve':d==='APPROVE_WITH_CONDITIONS'?'approve_with_conditions':d==='REVIEW'?'review':'reject';
-      html += '<div class="memo-decision-box ' + dClass + '">' + d.replace(/_/g,' ') + '</div>';
-      html += '<div class="memo-text">' + (sec.content||'Information not provided') + '</div>';
+      var d = String(sec.decision || 'REVIEW');
+      var dClass = memoDecisionBoxClass(d);
+      html += '<div class="memo-decision-box ' + dClass + '">' + escapeHtml(d.replace(/_/g,' ')) + '</div>';
+      html += '<div class="memo-text">' + escapeHtml(sec.content || 'Information not provided') + '</div>';
     }
     // Ownership & Control — with structure complexity and control statement
     else if (key === 'ownership_and_control') {
@@ -33225,14 +33386,14 @@ function renderMemoSections(data) {
         html += '<div style="display:flex;gap:12px;margin-bottom:10px;flex-wrap:wrap;">';
         if (sec.structure_complexity) {
           var scClass = sec.structure_complexity==='Simple'?'low':sec.structure_complexity==='Layered'?'medium':'high';
-          html += '<span style="font-size:10px;color:var(--text3);">Structure:</span><span class="memo-risk-badge ' + scClass + '">' + sec.structure_complexity + '</span>';
+          html += '<span style="font-size:10px;color:var(--text3);">Structure:</span><span class="memo-risk-badge ' + scClass + '">' + escapeHtml(sec.structure_complexity) + '</span>';
         }
         if (sec.control_statement) {
-          html += '<span style="font-size:10px;color:var(--text3);margin-left:8px;">Control:</span><span style="font-size:11px;font-weight:600;color:var(--text1);">' + sec.control_statement + '</span>';
+          html += '<span style="font-size:10px;color:var(--text3);margin-left:8px;">Control:</span><span style="font-size:11px;font-weight:600;color:var(--text1);">' + escapeHtml(sec.control_statement) + '</span>';
         }
         html += '</div>';
       }
-      html += '<div class="memo-text">' + (sec.content||'Information not provided') + '</div>';
+      html += '<div class="memo-text">' + escapeHtml(sec.content || 'Information not provided') + '</div>';
     }
     // AI Explainability — structured factor display
     else if (key === 'ai_explainability') {
@@ -33240,14 +33401,14 @@ function renderMemoSections(data) {
       var aiContent = sec.content || '';
       var modelInfo = aiContent.split('Risk-increasing factors:')[0] || aiContent;
       if (modelInfo && modelInfo.length < aiContent.length) {
-        html += '<div class="memo-text">' + modelInfo.trim() + '</div>';
+        html += '<div class="memo-text">' + escapeHtml(modelInfo.trim()) + '</div>';
       }
       // Risk-increasing factors
       var incFactors = sec.risk_increasing_factors || [];
       if (incFactors.length > 0) {
         html += '<div style="margin:8px 0;"><div style="font-size:10px;font-weight:700;color:var(--red);margin-bottom:4px;">RISK-INCREASING FACTORS</div>';
         incFactors.forEach(function(f) {
-          html += '<div style="font-size:11px;color:#dc2626;padding:3px 0 3px 16px;border-left:3px solid #dc2626;margin:3px 0;">+ ' + f + '</div>';
+          html += '<div style="font-size:11px;color:#dc2626;padding:3px 0 3px 16px;border-left:3px solid #dc2626;margin:3px 0;">+ ' + escapeHtml(f) + '</div>';
         });
         html += '</div>';
       }
@@ -33256,23 +33417,23 @@ function renderMemoSections(data) {
       if (decFactors.length > 0) {
         html += '<div style="margin:8px 0;"><div style="font-size:10px;font-weight:700;color:var(--green);margin-bottom:4px;">RISK-DECREASING FACTORS</div>';
         decFactors.forEach(function(f) {
-          html += '<div style="font-size:11px;color:#16a34a;padding:3px 0 3px 16px;border-left:3px solid #16a34a;margin:3px 0;">- ' + f + '</div>';
+          html += '<div style="font-size:11px;color:#16a34a;padding:3px 0 3px 16px;border-left:3px solid #16a34a;margin:3px 0;">- ' + escapeHtml(f) + '</div>';
         });
         html += '</div>';
       }
       // Fallback to full content if no structured factors
       if (incFactors.length === 0 && decFactors.length === 0) {
-        html += '<div class="memo-text">' + aiContent + '</div>';
+        html += '<div class="memo-text">' + escapeHtml(aiContent) + '</div>';
       }
       // Decision pathway
       var pathIdx = aiContent.indexOf('Decision pathway:');
       if (pathIdx > -1) {
-        html += '<div class="memo-text" style="margin-top:6px;font-size:10px;color:var(--text3);">' + aiContent.substring(pathIdx) + '</div>';
+        html += '<div class="memo-text" style="margin-top:6px;font-size:10px;color:var(--text3);">' + escapeHtml(aiContent.substring(pathIdx)) + '</div>';
       }
     }
     // Standard sections
     else {
-      html += '<div class="memo-text">' + (sec.content||'Information not provided') + '</div>';
+      html += '<div class="memo-text">' + escapeHtml(sec.content || 'Information not provided') + '</div>';
     }
 
     html += '</div>';
@@ -33283,21 +33444,22 @@ function renderMemoSections(data) {
   if (sv && sv.verdict) {
     var svColor = sv.verdict === 'CONSISTENT' ? '#16a34a' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? '#d97706' : '#dc2626';
     var svBg = sv.verdict === 'CONSISTENT' ? '#f0fdf4' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? '#fffbeb' : '#fef2f2';
+    var svVerdictLabel = String(sv.verdict || '').replace(/_/g, ' ');
     html += '<div style="border:2px solid ' + svColor + ';border-radius:8px;padding:16px;margin-top:16px;background:' + svBg + ';">';
     html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">';
     html += '<span style="font-size:13px;font-weight:700;color:' + svColor + ';">SUPERVISOR VERDICT</span>';
     html += '<span class="ai-advisory-badge">🤖 System-Generated — Advisory Only</span>';
-    html += '<span style="background:' + svColor + ';color:#fff;padding:2px 10px;border-radius:4px;font-size:11px;font-weight:700;">' + sv.verdict.replace(/_/g, ' ') + '</span>';
+    html += '<span style="background:' + svColor + ';color:#fff;padding:2px 10px;border-radius:4px;font-size:11px;font-weight:700;">' + escapeHtml(svVerdictLabel) + '</span>';
     html += '<span style="font-size:11px;color:var(--text3);margin-left:auto;">Confidence: ' + Math.round((sv.supervisor_confidence || 0) * 100) + '%</span>';
     html += '</div>';
-    html += '<div style="font-size:11px;color:var(--text1);margin-bottom:8px;">' + (sv.recommendation || '') + '</div>';
+    html += '<div style="font-size:11px;color:var(--text1);margin-bottom:8px;">' + escapeHtml(sv.recommendation || '') + '</div>';
     // Contradictions
     if (sv.contradictions && sv.contradictions.length > 0) {
       html += '<div style="font-size:10px;font-weight:700;color:#dc2626;margin:6px 0 4px;">Contradictions (' + sv.contradictions.length + '):</div>';
       sv.contradictions.forEach(function(c) {
         html += '<div style="font-size:10px;padding:4px 8px;margin:2px 0;background:rgba(220,38,38,0.08);border-radius:4px;border-left:3px solid #dc2626;">';
-        html += '<strong>[' + (c.severity || '').toUpperCase() + ']</strong> ' + c.description;
-        if (c.section_a && c.section_b) html += ' <span style="color:var(--text3);">(' + c.section_a + ' vs ' + c.section_b + ')</span>';
+        html += '<strong>[' + escapeHtml(String(c.severity || '').toUpperCase()) + ']</strong> ' + escapeHtml(c.description || '');
+        if (c.section_a && c.section_b) html += ' <span style="color:var(--text3);">(' + escapeHtml(c.section_a) + ' vs ' + escapeHtml(c.section_b) + ')</span>';
         html += '</div>';
       });
     }
@@ -33306,7 +33468,7 @@ function renderMemoSections(data) {
       html += '<div style="font-size:10px;font-weight:700;color:#d97706;margin:6px 0 4px;">Warnings (' + sv.warnings.length + '):</div>';
       sv.warnings.forEach(function(w) {
         html += '<div style="font-size:10px;padding:4px 8px;margin:2px 0;background:rgba(217,119,6,0.08);border-radius:4px;border-left:3px solid #d97706;">';
-        html += '<strong>[' + (w.severity || '').toUpperCase() + ']</strong> ' + w.description;
+        html += '<strong>[' + escapeHtml(String(w.severity || '').toUpperCase()) + ']</strong> ' + escapeHtml(w.description || '');
         html += '</div>';
       });
     }
@@ -33318,11 +33480,12 @@ function renderMemoSections(data) {
   if (re && re.engine_status) {
     var reColor = re.engine_status === 'CLEAN' ? '#16a34a' : re.engine_status === 'ENFORCED' ? '#d97706' : '#dc2626';
     var reBg = re.engine_status === 'CLEAN' ? '#f0fdf4' : re.engine_status === 'ENFORCED' ? '#fffbeb' : '#fef2f2';
+    var reStatus = String(re.engine_status || '');
     html += '<div style="border:2px solid ' + reColor + ';border-radius:8px;padding:16px;margin-top:12px;background:' + reBg + ';">';
     html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">';
     html += '<span style="font-size:13px;font-weight:700;color:' + reColor + ';">PRE-GENERATION RULE ENGINE</span>';
     html += '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;background:rgba(22,163,74,0.1);color:#166534;border:1px solid rgba(22,163,74,0.3);">⚙️ Deterministic — Rule-Based</span>';
-    html += '<span style="background:' + reColor + ';color:#fff;padding:2px 10px;border-radius:4px;font-size:11px;font-weight:700;">' + re.engine_status + '</span>';
+    html += '<span style="background:' + reColor + ';color:#fff;padding:2px 10px;border-radius:4px;font-size:11px;font-weight:700;">' + escapeHtml(reStatus) + '</span>';
     html += '<span style="font-size:10px;color:var(--text3);margin-left:auto;">Rules: ' + (re.rules_checked || []).length + ' | Enforcements: ' + (re.total_enforcements || 0) + ' | Violations: ' + (re.total_violations || 0) + '</span>';
     html += '</div>';
     // Enforcements
@@ -33330,9 +33493,9 @@ function renderMemoSections(data) {
       html += '<div style="font-size:10px;font-weight:700;color:#d97706;margin:6px 0 4px;">Enforcements Applied (' + re.enforcements.length + '):</div>';
       re.enforcements.forEach(function(e) {
         html += '<div style="font-size:10px;padding:4px 8px;margin:2px 0;background:rgba(217,119,6,0.08);border-radius:4px;border-left:3px solid #d97706;">';
-        html += '<strong>[' + (e.rule || '') + ']</strong> ' + (e.reason || '');
-        if (e.original && e.enforced) html += ' <span style="color:var(--text3);">(was: ' + e.original + ' -> now: ' + e.enforced + ')</span>';
-        if (e.original_decision && e.enforced_decision) html += ' <span style="color:var(--text3);">(was: ' + e.original_decision + ' -> now: ' + e.enforced_decision + ')</span>';
+        html += '<strong>[' + escapeHtml(e.rule || '') + ']</strong> ' + escapeHtml(e.reason || '');
+        if (e.original && e.enforced) html += ' <span style="color:var(--text3);">(was: ' + escapeHtml(e.original) + ' -> now: ' + escapeHtml(e.enforced) + ')</span>';
+        if (e.original_decision && e.enforced_decision) html += ' <span style="color:var(--text3);">(was: ' + escapeHtml(e.original_decision) + ' -> now: ' + escapeHtml(e.enforced_decision) + ')</span>';
         html += '</div>';
       });
     }
@@ -33341,8 +33504,8 @@ function renderMemoSections(data) {
       html += '<div style="font-size:10px;font-weight:700;color:#dc2626;margin:6px 0 4px;">Rule Violations (' + re.violations.length + '):</div>';
       re.violations.forEach(function(v) {
         html += '<div style="font-size:10px;padding:4px 8px;margin:2px 0;background:rgba(220,38,38,0.08);border-radius:4px;border-left:3px solid #dc2626;">';
-        html += '<strong>[' + (v.rule || '') + ' / ' + (v.severity || '').toUpperCase() + ']</strong> ' + (v.detail || '');
-        if (v.action) html += ' <span style="color:var(--text3);">Action: ' + v.action + '</span>';
+        html += '<strong>[' + escapeHtml(v.rule || '') + ' / ' + escapeHtml(String(v.severity || '').toUpperCase()) + ']</strong> ' + escapeHtml(v.detail || '');
+        if (v.action) html += ' <span style="color:var(--text3);">Action: ' + escapeHtml(v.action) + '</span>';
         html += '</div>';
       });
     }
@@ -33353,7 +33516,7 @@ function renderMemoSections(data) {
   if (data.metadata && data.metadata.blocked) {
     html += '<div style="border:3px solid #dc2626;border-radius:8px;padding:16px;margin-top:12px;background:#fef2f2;text-align:center;">';
     html += '<div style="font-size:16px;font-weight:700;color:#dc2626;margin-bottom:6px;">MEMO BLOCKED</div>';
-    html += '<div style="font-size:12px;color:#991b1b;">' + (data.metadata.block_reason || 'Blocked by Rule Engine + Supervisor. Manual review required.') + '</div>';
+    html += '<div style="font-size:12px;color:#991b1b;">' + escapeHtml(data.metadata.block_reason || 'Blocked by Rule Engine + Supervisor. Manual review required.') + '</div>';
     html += '</div>';
   }
 
@@ -33919,7 +34082,7 @@ async function loadSupervisorForApp() {
     }
   } catch (e) {
     statusBadge.textContent = 'CONNECTION ERROR'; statusBadge.style.background = '#fee2e2'; statusBadge.style.color = '#991b1b';
-    resultsPanel.style.display = ''; resultsPanel.innerHTML = '<div class="card" style="padding:16px;color:#991b1b;font-size:12px;">Network error loading supervisor results: ' + (e.message || 'unknown') + '</div>';
+    resultsPanel.style.display = ''; resultsPanel.innerHTML = '<div class="card" style="padding:16px;color:#991b1b;font-size:12px;">Network error loading supervisor results: ' + escapeHtml(e.message || 'unknown') + '</div>';
   }
 }
 
@@ -33941,13 +34104,13 @@ function renderSupervisorResults(result) {
   var provHtml = '<div class="card" style="margin-bottom:14px;padding:12px 16px;background:var(--surface);border:1px solid var(--border1);">';
   provHtml += '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:11px;color:var(--text3);">';
   if (result.started_at) {
-    provHtml += '<span><strong>Run started:</strong> ' + result.started_at.substring(0,19).replace('T',' ') + ' UTC</span>';
+    provHtml += '<span><strong>Run started:</strong> ' + escapeHtml(String(result.started_at).substring(0,19).replace('T',' ')) + ' UTC</span>';
   }
   if (result.completed_at) {
-    provHtml += '<span><strong>Completed:</strong> ' + result.completed_at.substring(0,19).replace('T',' ') + ' UTC</span>';
+    provHtml += '<span><strong>Completed:</strong> ' + escapeHtml(String(result.completed_at).substring(0,19).replace('T',' ')) + ' UTC</span>';
   }
   if (result.pipeline_id) {
-    provHtml += '<span><strong>Pipeline ID:</strong> <code style="font-size:10px;background:var(--bg2);padding:1px 4px;border-radius:3px;">' + result.pipeline_id.substring(0,12) + '…</code></span>';
+    provHtml += '<span><strong>Pipeline ID:</strong> <code style="font-size:10px;background:var(--bg2);padding:1px 4px;border-radius:3px;">' + escapeHtml(String(result.pipeline_id).substring(0,12)) + '…</code></span>';
   }
   provHtml += '<span><strong>Analysis type:</strong> Rules-based / heuristic (deterministic agents)</span>';
   provHtml += '</div>';
@@ -33994,10 +34157,10 @@ function renderSupervisorResults(result) {
   if (agents.length === 0) { agHtml = '<div style="font-size:12px;color:var(--text3);">No agent results.</div>'; }
   agents.forEach(function(a) {
     var confColor = a.confidence >= 0.85 ? 'var(--green)' : a.confidence >= 0.65 ? 'var(--amber)' : 'var(--red)';
-    var stColor = a.status === 'clean' ? 'var(--green)' : a.status === 'issues_found' ? 'var(--amber)' : 'var(--red)';
+    var stColor = knownStatusColor(a.status);
     agHtml += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border1);">';
-    agHtml += '<div style="width:240px;font-size:12px;font-weight:600;">' + (a.agent_name || a.agent_type.replace(/_/g,' ')) + '</div>';
-    agHtml += '<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:' + stColor + ';color:white;font-weight:600;">' + (a.status || '').toUpperCase() + '</span>';
+    agHtml += '<div style="width:240px;font-size:12px;font-weight:600;">' + escapeHtml(a.agent_name || String(a.agent_type || '').replace(/_/g,' ')) + '</div>';
+    agHtml += '<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:' + stColor + ';color:white;font-weight:600;">' + escapeHtml(String(a.status || '').toUpperCase()) + '</span>';
     agHtml += '<span style="font-size:11px;color:' + confColor + ';font-weight:700;">' + (a.confidence != null ? (a.confidence * 100).toFixed(0) + '%' : '—') + '</span>';
     agHtml += '<span style="font-size:11px;color:var(--text3);">' + (a.findings_count || 0) + ' findings, ' + (a.issues_count || 0) + ' issues</span>';
     if (a.escalation_flag) agHtml += '<span style="font-size:10px;background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:4px;font-weight:600;">ESCALATION</span>';
@@ -34013,15 +34176,15 @@ function renderSupervisorResults(result) {
   else if (contras.length === 0) { cHtml = '<div style="font-size:12px;color:var(--green);font-weight:600;">✅ No contradictions detected between agents.</div>'; }
   else {
     contras.forEach(function(c) {
-      var sevColor = c.severity === 'critical' ? '#991b1b' : c.severity === 'high' ? '#dc2626' : '#d97706';
+      var sevColor = supervisorSeverityColor(c.severity);
       cHtml += '<div style="padding:10px;margin-bottom:8px;border-left:3px solid ' + sevColor + ';background:var(--bg2);border-radius:6px;">';
       cHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
-      cHtml += '<span style="font-size:12px;font-weight:700;">' + (c.contradiction_category || c.contradiction_type || '').replace(/_/g,' ') + '</span>';
-      cHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + sevColor + ';color:white;font-weight:600;">' + (c.severity || '').toUpperCase() + '</span>';
+      cHtml += '<span style="font-size:12px;font-weight:700;">' + escapeHtml(String(c.contradiction_category || c.contradiction_type || '').replace(/_/g,' ')) + '</span>';
+      cHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + sevColor + ';color:white;font-weight:600;">' + escapeHtml(String(c.severity || '').toUpperCase()) + '</span>';
       cHtml += '</div>';
-      cHtml += '<div style="font-size:11px;color:var(--text2);line-height:1.6;">' + (c.description || '') + '</div>';
+      cHtml += '<div style="font-size:11px;color:var(--text2);line-height:1.6;">' + escapeHtml(c.description || '') + '</div>';
       if (c.agent_a_type || c.agent_b_type) {
-        cHtml += '<div style="font-size:10px;color:var(--text3);margin-top:4px;">Agents: ' + (c.agent_a_type || '').replace(/_/g,' ') + ' vs ' + (c.agent_b_type || '').replace(/_/g,' ') + '</div>';
+        cHtml += '<div style="font-size:10px;color:var(--text3);margin-top:4px;">Agents: ' + escapeHtml(String(c.agent_a_type || '').replace(/_/g,' ')) + ' vs ' + escapeHtml(String(c.agent_b_type || '').replace(/_/g,' ')) + '</div>';
       }
       cHtml += '</div>';
     });
@@ -34035,13 +34198,13 @@ function renderSupervisorResults(result) {
   if (rules.length === 0) { rHtml = '<div style="font-size:12px;color:var(--green);font-weight:600;">✅ No compliance rules triggered.</div>'; }
   else {
     rules.forEach(function(r) {
-      var actColor = (r.action_taken === 'reject' || r.action_taken === 'block_approval') ? '#991b1b' : r.action_taken === 'escalate' ? '#dc2626' : '#d97706';
+      var actColor = supervisorSeverityColor(r.action_taken);
       rHtml += '<div style="padding:10px;margin-bottom:8px;border-left:3px solid ' + actColor + ';background:var(--bg2);border-radius:6px;">';
       rHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
-      rHtml += '<span style="font-size:12px;font-weight:700;">' + (r.rule_name || '').replace(/_/g,' ') + '</span>';
-      rHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + actColor + ';color:white;font-weight:600;">' + (r.action_taken || '').replace(/_/g,' ').toUpperCase() + '</span>';
+      rHtml += '<span style="font-size:12px;font-weight:700;">' + escapeHtml(String(r.rule_name || '').replace(/_/g,' ')) + '</span>';
+      rHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + actColor + ';color:white;font-weight:600;">' + escapeHtml(String(r.action_taken || '').replace(/_/g,' ').toUpperCase()) + '</span>';
       rHtml += '</div>';
-      rHtml += '<div style="font-size:11px;color:var(--text2);">' + (r.rule_recommendation || r.rule_category || '') + '</div>';
+      rHtml += '<div style="font-size:11px;color:var(--text2);">' + escapeHtml(r.rule_recommendation || r.rule_category || '') + '</div>';
       rHtml += '</div>';
     });
   }
@@ -34057,11 +34220,11 @@ function renderSupervisorResults(result) {
     rrHtml += '<div style="padding:10px;background:#fef3c7;border-radius:6px;margin-bottom:10px;font-size:12px;color:#92400e;font-weight:600;">⚠️ This case requires human review</div>';
     if (blocking.length > 0) {
       rrHtml += '<div style="font-size:11px;font-weight:700;color:var(--red);margin-bottom:6px;">Blocking Issues:</div>';
-      blocking.forEach(function(b) { rrHtml += '<div style="font-size:11px;color:var(--red);padding:2px 0;">🔴 ' + b + '</div>'; });
+      blocking.forEach(function(b) { rrHtml += '<div style="font-size:11px;color:var(--red);padding:2px 0;">🔴 ' + escapeHtml(b) + '</div>'; });
     }
     if (reviewReasons.length > 0) {
       rrHtml += '<div style="font-size:11px;font-weight:700;color:var(--amber);margin:8px 0 6px;">Review Reasons:</div>';
-      reviewReasons.forEach(function(r) { rrHtml += '<div style="font-size:11px;color:var(--text2);padding:2px 0;">• ' + r + '</div>'; });
+      reviewReasons.forEach(function(r) { rrHtml += '<div style="font-size:11px;color:var(--text2);padding:2px 0;">• ' + escapeHtml(r) + '</div>'; });
     }
     rrHtml += '<div style="margin-top:12px;padding:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:6px;font-size:12px;color:var(--text3);">This analysis is for decision support only. To act on these findings, use the compliance memo workflow: Generate Memo → Validate → Approve/Reject via the Memo tab.</div>';
   } else {
@@ -34079,8 +34242,8 @@ function renderSupervisorResults(result) {
 
 function svStatCard(label, value, color) {
   return '<div style="background:var(--surface);border:1px solid var(--border1);border-radius:6px;padding:10px;text-align:center;">'
-    + '<div style="font-size:9px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);font-weight:600;">' + label + '</div>'
-    + '<div style="font-size:18px;font-weight:800;color:' + color + ';margin-top:4px;">' + value + '</div>'
+    + '<div style="font-size:9px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);font-weight:600;">' + escapeHtml(label) + '</div>'
+    + '<div style="font-size:18px;font-weight:800;color:' + color + ';margin-top:4px;">' + escapeHtml(value) + '</div>'
     + '</div>';
 }
 
@@ -34093,7 +34256,7 @@ async function refreshSupervisorDashboard() {
       headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
     });
     var data = await res.json();
-    if (data.error) { document.getElementById('sv-pipelines-list').innerHTML = '<div style="font-size:12px;color:var(--text3);">Supervisor not available: ' + data.error + '</div>'; return; }
+    if (data.error) { document.getElementById('sv-pipelines-list').innerHTML = '<div style="font-size:12px;color:var(--text3);">Supervisor not available: ' + escapeHtml(data.error) + '</div>'; return; }
 
     var stats = data.system_stats || {};
     document.getElementById('sv-stat-pipelines').textContent = (data.recent_pipelines || []).length;
@@ -34106,12 +34269,12 @@ async function refreshSupervisorDashboard() {
     var pHtml = '';
     if (pipelines.length === 0) { pHtml = '<div style="font-size:12px;color:var(--text3);">No pipelines run yet.</div>'; }
     pipelines.forEach(function(p) {
-      var stColor = p.status === 'completed' ? 'var(--green)' : p.status === 'awaiting_review' ? 'var(--amber)' : 'var(--red)';
+      var stColor = knownStatusColor(p.status);
       pHtml += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border1);">';
-      pHtml += '<span style="font-size:11px;font-family:monospace;color:var(--text3);">' + (p.pipeline_id || '').substring(0, 8) + '</span>';
-      pHtml += '<span style="font-size:11px;font-weight:600;">' + (p.application_id || '').substring(0, 12) + '</span>';
+      pHtml += '<span style="font-size:11px;font-family:monospace;color:var(--text3);">' + escapeHtml(String(p.pipeline_id || '').substring(0, 8)) + '</span>';
+      pHtml += '<span style="font-size:11px;font-weight:600;">' + escapeHtml(String(p.application_id || '').substring(0, 12)) + '</span>';
       var stLabel = p.status === 'awaiting_review' ? 'REQUIRES HUMAN REVIEW' : (p.status || '').replace(/_/g,' ').toUpperCase();
-      pHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + stColor + ';color:white;font-weight:600;">' + stLabel + '</span>';
+      pHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + stColor + ';color:white;font-weight:600;">' + escapeHtml(stLabel) + '</span>';
       pHtml += '<span style="font-size:10px;color:var(--text3);">' + (p.agent_count || 0) + ' agents, ' + (p.contradiction_count || 0) + ' contradictions</span>';
       pHtml += '</div>';
     });
@@ -34123,7 +34286,7 @@ async function refreshSupervisorDashboard() {
     if (escs.length === 0) { eHtml = '<div style="font-size:12px;color:var(--green);font-weight:600;">✅ No pending escalations.</div>'; }
     escs.forEach(function(e) {
       eHtml += '<div style="padding:8px;margin-bottom:6px;border-left:3px solid var(--red);background:var(--bg2);border-radius:6px;font-size:11px;">';
-      eHtml += '<strong>' + (e.application_id || '').substring(0, 12) + '</strong> — ' + (e.reason || '') + ' <span style="color:var(--text3);">(' + (e.escalation_level || '').replace(/_/g,' ') + ')</span>';
+      eHtml += '<strong>' + escapeHtml(String(e.application_id || '').substring(0, 12)) + '</strong> — ' + escapeHtml(e.reason || '') + ' <span style="color:var(--text3);">(' + escapeHtml(String(e.escalation_level || '').replace(/_/g,' ')) + ')</span>';
       eHtml += '</div>';
     });
     document.getElementById('sv-escalations-list').innerHTML = eHtml;
@@ -34137,17 +34300,17 @@ async function refreshSupervisorDashboard() {
     var rlHtml = '';
     if (rules.length === 0) { rlHtml = '<div style="font-size:12px;color:var(--text3);">No rules configured.</div>'; }
     rules.forEach(function(r) {
-      var actColor = r.action === 'reject' ? '#991b1b' : r.action === 'escalate' ? '#dc2626' : r.action === 'block_approval' ? '#991b1b' : '#d97706';
+      var actColor = supervisorSeverityColor(r.action);
       rlHtml += '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border1);">';
-      rlHtml += '<span style="font-size:11px;font-weight:600;min-width:200px;">' + (r.name || '').replace(/_/g,' ') + '</span>';
-      rlHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + actColor + ';color:white;font-weight:600;">' + (r.action || '').replace(/_/g,' ').toUpperCase() + '</span>';
-      rlHtml += '<span style="font-size:10px;color:var(--text3);">' + (r.description || '') + '</span>';
+      rlHtml += '<span style="font-size:11px;font-weight:600;min-width:200px;">' + escapeHtml(String(r.name || '').replace(/_/g,' ')) + '</span>';
+      rlHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + actColor + ';color:white;font-weight:600;">' + escapeHtml(String(r.action || '').replace(/_/g,' ').toUpperCase()) + '</span>';
+      rlHtml += '<span style="font-size:10px;color:var(--text3);">' + escapeHtml(r.description || '') + '</span>';
       rlHtml += '</div>';
     });
     document.getElementById('sv-rules-list').innerHTML = rlHtml;
 
   } catch (e) {
-    document.getElementById('sv-pipelines-list').innerHTML = '<div style="font-size:12px;color:var(--red);">Failed to load dashboard: ' + e.message + '</div>';
+    document.getElementById('sv-pipelines-list').innerHTML = '<div style="font-size:12px;color:var(--red);">Failed to load dashboard: ' + escapeHtml(e.message || 'unknown') + '</div>';
   }
 }
 
@@ -34155,30 +34318,30 @@ async function refreshSupervisorDashboard() {
 async function refreshSupervisorAudit() {
   var filterType = document.getElementById('sv-audit-filter-type').value;
   var url = BO_API_BASE + '/supervisor/audit?limit=100';
-  if (filterType) url += '&event_type=' + filterType;
+  if (filterType) url += '&event_type=' + encodeURIComponent(filterType);
   try {
     var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') } });
     var data = await res.json();
-    if (data.error) { document.getElementById('sv-audit-entries').innerHTML = '<div style="font-size:12px;color:var(--red);">' + data.error + '</div>'; return; }
+    if (data.error) { document.getElementById('sv-audit-entries').innerHTML = '<div style="font-size:12px;color:var(--red);">' + escapeHtml(data.error) + '</div>'; return; }
 
     var entries = data.entries || [];
     var html = '';
     if (entries.length === 0) { html = '<div style="font-size:12px;color:var(--text3);">No audit entries found.</div>'; }
     entries.forEach(function(e) {
-      var sevColor = e.severity === 'critical' ? '#991b1b' : e.severity === 'high' ? '#dc2626' : e.severity === 'warning' ? '#d97706' : e.severity === 'medium' ? '#d97706' : '#64748b';
+      var sevColor = supervisorSeverityColor(e.severity);
       html += '<div style="padding:8px 10px;border-bottom:1px solid var(--border1);font-size:11px;">';
       html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
-      html += '<span style="font-weight:600;color:' + sevColor + ';">' + (e.event_type || '').replace(/_/g,' ').toUpperCase() + '</span>';
-      html += '<span style="color:var(--text3);font-size:10px;">' + (e.timestamp || '').substring(0, 19).replace('T', ' ') + '</span>';
+      html += '<span style="font-weight:600;color:' + sevColor + ';">' + escapeHtml(String(e.event_type || '').replace(/_/g,' ').toUpperCase()) + '</span>';
+      html += '<span style="color:var(--text3);font-size:10px;">' + escapeHtml(String(e.timestamp || '').substring(0, 19).replace('T', ' ')) + '</span>';
       html += '</div>';
-      html += '<div style="color:var(--text2);margin-top:2px;">' + (e.action || '') + '</div>';
-      if (e.detail) html += '<div style="color:var(--text3);font-size:10px;margin-top:2px;">' + e.detail + '</div>';
-      if (e.entry_hash) html += '<div style="color:var(--text3);font-size:9px;font-family:monospace;margin-top:2px;">Hash: ' + e.entry_hash.substring(0, 16) + '…</div>';
+      html += '<div style="color:var(--text2);margin-top:2px;">' + escapeHtml(e.action || '') + '</div>';
+      if (e.detail) html += '<div style="color:var(--text3);font-size:10px;margin-top:2px;">' + escapeHtml(e.detail) + '</div>';
+      if (e.entry_hash) html += '<div style="color:var(--text3);font-size:9px;font-family:monospace;margin-top:2px;">Hash: ' + escapeHtml(String(e.entry_hash).substring(0, 16)) + '…</div>';
       html += '</div>';
     });
     document.getElementById('sv-audit-entries').innerHTML = html;
   } catch (e) {
-    document.getElementById('sv-audit-entries').innerHTML = '<div style="font-size:12px;color:var(--red);">Failed: ' + e.message + '</div>';
+    document.getElementById('sv-audit-entries').innerHTML = '<div style="font-size:12px;color:var(--red);">Failed: ' + escapeHtml(e.message || 'unknown') + '</div>';
   }
 }
 
@@ -34190,16 +34353,16 @@ async function verifySupervisorAuditChain() {
     var data = await res.json();
     var statusEl = document.getElementById('sv-audit-chain-status');
     if (data.error) {
-      statusEl.innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;">Chain verification error: ' + data.error + '</div>';
+      statusEl.innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;">Chain verification error: ' + escapeHtml(data.error) + '</div>';
     } else if (data.status === 'no_entries') {
       statusEl.innerHTML = '<div style="padding:10px;background:#fef3c7;border-radius:6px;font-size:12px;color:#92400e;font-weight:600;">⚠️ Audit chain is empty — no supervisor runs have been recorded yet. Run the supervisor on at least one case to populate the chain.</div>';
     } else if (data.verified && data.entries_checked > 0) {
-      statusEl.innerHTML = '<div style="padding:10px;background:#dcfce7;border-radius:6px;font-size:12px;color:#166534;font-weight:600;">🔗 Audit chain integrity verified — ' + data.entries_checked + ' entries checked, no tampering detected.</div>';
+      statusEl.innerHTML = '<div style="padding:10px;background:#dcfce7;border-radius:6px;font-size:12px;color:#166534;font-weight:600;">🔗 Audit chain integrity verified — ' + escapeHtml(data.entries_checked) + ' entries checked, no tampering detected.</div>';
     } else {
-      statusEl.innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;font-weight:600;">⚠️ Chain integrity issue detected. ' + (data.broken_links && data.broken_links.length ? data.broken_links.length + ' broken link(s).' : data.reason || '') + '</div>';
+      statusEl.innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;font-weight:600;">⚠️ Chain integrity issue detected. ' + escapeHtml(data.broken_links && data.broken_links.length ? data.broken_links.length + ' broken link(s).' : data.reason || '') + '</div>';
     }
   } catch (e) {
-    document.getElementById('sv-audit-chain-status').innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;">Verification failed: ' + e.message + '</div>';
+    document.getElementById('sv-audit-chain-status').innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;">Verification failed: ' + escapeHtml(e.message || 'unknown') + '</div>';
   }
 }
 
