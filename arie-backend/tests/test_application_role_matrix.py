@@ -1,6 +1,7 @@
 """Applications role-matrix harness and staging-seed safety regression tests."""
 
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -28,6 +29,24 @@ from scripts.qa.application_role_matrix_harness import (  # noqa: E402
 
 OFFICER_ROLES = ("admin", "sco", "co", "analyst")
 SIGNOFF = {"acknowledged": True, "scope": "decision", "source_context": "ai_advisory"}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_logging_configuration():
+    """Keep server module logging setup from leaking into later test modules."""
+    from observability import arie_logger
+
+    root_logger = logging.getLogger()
+    arie_state = (list(arie_logger.handlers), arie_logger.level, arie_logger.propagate)
+    root_state = (list(root_logger.handlers), root_logger.level)
+    try:
+        yield
+    finally:
+        arie_logger.handlers[:] = arie_state[0]
+        arie_logger.setLevel(arie_state[1])
+        arie_logger.propagate = arie_state[2]
+        root_logger.handlers[:] = root_state[0]
+        root_logger.setLevel(root_state[1])
 
 
 def test_staging_seed_guard_requires_exact_environment_host_and_confirmation():
