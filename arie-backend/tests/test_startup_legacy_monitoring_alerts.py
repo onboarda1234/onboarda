@@ -145,6 +145,57 @@ def test_sqlite_init_db_repairs_legacy_application_enhanced_requirement_monitori
     )
 
 
+def test_sqlite_init_db_repairs_legacy_audit_log_application_id(tmp_path):
+    """Legacy audit_log tables are repaired before the application_id index is created."""
+    env = os.environ.copy()
+    env["DATABASE_URL"] = ""
+    env["ENVIRONMENT"] = "development"
+    env["DB_PATH"] = str(tmp_path / "legacy_audit_log.db")
+
+    _run_startup_script(
+        """
+        import re
+
+        import db as db_module
+
+        def legacy_schema_without_audit_application_id(schema_sql):
+            legacy_sql, replacements = re.subn(
+                r"(\\n\\s*target TEXT,\\n)"
+                r"\\s*application_id TEXT,\\n"
+                r"\\s*detail TEXT,\\n",
+                r"\\1        detail TEXT,\\n",
+                schema_sql,
+                count=1,
+            )
+            assert replacements == 1
+            assert "idx_audit_log_application_id" not in legacy_sql
+            return legacy_sql
+
+        legacy_db = db_module.get_db()
+        legacy_db.executescript(
+            legacy_schema_without_audit_application_id(db_module._get_sqlite_schema())
+        )
+        legacy_db.commit()
+        pre_cols = {
+            r["name"]
+            for r in legacy_db.execute("PRAGMA table_info(audit_log)").fetchall()
+        }
+        assert "application_id" not in pre_cols
+        legacy_db.close()
+
+        db_module.init_db()
+
+        db = db_module.get_db()
+        cols = {r["name"] for r in db.execute("PRAGMA table_info(audit_log)").fetchall()}
+        indexes = {r["name"] for r in db.execute("PRAGMA index_list(audit_log)").fetchall()}
+        db.close()
+        assert "application_id" in cols
+        assert "idx_audit_log_application_id" in indexes
+        """,
+        env,
+    )
+
+
 def test_pg_init_db_repairs_legacy_monitoring_alerts_identity():
     """A legacy PostgreSQL table missing CA identity columns is repaired at startup."""
     dsn = os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("DATABASE_URL_TEST")
@@ -300,6 +351,83 @@ def test_pg_init_db_repairs_legacy_application_enhanced_requirement_monitoring_c
         assert {"monitoring_alert_id", "monitoring_document_id", "due_date"} <= cols
         assert "idx_app_enhanced_req_monitoring_alert" in indexes
         assert "idx_app_enhanced_req_monitoring_doc" in indexes
+        """,
+        env,
+    )
+
+
+def test_pg_init_db_repairs_legacy_audit_log_application_id():
+    """PostgreSQL startup repairs old audit_log tables before creating the application_id index."""
+    dsn = os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("DATABASE_URL_TEST")
+    if not dsn:
+        pytest.skip("Set TEST_POSTGRES_DSN or DATABASE_URL_TEST to enable PG startup regression test.")
+
+    env = os.environ.copy()
+    env["DATABASE_URL"] = dsn
+    env["ENVIRONMENT"] = "development"
+
+    _run_startup_script(
+        """
+        import re
+
+        import psycopg2
+        import db as db_module
+
+        def legacy_schema_without_audit_application_id(schema_sql):
+            legacy_sql, replacements = re.subn(
+                r"(\\n\\s*target TEXT,\\n)"
+                r"\\s*application_id TEXT,\\n"
+                r"\\s*detail TEXT,\\n",
+                r"\\1        detail TEXT,\\n",
+                schema_sql,
+                count=1,
+            )
+            assert replacements == 1
+            assert "idx_audit_log_application_id" not in legacy_sql
+            return legacy_sql
+
+        dsn = __import__("os").environ["DATABASE_URL"]
+        with psycopg2.connect(dsn) as conn:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute("DROP SCHEMA public CASCADE")
+                cur.execute("CREATE SCHEMA public")
+
+        legacy_db = db_module.get_db()
+        legacy_db.executescript(
+            legacy_schema_without_audit_application_id(db_module._get_postgres_schema())
+        )
+        legacy_db.commit()
+        pre_cols = {
+            r["column_name"]
+            for r in legacy_db.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'audit_log'"
+            ).fetchall()
+        }
+        assert "application_id" not in pre_cols
+        legacy_db.close()
+
+        db_module.init_db()
+
+        db = db_module.get_db()
+        cols = {
+            r["column_name"]
+            for r in db.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'audit_log'"
+            ).fetchall()
+        }
+        indexes = {
+            r["indexname"]
+            for r in db.execute(
+                "SELECT indexname FROM pg_indexes WHERE tablename = 'audit_log'"
+            ).fetchall()
+        }
+        db.close()
+        db_module.close_pg_pool()
+        assert "application_id" in cols
+        assert "idx_audit_log_application_id" in indexes
         """,
         env,
     )
