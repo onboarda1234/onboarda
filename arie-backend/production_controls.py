@@ -380,7 +380,7 @@ class UsageCapManager:
                 WHERE service = ? AND month_key = ?
             """, (service.upper(), month_key))
             result = db.fetchone()
-            return float(result['total'] or result[0] or 0) if result else 0.0
+            return float((result or {}).get('total') or 0)
         finally:
             db.close()
 
