@@ -30,7 +30,8 @@ def _find_free_port():
 @pytest.fixture(scope="module")
 def rmi_api_server():
     db_path = os.path.join(tempfile.gettempdir(), f"onboarda_rmi_test_{os.getpid()}.db")
-    os.environ["DB_PATH"] = db_path
+    from tests.conftest import _sync_test_db_path
+    _sync_test_db_path(db_path)
     try:
         os.unlink(db_path)
     except OSError:

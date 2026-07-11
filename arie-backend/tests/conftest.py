@@ -85,8 +85,40 @@ def _sync_test_db_path(path):
         module = sys.modules.get(module_name)
         if module is not None and hasattr(module, "DB_PATH"):
             setattr(module, "DB_PATH", path)
+        # Live-PostgreSQL tests reload config/db while DATABASE_URL points at a
+        # throwaway database.  Restoring DB_PATH alone leaves the reloaded db
+        # module's engine selector on PostgreSQL, so later SQLite fixtures can
+        # connect to a dropped database or bypass their verified temp path.
+        if module_name == "config" and module is not None:
+            if hasattr(module, "DATABASE_URL"):
+                setattr(module, "DATABASE_URL", "")
+            if hasattr(module, "USE_POSTGRES"):
+                setattr(module, "USE_POSTGRES", False)
+        if module_name == "db" and module is not None:
+            close_pool = getattr(module, "close_pg_pool", None)
+            if callable(close_pool) and getattr(module, "_pg_pool", None) is not None:
+                close_pool()
+            if hasattr(module, "DATABASE_URL"):
+                setattr(module, "DATABASE_URL", "")
+            if hasattr(module, "USE_POSTGRESQL"):
+                setattr(module, "USE_POSTGRESQL", False)
         if module_name == "server" and module is not None and hasattr(module, "_CFG_DB_PATH"):
             setattr(module, "_CFG_DB_PATH", path)
+
+
+def _sqlite_test_schema_present(path):
+    """Return whether the shared disposable SQLite DB still has core schema."""
+    if not os.path.exists(path):
+        return False
+    try:
+        conn = sqlite3.connect(path)
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='applications'"
+        ).fetchone()
+        conn.close()
+        return row is not None
+    except sqlite3.Error:
+        return False
 
 
 def _candidate_test_db_paths():
@@ -194,7 +226,7 @@ def temp_db():
     path = os.path.join(tempfile.gettempdir(), f"onboarda_test_{os.getpid()}.db")
     _sync_test_db_path(path)
 
-    if not _db_initialized:
+    if not _db_initialized or not _sqlite_test_schema_present(path):
         # Remove stale DB from previous run
         try:
             os.unlink(path)

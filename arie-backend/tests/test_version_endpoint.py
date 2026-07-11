@@ -50,7 +50,8 @@ def _find_free_port():
 def api_server():
     """Start a real Tornado HTTP server for version endpoint testing."""
     db_path = os.path.join(tempfile.gettempdir(), f"onboarda_test_{os.getpid()}.db")
-    os.environ["DB_PATH"] = db_path
+    from tests.conftest import _sync_test_db_path
+    _sync_test_db_path(db_path)
 
     from db import init_db, seed_initial_data, get_db
     init_db()
