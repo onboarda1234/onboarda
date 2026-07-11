@@ -1,10 +1,4 @@
-"""
-PR #116 fixup H2/H3 — production-path coverage for normalized-record cleanup.
-
-Proves that the *production* delete cascade (server.cleanup_application_delete_artifacts)
-removes screening_reports_normalized rows via the shared helper, and does NOT
-abort when the table is absent (e.g. migration 007 not applied locally).
-"""
+"""P12-1 production-path coverage for normalized screening evidence."""
 import os
 import sys
 import tempfile
@@ -30,6 +24,8 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", db_path)
 
     # Force a re-init by clearing cached module if already imported
+    import db as db_module
+    db_module.DB_PATH = db_path
     from db import init_db, get_db
     init_db()
 
@@ -49,10 +45,9 @@ def _seed_application(db, app_id="app-cascade-1", app_ref="REF-CASCADE-1"):
     )
 
 
-def test_cleanup_removes_normalized_rows_via_helper(isolated_db):
+def test_cleanup_refuses_normalized_screening_evidence(isolated_db):
     """
-    Production cleanup path must remove normalized rows.
-    Proves the helper (not dead inline SQL) is wired into the cascade.
+    Production cleanup must fail before normalized evidence is removed.
     """
     from screening_storage import ensure_normalized_table
     from server import cleanup_application_delete_artifacts
@@ -79,14 +74,18 @@ def test_cleanup_removes_normalized_rows_via_helper(isolated_db):
     ).fetchone()
     assert pre["c"] == 2
 
-    cleanup_application_delete_artifacts(db, "app-cascade-1", "REF-CASCADE-1")
-    db.commit()
+    from regulated_deletion import RegulatedDeleteDenied
+    with pytest.raises(RegulatedDeleteDenied):
+        cleanup_application_delete_artifacts(db, "app-cascade-1", "REF-CASCADE-1")
 
     post = db.execute(
         "SELECT COUNT(*) AS c FROM screening_reports_normalized WHERE application_id=?",
         ("app-cascade-1",),
     ).fetchone()
-    assert post["c"] == 0
+    assert post["c"] == 2
+    assert db.execute(
+        "SELECT id FROM applications WHERE id=?", ("app-cascade-1",)
+    ).fetchone() is not None
 
 
 def test_cleanup_does_not_fail_when_normalized_table_missing(isolated_db):

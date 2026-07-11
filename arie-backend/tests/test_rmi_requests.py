@@ -248,7 +248,8 @@ def test_client_notifications_expose_rmi_and_upload_fulfills_item(rmi_api_server
         headers=_client_headers(client_id),
         timeout=5,
     )
-    assert delete_resp.status_code == 200, delete_resp.text
+    assert delete_resp.status_code == 409, delete_resp.text
+    assert "regulated verification or review evidence" in delete_resp.text
 
     conn = get_db()
     item = conn.execute("SELECT status, document_id, uploaded_at, reviewed_at FROM rmi_request_items WHERE id=?", (first_item["id"],)).fetchone()
@@ -256,12 +257,12 @@ def test_client_notifications_expose_rmi_and_upload_fulfills_item(rmi_api_server
     doc = conn.execute("SELECT id FROM documents WHERE id=?", (upload_resp.json()["id"],)).fetchone()
     conn.close()
 
-    assert doc is None
-    assert item["status"] == "requested"
-    assert item["document_id"] is None
-    assert item["uploaded_at"] is None
+    assert doc is not None
+    assert item["status"] == "uploaded"
+    assert item["document_id"] == upload_resp.json()["id"]
+    assert item["uploaded_at"] is not None
     assert item["reviewed_at"] is None
-    assert request_row["status"] == "open"
+    assert request_row["status"] == "partially_fulfilled"
 
 
 def test_single_item_rmi_stays_pending_review_until_officer_accepts(rmi_api_server):

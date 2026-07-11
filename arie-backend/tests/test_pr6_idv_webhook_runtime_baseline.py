@@ -119,13 +119,14 @@ def test_deploy_workflow_updates_verification_worker_with_same_sha_pinned_image(
 
 def test_verification_worker_smoke_processes_synthetic_job_without_provider_calls(tmp_path, monkeypatch):
     smoke = _load_script("verification_worker_smoke.py")
-
     with fresh_migration_db(tmp_path, monkeypatch) as db:
+        monkeypatch.setenv("ENVIRONMENT", "testing")
         result = smoke.run_smoke(
             db=db,
             run_id="unit01",
             worker_id="pr6-smoke-unit",
             cleanup=True,
+            cleanup_confirmation="DELETE-SYNTHETIC-FIXTURE",
         )
 
         assert result["status"] == "passed"

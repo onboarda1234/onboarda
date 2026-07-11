@@ -104,18 +104,17 @@ class TestEX01_AdminResetDBAuth:
         handler.post()
         assert handler._status_code == 403
 
-    def test_admin_correct_confirmation_succeeds(self, temp_db):
-        """Admin token + correct confirmation -> 200 (reset succeeds in test env)."""
+    def test_admin_correct_confirmation_still_refuses_generic_wipe(self, temp_db):
+        """Confirmation cannot turn a generic regulated-table wipe into a sanctioned path."""
         from server import AdminResetDBHandler, create_token
         token = create_token("admin001", "admin", "Test Admin", "officer")
         body = json.dumps({"confirm": "test-wipe-confirm"}).encode()
         handler = _build_handler(AdminResetDBHandler, "POST", "/api/admin/reset-db",
                                  body=body, token=token)
         handler.post()
-        # In non-production testing env, this should succeed
-        assert handler._status_code == 200
+        assert handler._status_code == 409
         resp = _response_json(handler)
-        assert resp.get("status") == "reset_complete"
+        assert "approved fixture cleanup workflow" in resp.get("error", "")
 
     def test_auth_check_precedes_confirmation_check(self, temp_db):
         """Auth must be checked BEFORE the confirmation string.

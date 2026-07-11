@@ -35,6 +35,8 @@ def api_server():
     db_path = os.path.join(tempfile.gettempdir(), f"onboarda_test_{os.getpid()}.db")
     os.environ["DB_PATH"] = db_path
 
+    import db as db_module
+    db_module.DB_PATH = db_path
     from db import init_db, seed_initial_data, get_db
     init_db()
     try:
@@ -74,6 +76,10 @@ def api_server():
 
     from tests.conftest import shutdown_test_http_server
     shutdown_test_http_server(thread, server_ref)
+    try:
+        os.unlink(db_path)
+    except OSError:
+        pass
 
 
 def _seed_app_and_doc(app_id, app_ref, client_id, status, doc_id):
@@ -121,6 +127,39 @@ class TestDocumentDeleteHandler:
         data = resp.json()
         assert data["deleted"] is True
         assert data["id"] == "doc_del_ok"
+
+    def test_delete_verified_document_is_denied_and_evidence_remains(self, api_server):
+        """Verification evidence must be preserved before any file/row mutation."""
+        from auth import create_token
+        from db import get_db
+
+        _seed_app_and_doc("app_del_evidence", "ARF-DEL-EVIDENCE", "client_evidence", "draft", "doc_del_evidence")
+        conn = get_db()
+        conn.execute(
+            "UPDATE documents SET verification_status='verified', verification_results=? WHERE id=?",
+            ('{"overall":"verified"}', "doc_del_evidence"),
+        )
+        conn.commit()
+        conn.close()
+        token = create_token("client_evidence", "client", "Evidence Client", "client")
+
+        resp = http_requests.delete(
+            f"{api_server}/api/applications/app_del_evidence/documents/doc_del_evidence",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 409
+        assert "regulated verification or review evidence" in resp.json()["error"]
+
+        conn = get_db()
+        assert conn.execute(
+            "SELECT verification_status FROM documents WHERE id=?", ("doc_del_evidence",)
+        ).fetchone()["verification_status"] == "verified"
+        assert conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log WHERE application_id=? AND action='Regulated Delete Denied'",
+            ("app_del_evidence",),
+        ).fetchone()["c"] >= 1
+        conn.close()
 
     def test_delete_blocked_after_submission(self, api_server):
         """DELETE when app is in_review should return 403."""
