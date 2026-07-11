@@ -297,10 +297,10 @@ class TestDBConstraints:
     """Verify CHECK constraints exist on risk-carrying tables."""
 
     @pytest.fixture
-    def temp_db(self, tmp_path):
+    def temp_db(self, tmp_path, monkeypatch):
         """Create a temporary SQLite database with schema."""
-        os.environ["DATABASE_URL"] = ""
-        os.environ["ENVIRONMENT"] = "development"
+        monkeypatch.setenv("DATABASE_URL", "")
+        monkeypatch.setenv("ENVIRONMENT", "development")
         import importlib
         import db as db_module
         importlib.reload(db_module)
