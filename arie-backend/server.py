@@ -29702,7 +29702,7 @@ class MemoValidateHandler(BaseHandler):
                     user.get("role", ""),
                     "Validate Memo",
                     app_id,
-                    app["id"],
+                    app_row["id"],
                     f"Memo validation: {validation['validation_status']} (score: {validation['quality_score']}/10)",
                     self.get_client_ip(),
                     (_obs_get_request_id() or ""),
@@ -30848,13 +30848,36 @@ def _persist_signoff_audit(
         "user_agent": user_agent,
     }, default=str)
 
-    db.execute(
-        "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
-        (user.get("sub", ""), user.get("name", ""), user.get("role", ""),
-         f"Officer Sign-Off ({scope})", target_ref, application_id, detail, ip_address,
-         (_obs_get_request_id() or ""))
-    )
+    has_metadata_columns = True
+    try:
+        if getattr(db, "is_postgres", False):
+            rows = db.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = ? AND column_name IN (?, ?)",
+                ("audit_log", "application_id", "request_id"),
+            ).fetchall()
+            present = {row["column_name"] for row in rows}
+            has_metadata_columns = {"application_id", "request_id"}.issubset(present)
+        else:
+            db.execute("SELECT application_id, request_id FROM audit_log LIMIT 1")
+    except Exception:
+        has_metadata_columns = False
+
+    if has_metadata_columns:
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (user.get("sub", ""), user.get("name", ""), user.get("role", ""),
+             f"Officer Sign-Off ({scope})", target_ref, application_id, detail, ip_address,
+             (_obs_get_request_id() or ""))
+        )
+    else:
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (user.get("sub", ""), user.get("name", ""), user.get("role", ""),
+             f"Officer Sign-Off ({scope})", target_ref, detail, ip_address)
+        )
 
 
 class MemoApproveHandler(BaseHandler):

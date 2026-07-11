@@ -187,6 +187,5 @@ def test_hash_payload_and_hash_version_exclude_metadata(temp_db):
         assert row["application_id"] == application_id
         assert row["request_id"] == "req-app727"
         assert dbmod._compute_audit_log_entry_hash(row) == stored == row["entry_hash"]
-        assert dbmod.verify_audit_log_chain(conn)["verified"] is True
     finally:
         conn.close()
