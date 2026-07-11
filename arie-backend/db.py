@@ -363,9 +363,24 @@ class DBConnection:
     Handles placeholder translation (? for SQLite, %s for PostgreSQL).
     """
 
-    def __init__(self, conn, is_postgres: bool = False):
+    def __init__(self, conn, is_postgres: bool = False, database_identity: str = None):
         self.conn = conn
         self.is_postgres = is_postgres
+        self.database_identity = database_identity
+        if not is_postgres and database_identity is None:
+            # Legacy tests and a few focused helpers construct DBConnection
+            # directly.  Derive the SQLite identity from the connection so a
+            # verified in-memory/temp test DB receives the narrow teardown
+            # bypass without trusting ENVIRONMENT alone.
+            try:
+                database_rows = conn.execute("PRAGMA database_list").fetchall()
+                main_path = next(
+                    (row[2] for row in database_rows if len(row) > 1 and row[1] == "main"),
+                    "",
+                )
+                self.database_identity = main_path or ":memory:"
+            except Exception:
+                self.database_identity = None
         self._cursor = None
         self._closed = False
 
@@ -439,6 +454,12 @@ class DBConnection:
 
     def execute(self, sql: str, params: Tuple = ()) -> 'DBConnection':
         """Execute SQL query with automatic dialect translation."""
+        from regulated_deletion import assert_sql_delete_allowed
+        assert_sql_delete_allowed(
+            sql,
+            database_identity=self.database_identity,
+            is_postgres=self.is_postgres,
+        )
         cursor = self._cursor_or_create()
         sql = self._translate_query(sql)
         try:
@@ -464,6 +485,12 @@ class DBConnection:
         translator is a no-op against constructs PG already accepts, so the
         translation is safe for both call sites.
         """
+        from regulated_deletion import assert_sql_delete_allowed
+        assert_sql_delete_allowed(
+            sql,
+            database_identity=self.database_identity,
+            is_postgres=self.is_postgres,
+        )
         if self.is_postgres:
             cursor = self._cursor_or_create()
             cursor.execute(self._translate_query(sql))
@@ -679,7 +706,7 @@ def get_db() -> DBConnection:
     if USE_POSTGRESQL:
         init_pg_pool()
         conn = _checkout_validated_pg_conn()
-        return DBConnection(conn, is_postgres=True)
+        return DBConnection(conn, is_postgres=True, database_identity=DATABASE_URL)
     else:
         # C-07: Block SQLite in production — this is a CRITICAL safety guard
         if env in ("production", "prod"):
@@ -690,7 +717,7 @@ def get_db() -> DBConnection:
             )
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
-        return DBConnection(conn, is_postgres=False)
+        return DBConnection(conn, is_postgres=False, database_identity=DB_PATH)
 
 
 # ============================================================================
@@ -6287,29 +6314,13 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
-    # Migration v2.13: Purge test/demo applications for "1947 OIL & GAS PLC".
-    # These records were created during testing and must not persist in any environment.
-    # Runs on every startup but is effectively a no-op after the first successful pass
-    # because no matching rows will remain.  The UPPER(TRIM()) normalisation guards
-    # against case/whitespace variants of the same company name.
-    #
-    # FK SAFETY (closes #126)
-    # -----------------------
-    # The schema in this file declares ``client_sessions.application_id``
-    # with ``ON DELETE CASCADE``, but staging Postgres still carries the
-    # original non-cascading constraint (``CREATE TABLE IF NOT EXISTS``
-    # never alters an existing FK).  If a candidate application is still
-    # referenced from ``client_sessions`` the parent DELETE raises
-    # ``ForeignKeyViolation`` and aborts the migration.
-    #
-    # We therefore probe ``client_sessions`` per row and skip any
-    # candidate that still has live references.  The skipped row is
-    # surfaced in the migration log as
-    # ``Skipped row <id> due to FK constraint (referenced by client_sessions)``
-    # so an operator can investigate and decide on the data manually
-    # (the data classification of e.g. ``4b005704dcdb436b`` -- test debris
-    # vs. real onboarding -- is intentionally not pre-empted by this
-    # migration).
+    # P12-1 Phase B: the historical v2.13 boot block used to hard-delete every
+    # application named "1947 OIL & GAS PLC", including compliance memos, EDD
+    # cases, decision records, cascaded evidence, and local files.  Company name
+    # is not a safe fixture marker and startup is not a sanctioned deletion
+    # workflow.  Keep the discovery signal, but make this permanently
+    # report-only.  Deliberate synthetic cleanup must use the explicit guarded
+    # non-production fixture workflow instead.
     try:
         target_name = "1947 OIL & GAS PLC"
         rows = db.execute(
@@ -6317,110 +6328,18 @@ def _run_migrations(db: DBConnection):
             (target_name.upper(),),
         ).fetchall()
         if rows:
-            ids_deleted = []
-            ids_skipped = []
-            for row in rows:
-                app_id = row["id"] if isinstance(row, dict) else row[0]
-                app_ref = row["ref"] if isinstance(row, dict) else row[1]
-                app_name = row["company_name"] if isinstance(row, dict) else row[2]
-
-                # FK probe: any non-cascading reference disqualifies this
-                # row from auto-deletion.  ``client_sessions`` is the
-                # known offender on staging; we count rows so the log is
-                # actionable.
-                cs_row = db.execute(
-                    "SELECT COUNT(*) AS n FROM client_sessions WHERE application_id = ?",
-                    (app_id,),
-                ).fetchone()
-                cs_count = 0
-                if cs_row is not None:
-                    # Different DB drivers expose the count under
-                    # different keys / positions: psycopg2 RealDictCursor
-                    # gives ``{"n": N}``; sqlite3.Row gives a Row that
-                    # ``dict()``s to ``{"n": N}``; bare tuples expose it
-                    # at index 0.  Handle each shape explicitly rather
-                    # than via a brittle expression.
-                    if isinstance(cs_row, dict):
-                        if "n" in cs_row:
-                            cs_count_raw = cs_row["n"]
-                        else:
-                            cs_count_raw = next(iter(cs_row.values()), 0)
-                    else:
-                        cs_count_raw = cs_row[0]
-                    try:
-                        cs_count = int(cs_count_raw or 0)
-                    except (TypeError, ValueError):
-                        cs_count = 0
-
-                if cs_count > 0:
-                    ids_skipped.append({
-                        "id": app_id,
-                        "ref": app_ref,
-                        "company_name": app_name,
-                        "client_sessions": cs_count,
-                    })
-                    logger.warning(
-                        "Migration v2.13: Skipped row %s (ref=%s, company=%s) due to "
-                        "FK constraint (referenced by client_sessions: %d row(s)). "
-                        "Operator must reconcile manually before this row can be purged.",
-                        app_id, app_ref, app_name, cs_count,
-                    )
-                    continue
-
-                # Remove local document files; failures are non-fatal (files may already
-                # be absent or hosted on S3) but are logged for manual follow-up.
-                docs = db.execute(
-                    "SELECT file_path FROM documents WHERE application_id = ?", (app_id,)
-                ).fetchall()
-                for doc in docs:
-                    fp = doc["file_path"] if isinstance(doc, dict) else doc[0]
-                    if fp:
-                        try:
-                            if os.path.exists(fp):
-                                os.remove(fp)
-                        except OSError as _e:
-                            logger.warning(
-                                "Migration v2.13: could not remove local file %s – "
-                                "manual cleanup may be required: %s", fp, _e
-                            )
-
-                # edd_cases and compliance_memos lack ON DELETE CASCADE on application_id,
-                # so they must be explicitly deleted before removing the parent row.
-                db.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
-                db.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
-                # decision_records uses application_ref (not application_id) as the FK.
-                db.execute("DELETE FROM decision_records WHERE application_ref = ?", (app_ref,))
-                # Deleting the parent cascades to all remaining child tables that *do*
-                # have ON DELETE CASCADE on their FK.  Rows that survive on a
-                # non-cascading constraint were already filtered above.
-                db.execute("DELETE FROM applications WHERE id = ?", (app_id,))
-                ids_deleted.append({"id": app_id, "ref": app_ref, "company_name": app_name})
-
-            db.commit()
-            if ids_deleted:
-                logger.info(
-                    "Migration v2.13: Purged %d application(s) for '%s': %s",
-                    len(ids_deleted),
-                    target_name,
-                    [r["ref"] for r in ids_deleted],
-                )
-            if ids_skipped:
-                logger.info(
-                    "Migration v2.13: Skipped %d application(s) for '%s' due to live "
-                    "FK references (manual reconciliation required): %s",
-                    len(ids_skipped),
-                    target_name,
-                    [{"id": r["id"], "ref": r["ref"], "client_sessions": r["client_sessions"]}
-                     for r in ids_skipped],
-                )
+            logger.warning(
+                "Migration v2.13 report-only: found %d application(s) named '%s'; "
+                "startup deletion is disabled by P12-1. No database or file mutation occurred. "
+                "Candidate refs: %s",
+                len(rows),
+                target_name,
+                [row["ref"] if isinstance(row, dict) else row[1] for row in rows],
+            )
         else:
-            logger.debug("Migration v2.13: No '%s' applications found – nothing to purge.", target_name)
+            logger.debug("Migration v2.13 report-only: no '%s' applications found.", target_name)
     except Exception as e:
-        logger.error("Migration v2.13 failed: %s", e, exc_info=True)
-        try:
-            db.rollback()
-        except Exception:
-            pass
+        logger.error("Migration v2.13 report-only check failed: %s", e, exc_info=True)
 
     # Migration v2.14: Rename 'pep-declaration' → 'pep_declaration' in ai_checks and documents.
     # The doc_type_alias "pep-declaration" was removed from verification_matrix.pep_declaration;

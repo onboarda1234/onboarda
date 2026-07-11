@@ -1,10 +1,7 @@
-"""
-Closes #126: the inline _run_migrations v2.13 ("Purge 1947 OIL & GAS PLC")
-must not raise ForeignKeyViolation when a candidate application is still
-referenced from ``client_sessions`` (or any other non-cascading FK).
-The referenced row must be skipped and surfaced in the migration log
-for manual reconciliation; canonical (unreferenced) rows must continue
-to be purged; the migration must be idempotent.
+"""P12-1: inline migration v2.13 is report-only and idempotent.
+
+The historical company-name purge ran on every boot.  Startup now reports any
+matching candidates without deleting applications, children, or files.
 
 SQLite-side coverage runs in CI by default with ``PRAGMA foreign_keys =
 ON`` to mirror PostgreSQL's default-on FK enforcement (the very thing
@@ -98,7 +95,7 @@ class TestInlineV213FKSafety(_InlineV213Base):
     foreign_keys=ON the constraint behaviour matches Postgres' default
     and reproduces the staging defect."""
 
-    def test_row_with_client_session_is_skipped_and_logged(self):
+    def test_row_with_client_session_is_preserved_and_logged(self):
         db = self._open_with_fk()
 
         _seed_app(db, "app-poisoned", "ARF-126-POISONED")
@@ -124,23 +121,18 @@ class TestInlineV213FKSafety(_InlineV213Base):
         ).fetchone()
         self.assertIsNotNone(present, "poisoned row must be skipped, not deleted")
 
-        # The skip must be surfaced as WARNING+INFO log entries.
-        skipped_warning = [
+        report_warning = [
             r for r in cm.records
             if r.levelno == logging.WARNING
-            and "Migration v2.13" in r.getMessage()
-            and "Skipped row app-poisoned" in r.getMessage()
-            and "client_sessions" in r.getMessage()
+            and "Migration v2.13 report-only" in r.getMessage()
+            and "ARF-126-POISONED" in r.getMessage()
+            and "No database or file mutation occurred" in r.getMessage()
         ]
-        self.assertTrue(skipped_warning,
-                        f"expected WARNING skip log; got: {cm.output}")
-        # Summary line names how many were skipped.
-        summary = [m for m in cm.output if "Skipped 1 application" in m]
-        self.assertTrue(summary, f"expected summary log; got: {cm.output}")
+        self.assertTrue(report_warning, f"expected report-only warning; got: {cm.output}")
 
         db.close()
 
-    def test_canonical_unreferenced_row_is_still_purged(self):
+    def test_unreferenced_name_match_is_also_preserved(self):
         db = self._open_with_fk()
 
         # Two candidates: one with a client_session reference, one without.
@@ -159,20 +151,17 @@ class TestInlineV213FKSafety(_InlineV213Base):
         present_ref = db.execute(
             "SELECT id FROM applications WHERE id = ?", ("app-referenced",)
         ).fetchone()
-        self.assertIsNone(present_clean, "unreferenced row must be purged")
-        self.assertIsNotNone(present_ref, "referenced row must be skipped")
+        self.assertIsNotNone(present_clean, "company-name match must never authorize boot deletion")
+        self.assertIsNotNone(present_ref, "referenced row must be preserved")
 
-        # Purge log records the canonical row.
         self.assertTrue(any(
-            "Migration v2.13: Purged 1 application" in m for m in cm.output
+            "Migration v2.13 report-only" in m and "found 2 application" in m
+            for m in cm.output
         ))
         db.close()
 
     def test_idempotent_second_invocation(self):
-        """Running the migration twice produces the same end state.  After
-        the canonical row is purged, the second pass is a no-op for it,
-        and the still-referenced poisoned row stays present and skipped
-        on every invocation."""
+        """Running the migration twice preserves every matching row."""
         db = self._open_with_fk()
 
         _seed_app(db, "app-clean-2", "ARF-126-CLEAN-2")
@@ -190,7 +179,7 @@ class TestInlineV213FKSafety(_InlineV213Base):
         first_stuck = db.execute(
             "SELECT id FROM applications WHERE id = ?", ("app-stuck",)
         ).fetchone()
-        self.assertIsNone(first_clean)
+        self.assertIsNotNone(first_clean)
         self.assertIsNotNone(first_stuck)
 
         # Second invocation must not raise and must leave state unchanged.
@@ -203,7 +192,7 @@ class TestInlineV213FKSafety(_InlineV213Base):
         second_stuck = db.execute(
             "SELECT id FROM applications WHERE id = ?", ("app-stuck",)
         ).fetchone()
-        self.assertIsNone(second_clean)
+        self.assertIsNotNone(second_clean)
         self.assertIsNotNone(second_stuck)
         db.close()
 

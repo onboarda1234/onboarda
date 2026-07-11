@@ -46,7 +46,9 @@ def fresh_sqlite(tmp_path, monkeypatch):
     db_file = str(tmp_path / "pr31_seed.db")
     orig = {var: os.environ.get(var) for var in ("DATABASE_URL", "ENVIRONMENT", "DB_PATH")}
     monkeypatch.setenv("DATABASE_URL", "")
-    monkeypatch.setenv("ENVIRONMENT", "development")
+    # P12-1's existing SQLite teardown exception requires both a verified
+    # temp-path database and the explicit testing environment.
+    monkeypatch.setenv("ENVIRONMENT", "testing")
     monkeypatch.setenv("DB_PATH", db_file)
 
     import config as config_module
@@ -217,7 +219,7 @@ def fresh_pg(monkeypatch):
     import psycopg2
     from urllib.parse import urlsplit, urlunsplit
 
-    db_name = f"pr31_seed_{uuid.uuid4().hex[:12]}"
+    db_name = f"onboarda_test_pr31_seed_{uuid.uuid4().hex[:12]}"
     parts = urlsplit(base_dsn)
     admin = psycopg2.connect(base_dsn)
     admin.autocommit = True
@@ -230,12 +232,15 @@ def fresh_pg(monkeypatch):
     fresh_dsn = urlunsplit((parts.scheme, parts.netloc, "/" + db_name, parts.query, parts.fragment))
 
     orig_db_url = os.environ.get("DATABASE_URL")
+    orig_environment = os.environ.get("ENVIRONMENT")
+    orig_test_postgres_dsn = os.environ.get("TEST_POSTGRES_DSN")
     # Everything after CREATE DATABASE runs inside try/finally so a setup
     # failure (reload/init_db) still drops the throwaway database and closes
     # the admin connection.
     try:
         monkeypatch.setenv("DATABASE_URL", fresh_dsn)
-        monkeypatch.setenv("ENVIRONMENT", "development")
+        monkeypatch.setenv("TEST_POSTGRES_DSN", fresh_dsn)
+        monkeypatch.setenv("ENVIRONMENT", "testing")
 
         import config as config_module
         importlib.reload(config_module)
@@ -248,6 +253,14 @@ def fresh_pg(monkeypatch):
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = orig_db_url
+        if orig_environment is None:
+            os.environ.pop("ENVIRONMENT", None)
+        else:
+            os.environ["ENVIRONMENT"] = orig_environment
+        if orig_test_postgres_dsn is None:
+            os.environ.pop("TEST_POSTGRES_DSN", None)
+        else:
+            os.environ["TEST_POSTGRES_DSN"] = orig_test_postgres_dsn
         try:
             import config as config_module
             import db as db_module
@@ -287,11 +300,14 @@ def test_fresh_pg_seed_populates_retention_policies(fresh_pg):
 
 def test_pg_staging_mimic_reseed_populates_empty_retention_table(fresh_pg):
     """The staging bug, reproduced and fixed on real PostgreSQL."""
+    from regulated_deletion import test_database_teardown_context
+
     db = fresh_pg.get_db()
     try:
         fresh_pg.seed_initial_data(db)
         db.commit()
-        db.execute("DELETE FROM data_retention_policies")
+        with test_database_teardown_context(db, reason="reset PR31 retention policy fixture"):
+            db.execute("DELETE FROM data_retention_policies")
         db.commit()
         assert _policy_count(db) == 0
 

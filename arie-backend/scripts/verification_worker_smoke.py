@@ -20,6 +20,8 @@ from typing import Any, Dict, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from db import get_db  # noqa: E402
+from fixtures.cleanup import fixture_cleanup_context  # noqa: E402
+from regulated_deletion import FIXTURE_CLEANUP_CONFIRMATION  # noqa: E402
 from verification_jobs import (  # noqa: E402
     claim_next_verification_job,
     enqueue_verification_job,
@@ -51,8 +53,8 @@ def _seed_smoke_records(db, run_id: str) -> Dict[str, Any]:
     )
     db.execute(
         """
-        INSERT INTO applications (id, ref, client_id, company_name, country, status, prescreening_data)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO applications (id, ref, client_id, company_name, country, status, prescreening_data, is_fixture)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             app_id,
@@ -62,6 +64,7 @@ def _seed_smoke_records(db, run_id: str) -> Dict[str, Any]:
             "Mauritius",
             "draft",
             _safe_json({"registered_entity_name": "PR6 Worker Smoke Ltd", "fixture_type": "pr6_worker_smoke"}),
+            True,
         ),
     )
     db.execute(
@@ -114,13 +117,44 @@ def _synthetic_executor(db, job: Dict[str, Any], worker_id: str) -> Dict[str, An
     }
 
 
-def _cleanup_smoke_records(db, *, client_id: str, application_id: str, document_id: str, job_id: str) -> None:
-    db.execute("DELETE FROM audit_log WHERE detail LIKE ?", (f"%{job_id}%",))
-    db.execute("DELETE FROM verification_jobs WHERE id=?", (job_id,))
-    db.execute("DELETE FROM documents WHERE id=?", (document_id,))
-    db.execute("DELETE FROM applications WHERE id=?", (application_id,))
-    db.execute("DELETE FROM clients WHERE id=?", (client_id,))
-    db.commit()
+def _cleanup_smoke_records(
+    db,
+    *,
+    client_id: str,
+    application_id: str,
+    document_id: str,
+    job_id: str,
+    confirmation: str,
+) -> None:
+    with fixture_cleanup_context(
+        db,
+        application_id,
+        actor_id="system:verification-worker-smoke",
+        confirmation=confirmation,
+        reason="explicit cleanup of a marked verification-worker smoke fixture",
+        allowed_tables=("agent_executions", "audit_log", "supervisor_pipeline_results"),
+    ):
+        # Preserve the existing audit records and add cleanup evidence.  The
+        # evidence ledger must outlive the synthetic application it describes.
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (
+                "system:verification-worker-smoke",
+                "Verification Worker Smoke",
+                "system",
+                "Fixture Cleanup",
+                application_id,
+                application_id,
+                _safe_json({"event": "fixture_cleanup", "job_id": job_id, "marker_verified": True}),
+                "system",
+            ),
+        )
+        db.execute("DELETE FROM verification_jobs WHERE id=?", (job_id,))
+        db.execute("DELETE FROM documents WHERE id=?", (document_id,))
+        db.execute("DELETE FROM applications WHERE id=?", (application_id,))
+        db.execute("DELETE FROM clients WHERE id=?", (client_id,))
+        db.commit()
 
 
 def run_smoke(
@@ -129,6 +163,7 @@ def run_smoke(
     run_id: Optional[str] = None,
     worker_id: Optional[str] = None,
     cleanup: bool = False,
+    cleanup_confirmation: str = "",
 ) -> Dict[str, Any]:
     own_db = db is None
     db = db or get_db()
@@ -188,6 +223,7 @@ def run_smoke(
                 application_id=seeded["application_id"],
                 document_id=seeded["document_id"],
                 job_id=job["id"],
+                confirmation=cleanup_confirmation,
             )
             payload["cleanup"] = "completed"
         else:
@@ -203,6 +239,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", default="")
     parser.add_argument("--worker-id", default="")
     parser.add_argument("--cleanup", action="store_true")
+    parser.add_argument(
+        "--cleanup-confirmation",
+        default="",
+        help=f"Required with --cleanup; exact value: {FIXTURE_CLEANUP_CONFIRMATION}",
+    )
     return parser
 
 
@@ -212,6 +253,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         run_id=args.run_id or None,
         worker_id=args.worker_id or None,
         cleanup=args.cleanup,
+        cleanup_confirmation=args.cleanup_confirmation,
     )
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0 if payload.get("status") == "passed" else 2

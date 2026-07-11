@@ -987,19 +987,15 @@ class RetentionManager:
                 except Exception as e:
                     summary["errors"].append(f"Session cleanup failed: {e}")
 
-                # Temporary uploads (30 days)
-                cutoff = datetime.now(timezone.utc) - timedelta(days=self.RETENTION_PERIODS["temporary_uploads"])
-                try:
-                    count = db.execute("""
-                        DELETE FROM documents
-                        WHERE document_type = 'temporary' AND created_at < ?
-                    """, (cutoff.strftime("%Y-%m-%dT%H:%M:%S"),))
-                    db.commit()
-                    if count:
-                        summary["deleted"]["temporary_uploads"] = count
-                        self._log_deletion("documents", count, "Temporary files older than 30 days")
-                except Exception as e:
-                    summary["errors"].append(f"Temporary upload cleanup failed: {e}")
+                # P12-1: documents are hybrid evidence containers.  This
+                # legacy generic retention sweep had no evidence-state check,
+                # legal-hold decision, physical-artifact atomicity, or P12-8
+                # purge evidence.  It is therefore disabled; document
+                # retention must use the approved subject/case workflow.
+                summary["deleted"]["temporary_uploads"] = 0
+                summary["errors"].append(
+                    "Temporary upload hard-delete disabled: use the approved evidence-aware retention workflow"
+                )
 
                 # Incident logs (3 years)
                 cutoff = datetime.now(timezone.utc) - timedelta(days=self.RETENTION_PERIODS["incidents"])

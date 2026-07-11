@@ -4079,6 +4079,28 @@ class AdminResetDBHandler(BaseHandler):
         if secret != required_confirm:
             self.error("Invalid confirmation", 403)
             return
+
+        # A generic all-table wipe is not an approved P12-1 sanctioned
+        # deletion context.  Retention and marked-fixture deletion have their
+        # own evidence-producing workflows; this endpoint must not become a
+        # bypass merely because it is outside production.
+        from regulated_deletion import log_regulated_delete_denied
+        log_regulated_delete_denied(
+            "audit_log",
+            "generic admin database reset is not a sanctioned deletion workflow",
+        )
+        self.log_audit(
+            user,
+            "Regulated Delete Denied",
+            "Database",
+            json.dumps({
+                "event": "regulated_delete_denied",
+                "reason": "generic_admin_reset_not_sanctioned",
+            }, sort_keys=True),
+        )
+        self.error("Database reset is disabled; use an approved fixture cleanup workflow.", 409)
+        return
+
         try:
             # B3: the wipe AND the re-seed both mutate the tables the boot
             # phase touches — hold the cross-task boot lock for the WHOLE
@@ -5821,8 +5843,112 @@ class ApplicationsHandler(BaseHandler):
         self.success({"id": app_id, "ref": ref, "status": "draft", "status_label": get_status_label("draft")}, 201)
 
 
+_APPLICATION_REGULATED_EVIDENCE_TABLES = (
+    "agent_executions",
+    "application_corrections",
+    "application_enhanced_requirements",
+    "change_alerts",
+    "change_requests",
+    "compliance_memos",
+    "edd_cases",
+    "entity_profile_versions",
+    "idv_resolutions",
+    "monitoring_alerts",
+    "periodic_reviews",
+    "rmi_requests",
+    "sar_reports",
+    "screening_provider_comparisons",
+    "screening_reports_normalized",
+    "screening_reviews",
+    "sumsub_applicant_mappings",
+    "supervisor_audit_log",
+    "supervisor_pipeline_results",
+    "transactions",
+)
+
+
+def _runtime_table_exists(db, table_name):
+    """Dialect-neutral table probe used before optional evidence queries."""
+    if db.is_postgres:
+        return db.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema='public' AND table_name=?",
+            (table_name,),
+        ).fetchone() is not None
+    return db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone() is not None
+
+
+def regulated_application_evidence(db, application_id, application_ref):
+    """Return a count-only inventory that makes draft deletion fail closed.
+
+    The query intentionally avoids selecting evidence payloads, names, or
+    provider data.  A non-zero count is sufficient to deny the operation.
+    """
+    evidence = {}
+    for table in _APPLICATION_REGULATED_EVIDENCE_TABLES:
+        if not _runtime_table_exists(db, table):
+            continue
+        row = db.execute(
+            f"SELECT COUNT(*) AS count FROM {table} WHERE application_id=?",
+            (application_id,),
+        ).fetchone()
+        count = int((row or {}).get("count") or 0)
+        if count:
+            evidence[table] = count
+
+    if _runtime_table_exists(db, "decision_records"):
+        row = db.execute(
+            "SELECT COUNT(*) AS count FROM decision_records WHERE application_ref=?",
+            (application_ref,),
+        ).fetchone()
+        count = int((row or {}).get("count") or 0)
+        if count:
+            evidence["decision_records"] = count
+
+    if _runtime_table_exists(db, "audit_log"):
+        row = db.execute(
+            "SELECT COUNT(*) AS count FROM audit_log "
+            "WHERE application_id=? OR target=? OR target=?",
+            (application_id, application_ref, application_id),
+        ).fetchone()
+        count = int((row or {}).get("count") or 0)
+        if count:
+            evidence["audit_log"] = count
+
+    # A document becomes regulated evidence once any verification/review or
+    # evidence-classification control has started.  A new pending upload with
+    # no such fields remains an evidence-free draft artifact.
+    if _runtime_table_exists(db, "documents"):
+        row = db.execute(
+            "SELECT COUNT(*) AS count FROM documents WHERE application_id=? AND ("
+            "COALESCE(verification_status, 'pending') NOT IN ('pending', 'skipped') OR "
+            "COALESCE(review_status, 'pending') <> 'pending' OR "
+            "COALESCE(evidence_class, '') <> '' OR "
+            "workflow_test_accepted IS TRUE OR reviewed_by IS NOT NULL)",
+            (application_id,),
+        ).fetchone()
+        count = int((row or {}).get("count") or 0)
+        if count:
+            evidence["document_verification_evidence"] = count
+
+    return evidence
+
+
 def cleanup_application_delete_artifacts(db, application_id, application_ref):
-    """Delete uploaded document artifacts and non-cascading child rows before app hard delete."""
+    """Delete artifacts only for a positively proven evidence-free draft."""
+    evidence = regulated_application_evidence(db, application_id, application_ref)
+    if evidence:
+        from regulated_deletion import RegulatedDeleteDenied, log_regulated_delete_denied
+        log_regulated_delete_denied(
+            "applications",
+            "application has regulated evidence",
+            application_id=application_id,
+        )
+        raise RegulatedDeleteDenied("applications", "application has regulated evidence")
+
     documents = db.execute(
         "SELECT id, file_path, s3_key FROM documents WHERE application_id=?",
         (application_id,)
@@ -5845,41 +5971,17 @@ def cleanup_application_delete_artifacts(db, application_id, application_ref):
             except Exception as exc:
                 logger.warning("S3 deletion failed for draft application doc %s: %s", doc["s3_key"], exc)
 
-    # RMI rows are explicitly removed before generic child cleanup so the later
-    # client_notifications delete cannot leave stale rmi_request_id mirrors.
-    db.execute(
-        "DELETE FROM rmi_request_items WHERE request_id IN (SELECT id FROM rmi_requests WHERE application_id=?)",
-        (application_id,),
-    )
-    db.execute("DELETE FROM rmi_requests WHERE application_id=?", (application_id,))
-
+    # Regulated/evidentiary tables are deliberately absent.  The preflight
+    # above proves they have no rows before any file or database mutation.
     for table in (
         "client_sessions",
         "documents",
         "client_notifications",
-        "monitoring_alerts",
-        "periodic_reviews",
-        "sar_reports",
-        "compliance_memos",
-        "edd_cases",
         "directors",
         "ubos",
         "intermediaries",
-        "transactions",
-        "agent_executions",
-        "sumsub_applicant_mappings",
-        "supervisor_pipeline_results",
-        "supervisor_audit_log",
     ):
         db.execute(f"DELETE FROM {table} WHERE application_id=?", (application_id,))
-    db.execute("DELETE FROM decision_records WHERE application_ref=?", (application_ref,))
-
-    # Sprint 3 Obj 2a (PR #116 fixup H2/H3): Delete normalized screening
-    # records via the shared helper, which narrowly handles the
-    # missing-table case (migration 007 not applied) without swallowing
-    # other DB errors.  This is the single production cleanup path.
-    from screening_storage import delete_normalized_reports_for_application
-    delete_normalized_reports_for_application(db, application_id)
 
 
 def _memo_block_columns(db, memo):
@@ -8582,6 +8684,35 @@ class ApplicationDetailHandler(BaseHandler):
         if app["status"] != "draft":
             db.close()
             return self.error("Only draft applications can be deleted.", 403)
+
+        evidence = regulated_application_evidence(db, app["id"], app["ref"])
+        if evidence:
+            from regulated_deletion import log_regulated_delete_denied
+            log_regulated_delete_denied(
+                "applications",
+                "portal draft contains regulated evidence",
+                application_id=app["id"],
+            )
+            self.log_audit(
+                user,
+                "Regulated Delete Denied",
+                app["ref"],
+                json.dumps({
+                    "event": "regulated_delete_denied",
+                    "reason": "application_has_regulated_evidence",
+                    "evidence_tables": evidence,
+                }, sort_keys=True),
+                db=db,
+                commit=False,
+                application_id=app["id"],
+            )
+            db.commit()
+            db.close()
+            return self.error(
+                "Application cannot be deleted because regulated compliance evidence exists. "
+                "Archive or withdraw instead.",
+                409,
+            )
 
         cleanup_application_delete_artifacts(db, app["id"], app["ref"])
         db.execute("DELETE FROM applications WHERE id=?", (app["id"],))
@@ -11704,7 +11835,9 @@ class DocumentDeleteHandler(BaseHandler):
             return self.error("Documents cannot be deleted after submission.", 403)
 
         doc = db.execute(
-            "SELECT id, doc_name, file_path, s3_key FROM documents WHERE id=? AND application_id=?",
+            "SELECT id, doc_name, file_path, s3_key, verification_status, verification_results, "
+            "review_status, reviewed_by, evidence_class, workflow_test_accepted "
+            "FROM documents WHERE id=? AND application_id=?",
             (doc_id, app["id"])
         ).fetchone()
         if not doc:
@@ -11721,6 +11854,51 @@ class DocumentDeleteHandler(BaseHandler):
         if any((item.get("status") or "") == "accepted" for item in linked_rmi_items):
             db.close()
             return self.error("Accepted requested documents cannot be deleted.", 403)
+
+        agent_evidence = db.execute(
+            "SELECT COUNT(*) AS count FROM agent_executions WHERE document_id=?",
+            (doc_id,),
+        ).fetchone()
+        evidence_reasons = []
+        if (doc.get("verification_status") or "pending") not in {"pending", "skipped"}:
+            evidence_reasons.append("verification_status")
+        if (doc.get("review_status") or "pending") != "pending" or doc.get("reviewed_by"):
+            evidence_reasons.append("document_review")
+        if doc.get("evidence_class") or doc.get("workflow_test_accepted"):
+            evidence_reasons.append("evidence_classification")
+        if int((agent_evidence or {}).get("count") or 0):
+            evidence_reasons.append("agent_execution")
+        if linked_rmi_items:
+            evidence_reasons.append("rmi_request")
+
+        if evidence_reasons:
+            from regulated_deletion import log_regulated_delete_denied
+            log_regulated_delete_denied(
+                "documents",
+                "document has regulated verification/review evidence",
+                application_id=app["id"],
+            )
+            self.log_audit(
+                user,
+                "Regulated Delete Denied",
+                app["ref"],
+                json.dumps({
+                    "event": "regulated_delete_denied",
+                    "reason": "document_has_regulated_evidence",
+                    "document_id": doc_id,
+                    "evidence_reasons": sorted(evidence_reasons),
+                }, sort_keys=True),
+                db=db,
+                commit=False,
+                application_id=app["id"],
+            )
+            db.commit()
+            db.close()
+            return self.error(
+                "Document cannot be deleted because regulated verification or review evidence exists. "
+                "Upload a replacement or supersede it instead.",
+                409,
+            )
 
         # Delete local file if exists
         if doc["file_path"] and os.path.exists(doc["file_path"]):

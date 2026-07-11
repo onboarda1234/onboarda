@@ -467,18 +467,16 @@ def run_pipeline_on_scenarios():
 
 
 def clean_demo_data():
-    """Remove all demo data from the database."""
-    db = get_db()
-    demo_ids = [s["id"] for s in DEMO_SCENARIOS]
-    for did in demo_ids:
-        db.execute("DELETE FROM documents WHERE application_id = ?", (did,))
-        db.execute("DELETE FROM directors WHERE application_id = ?", (did,))
-        db.execute("DELETE FROM ubos WHERE application_id = ?", (did,))
-        db.execute("DELETE FROM applications WHERE id = ?", (did,))
-    db.execute("DELETE FROM clients WHERE id = 'demo-client-001'")
-    db.commit()
-    db.close()
-    print("Demo data cleaned.")
+    """Refuse the legacy generic demo wipe.
+
+    Demo rows may contain real-looking compliance decisions and are not
+    uniformly marked as synthetic.  P12-1 therefore requires re-seeding them
+    with explicit fixture markers before a guarded non-production cleanup can
+    be offered.
+    """
+    raise RuntimeError(
+        "Demo cleanup is disabled: use the explicit marker-scoped non-production fixture workflow."
+    )
 
 
 # ═══════════════════════════════════════════════════════════
@@ -487,7 +485,11 @@ def clean_demo_data():
 
 if __name__ == "__main__":
     if "--clean" in sys.argv:
-        clean_demo_data()
+        try:
+            clean_demo_data()
+        except RuntimeError as exc:
+            print(f"REFUSED: {exc}")
+            raise SystemExit(2)
     elif "--run" in sys.argv:
         seed_all_scenarios()
         run_pipeline_on_scenarios()

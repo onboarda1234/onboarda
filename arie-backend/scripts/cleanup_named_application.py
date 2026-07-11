@@ -2,8 +2,10 @@
 """
 cleanup_named_application.py
 ─────────────────────────────
-One-time script to hard-delete all applications matching a given company name
-from the Onboarda/RegMind database, cascading to all child tables.
+Legacy company-name cleanup inventory.
+
+P12-1 keeps dry-run discovery available but refuses ``--execute`` because a
+company name is not a fixture marker or sanctioned deletion context.
 
 Matching strategy: exact, case-insensitive, whitespace-normalised comparison.
   UPPER(TRIM(company_name)) == UPPER(TRIM(<target>))
@@ -14,7 +16,7 @@ Usage
   # Dry-run (default) — shows what WOULD be deleted, touches nothing
   python scripts/cleanup_named_application.py "1947 OIL & GAS PLC"
 
-  # Live deletion — prints a full deletion report
+  # Explicit refusal — company-name-only deletion is not sanctioned
   python scripts/cleanup_named_application.py "1947 OIL & GAS PLC" --execute
 
   # Point at a specific SQLite file (default: onboarda.db in backend root)
@@ -24,9 +26,9 @@ Usage
   DATABASE_URL=postgresql://user:pass@host/dbname \
     python scripts/cleanup_named_application.py "1947 OIL & GAS PLC" --execute
 
-Deletion report
-───────────────
-After a successful --execute run the script prints:
+Inventory report
+────────────────
+The dry run prints:
   • Applications found (id, ref, status, created_at)
   • Rows deleted per child table
   • Local file paths attempted / removed
@@ -34,13 +36,7 @@ After a successful --execute run the script prints:
     AWS credentials to be configured; see note below)
   • Anything that could not be verified
 
-S3 note
-───────
-The script calls s3_client.delete_document() for each s3_key found in the
-documents table.  This requires AWS credentials (AWS_ACCESS_KEY_ID,
-AWS_SECRET_ACCESS_KEY, S3_BUCKET_NAME) to be present in the environment.
-If credentials are absent the s3_keys are listed but NOT deleted — they are
-flagged as "NOT VERIFIED / requires manual S3 cleanup".
+No DB, local-file, or S3 mutation occurs through this script.
 """
 
 import argparse
@@ -125,6 +121,17 @@ def run_cleanup(target_name: str, execute: bool):
             app["id"], app["ref"], app["status"], app["created_at"]
         )
     log.info("")
+
+    if execute:
+        # P12-1: company-name matching is not a fixture marker and cannot
+        # authorize deletion of regulated application evidence.  Keep the
+        # dry-run inventory for operator discovery, but refuse all mutation.
+        log.error(
+            "REFUSED: arbitrary company-name deletion is not a sanctioned workflow. "
+            "Use the marker-scoped non-production fixture cleanup helper or an approved retention process."
+        )
+        db.close()
+        return False
 
     total_deleted = {}
     s3_unverified = []
@@ -305,6 +312,7 @@ def run_cleanup(target_name: str, execute: bool):
         log.info("  ✓ Deletion complete.")
 
     log.info("═" * 70)
+    return True
 
 
 def main():

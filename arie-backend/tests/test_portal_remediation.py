@@ -29,6 +29,8 @@ def api_server():
     except OSError:
         pass
 
+    import db as db_module
+    db_module.DB_PATH = db_path
     from db import get_db, init_db, seed_initial_data
 
     init_db()
@@ -69,6 +71,10 @@ def api_server():
 
     from tests.conftest import shutdown_test_http_server
     shutdown_test_http_server(thread, server_ref)
+    try:
+        os.unlink(db_path)
+    except OSError:
+        pass
 
 
 def _ensure_client(db, client_id="portalclient001", email="portal@test.com"):
@@ -390,9 +396,20 @@ def test_client_can_delete_draft_application(api_server):
     conn.close()
 
 
-def test_client_delete_cleans_child_rows_and_document_artifacts(api_server):
+def test_client_delete_refuses_regulated_children_without_partial_artifact_cleanup(api_server, monkeypatch):
     from auth import create_token
     from db import get_db
+    import server as server_module
+
+    s3_delete_calls = []
+
+    class _FakeS3:
+        def delete_document(self, key):
+            s3_delete_calls.append(key)
+            return True, "deleted"
+
+    monkeypatch.setattr(server_module, "HAS_S3", True)
+    monkeypatch.setattr(server_module, "get_s3_client", lambda: _FakeS3())
 
     temp_dir = tempfile.mkdtemp(prefix="portal-delete-")
     file_path = os.path.join(temp_dir, "draft-doc.pdf")
@@ -410,10 +427,10 @@ def test_client_delete_cleans_child_rows_and_document_artifacts(api_server):
     )
     conn.execute(
         """
-        INSERT INTO documents (id, application_id, doc_type, doc_name, file_path)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO documents (id, application_id, doc_type, doc_name, file_path, s3_key)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        ("doc_delete_children", "delete_children", "cert_inc", "draft-doc.pdf", file_path),
+        ("doc_delete_children", "delete_children", "cert_inc", "draft-doc.pdf", file_path, "fixtures/draft-doc.pdf"),
     )
     conn.execute(
         """
@@ -436,6 +453,29 @@ def test_client_delete_cleans_child_rows_and_document_artifacts(api_server):
         """,
         ("delete_children", "Delete Children Ltd", "pending"),
     )
+    conn.execute(
+        "UPDATE documents SET verification_status='verified', verification_results=? WHERE id=?",
+        (json.dumps({"overall": "verified"}), "doc_delete_children"),
+    )
+    conn.execute(
+        "INSERT INTO compliance_memos (application_id, memo_data) VALUES (?, ?)",
+        ("delete_children", json.dumps({"summary": "regulated memo evidence"})),
+    )
+    conn.execute(
+        "INSERT INTO screening_reviews (application_id, subject_type, subject_name, disposition) "
+        "VALUES (?,?,?,?)",
+        ("delete_children", "entity", "Delete Children Ltd", "cleared"),
+    )
+    conn.execute(
+        "INSERT INTO decision_records (id, application_ref, decision_type, source, timestamp) "
+        "VALUES (?,?,?,?,?)",
+        ("decision-delete-children", "ARF-DELETE-CHILDREN", "request_documents", "manual", "2026-01-01T00:00:00"),
+    )
+    conn.execute(
+        "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail) "
+        "VALUES (?,?,?,?,?,?,?)",
+        ("admin001", "Test Admin", "admin", "Evidence Recorded", "ARF-DELETE-CHILDREN", "delete_children", "regulated audit evidence"),
+    )
     conn.commit()
     conn.close()
 
@@ -445,16 +485,40 @@ def test_client_delete_cleans_child_rows_and_document_artifacts(api_server):
         headers={"Authorization": f"Bearer {token}"},
         timeout=3,
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 409
+    assert "regulated compliance evidence exists" in resp.json()["error"]
 
     conn = get_db()
-    assert conn.execute("SELECT id FROM applications WHERE id=?", ("delete_children",)).fetchone() is None
-    assert conn.execute("SELECT id FROM documents WHERE application_id=?", ("delete_children",)).fetchone() is None
-    assert conn.execute("SELECT id FROM client_sessions WHERE application_id=?", ("delete_children",)).fetchone() is None
-    assert conn.execute("SELECT id FROM client_notifications WHERE application_id=?", ("delete_children",)).fetchone() is None
-    assert conn.execute("SELECT id FROM periodic_reviews WHERE application_id=?", ("delete_children",)).fetchone() is None
+    assert conn.execute("SELECT id FROM applications WHERE id=?", ("delete_children",)).fetchone() is not None
+    assert conn.execute("SELECT id FROM documents WHERE application_id=?", ("delete_children",)).fetchone() is not None
+    assert conn.execute("SELECT id FROM client_sessions WHERE application_id=?", ("delete_children",)).fetchone() is not None
+    assert conn.execute("SELECT id FROM client_notifications WHERE application_id=?", ("delete_children",)).fetchone() is not None
+    assert conn.execute("SELECT id FROM periodic_reviews WHERE application_id=?", ("delete_children",)).fetchone() is not None
+    assert conn.execute("SELECT id FROM compliance_memos WHERE application_id=?", ("delete_children",)).fetchone() is not None
+    assert conn.execute("SELECT id FROM screening_reviews WHERE application_id=?", ("delete_children",)).fetchone() is not None
+    assert conn.execute("SELECT id FROM decision_records WHERE application_ref=?", ("ARF-DELETE-CHILDREN",)).fetchone() is not None
+    denial = conn.execute(
+        "SELECT detail FROM audit_log WHERE application_id=? AND action='Regulated Delete Denied'",
+        ("delete_children",),
+    ).fetchone()
+    assert denial is not None
+    assert json.loads(denial["detail"])["event"] == "regulated_delete_denied"
+    assert os.path.exists(file_path)
+    assert s3_delete_calls == []
+
+    # Isolated test teardown only; production code cannot use this bypass.
+    conn.execute("DELETE FROM decision_records WHERE application_ref=?", ("ARF-DELETE-CHILDREN",))
+    conn.execute("DELETE FROM screening_reviews WHERE application_id=?", ("delete_children",))
+    conn.execute("DELETE FROM compliance_memos WHERE application_id=?", ("delete_children",))
+    conn.execute("DELETE FROM periodic_reviews WHERE application_id=?", ("delete_children",))
+    conn.execute("DELETE FROM audit_log WHERE application_id=?", ("delete_children",))
+    conn.execute("DELETE FROM client_notifications WHERE application_id=?", ("delete_children",))
+    conn.execute("DELETE FROM client_sessions WHERE application_id=?", ("delete_children",))
+    conn.execute("DELETE FROM documents WHERE application_id=?", ("delete_children",))
+    conn.execute("DELETE FROM applications WHERE id=?", ("delete_children",))
+    conn.commit()
     conn.close()
-    assert not os.path.exists(file_path)
+    os.unlink(file_path)
 
 
 def test_client_cannot_delete_submitted_application(api_server):
