@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,7 +20,9 @@ from regulated_deletion import (  # noqa: E402
     FIXTURE_CLEANUP_CONFIRMATION,
     RegulatedDeleteDenied,
     assert_sql_delete_allowed,
+    is_verified_disposable_postgres_test_db,
     sanctioned_delete_context,
+    test_database_teardown_context,
 )
 
 
@@ -134,6 +137,125 @@ def test_multi_table_truncate_cannot_hide_regulated_target_after_ephemeral_table
     with pytest.raises(RegulatedDeleteDenied):
         assert_sql_delete_allowed("TRUNCATE TABLE sessions, public.audit_log CASCADE")
     assert_sql_delete_allowed("SELECT 'DELETE FROM audit_log' AS harmless_text -- DELETE FROM decision_records")
+
+
+def _clear_deployment_markers(monkeypatch):
+    for key in (
+        "PRODUCTION", "IS_PRODUCTION", "STAGING", "IS_STAGING",
+        "APP_ENV", "DEPLOYMENT_ENVIRONMENT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_disposable_postgres_teardown_context_allows_exact_local_test_db(monkeypatch, caplog):
+    _clear_deployment_markers(monkeypatch)
+    monkeypatch.setenv("ENVIRONMENT", "testing")
+    expected = "postgresql://postgres:secret@localhost:5432/onboarda_test_ci_123?sslmode=disable"
+    # Scheme alias and query parsing are safely normalized before exact match.
+    active = "postgres://postgres:secret@localhost/onboarda_test_ci_123?sslmode=disable"
+    monkeypatch.setenv("TEST_POSTGRES_DSN", expected)
+    db = SimpleNamespace(is_postgres=True, database_identity=active)
+
+    with caplog.at_level("WARNING", logger="arie.regulated_deletion"):
+        with test_database_teardown_context(db, reason="reset audit-chain test rows"):
+            assert_sql_delete_allowed(active and "DELETE FROM audit_log", database_identity=active, is_postgres=True)
+
+    assert not any("regulated_delete_denied" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("environment", "active_dsn", "test_dsn", "marker_key", "marker_value"),
+    (
+        ("staging", "postgresql://u:p@localhost/onboarda_test_ci", "postgresql://u:p@localhost/onboarda_test_ci", None, None),
+        ("production", "postgresql://u:p@localhost/onboarda_test_ci", "postgresql://u:p@localhost/onboarda_test_ci", None, None),
+        (None, "postgresql://u:p@localhost/onboarda_test_ci", "postgresql://u:p@localhost/onboarda_test_ci", None, None),
+        ("testing", "postgresql://u:p@localhost/onboarda_test_ci_a", "postgresql://u:p@localhost/onboarda_test_ci_b", None, None),
+        ("testing", "postgresql://u:p@10.0.0.8/onboarda_test_ci", "postgresql://u:p@10.0.0.8/onboarda_test_ci", None, None),
+        ("testing", "postgresql://u:p@localhost/onboarda_ci", "postgresql://u:p@localhost/onboarda_ci", None, None),
+        ("testing", "postgresql://u:p@db.cluster.us-east-1.rds.amazonaws.com/onboarda_test_ci", "postgresql://u:p@db.cluster.us-east-1.rds.amazonaws.com/onboarda_test_ci", None, None),
+        ("testing", "postgresql://u:p@localhost/onboarda_test_production", "postgresql://u:p@localhost/onboarda_test_production", None, None),
+        ("testing", "postgresql://u:p@localhost/onboarda_test_ci", "postgresql://u:p@localhost/onboarda_test_ci", "IS_PRODUCTION", "true"),
+        ("testing", "postgresql://u:p@localhost/onboarda_test_ci", "postgresql://u:p@localhost/onboarda_test_ci", "STAGING", "1"),
+    ),
+)
+def test_disposable_postgres_teardown_predicates_fail_closed(
+    monkeypatch, environment, active_dsn, test_dsn, marker_key, marker_value
+):
+    _clear_deployment_markers(monkeypatch)
+    if environment is None:
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+    else:
+        monkeypatch.setenv("ENVIRONMENT", environment)
+    monkeypatch.setenv("TEST_POSTGRES_DSN", test_dsn)
+    if marker_key:
+        monkeypatch.setenv(marker_key, marker_value)
+    assert not is_verified_disposable_postgres_test_db(active_dsn, True)
+    with pytest.raises(ValueError, match="verified disposable"):
+        with test_database_teardown_context(
+            SimpleNamespace(is_postgres=True, database_identity=active_dsn),
+            reason="attempted test reset",
+        ):
+            pass
+
+
+def test_disposable_postgres_teardown_requires_test_dsn_context_and_postgres(monkeypatch):
+    _clear_deployment_markers(monkeypatch)
+    monkeypatch.setenv("ENVIRONMENT", "testing")
+    dsn = "postgresql://u:p@127.0.0.1/onboarda_test_ci"
+    monkeypatch.delenv("TEST_POSTGRES_DSN", raising=False)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    assert not is_verified_disposable_postgres_test_db(dsn, True)
+    assert not is_verified_disposable_postgres_test_db(dsn, False, test_postgres_dsn=dsn)
+    assert not is_verified_disposable_postgres_test_db(None, True, test_postgres_dsn=dsn)
+
+    with pytest.raises(RegulatedDeleteDenied):
+        assert_sql_delete_allowed("DELETE FROM audit_log", database_identity=dsn, is_postgres=True)
+    with pytest.raises(ValueError, match="unknown sanctioned"):
+        with sanctioned_delete_context(
+            "application_delete",
+            actor_id="runtime-user",
+            role="client",
+            reason="ordinary application delete",
+            allowed_tables=("audit_log",),
+            confirmed=True,
+            database_identity=dsn,
+            is_postgres=True,
+        ):
+            pass
+
+    monkeypatch.setenv("TEST_POSTGRES_DSN", dsn)
+    with pytest.raises(RegulatedDeleteDenied):
+        assert_sql_delete_allowed("DELETE FROM audit_log", database_identity=dsn, is_postgres=True)
+    with pytest.raises(ValueError, match="verified disposable"):
+        with test_database_teardown_context(
+            SimpleNamespace(is_postgres=False, database_identity=":memory:"),
+            reason="PostgreSQL-only bypass attempted from SQLite",
+        ):
+            pass
+
+
+def test_disposable_postgres_local_socket_is_allowed_but_remote_override_is_denied(monkeypatch):
+    _clear_deployment_markers(monkeypatch)
+    monkeypatch.setenv("ENVIRONMENT", "testing")
+    socket_dsn = "postgresql:///onboarda_test_socket?host=%2Fvar%2Frun%2Fpostgresql"
+    monkeypatch.setenv("TEST_POSTGRES_DSN", socket_dsn)
+    assert is_verified_disposable_postgres_test_db(socket_dsn, True)
+
+    remote_override = "postgresql://localhost/onboarda_test_socket?host=remote.internal"
+    monkeypatch.setenv("TEST_POSTGRES_DSN", remote_override)
+    assert not is_verified_disposable_postgres_test_db(remote_override, True)
+
+
+def test_disposable_postgres_teardown_context_is_not_wired_into_runtime_paths():
+    from pathlib import Path
+
+    backend = Path(__file__).resolve().parents[1]
+    for runtime_file in (
+        "server.py", "base_handler.py", "db.py", "gdpr.py",
+        "production_controls.py", "gdpr_erasure.py",
+    ):
+        source = (backend / runtime_file).read_text(encoding="utf-8")
+        assert "test_database_teardown_context" not in source, runtime_file
 
 
 def test_fixture_cleanup_requires_nonprod_marker_confirmation_and_isolated_test_db(monkeypatch):

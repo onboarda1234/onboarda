@@ -712,7 +712,7 @@ def fresh_pg(monkeypatch):
         pytest.skip("No PostgreSQL DSN available")
     import psycopg2
     from urllib.parse import urlsplit, urlunsplit
-    db_name = f"h2b_{uuid.uuid4().hex[:12]}"
+    db_name = f"onboarda_test_h2b_{uuid.uuid4().hex[:12]}"
     parts = urlsplit(base_dsn)
     admin = psycopg2.connect(base_dsn)
     admin.autocommit = True
@@ -724,9 +724,12 @@ def fresh_pg(monkeypatch):
         raise
     fresh_dsn = urlunsplit((parts.scheme, parts.netloc, "/" + db_name, parts.query, parts.fragment))
     orig = os.environ.get("DATABASE_URL")
+    orig_environment = os.environ.get("ENVIRONMENT")
+    orig_test_postgres_dsn = os.environ.get("TEST_POSTGRES_DSN")
     try:
         monkeypatch.setenv("DATABASE_URL", fresh_dsn)
-        monkeypatch.setenv("ENVIRONMENT", "development")
+        monkeypatch.setenv("TEST_POSTGRES_DSN", fresh_dsn)
+        monkeypatch.setenv("ENVIRONMENT", "testing")
         import config as config_module
         import db as db_module
         importlib.reload(config_module)
@@ -741,6 +744,14 @@ def fresh_pg(monkeypatch):
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = orig
+        if orig_environment is None:
+            os.environ.pop("ENVIRONMENT", None)
+        else:
+            os.environ["ENVIRONMENT"] = orig_environment
+        if orig_test_postgres_dsn is None:
+            os.environ.pop("TEST_POSTGRES_DSN", None)
+        else:
+            os.environ["TEST_POSTGRES_DSN"] = orig_test_postgres_dsn
         try:
             import config as config_module
             import db as db_module
@@ -781,9 +792,11 @@ def test_pg_erasure_log_uses_real_booleans(fresh_pg):
 
 def test_pg_fail_closed_on_empty_policy(fresh_pg):
     import gdpr_erasure as ge
+    from regulated_deletion import test_database_teardown_context
     db = fresh_pg.get_db()
     try:
-        db.execute("DELETE FROM data_retention_policies")
+        with test_database_teardown_context(db, reason="reset H2B retention policy fixture"):
+            db.execute("DELETE FROM data_retention_policies")
         db.commit()
         db.execute("INSERT INTO clients (id, email, password_hash, company_name, status) VALUES (?, ?, 'h', 'Co', 'active')",
                    ("pgc2", "pgc2@example.com"))

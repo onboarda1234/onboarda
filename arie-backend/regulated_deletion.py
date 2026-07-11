@@ -18,6 +18,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 
 logger = logging.getLogger("arie.regulated_deletion")
@@ -114,6 +115,7 @@ APPROVED_CONTEXTS = frozenset({
     "future_gdpr_erasure_dual_control",
     "fixture_cleanup_nonprod",
     "migration_admin_context",
+    "test_database_teardown",
 })
 
 
@@ -141,6 +143,8 @@ class DeletionContext:
     confirmed: bool = False
     second_approver_id: Optional[str] = None
     feature_enabled: bool = False
+    database_identity: Optional[str] = None
+    is_postgres: bool = False
 
 
 _ACTIVE_CONTEXT: ContextVar[Optional[DeletionContext]] = ContextVar(
@@ -162,6 +166,103 @@ def is_ephemeral_table(table: str) -> bool:
 
 def _environment(value: Optional[str] = None) -> str:
     return (value or os.environ.get("ENVIRONMENT") or "development").strip().lower()
+
+
+def _truthy_environment_marker(value: Optional[str]) -> bool:
+    return str(value or "").strip().lower() not in {"", "0", "false", "no", "off", "none"}
+
+
+def _normalise_postgres_test_dsn(value: Optional[str]):
+    """Return a comparison tuple and parsed locality fields, or ``None``.
+
+    Only URI-form PostgreSQL DSNs are accepted.  Keyword DSNs and ambiguous
+    values fail closed rather than relying on driver-specific interpretation.
+    """
+    if not value:
+        return None
+    try:
+        parts = urlsplit(str(value).strip())
+        if parts.scheme.lower() not in {"postgres", "postgresql"} or parts.fragment:
+            return None
+        path = unquote(parts.path or "")
+        if not path.startswith("/") or not path[1:] or "/" in path[1:]:
+            return None
+        database = path[1:]
+        host = (parts.hostname or "").lower()
+        port = parts.port or 5432
+        query = tuple(sorted(parse_qsl(parts.query, keep_blank_values=True)))
+        query_map = {}
+        for key, item in query:
+            query_map.setdefault(key.lower(), []).append(item)
+        normalised = (
+            "postgresql",
+            parts.username or "",
+            parts.password or "",
+            host,
+            port,
+            database,
+            query,
+        )
+        return normalised, host, database, query_map
+    except (TypeError, ValueError):
+        return None
+
+
+def _local_postgres_host(host: str, query_map) -> bool:
+    local_names = {"", "localhost", "127.0.0.1", "::1"}
+    if host not in local_names:
+        return False
+    for key in ("host", "hostaddr"):
+        for override in query_map.get(key, []):
+            candidate = str(override or "").strip().lower()
+            if candidate in local_names:
+                continue
+            # libpq local-socket directories are absolute filesystem paths.
+            if key == "host" and candidate.startswith("/") and ".." not in Path(candidate).parts:
+                continue
+            return False
+    return True
+
+
+def is_verified_disposable_postgres_test_db(
+    database_identity: Optional[str],
+    is_postgres: bool,
+    *,
+    environment: Optional[str] = None,
+    test_postgres_dsn: Optional[str] = None,
+) -> bool:
+    """Prove a PostgreSQL database is the explicit local disposable test DB."""
+    if not is_postgres or _environment(environment) != "testing":
+        return False
+    expected_dsn = test_postgres_dsn or os.environ.get("TEST_POSTGRES_DSN")
+    if not expected_dsn or not database_identity:
+        return False
+
+    # Independent deployment markers override a misleading ENVIRONMENT value.
+    if any(
+        _truthy_environment_marker(os.environ.get(key))
+        for key in ("PRODUCTION", "IS_PRODUCTION", "STAGING", "IS_STAGING")
+    ):
+        return False
+    for key in ("APP_ENV", "DEPLOYMENT_ENVIRONMENT"):
+        if str(os.environ.get(key) or "").strip().lower() in {
+            "prod", "production", "stage", "staging"
+        }:
+            return False
+
+    active = _normalise_postgres_test_dsn(database_identity)
+    expected = _normalise_postgres_test_dsn(expected_dsn)
+    if active is None or expected is None or active[0] != expected[0]:
+        return False
+    _, host, database, query_map = active
+    if not _local_postgres_host(host, query_map):
+        return False
+    database_lower = database.lower()
+    if not database_lower.startswith("onboarda_test_"):
+        return False
+    if any(marker in database_lower for marker in ("production", "staging", "_prod", "_stage")):
+        return False
+    return True
 
 
 def _validate_context(context: DeletionContext) -> None:
@@ -197,6 +298,15 @@ def _validate_context(context: DeletionContext) -> None:
     elif context.name == "migration_admin_context":
         if context.role not in {"system", "admin"} or not context.confirmed:
             raise ValueError("migration/admin deletion requires explicit system/admin approval")
+    elif context.name == "test_database_teardown":
+        if context.role != "system" or not context.confirmed:
+            raise ValueError("test database teardown requires explicit system test authority")
+        if not is_verified_disposable_postgres_test_db(
+            context.database_identity,
+            context.is_postgres,
+            environment=context.environment,
+        ):
+            raise ValueError("test database teardown requires a verified disposable local PostgreSQL test database")
 
 
 @contextmanager
@@ -214,6 +324,8 @@ def sanctioned_delete_context(
     confirmed: bool = False,
     second_approver_id: Optional[str] = None,
     feature_enabled: bool = False,
+    database_identity: Optional[str] = None,
+    is_postgres: bool = False,
 ):
     """Activate one validated, explicitly scoped sanctioned deletion context."""
     context = DeletionContext(
@@ -229,6 +341,8 @@ def sanctioned_delete_context(
         confirmed=bool(confirmed),
         second_approver_id=second_approver_id,
         feature_enabled=bool(feature_enabled),
+        database_identity=database_identity,
+        is_postgres=bool(is_postgres),
     )
     _validate_context(context)
     token = _ACTIVE_CONTEXT.set(context)
@@ -236,6 +350,32 @@ def sanctioned_delete_context(
         yield context
     finally:
         _ACTIVE_CONTEXT.reset(token)
+
+
+@contextmanager
+def test_database_teardown_context(db, *, reason: str):
+    """Authorize cleanup only on the explicitly configured disposable PG DB.
+
+    No runtime handler imports this helper.  It exists for pytest reset and
+    teardown code whose direct regulated DELETE statements must clean a fresh,
+    local, run-scoped PostgreSQL database.
+    """
+    with sanctioned_delete_context(
+        "test_database_teardown",
+        actor_id="pytest:test-database-teardown",
+        role="system",
+        reason=reason,
+        allowed_tables=REGULATED_TABLES,
+        environment=os.environ.get("ENVIRONMENT"),
+        confirmed=True,
+        database_identity=getattr(db, "database_identity", None),
+        is_postgres=bool(getattr(db, "is_postgres", False)),
+    ) as context:
+        yield context
+
+
+# Prevent pytest from collecting this imported helper as a test function.
+test_database_teardown_context.__test__ = False
 
 
 def _safe_log_value(value: Optional[str], limit: int = 160) -> Optional[str]:
