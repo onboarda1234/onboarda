@@ -27,23 +27,14 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-import tornado.web
+from base_handler import BaseHandler
 
 from .compliance_assistant import ComplianceAssistant
 from .human_review import HumanReviewService
-from .schemas import ReviewDecision, TriggerType
+from .schemas import TriggerType
 from .supervisor import AgentSupervisor, SupervisorPipelineResult
-
-
-def _decode_token(token: str):
-    """Decode a JWT token — delegates to auth module."""
-    try:
-        from auth import decode_token
-        return decode_token(token)
-    except ImportError:
-        return None
 
 logger = logging.getLogger("arie.supervisor.api")
 
@@ -197,42 +188,13 @@ def get_supervisor() -> AgentSupervisor:
 # BASE HANDLER
 # ═══════════════════════════════════════════════════════════
 
-class SupervisorBaseHandler(tornado.web.RequestHandler):
-    """Base handler with common utilities and JWT authentication."""
+class SupervisorBaseHandler(BaseHandler):
+    """Supervisor JSON helpers layered on the common secured BaseHandler.
 
-    def set_default_headers(self):
-        self.set_header("Content-Type", "application/json")
-        self.set_header("Access-Control-Allow-Origin", "*")
-        self.set_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS")
-        self.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-    def options(self, *args, **kwargs):
-        self.set_status(204)
-        self.finish()
-
-    def get_current_user_token(self):
-        """Decode JWT from Bearer header or session cookie."""
-        auth = self.request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            return _decode_token(auth[7:])
-        session_token = self.get_cookie("arie_session", None)
-        if session_token:
-            return _decode_token(session_token)
-        return None
-
-    def require_auth(self, roles: Optional[List[str]] = None):
-        """Require authentication; optionally restrict to specific roles.
-        Returns the decoded user dict, or None (after writing 401/403)."""
-        user = self.get_current_user_token()
-        if not user:
-            self.set_status(401)
-            self.write(json.dumps({"error": "Authentication required"}))
-            return None
-        if roles and user.get("role") not in roles:
-            self.set_status(403)
-            self.write(json.dumps({"error": "Insufficient permissions"}))
-            return None
-        return user
+    Authentication and role policy remain explicit in each endpoint, while
+    BaseHandler supplies request preparation, CSRF, active-session validation,
+    security headers, request IDs, safe errors, and shared security hooks.
+    """
 
     def write_json(self, data: Any, status: int = 200):
         self.set_status(status)
@@ -245,36 +207,60 @@ class SupervisorBaseHandler(tornado.web.RequestHandler):
             body["details"] = details
         self.write(json.dumps(body, default=str))
 
-    def write_error(self, status_code, **kwargs):
-        """Render uncaught HTTPErrors (e.g. the BSA-006 malformed-body 400)
-        as the same JSON envelope as write_error_json — these are JSON APIs,
-        never Tornado's default HTML error page."""
-        self.set_status(status_code)
-        self.finish(json.dumps(
-            {"error": self._reason or "Internal server error", "status": status_code},
-            default=str))
-
     def get_json_body(self) -> Dict[str, Any]:
-        """Parse the JSON request body.
+        """Preserve the supervisor helper name using BaseHandler's parser."""
+        return self.get_json()
 
-        BSA-006 (fail-closed, review fold S1): a NON-EMPTY body that is not
-        valid JSON is a client error → structured 400, never a silent ``{}``
-        that lets a state-changing supervisor endpoint proceed on defaults the
-        client never sent. Empty body / JSON null still yield ``{}``.
-        """
-        body = self.request.body
-        if not body:
-            return {}
-        try:
-            parsed = json.loads(body)
-        except (json.JSONDecodeError, TypeError):
-            raise tornado.web.HTTPError(400, reason="Request body is not valid JSON")
-        if parsed is None:
-            return {}
-        if not isinstance(parsed, (dict, list)):
-            raise tornado.web.HTTPError(
-                400, reason="Request body must be a JSON object")
-        return parsed
+    def get_server_actor(self, user: Dict[str, Any], action: str) -> Optional[Dict[str, str]]:
+        """Return fail-closed actor provenance from authenticated claims only."""
+        if not isinstance(user, dict):
+            user = {}
+
+        def _first(*keys):
+            for key in keys:
+                value = str(user.get(key) or "").strip()
+                if value:
+                    return value
+            return ""
+
+        actor = {
+            # BaseHandler currently returns ``sub``; user_id/id are accepted
+            # only as server-side compatibility fallbacks for trusted sessions.
+            "id": _first("sub", "user_id", "id"),
+            "name": _first("name", "email"),
+            "role": _first("role").lower(),
+        }
+        if not all(actor.values()):
+            logger.warning(
+                "supervisor_actor_provenance_unavailable action=%s request_id=%s",
+                action,
+                getattr(self, "request_id", ""),
+            )
+            self.write_error_json(403, "Authenticated actor provenance unavailable")
+            return None
+        return actor
+
+    def log_actor_field_conflicts(
+        self,
+        body: Dict[str, Any],
+        actor: Dict[str, str],
+        action: str,
+        expected_fields: Dict[str, str],
+    ) -> None:
+        """Log attempted actor forgery without logging untrusted field values."""
+        conflicts = []
+        for body_field, expected_value in expected_fields.items():
+            supplied = body.get(body_field)
+            if supplied not in (None, "") and str(supplied).strip() != expected_value:
+                conflicts.append(body_field)
+        if conflicts:
+            logger.warning(
+                "supervisor_actor_forgery_attempt action=%s actor_id=%s fields=%s request_id=%s",
+                action,
+                actor["id"],
+                ",".join(sorted(conflicts)),
+                getattr(self, "request_id", ""),
+            )
 
     def get_bounded_int_argument(self, name: str, default: int, min_value: int = 1, max_value: int = 1000) -> int:
         """BSA-007 (review fold S2): malformed pagination is a client mistake,
@@ -301,7 +287,16 @@ class PipelineRunHandler(SupervisorBaseHandler):
         body = self.get_json_body()
         application_id = body.get("application_id")
         trigger_type = body.get("trigger_type", "onboarding")
-        trigger_source = body.get("trigger_source", "api")
+        actor = self.get_server_actor(user, "pipeline_run")
+        if not actor:
+            return
+        trigger_source = f"supervisor_api:{actor['id']}"
+        self.log_actor_field_conflicts(
+            body,
+            actor,
+            "pipeline_run",
+            {"trigger_source": trigger_source},
+        )
 
         if not application_id:
             return self.write_error_json(400, "application_id is required")
@@ -378,11 +373,24 @@ class ReviewSubmitHandler(SupervisorBaseHandler):
             return
         body = self.get_json_body()
 
-        required = ["pipeline_id", "reviewer_id", "reviewer_name",
-                     "reviewer_role", "decision", "decision_reason"]
+        required = ["pipeline_id", "decision", "decision_reason"]
         missing = [f for f in required if not body.get(f)]
         if missing:
             return self.write_error_json(400, f"Missing required fields: {missing}")
+
+        actor = self.get_server_actor(user, "review_submit")
+        if not actor:
+            return
+        self.log_actor_field_conflicts(
+            body,
+            actor,
+            "review_submit",
+            {
+                "reviewer_id": actor["id"],
+                "reviewer_name": actor["name"],
+                "reviewer_role": actor["role"],
+            },
+        )
 
         pipeline_id = body["pipeline_id"]
         result = _pipeline_cache.get(pipeline_id)
@@ -392,9 +400,9 @@ class ReviewSubmitHandler(SupervisorBaseHandler):
         try:
             review = _review_service.submit_review(
                 pipeline_result=result,
-                reviewer_id=body["reviewer_id"],
-                reviewer_name=body["reviewer_name"],
-                reviewer_role=body["reviewer_role"],
+                reviewer_id=actor["id"],
+                reviewer_name=actor["name"],
+                reviewer_role=actor["role"],
                 decision=body["decision"],
                 decision_reason=body["decision_reason"],
                 risk_level_assigned=body.get("risk_level_assigned"),
@@ -444,18 +452,31 @@ class EscalationHandler(SupervisorBaseHandler):
             return
         body = self.get_json_body()
         required = ["application_id", "pipeline_id", "escalation_level",
-                     "reason", "escalated_by", "escalated_by_role"]
+                     "reason"]
         missing = [f for f in required if not body.get(f)]
         if missing:
             return self.write_error_json(400, f"Missing required fields: {missing}")
+
+        actor = self.get_server_actor(user, "escalation_create")
+        if not actor:
+            return
+        self.log_actor_field_conflicts(
+            body,
+            actor,
+            "escalation_create",
+            {
+                "escalated_by": actor["name"],
+                "escalated_by_role": actor["role"],
+            },
+        )
 
         result = _review_service.escalate_case(
             application_id=body["application_id"],
             pipeline_id=body["pipeline_id"],
             escalation_level=body["escalation_level"],
             reason=body["reason"],
-            escalated_by=body["escalated_by"],
-            escalated_by_role=body["escalated_by_role"],
+            escalated_by=actor["name"],
+            escalated_by_role=actor["role"],
             assigned_to=body.get("assigned_to"),
         )
         self.write_json(result)
