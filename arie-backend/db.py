@@ -4687,6 +4687,8 @@ def append_audit_log(
     ip_address: Optional[str] = None,
     before_state: Any = None,
     after_state: Any = None,
+    application_id: Optional[str] = None,
+    request_id: Optional[str] = None,
     commit: bool = False,
 ) -> str:
     """Append a hash-chained entry to audit_log and return its entry_hash.
@@ -4712,7 +4714,23 @@ def append_audit_log(
 
     Keyword-only with None/"" defaults so it absorbs every existing audit_log
     caller's argument subset when the wiring step (deferred) routes them here.
+    application_id is write-through metadata only: callers with reliable app
+    context must pass it in; this function deliberately performs no target/ref
+    lookup and opens no second DB connection while appending the chain row.
     """
+    if request_id is None:
+        try:
+            from observability import get_request_id as _get_request_id
+            request_id = _get_request_id()
+        except Exception:
+            request_id = None
+
+    scoped_application_id = (
+        str(application_id).strip()[:128]
+        if application_id is not None and str(application_id).strip()
+        else None
+    )
+
     if getattr(db, "is_postgres", False):
         db.execute("SELECT pg_advisory_xact_lock(?)", (_AUDIT_LOG_CHAIN_LOCK_KEY,))
 
@@ -4756,13 +4774,14 @@ def append_audit_log(
         """
         INSERT INTO audit_log
             (user_id, user_name, user_role, action, target, detail, ip_address,
-             timestamp, before_state, after_state, previous_hash, entry_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             timestamp, before_state, after_state, previous_hash, entry_hash,
+             application_id, request_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id or None, user_name or None, user_role or None, action,
             target, detail, ip_address, timestamp, before_str, after_str,
-            previous_hash, entry_hash,
+            previous_hash, entry_hash, scoped_application_id, request_id or None,
         ),
     )
     if commit:
