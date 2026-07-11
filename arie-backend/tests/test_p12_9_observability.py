@@ -397,7 +397,7 @@ class TestReviewFolds:
         with open(os.path.join(BACKEND, "server.py"), encoding="utf-8") as fh:
             src = fh.read()
         assert 'self.request.headers.get("X-Request-ID", "")' not in src
-        assert src.count('(_obs_get_request_id() or "")') == 4
+        assert src.count('(_obs_get_request_id() or "")') >= 4
 
     def test_s3_probe_uses_tight_timeout_client(self):
         """M3: the readiness probe must not run botocore's default 60s

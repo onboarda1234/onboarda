@@ -11218,12 +11218,23 @@ class PreApprovalDecisionHandler(BaseHandler):
 
         # Audit trail — authoritative in-transaction record carries before/after state
         _after = {"status": new_status, "pre_approval_decision": decision}
-        db.execute("""INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state)
-                     VALUES (?,?,?,?,?,?,?,?,?)""",
-                   (user.get("sub",""), user.get("name",""), user.get("role",""),
-                    f"Pre-Approval: {decision}", app["ref"],
-                    f"Pre-approval decision: {decision} | Risk: {app['risk_level']} (Score: {app['risk_score']}) | Notes: {notes}",
-                    self.get_client_ip(), _safe_json(_before), _safe_json(_after)))
+        db.execute(
+            """INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, before_state, after_state, request_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                user.get("sub", ""),
+                user.get("name", ""),
+                user.get("role", ""),
+                f"Pre-Approval: {decision}",
+                app["ref"],
+                real_id,
+                f"Pre-approval decision: {decision} | Risk: {app['risk_level']} (Score: {app['risk_score']}) | Notes: {notes}",
+                self.get_client_ip(),
+                _safe_json(_before),
+                _safe_json(_after),
+                (_obs_get_request_id() or ""),
+            ),
+        )
 
         self.log_governance_attempt(
             user, "application.pre_approval_decision", attempt_target, "accepted", 201,
@@ -28926,18 +28937,20 @@ def _mark_latest_memo_stale(
             ],
         }, default=str, sort_keys=True)
         db.execute(
-            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, before_state, after_state, request_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 audit_actor.get("sub", ""),
                 audit_actor.get("name", ""),
                 audit_actor.get("role", ""),
                 "Memo Marked Stale",
                 app_ref or application_id,
+                application_id,
                 detail,
                 ip_address or "",
                 _safe_json(before_state if before_state is not None else before_memo),
                 _safe_json(after_state if after_state is not None else after_memo),
+                (_obs_get_request_id() or ""),
             ),
         )
     except Exception as audit_exc:
@@ -29146,19 +29159,22 @@ class ComplianceMemoHandler(BaseHandler):
             message = document_reliance_error_message(document_gate, action="memo generation")
             try:
                 db.execute(
-                    "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                    "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
                     (
                         user.get("sub", ""),
                         user.get("name", ""),
                         user.get("role", ""),
                         "Generate Memo Blocked: Document Evidence Gate",
                         app["ref"],
+                        real_id,
                         json.dumps({
                             "event": "memo_generation_document_evidence_blocked",
                             "blocker_count": document_gate.get("blocker_count", 0),
                             "blockers": document_gate.get("blockers", []),
                         }, default=str, sort_keys=True),
                         self.get_client_ip(),
+                        (_obs_get_request_id() or ""),
                     ),
                 )
                 db.commit()
@@ -29261,18 +29277,21 @@ class ComplianceMemoHandler(BaseHandler):
         if reused_memo:
             reused_blocked = bool(reused_memo.get("metadata", {}).get("blocked"))
             db.execute(
-                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 (
                     user.get("sub", ""),
                     user.get("name", ""),
                     user.get("role", ""),
                     "Generate Memo",
                     app["ref"],
+                    real_id,
                     "Compliance memo generation reused existing memo "
                     + str(reused_memo.get("metadata", {}).get("idempotency", {}).get("memo_id"))
                     + " because source inputs were unchanged"
                     + (" | reused_blocked_memo=true" if reused_blocked else ""),
                     self.get_client_ip(),
+                    (_obs_get_request_id() or ""),
                 ),
             )
             db.commit()
@@ -29376,14 +29395,25 @@ class ComplianceMemoHandler(BaseHandler):
                  memo.get("metadata", {}).get("memo_version", "v" + str(next_version)), memo_input_hash, next_version,
                  _memo_blocked_val, _memo_block_reason)
             )
-            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Generate Memo", app["ref"],
-                        "Compliance memo generated for " + app["company_name"]
-                        + " | Supervisor: " + supervisor_result["verdict"]
-                        + " | Quality: " + str(validation_result["quality_score"]) + "/10"
-                        + " | Rule Engine: " + rule_engine_result["engine_status"]
-                        + (" | BLOCKED" if memo["metadata"].get("blocked") else ""),
-                        self.get_client_ip()))
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    user.get("sub", ""),
+                    user.get("name", ""),
+                    user.get("role", ""),
+                    "Generate Memo",
+                    app["ref"],
+                    real_id,
+                    "Compliance memo generated for " + app["company_name"]
+                    + " | Supervisor: " + supervisor_result["verdict"]
+                    + " | Quality: " + str(validation_result["quality_score"]) + "/10"
+                    + " | Rule Engine: " + rule_engine_result["engine_status"]
+                    + (" | BLOCKED" if memo["metadata"].get("blocked") else ""),
+                    self.get_client_ip(),
+                    (_obs_get_request_id() or ""),
+                ),
+            )
         except Exception as e:
             logger.error("Failed to persist compliance memo/audit for %s: %s", real_id, e, exc_info=True)
             try:
@@ -29663,8 +29693,21 @@ class MemoValidateHandler(BaseHandler):
                 "UPDATE compliance_memos SET quality_score = ?, validation_status = ?, validation_issues = ?, validation_run_at = ? WHERE id = ?",
                 (validation["quality_score"], validation["validation_status"], json.dumps(validation["issues"]), validation["validated_at"], memo_row["id"])
             )
-            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Validate Memo", app_id, f"Memo validation: {validation['validation_status']} (score: {validation['quality_score']}/10)", self.get_client_ip()))
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    user.get("sub", ""),
+                    user.get("name", ""),
+                    user.get("role", ""),
+                    "Validate Memo",
+                    app_id,
+                    app_row["id"],
+                    f"Memo validation: {validation['validation_status']} (score: {validation['quality_score']}/10)",
+                    self.get_client_ip(),
+                    (_obs_get_request_id() or ""),
+                ),
+            )
             db.commit()
         except Exception as e:
             # P10-2 / RDI-011: FAIL CLOSED. Never report validation output as
@@ -30782,7 +30825,17 @@ def _validate_officer_signoff(signoff, expected_scope):
     return None
 
 
-def _persist_signoff_audit(db, user, target_ref, scope, signoff_obj, ip_address, user_agent):
+def _persist_signoff_audit(
+    db,
+    user,
+    target_ref,
+    scope,
+    signoff_obj,
+    ip_address,
+    user_agent,
+    *,
+    application_id=None,
+):
     """Persist officer sign-off event to the audit_log table.
 
     Records server-side context (IP, user agent, timestamp) independently
@@ -30795,12 +30848,36 @@ def _persist_signoff_audit(db, user, target_ref, scope, signoff_obj, ip_address,
         "user_agent": user_agent,
     }, default=str)
 
-    db.execute(
-        "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (user.get("sub", ""), user.get("name", ""), user.get("role", ""),
-         f"Officer Sign-Off ({scope})", target_ref, detail, ip_address)
-    )
+    has_metadata_columns = True
+    try:
+        if getattr(db, "is_postgres", False):
+            rows = db.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = ? AND column_name IN (?, ?)",
+                ("audit_log", "application_id", "request_id"),
+            ).fetchall()
+            present = {row["column_name"] for row in rows}
+            has_metadata_columns = {"application_id", "request_id"}.issubset(present)
+        else:
+            db.execute("SELECT application_id, request_id FROM audit_log LIMIT 1")
+    except Exception:
+        has_metadata_columns = False
+
+    if has_metadata_columns:
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (user.get("sub", ""), user.get("name", ""), user.get("role", ""),
+             f"Officer Sign-Off ({scope})", target_ref, application_id, detail, ip_address,
+             (_obs_get_request_id() or ""))
+        )
+    else:
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (user.get("sub", ""), user.get("name", ""), user.get("role", ""),
+             f"Officer Sign-Off ({scope})", target_ref, detail, ip_address)
+        )
 
 
 class MemoApproveHandler(BaseHandler):
@@ -31090,14 +31167,28 @@ class MemoApproveHandler(BaseHandler):
                 audit_detail += "Supervisor verdict: CONSISTENT_WITH_WARNINGS. "
             audit_detail += f"Approval reason: {approval_reason}"
 
-            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Approve Memo", app_id, audit_detail, self.get_client_ip()))
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    user.get("sub", ""),
+                    user.get("name", ""),
+                    user.get("role", ""),
+                    "Approve Memo",
+                    app_id,
+                    app_row["id"] if app_row else None,
+                    audit_detail,
+                    self.get_client_ip(),
+                    (_obs_get_request_id() or ""),
+                ),
+            )
 
             # ── EX-11: Persist officer sign-off audit record ──
             _persist_signoff_audit(db, user, app_id, "memo",
                                    body.get("officer_signoff", {}),
                                    self.get_client_ip(),
-                                   self.request.headers.get("User-Agent", ""))
+                                   self.request.headers.get("User-Agent", ""),
+                                   application_id=app_row["id"] if app_row else None)
             self.log_governance_attempt(
                 user, "memo.approve", attempt_target, "accepted", 200,
                 "", attempt_summary, db=db, commit=False, best_effort=False)
@@ -31523,10 +31614,21 @@ class MemoSupervisorHandler(BaseHandler):
                 (json.dumps(memo_data), supervisor_result["verdict"], supervisor_result["recommendation"],
                  _sup_blocked_val, _sup_block_reason, memo_row["id"])
             )
-            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Run Memo Supervisor", app_id,
-                        "Supervisor verdict: " + supervisor_result["verdict"] + " | Contradictions: " + str(supervisor_result["contradiction_count"]),
-                        self.get_client_ip()))
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    user.get("sub", ""),
+                    user.get("name", ""),
+                    user.get("role", ""),
+                    "Run Memo Supervisor",
+                    app_id,
+                    app_row["id"] if app_row else None,
+                    "Supervisor verdict: " + supervisor_result["verdict"] + " | Contradictions: " + str(supervisor_result["contradiction_count"]),
+                    self.get_client_ip(),
+                    (_obs_get_request_id() or ""),
+                ),
+            )
 
             # ── Record normalized supervisor decision record ──
             try:
@@ -32591,12 +32693,23 @@ class ApplicationDecisionHandler(BaseHandler):
                     _first_after = {"status": app["status"], "decision": "approve",
                                     "note": "awaiting_second_approver",
                                     "first_approver_id": user.get("sub", "")}
-                    db.execute("""INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state)
-                                 VALUES (?,?,?,?,?,?,?,?,?)""",
-                               (user.get("sub",""), user.get("name",""), user.get("role",""),
-                                "First Approval (Pending Second)", app["ref"],
-                                f"Decision: approve | Reason: {decision_reason} | Awaiting second approver",
-                                self.get_client_ip(), _safe_json(_before), _safe_json(_first_after)))
+                    db.execute(
+                        """INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, before_state, after_state, request_id)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                        (
+                            user.get("sub", ""),
+                            user.get("name", ""),
+                            user.get("role", ""),
+                            "First Approval (Pending Second)",
+                            app["ref"],
+                            real_id,
+                            f"Decision: approve | Reason: {decision_reason} | Awaiting second approver",
+                            self.get_client_ip(),
+                            _safe_json(_before),
+                            _safe_json(_first_after),
+                            (_obs_get_request_id() or ""),
+                        ),
+                    )
                     self.log_governance_attempt(
                         user, "application.decision", attempt_target, "accepted", 202,
                         "First approval recorded; awaiting second approver", attempt_summary,
@@ -32754,9 +32867,23 @@ class ApplicationDecisionHandler(BaseHandler):
                   "decision_by": user.get("sub"),
                   "first_approver_id": app.get("first_approver_id") if _application_risk_snapshot(app)[0] in ("HIGH", "VERY_HIGH") else None,
                   "monitoring_enrollment": monitoring_enrollment if decision == "approve" else None}
-        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
-                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Decision", app["ref"], audit_detail, self.get_client_ip(),
-                    _safe_json(_before), _safe_json(_after)))
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, before_state, after_state, request_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                user.get("sub", ""),
+                user.get("name", ""),
+                user.get("role", ""),
+                "Decision",
+                app["ref"],
+                real_id,
+                audit_detail,
+                self.get_client_ip(),
+                _safe_json(_before),
+                _safe_json(_after),
+                (_obs_get_request_id() or ""),
+            ),
+        )
 
         # ── PR-AUTHORITY-AUDIT-HARDENING-1: first-class, filterable override event ──
         # Override use was previously only discoverable by parsing the Decision row;
@@ -32787,7 +32914,8 @@ class ApplicationDecisionHandler(BaseHandler):
                                "override" if override_ai else "decision",
                                data.get("officer_signoff", {}),
                                self.get_client_ip(),
-                               self.request.headers.get("User-Agent", ""))
+                               self.request.headers.get("User-Agent", ""),
+                               application_id=real_id)
 
         # ── Record normalized decision record + commit (P10-2 / RDI-001) ──
         # FAIL-CLOSED: the normalized decision record is part of the regulatory

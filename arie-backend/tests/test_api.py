@@ -1286,36 +1286,36 @@ class TestAuthenticatedAccess:
         )
         assert client_resp.status_code == 403
 
-    def test_audit_application_id_probes_do_not_use_supplied_transaction(self, temp_db):
-        """Schema/id probes must not execute on a caller-owned transaction."""
-        from base_handler import _audit_log_has_application_id, _resolve_audit_application_id
+    def test_audit_application_id_probes_use_supplied_transaction(self, temp_db, monkeypatch):
+        """Schema/id probes use the caller-owned transaction for same-transaction visibility."""
+        import base_handler
         from db import get_db
 
-        app_id = "app_probe_autonomous"
-        app_ref = "ARF-PROBE-AUTONOMOUS"
+        suffix = uuid.uuid4().hex[:8]
+        app_id = f"app_probe_handle_{suffix}"
+        app_ref = f"ARF-PROBE-HANDLE-{suffix}"
         conn = get_db()
-        conn.execute("DELETE FROM applications WHERE id = ? OR ref = ?", (app_id, app_ref))
-        conn.execute(
-            """
-            INSERT INTO applications
-            (id, ref, client_id, company_name, country, sector, entity_type, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (app_id, app_ref, "testclient001", "Probe Autonomy Ltd",
-             "Mauritius", "Technology", "SME", "in_review"),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                """
+                INSERT INTO applications
+                (id, ref, client_id, company_name, country, sector, entity_type, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (app_id, app_ref, "testclient001", "Probe Autonomy Ltd",
+                 "Mauritius", "Technology", "SME", "in_review"),
+            )
 
-        class PoisonTransaction:
-            is_postgres = True
+            def fail_get_db(*_args, **_kwargs):
+                raise AssertionError("audit application-id probes must use the supplied DB handle")
 
-            def execute(self, *_args, **_kwargs):
-                raise AssertionError("supplied transaction must not be used for audit probes")
+            monkeypatch.setattr(base_handler, "get_db", fail_get_db)
 
-        supplied_transaction = PoisonTransaction()
-        assert _audit_log_has_application_id(supplied_transaction) is True
-        assert _resolve_audit_application_id(supplied_transaction, app_ref) == app_id
+            assert base_handler._audit_log_has_application_id(conn) is True
+            assert base_handler._resolve_audit_application_id(conn, app_ref) == app_id
+            conn.rollback()
+        finally:
+            conn.close()
 
     def test_dashboard_reports_surface_unknown_risk_bucket(self, api_server):
         """Unknown risk must be explicit, not coerced into low/zero reporting."""

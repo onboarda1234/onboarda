@@ -115,9 +115,11 @@ def _safe_json(obj):
 
 def _audit_log_has_application_id(db=None):
     """Return True when audit_log has the immutable application scope column."""
-    probe_db = None
+    probe_db = db
+    own_db = db is None
     try:
-        probe_db = get_db()
+        if own_db:
+            probe_db = get_db()
         if getattr(probe_db, "is_postgres", False):
             row = probe_db.execute(
                 "SELECT 1 FROM information_schema.columns "
@@ -131,7 +133,7 @@ def _audit_log_has_application_id(db=None):
         logger.debug("audit_application_id_schema_probe_failed", exc_info=True)
         return False
     finally:
-        if probe_db is not None:
+        if own_db and probe_db is not None:
             try:
                 probe_db.close()
             except Exception:
@@ -143,18 +145,19 @@ def _resolve_audit_application_id(db, target, application_id=None):
     if application_id:
         return str(application_id).strip()[:128] or None
 
+    if db is None:
+        return None
+
     text = str(target or "").strip()
     if not text:
         return None
 
-    probe_db = None
     try:
-        probe_db = get_db()
         if text.startswith("periodic_review:"):
             review_id = text.split("periodic_review:", 1)[1].strip()
             if not review_id:
                 return None
-            row = probe_db.execute(
+            row = db.execute(
                 "SELECT application_id FROM periodic_reviews WHERE id = ?",
                 (review_id,),
             ).fetchone()
@@ -165,7 +168,7 @@ def _resolve_audit_application_id(db, target, application_id=None):
         if text.startswith("application:"):
             text = text.split("application:", 1)[1].strip()
 
-        rows = probe_db.execute(
+        rows = db.execute(
             "SELECT id FROM applications WHERE id = ? OR ref = ? ORDER BY id ASC LIMIT 2",
             (text, text),
         ).fetchall()
@@ -174,12 +177,6 @@ def _resolve_audit_application_id(db, target, application_id=None):
             return ids[0][:128]
     except Exception:
         logger.debug("audit_application_id_resolution_failed target=%s", target, exc_info=True)
-    finally:
-        if probe_db is not None:
-            try:
-                probe_db.close()
-            except Exception:
-                pass
     return None
 
 
@@ -965,8 +962,8 @@ class BaseHandler(tornado.web.RequestHandler):
             if _audit_log_has_application_id(db):
                 scoped_application_id = _resolve_audit_application_id(db, target, application_id)
                 db.execute(
-                    "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address) "
-                    "VALUES (?,?,?,?,?,?,?,?)",
+                    "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
                     (
                         user.get("sub", "") if user else "",
                         user.get("name", "") if user else "",
@@ -976,12 +973,13 @@ class BaseHandler(tornado.web.RequestHandler):
                         scoped_application_id,
                         detail,
                         self.get_client_ip() if hasattr(self, "request") else "",
+                        get_request_id(),
                     ),
                 )
             else:
                 db.execute(
-                    "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) "
-                    "VALUES (?,?,?,?,?,?,?)",
+                    "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, request_id) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
                     (
                         user.get("sub", "") if user else "",
                         user.get("name", "") if user else "",
@@ -990,6 +988,7 @@ class BaseHandler(tornado.web.RequestHandler):
                         target,
                         detail,
                         self.get_client_ip() if hasattr(self, "request") else "",
+                        get_request_id(),
                     ),
                 )
             if own_db or commit:
