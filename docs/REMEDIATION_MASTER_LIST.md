@@ -302,7 +302,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | P13-4 | App-detail render race guard | FEO-005 | MED | Monotonic request nonce / expected-ref check in `openAppDetail`→`renderAuthoritativeAppDetail`; ignore stale responses so Application A can never render over Application B's context | — | 📋 scoped |
 | P13-5 | Role-UI fail-closed until matrix loads | FEO-006 | LOW | Privileged controls hidden/disabled with a loading/retry state until the RBAC matrix is fetched (today UI deliberately fails open; backend remains the gate) | — | 📋 scoped |
 | P13-6 | Portal intake PII out of sessionStorage | FEO-007 | MED | Persist company-intake state via the authenticated server-side save/resume path; keep only an opaque resume handle client-side; clear legacy `arie_company_intake_state` on load | — | 📋 scoped |
-| 🟠 P13-7 | Compliance-officer SOP pack | FEO-014 | MED (ops/docs) | Officer onboarding/training SOP, pre-approval review checklist, `INCONSISTENT` supervisor-verdict handling, senior escalation, override + evidence-export procedures | — | 📋 scoped (ops/docs) · 🟠 **pilot operational gate** |
+| 🟠 P13-7 | Compliance-officer SOP pack | FEO-014 | MED (ops/docs) | Officer onboarding/training SOP, pre-approval review checklist, `INCONSISTENT` supervisor-verdict handling, senior escalation, override + evidence-export procedures | #745 | 🟢 PR open / docs-only in progress · 🟠 **pilot operational gate** |
 
 **Wave order:** W1 P13-1 (the two HIGH stored-XSS findings — officer-session code execution) · W2 P13-2…P13-6 · P13-7 alongside (docs, non-code).
 
