@@ -215,6 +215,23 @@ _REQUEST_LOG_EXCLUDED_PATHS = frozenset({
     "/api/liveness", "/api/health", "/api/readiness",
 })
 
+# BSA-004: provider webhooks authenticate with their existing signature
+# verifiers, not browser CSRF tokens.  Keep this allowlist exact and path-only:
+# substring matching (especially against ``request.uri``) lets an attacker put
+# ``/webhook`` in an unrelated path or query string and bypass CSRF.
+_CSRF_WEBHOOK_EXEMPT_PATHS = frozenset({
+    "/api/kyc/webhook",
+    "/api/webhooks/complyadvantage",
+})
+
+_CSRF_PRE_SESSION_EXEMPT_PATHS = frozenset({
+    "/api/auth/officer/login",
+    "/api/auth/client/login",
+    "/api/auth/client/register",
+    "/api/auth/logout",
+    "/api/health",
+})
+
 
 class BaseHandler(tornado.web.RequestHandler):
     def prepare(self):
@@ -523,19 +540,14 @@ class BaseHandler(tornado.web.RequestHandler):
         # Bearer token auth is inherently CSRF-safe
         if self.request.headers.get("Authorization", "").startswith("Bearer "):
             return
-        # Webhook endpoints use HMAC signatures, not cookies
-        if "/webhook" in self.request.uri:
+        # The two provider webhook endpoints use signature verification, not
+        # cookies.  Exact request.path matching deliberately excludes lookalike
+        # paths, trailing slashes, and query-string injection attempts.
+        if self.request.path in _CSRF_WEBHOOK_EXEMPT_PATHS:
             return
         # Auth endpoints (login, register) are pre-session — no CSRF token exists yet
         # These are protected by rate limiting instead
-        _csrf_exempt_paths = (
-            "/api/auth/officer/login",
-            "/api/auth/client/login",
-            "/api/auth/client/register",
-            "/api/auth/logout",
-            "/api/health",
-        )
-        if self.request.uri in _csrf_exempt_paths:
+        if self.request.path in _CSRF_PRE_SESSION_EXEMPT_PATHS:
             return
         # OPTIONS preflight requests don't need CSRF
         if self.request.method == "OPTIONS":
