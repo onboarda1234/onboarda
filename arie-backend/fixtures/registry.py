@@ -7,10 +7,15 @@ rows idempotently against the *real* current schema declared in
 
 Conventions enforced here (so the seeder stays generic):
 
-- ``application.id``      : 16-char lowercase hex from a reserved
-                            ``f1xed...`` namespace (visually obvious in
-                            logs; cannot collide with real or demo IDs)
-- ``application.ref``     : reserved range ``ARF-2026-9xxxxx``
+- ``application.id``      : legacy SCEN-01..11 fixtures retain their
+                            deterministic ``f1xed...`` ids. Item 36 roots
+                            use generated ids and are identified by the
+                            registry key, marker, synthetic ref and
+                            ``is_fixture`` flag instead.
+- ``application.ref``     : legacy fixtures retain their ARF refs; Item 36
+                            uses the reserved ``FX-ITEM36-*`` namespace,
+                            which normal application-ref generation never
+                            emits.
 - ``application.risk_level``: UPPERCASE (LOW/MEDIUM/HIGH/VERY_HIGH) to
                               satisfy the schema CHECK constraint
 - ``company_name`` prefix : ``FIX-SCENxx ...``
@@ -37,9 +42,8 @@ from typing import List, Optional, Dict, Any
 
 
 # ---------------------------------------------------------------------
-# Deterministic application ids (16-char lowercase hex). Picked from a
-# reserved "f1xed..." namespace so they are visually obvious in logs
-# and cannot collide with existing real or demo IDs.
+# Deterministic application ids for the original SCEN-01..11 fixtures.
+# Item 36 deliberately does not rely on globally fixed primary keys.
 # ---------------------------------------------------------------------
 APP_ID = {
     "SCEN-01": "f1xed00000000001",
@@ -53,7 +57,6 @@ APP_ID = {
     "SCEN-09": "f1xed00000000009",
     "SCEN-10": "f1xed00000000010",
     "SCEN-11": "f1xed00000000011",
-    **{f"SCEN-{n}": f"f1xed000000000{n:02d}" for n in range(12, 24)},
 }
 
 APP_REF = {
@@ -68,7 +71,22 @@ APP_REF = {
     "SCEN-09": "ARF-2026-900009",
     "SCEN-10": "ARF-2026-900010",
     "SCEN-11": "ARF-2026-900011",
-    **{f"SCEN-{n}": f"ARF-2026-9000{n:02d}" for n in range(12, 24)},
+    "SCEN-12": "FX-ITEM36-SCEN12-BLOCKERS",
+    "SCEN-13": "FX-ITEM36-SCEN13-STALE-MEMO",
+    "SCEN-14": "FX-ITEM36-SCEN14-STALE-RISK",
+    "SCEN-15": "FX-ITEM36-SCEN15-MISSING-IDV",
+    "SCEN-16": "FX-ITEM36-SCEN16-MISSING-DOCS",
+    "SCEN-17": "FX-ITEM36-SCEN17-PENDING-RMI",
+    "SCEN-18": "FX-ITEM36-SCEN18-SANCTIONS",
+    "SCEN-19": "FX-ITEM36-SCEN19-PEP",
+    "SCEN-20": "FX-ITEM36-SCEN20-PR-BLOCKED",
+    "SCEN-21": "FX-ITEM36-SCEN21-PR-COMPLETED",
+    "SCEN-22": "FX-ITEM36-SCEN22A-XCLIENT",
+    "SCEN-23": "FX-ITEM36-SCEN23-REPLAY",
+}
+
+ITEM36_PAIR_REFS = {
+    "SCEN-22": "FX-ITEM36-SCEN22B-XCLIENT",
 }
 
 
@@ -515,7 +533,7 @@ for number, key, purpose, state_kind, status in _ITEM36_SCENARIOS:
 
 
 def _manifest(code, key, expected_state, tables, regulated, cleanup, control, http, retain):
-    return {
+    manifest = {
         "fixture_key": key,
         "scenario_code": code,
         "synthetic_ref": APP_REF[code],
@@ -528,6 +546,9 @@ def _manifest(code, key, expected_state, tables, regulated, cleanup, control, ht
         "expected_HTTP_result": http,
         "safe_to_retain_in_staging": retain,
     }
+    if code in ITEM36_PAIR_REFS:
+        manifest["paired_synthetic_ref"] = ITEM36_PAIR_REFS[code]
+    return manifest
 
 
 NEGATIVE_PATH_FIXTURES = {

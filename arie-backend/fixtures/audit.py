@@ -65,6 +65,16 @@ def make_fixture_audit_writer(db):
         after_state: Optional[Any] = None,
     ):
         tagged_action = action if action.startswith("fixture.") else f"fixture.{action}"
+        # Fixture audit evidence is part of the idempotent substrate: a
+        # re-seed converges rather than appending duplicate logical events.
+        # The exact action/target/detail tuple remains specific enough to
+        # distinguish separate fixture state transitions.
+        existing = db.execute(
+            "SELECT id FROM audit_log WHERE user_id=? AND action=? AND target=? AND detail=? LIMIT 1",
+            (FIXTURE_USER_ID, tagged_action, target, detail),
+        ).fetchone()
+        if existing:
+            return
         db.execute(
             "INSERT INTO audit_log "
             "(user_id, user_name, user_role, action, target, detail, "

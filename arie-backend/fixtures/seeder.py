@@ -5,7 +5,8 @@ PostgreSQL (production/staging) schemas declared in
 ``arie-backend/db.py``. No schema changes are made.
 
 Idempotency keys (per registry conventions):
-- applications: ``id`` (deterministic ``f1xed...`` hex)
+- applications: legacy scenarios use deterministic ids; Item 36 uses the
+  exact fixture key + marker + synthetic ref + ``is_fixture`` identity
 - monitoring_alerts: ``source_reference`` (e.g. FIX_SCEN01_ALERT)
 - periodic_reviews: ``trigger_reason`` LIKE 'FIX_SCENxx_REVIEW%'
 - edd_cases: ``trigger_notes`` LIKE 'FIX_SCENxx_EDD%'
@@ -37,6 +38,8 @@ from fixtures.audit import make_fixture_audit_writer
 from fixtures.registry import (
     APP_ID,
     APP_REF,
+    ITEM36_PAIR_REFS,
+    NEGATIVE_PATH_FIXTURES,
     SCENARIOS,
     ScenarioDef,
     _days_ago_iso,
@@ -52,6 +55,10 @@ logger = logging.getLogger(__name__)
 REVIEW_PAYLOAD_SENTINEL = "FIX_REVIEW_JSON:"
 EDD_PAYLOAD_SENTINEL = "FIX_EDD_JSON:"
 DISMISSAL_PAYLOAD_SENTINEL = "FIX_PAYLOAD_JSON:"
+
+
+class FixtureReferenceCollision(RuntimeError):
+    """A reserved fixture reference is occupied by a different identity."""
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +120,98 @@ def _fetch_id(db, sql: str, params: tuple):
     return list(row.values())[0]
 
 
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _fixture_identity(scen: ScenarioDef, role: str = "root") -> Dict[str, str]:
+    manifest = NEGATIVE_PATH_FIXTURES[scen.fixture_key]
+    return {
+        "fixture": scen.code,
+        "fixture_key": scen.fixture_key,
+        "fixture_marker": manifest["marker"],
+        "fixture_role": role,
+        "source": "fixtures.seeder",
+    }
+
+
+def _identity_matches(row: Dict[str, Any], expected: Dict[str, str]) -> bool:
+    data = _json_object(row.get("prescreening_data"))
+    return all(data.get(key) == value for key, value in expected.items())
+
+
+def _preflight_fixture_reference(
+    db, *, synthetic_ref: str, expected: Dict[str, str]
+) -> Optional[str]:
+    """Validate one reserved ref without mutating any root or child row."""
+    suffix = " FOR UPDATE" if USE_POSTGRESQL else ""
+    row = db.execute(
+        "SELECT id, ref, is_fixture, prescreening_data FROM applications "
+        f"WHERE ref=?{suffix}",
+        (synthetic_ref,),
+    ).fetchone()
+    if row:
+        if not _truthy(row.get("is_fixture")):
+            raise FixtureReferenceCollision(
+                f"fixture reference collision: {synthetic_ref} belongs to "
+                f"non-fixture application {row.get('id')}"
+            )
+        if not _identity_matches(row, expected):
+            raise FixtureReferenceCollision(
+                f"fixture registry inconsistency: {synthetic_ref} is owned by "
+                "a different fixture identity"
+            )
+
+    # Also reject one logical fixture identity being split across refs. This
+    # scan is intentionally small and portable across PostgreSQL JSONB and the
+    # SQLite TEXT representation used by tests.
+    candidates = db.execute(
+        "SELECT id, ref, is_fixture, prescreening_data FROM applications "
+        "WHERE is_fixture=?",
+        (True,),
+    ).fetchall()
+    for candidate in candidates:
+        if _identity_matches(candidate, expected) and candidate.get("ref") != synthetic_ref:
+            raise FixtureReferenceCollision(
+                f"fixture registry inconsistency: identity {expected['fixture_key']}/"
+                f"{expected['fixture_role']} already uses {candidate.get('ref')}"
+            )
+    return row.get("id") if row else None
+
+
+def _preflight_item36_refs(db, selected: List[ScenarioDef]) -> None:
+    """Fail the whole seed before any write if any selected ref is unsafe."""
+    for scen in selected:
+        if not scen.fixture_key:
+            continue
+        _preflight_fixture_reference(
+            db,
+            synthetic_ref=APP_REF[scen.code],
+            expected=_fixture_identity(scen),
+        )
+        pair_ref = ITEM36_PAIR_REFS.get(scen.code)
+        if pair_ref:
+            _preflight_fixture_reference(
+                db,
+                synthetic_ref=pair_ref,
+                expected=_fixture_identity(scen, "pair_b"),
+            )
+
+
 def _insert_returning_id(db, table: str, cols: str, values: tuple) -> int:
     """INSERT and return the new SERIAL/AUTOINCREMENT id.
 
@@ -162,8 +261,13 @@ def _insert_returning_id(db, table: str, cols: str, values: tuple) -> int:
 # ---------------------------------------------------------------------------
 
 def _upsert_application(db, audit, scen: ScenarioDef) -> str:
-    app_id = APP_ID[scen.code]
     ref = APP_REF[scen.code]
+    if scen.fixture_key:
+        app_id = _preflight_fixture_reference(
+            db, synthetic_ref=ref, expected=_fixture_identity(scen)
+        ) or _new_text_id()
+    else:
+        app_id = APP_ID[scen.code]
     risk_dimensions = json.dumps(
         {
             "country": scen.country,
@@ -176,7 +280,11 @@ def _upsert_application(db, audit, scen: ScenarioDef) -> str:
 
     existing = _fetch_id(db, "SELECT id FROM applications WHERE id = ?", (app_id,))
     now = _now_iso()
-    prescreening_payload = {"fixture": scen.code, "source": "fixtures.seeder"}
+    prescreening_payload = (
+        _fixture_identity(scen)
+        if scen.fixture_key
+        else {"fixture": scen.code, "source": "fixtures.seeder"}
+    )
     if scen.state_kind == "sanctions_hit":
         prescreening_payload.update({
             "screening_report": {
@@ -228,7 +336,11 @@ def _upsert_application(db, audit, scen: ScenarioDef) -> str:
         audit(
             action="upsert_application",
             target=f"application:{app_id}",
-            detail=f"Updated fixture application for {scen.code} ({scen.company_name})",
+            detail=(
+                f"Converged fixture application for {scen.code} ({scen.company_name})"
+                if scen.fixture_key
+                else f"Updated fixture application for {scen.code} ({scen.company_name})"
+            ),
             after_state={"id": app_id, "ref": ref, "company_name": scen.company_name},
         )
         return app_id
@@ -261,9 +373,13 @@ def _upsert_application(db, audit, scen: ScenarioDef) -> str:
         ),
     )
     audit(
-        action="insert_application",
+        action="upsert_application" if scen.fixture_key else "insert_application",
         target=f"application:{app_id}",
-        detail=f"Inserted fixture application for {scen.code} ({scen.company_name})",
+        detail=(
+            f"Converged fixture application for {scen.code} ({scen.company_name})"
+            if scen.fixture_key
+            else f"Inserted fixture application for {scen.code} ({scen.company_name})"
+        ),
         after_state={"id": app_id, "ref": ref, "company_name": scen.company_name},
     )
     return app_id
@@ -292,44 +408,80 @@ def _upsert_item36_state(db, audit, app_id: str, scen: ScenarioDef) -> Dict[str,
             ("stale:recompute_failed:item36", _days_ago_iso(30), app_id),
         )
     elif kind == "pending_rmi":
-        request_id = "fix-scen17-rmi"
-        db.execute(
-            "INSERT OR IGNORE INTO rmi_requests "
-            "(id,application_id,status,reason,deadline,created_by_name) VALUES (?,?,?,?,?,?)",
-            (request_id, app_id, "open", "FIX-SCEN17 pending information request", _days_ago_iso(-14), "fixture_seed"),
+        reason = "FIX-SCEN17 pending information request"
+        request_id = _fetch_id(
+            db,
+            "SELECT id FROM rmi_requests WHERE application_id=? AND reason=?",
+            (app_id, reason),
         )
-        db.execute(
-            "INSERT OR IGNORE INTO rmi_request_items "
-            "(id,request_id,doc_type,label,description,status) VALUES (?,?,?,?,?,?)",
-            ("fix-scen17-rmi-item", request_id, "source_of_funds", "Source of funds", "Synthetic pending RMI", "requested"),
+        if request_id:
+            db.execute(
+                "UPDATE rmi_requests SET status=?, deadline=?, created_by_name=? WHERE id=?",
+                ("open", _days_ago_iso(-14), "fixture_seed", request_id),
+            )
+        else:
+            request_id = _new_text_id()
+            db.execute(
+                "INSERT INTO rmi_requests "
+                "(id,application_id,status,reason,deadline,created_by_name) VALUES (?,?,?,?,?,?)",
+                (request_id, app_id, "open", reason, _days_ago_iso(-14), "fixture_seed"),
+            )
+        item_id = _fetch_id(
+            db,
+            "SELECT id FROM rmi_request_items WHERE request_id=? AND description=?",
+            (request_id, "FIX-SCEN17 Synthetic pending RMI"),
         )
+        if item_id:
+            db.execute(
+                "UPDATE rmi_request_items SET doc_type=?, label=?, status=? WHERE id=?",
+                ("source_of_funds", "Source of funds", "requested", item_id),
+            )
+        else:
+            item_id = _new_text_id()
+            db.execute(
+                "INSERT INTO rmi_request_items "
+                "(id,request_id,doc_type,label,description,status) VALUES (?,?,?,?,?,?)",
+                (item_id, request_id, "source_of_funds", "Source of funds", "FIX-SCEN17 Synthetic pending RMI", "requested"),
+            )
         result["rmi_request_id"] = request_id
     elif kind == "missing_idv":
-        db.execute(
-            "INSERT OR IGNORE INTO directors "
-            "(id,application_id,full_name,nationality,is_pep,pep_declaration) VALUES (?,?,?,?,?,?)",
-            (
-                "fix-scen15-director", app_id, "FIX-SCEN15 Unverified Director",
-                "Mauritius", False, json.dumps({"fixture": True}),
-            ),
+        full_name = "FIX-SCEN15 Unverified Director"
+        director_id = _fetch_id(
+            db, "SELECT id FROM directors WHERE application_id=? AND full_name=?", (app_id, full_name)
         )
-        result["director_id"] = "fix-scen15-director"
+        if not director_id:
+            director_id = _new_text_id()
+            db.execute(
+                "INSERT INTO directors "
+                "(id,application_id,full_name,nationality,is_pep,pep_declaration) VALUES (?,?,?,?,?,?)",
+                (director_id, app_id, full_name, "Mauritius", False, json.dumps({"fixture": True})),
+            )
+        result["director_id"] = director_id
     elif kind == "pep_review":
-        db.execute(
-            "INSERT OR IGNORE INTO directors "
-            "(id,application_id,full_name,nationality,is_pep,pep_declaration) VALUES (?,?,?,?,?,?)",
-            (
-                "fix-scen19-pep", app_id, "FIX-SCEN19 Synthetic PEP", "Mauritius", True,
-                json.dumps({
-                    "fixture": True,
-                    "declared": True,
-                    "role": "FIX-SCEN19 synthetic former public official",
-                    "pep_status": "declared_yes",
-                    "review_status": "outstanding",
-                }),
-            ),
+        full_name = "FIX-SCEN19 Synthetic PEP"
+        director_id = _fetch_id(
+            db, "SELECT id FROM directors WHERE application_id=? AND full_name=?", (app_id, full_name)
         )
-        result["director_id"] = "fix-scen19-pep"
+        pep_declaration = json.dumps({
+            "fixture": True,
+            "declared": True,
+            "role": "FIX-SCEN19 synthetic former public official",
+            "pep_status": "declared_yes",
+            "review_status": "outstanding",
+        })
+        if director_id:
+            db.execute(
+                "UPDATE directors SET nationality=?, is_pep=?, pep_declaration=? WHERE id=?",
+                ("Mauritius", True, pep_declaration, director_id),
+            )
+        else:
+            director_id = _new_text_id()
+            db.execute(
+                "INSERT INTO directors "
+                "(id,application_id,full_name,nationality,is_pep,pep_declaration) VALUES (?,?,?,?,?,?)",
+                (director_id, app_id, full_name, "Mauritius", True, pep_declaration),
+            )
+        result["director_id"] = director_id
     elif kind in {"periodic_blocked", "periodic_completed"}:
         marker = f"FIX_{scen.code.replace('-', '_')}_ITEM36"
         existing = _fetch_id(db, "SELECT id FROM periodic_reviews WHERE trigger_reason=?", (marker,))
@@ -356,19 +508,49 @@ def _upsert_item36_state(db, audit, app_id: str, scen: ScenarioDef) -> Dict[str,
             )
         result["review_id"] = review_id
     elif kind == "similar_reference_pair":
+        client_ids = {}
         for suffix in ("a", "b"):
-            client_id = f"fix-scen22-client-{suffix}"
+            email = f"fix-scen22-{suffix}@fixture.invalid"
+            company = f"FIX-SCEN22 Client {suffix.upper()}"
+            client = db.execute(
+                "SELECT id, email, company_name FROM clients WHERE email=?", (email,)
+            ).fetchone()
+            if client and client.get("company_name") != company:
+                raise FixtureReferenceCollision(
+                    f"fixture client identity collision: {email} belongs to {client.get('id')}"
+                )
+            client_id = client.get("id") if client else _new_text_id()
+            if client:
+                db.execute(
+                    "UPDATE clients SET password_hash=?, company_name=?, status=? WHERE id=?",
+                    ("fixture-no-login", company, "active", client_id),
+                )
+            else:
+                db.execute(
+                    "INSERT INTO clients (id,email,password_hash,company_name,status) VALUES (?,?,?,?,?)",
+                    (client_id, email, "fixture-no-login", company, "active"),
+                )
+            client_ids[suffix] = client_id
+        db.execute("UPDATE applications SET client_id=? WHERE id=?", (client_ids["a"], app_id))
+        pair_ref = ITEM36_PAIR_REFS[scen.code]
+        pair_identity = _fixture_identity(scen, "pair_b")
+        pair_id = _preflight_fixture_reference(
+            db, synthetic_ref=pair_ref, expected=pair_identity
+        ) or _new_text_id()
+        pair_payload = json.dumps(pair_identity)
+        if _fetch_id(db, "SELECT id FROM applications WHERE id=?", (pair_id,)):
             db.execute(
-                "INSERT OR IGNORE INTO clients (id,email,password_hash,company_name,status) VALUES (?,?,?,?,?)",
-                (client_id, f"fix-scen22-{suffix}@fixture.invalid", "fixture-no-login", f"FIX-SCEN22 Client {suffix.upper()}", "active"),
+                "UPDATE applications SET client_id=?, company_name=?, country=?, sector=?, "
+                "status=?, risk_level=?, is_fixture=?, prescreening_data=?, updated_at=? WHERE id=?",
+                (client_ids["b"], "FIX-SCEN22 Similar Reference Pair B Ltd", "Mauritius", "financial_services", "in_review", "MEDIUM", True, pair_payload, _now_iso(), pair_id),
             )
-        db.execute("UPDATE applications SET client_id=? WHERE id=?", ("fix-scen22-client-a", app_id))
-        pair_id = "f1xed0000000022b"
-        db.execute(
-            "INSERT OR IGNORE INTO applications "
-            "(id,ref,client_id,company_name,country,sector,status,risk_level,is_fixture) VALUES (?,?,?,?,?,?,?,?,?)",
-            (pair_id, "ARF-2026-900022A", "fix-scen22-client-b", "FIX-SCEN22 Similar Reference Pair B Ltd", "Mauritius", "financial_services", "in_review", "MEDIUM", True),
-        )
+        else:
+            db.execute(
+                "INSERT INTO applications "
+                "(id,ref,client_id,company_name,country,sector,status,risk_level,is_fixture,prescreening_data,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (pair_id, pair_ref, client_ids["b"], "FIX-SCEN22 Similar Reference Pair B Ltd", "Mauritius", "financial_services", "in_review", "MEDIUM", True, pair_payload, _now_iso(), _now_iso()),
+            )
         result["paired_application_id"] = pair_id
     elif kind == "consumed_approval":
         db.execute(
@@ -376,13 +558,26 @@ def _upsert_item36_state(db, audit, app_id: str, scen: ScenarioDef) -> Dict[str,
             "decision_notes=? WHERE id=?",
             ("FIX-SCEN23 approval already consumed", app_id),
         )
-        db.execute(
-            "INSERT OR IGNORE INTO decision_records "
-            "(id,application_ref,decision_type,risk_level,source,actor_user_id,actor_role,timestamp,key_flags) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            ("fix-scen23-decision", APP_REF[scen.code], "approve", scen.risk_level, "manual", "fixture_seed", "sco", _now_iso(), json.dumps(["item36_fixture"])),
+        decision_id = _fetch_id(
+            db,
+            "SELECT id FROM decision_records WHERE application_ref=? AND actor_user_id=?",
+            (APP_REF[scen.code], "fixture_seed"),
         )
-        result["decision_id"] = "fix-scen23-decision"
+        key_flags = json.dumps(["item36_fixture", _fixture_identity(scen)["fixture_marker"]])
+        if decision_id:
+            db.execute(
+                "UPDATE decision_records SET decision_type=?, risk_level=?, source=?, actor_role=?, timestamp=?, key_flags=? WHERE id=?",
+                ("approve", scen.risk_level, "manual", "sco", _now_iso(), key_flags, decision_id),
+            )
+        else:
+            decision_id = _new_text_id()
+            db.execute(
+                "INSERT INTO decision_records "
+                "(id,application_ref,decision_type,risk_level,source,actor_user_id,actor_role,timestamp,key_flags) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (decision_id, APP_REF[scen.code], "approve", scen.risk_level, "manual", "fixture_seed", "sco", _now_iso(), key_flags),
+            )
+        result["decision_id"] = decision_id
 
     audit(
         action="item36_state",
@@ -875,6 +1070,10 @@ def seed_all(
     selected = [s for s in SCENARIOS if (not only or s.code in only)]
     results: List[Dict[str, Any]] = []
     try:
+        # Validate every selected Item 36 root (and the cross-client pair) at
+        # the start of the transaction. A collision therefore fails before
+        # any application, client or evidence row is written.
+        _preflight_item36_refs(db, selected)
         for scen in selected:
             results.append(_seed_one(db, audit, scen))
         if dry_run:
@@ -887,7 +1086,10 @@ def seed_all(
             audit(
                 action="apply_complete",
                 target="fixtures:all",
-                detail=f"Applied {len(results)} scenarios",
+                detail=(
+                    f"Applied {len(results)} scenarios: "
+                    + ",".join(result["scenario"] for result in results)
+                ),
             )
             db.commit()
             logger.info(
