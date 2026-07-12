@@ -3574,6 +3574,16 @@ def init_db():
     logger.info("startup: entering init_db (schema + inline migrations)")
     db = get_db()
     try:
+        # BSA-003B hotfix: long-lived databases can already have the three
+        # supervisor evidence tables with the pre-main-DB SQLite-era shape.
+        # Reconcile them before the canonical schema runs because that schema
+        # creates indexes on columns (notably decision_at) that legacy tables
+        # do not have.  This same helper is repeated by inline v2.52 below so
+        # the migration remains idempotent and self-contained.
+        logger.info("startup: entering supervisor evidence schema preflight (v2.52)")
+        _ensure_supervisor_human_review_persistence_schema(db)
+        logger.info("startup: completed supervisor evidence schema preflight (v2.52)")
+
         if USE_POSTGRESQL:
             schema = _get_postgres_schema()
         else:
@@ -4117,6 +4127,358 @@ def _safe_table_exists(db: DBConnection, table: str) -> bool:
             return True
         except Exception:
             return False
+
+
+def _supervisor_column_metadata(db: DBConnection, table: str, column: str):
+    """Return dialect-neutral metadata for a known supervisor column."""
+    if db.is_postgres:
+        return db.execute(
+            "SELECT data_type, is_nullable, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_schema = current_schema() "
+            "AND table_name = ? AND column_name = ?",
+            (table, column),
+        ).fetchone()
+
+    rows = db.execute(f"PRAGMA table_info({table})").fetchall()
+    for row in rows:
+        if row["name"] == column:
+            return {
+                "data_type": str(row["type"] or "").lower(),
+                "is_nullable": "NO" if row["notnull"] else "YES",
+                "column_default": row["dflt_value"],
+                "is_primary_key": bool(row["pk"]),
+            }
+    return None
+
+
+def _ensure_supervisor_text_id(db: DBConnection, table: str) -> None:
+    """Make a legacy supervisor integer key accept #746 UUID text values."""
+    if not _safe_table_exists(db, table):
+        return
+    id_meta = _supervisor_column_metadata(db, table, "id")
+    if not id_meta or str(id_meta["data_type"]).lower() in (
+        "text", "character varying", "varchar"
+    ):
+        return
+
+    if db.is_postgres:
+        db.execute(f"ALTER TABLE {table} ALTER COLUMN id DROP DEFAULT")
+        db.execute(f"ALTER TABLE {table} ALTER COLUMN id TYPE TEXT USING id::text")
+        return
+
+    if not _safe_column_exists(db, table, "legacy_id"):
+        db.execute(f"ALTER TABLE {table} RENAME COLUMN id TO legacy_id")
+        db.execute(f"ALTER TABLE {table} ADD COLUMN id TEXT")
+        db.execute(f"UPDATE {table} SET id = CAST(legacy_id AS TEXT)")
+        db.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS uq_{table}_text_id "
+            f"ON {table}(id)"
+        )
+
+
+def _rebuild_sqlite_legacy_supervisor_overrides(db: DBConnection) -> None:
+    """Remove the obsolete SQLite pipeline_id write gate without data loss.
+
+    SQLite cannot drop a NOT NULL constraint in place.  Rebuild only this
+    legacy test/dev table, retaining its old evidence columns as nullable
+    compatibility fields while adding the #746 runtime contract.  PostgreSQL
+    uses an in-place ``DROP NOT NULL`` and never enters this path.
+    """
+    legacy_table = "supervisor_overrides_bsa003_legacy"
+    if _safe_table_exists(db, legacy_table):
+        raise RuntimeError(
+            "incomplete prior supervisor_overrides SQLite reconciliation"
+        )
+
+    db.execute(f"ALTER TABLE supervisor_overrides RENAME TO {legacy_table}")
+    db.execute(
+        """
+        CREATE TABLE supervisor_overrides (
+            id TEXT PRIMARY KEY,
+            review_id TEXT,
+            application_id TEXT NOT NULL,
+            agent_type TEXT,
+            override_type TEXT NOT NULL,
+            original_value TEXT,
+            override_value TEXT,
+            reason TEXT NOT NULL,
+            officer_id TEXT NOT NULL,
+            officer_name TEXT,
+            officer_role TEXT,
+            approver_id TEXT,
+            approver_name TEXT,
+            approved_at TEXT,
+            request_id TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            pipeline_id TEXT,
+            ai_recommendation TEXT,
+            officer_decision TEXT
+        )
+        """
+    )
+    db.execute(
+        f"""
+        INSERT INTO supervisor_overrides
+            (id, application_id, override_type, original_value,
+             override_value, reason, officer_id, officer_name, created_at,
+             pipeline_id, ai_recommendation, officer_decision)
+        SELECT CAST(id AS TEXT), application_id, override_type,
+               ai_recommendation, officer_decision, reason, officer_id,
+               officer_name, created_at, pipeline_id, ai_recommendation,
+               officer_decision
+        FROM {legacy_table}
+        """
+    )
+    db.execute(f"DROP TABLE {legacy_table}")
+
+
+def _ensure_supervisor_human_review_persistence_schema(db: DBConnection) -> None:
+    """Reconcile BSA-003B evidence tables before creating their indexes.
+
+    The old local-persistence DDL was also present in some long-lived main
+    databases.  ``CREATE TABLE IF NOT EXISTS`` cannot upgrade those tables, so
+    the canonical schema used to fail while creating the first new-column
+    index.  Keep this repair additive: preserve legacy columns/rows, add the
+    runtime contract, and create indexes only after every referenced column is
+    known to exist.
+    """
+    timestamp_type = "TIMESTAMP" if db.is_postgres else "TEXT"
+
+    # Repair the parent key types before CREATE TABLE can introduce a missing
+    # child table with a text foreign key.  This also supports partially
+    # present legacy schemas, not only the all-three-tables staging shape.
+    for table in (
+        "supervisor_escalations",
+        "supervisor_human_reviews",
+        "supervisor_overrides",
+    ):
+        _ensure_supervisor_text_id(db, table)
+
+    # Step 1: ensure all three tables exist.  Fresh databases receive the
+    # strict canonical contract; existing legacy tables are left intact for
+    # the additive reconciliation below.
+    db.executescript(
+        f"""
+        CREATE TABLE IF NOT EXISTS supervisor_escalations (
+            id TEXT PRIMARY KEY,
+            pipeline_id TEXT NOT NULL,
+            application_id TEXT NOT NULL,
+            escalation_source TEXT NOT NULL,
+            source_id TEXT,
+            escalation_level TEXT NOT NULL,
+            priority TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            context_json TEXT DEFAULT '{{}}',
+            assigned_to TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            sla_deadline {timestamp_type},
+            resolved_at {timestamp_type},
+            escalated_by_id TEXT NOT NULL,
+            escalated_by_name TEXT NOT NULL,
+            escalated_by_role TEXT NOT NULL,
+            request_id TEXT,
+            created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS supervisor_human_reviews (
+            id TEXT PRIMARY KEY,
+            pipeline_id TEXT NOT NULL,
+            application_id TEXT NOT NULL,
+            escalation_id TEXT REFERENCES supervisor_escalations(id),
+            review_type TEXT NOT NULL,
+            reviewer_id TEXT NOT NULL,
+            reviewer_name TEXT NOT NULL,
+            reviewer_role TEXT NOT NULL,
+            ai_recommendation TEXT,
+            ai_confidence REAL,
+            ai_risk_level TEXT,
+            rules_recommendation TEXT,
+            rules_triggered TEXT DEFAULT '[]',
+            contradictions_json TEXT DEFAULT '[]',
+            decision TEXT NOT NULL,
+            decision_reason TEXT NOT NULL,
+            risk_level_assigned TEXT,
+            conditions TEXT,
+            follow_up_required INTEGER NOT NULL DEFAULT 0,
+            follow_up_details TEXT,
+            is_ai_override INTEGER NOT NULL DEFAULT 0,
+            override_reason TEXT,
+            review_started_at {timestamp_type},
+            decision_at {timestamp_type} NOT NULL,
+            request_id TEXT,
+            created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS supervisor_overrides (
+            id TEXT PRIMARY KEY,
+            review_id TEXT NOT NULL REFERENCES supervisor_human_reviews(id),
+            application_id TEXT NOT NULL,
+            agent_type TEXT,
+            override_type TEXT NOT NULL,
+            original_value TEXT NOT NULL,
+            override_value TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            officer_id TEXT NOT NULL,
+            officer_name TEXT NOT NULL,
+            officer_role TEXT NOT NULL,
+            approver_id TEXT,
+            approver_name TEXT,
+            approved_at {timestamp_type},
+            request_id TEXT,
+            created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+
+    column_definitions = {
+        "supervisor_escalations": {
+            "pipeline_id": "TEXT",
+            "application_id": "TEXT",
+            "escalation_source": "TEXT",
+            "source_id": "TEXT",
+            "escalation_level": "TEXT",
+            "priority": "TEXT",
+            "reason": "TEXT",
+            "context_json": "TEXT DEFAULT '{}'",
+            "assigned_to": "TEXT",
+            "status": "TEXT DEFAULT 'pending'",
+            "sla_deadline": timestamp_type,
+            "resolved_at": timestamp_type,
+            "escalated_by_id": "TEXT",
+            "escalated_by_name": "TEXT",
+            "escalated_by_role": "TEXT",
+            "request_id": "TEXT",
+            "created_at": timestamp_type,
+        },
+        "supervisor_human_reviews": {
+            "pipeline_id": "TEXT",
+            "application_id": "TEXT",
+            "escalation_id": "TEXT",
+            "review_type": "TEXT",
+            "reviewer_id": "TEXT",
+            "reviewer_name": "TEXT",
+            "reviewer_role": "TEXT",
+            "ai_recommendation": "TEXT",
+            "ai_confidence": "REAL",
+            "ai_risk_level": "TEXT",
+            "rules_recommendation": "TEXT",
+            "rules_triggered": "TEXT DEFAULT '[]'",
+            "contradictions_json": "TEXT DEFAULT '[]'",
+            "decision": "TEXT",
+            "decision_reason": "TEXT",
+            "risk_level_assigned": "TEXT",
+            "conditions": "TEXT",
+            "follow_up_required": "INTEGER DEFAULT 0",
+            "follow_up_details": "TEXT",
+            "is_ai_override": "INTEGER DEFAULT 0",
+            "override_reason": "TEXT",
+            "review_started_at": timestamp_type,
+            "decision_at": timestamp_type,
+            "request_id": "TEXT",
+            "created_at": timestamp_type,
+        },
+        "supervisor_overrides": {
+            "review_id": "TEXT",
+            "application_id": "TEXT",
+            "agent_type": "TEXT",
+            "override_type": "TEXT",
+            "original_value": "TEXT",
+            "override_value": "TEXT",
+            "reason": "TEXT",
+            "officer_id": "TEXT",
+            "officer_name": "TEXT",
+            "officer_role": "TEXT",
+            "approver_id": "TEXT",
+            "approver_name": "TEXT",
+            "approved_at": timestamp_type,
+            "request_id": "TEXT",
+            "created_at": timestamp_type,
+        },
+    }
+
+    # SQLite cannot relax the one obsolete legacy NOT NULL constraint in
+    # place.  Rebuild that table before the general additive pass; this path is
+    # restricted to SQLite test/dev databases and preserves every legacy
+    # evidence field.
+    if not db.is_postgres:
+        legacy_pipeline_meta = _supervisor_column_metadata(
+            db, "supervisor_overrides", "pipeline_id"
+        )
+        if legacy_pipeline_meta and legacy_pipeline_meta["is_nullable"] == "NO":
+            _rebuild_sqlite_legacy_supervisor_overrides(db)
+
+    # The legacy tables used INTEGER PRIMARY KEY while #746 writes UUID text.
+    # A pre-create pass above handles existing parent tables before foreign
+    # keys are introduced; repeat here for idempotency and newly created tables.
+    for table in column_definitions:
+        _ensure_supervisor_text_id(db, table)
+
+        for column, definition in column_definitions[table].items():
+            if not _safe_column_exists(db, table, column):
+                db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    # The legacy override shape required pipeline_id even though #746's
+    # override record is review/application scoped and does not write it.
+    # Preserve the legacy value while removing only that obsolete write gate.
+    pipeline_meta = _supervisor_column_metadata(
+        db, "supervisor_overrides", "pipeline_id"
+    )
+    if pipeline_meta and pipeline_meta["is_nullable"] == "NO":
+        if db.is_postgres:
+            db.execute(
+                "ALTER TABLE supervisor_overrides "
+                "ALTER COLUMN pipeline_id DROP NOT NULL"
+            )
+        else:
+            # The SQLite rebuild above must have removed this constraint.
+            raise RuntimeError(
+                "legacy supervisor_overrides.pipeline_id remains NOT NULL"
+            )
+
+    # Preserve the legacy timestamp/override meaning where those predecessor
+    # columns exist.  Fresh tables and new writes already provide these values.
+    if _safe_column_exists(db, "supervisor_human_reviews", "reviewed_at"):
+        reviewed_at_value = (
+            "reviewed_at::timestamptz" if db.is_postgres else "reviewed_at"
+        )
+        db.execute(
+            "UPDATE supervisor_human_reviews "
+            f"SET decision_at = COALESCE(decision_at, {reviewed_at_value}, CURRENT_TIMESTAMP), "
+            f"created_at = COALESCE(created_at, {reviewed_at_value}, CURRENT_TIMESTAMP) "
+            "WHERE decision_at IS NULL OR created_at IS NULL"
+        )
+    else:
+        db.execute(
+            "UPDATE supervisor_human_reviews "
+            "SET decision_at = COALESCE(decision_at, CURRENT_TIMESTAMP), "
+            "created_at = COALESCE(created_at, CURRENT_TIMESTAMP) "
+            "WHERE decision_at IS NULL OR created_at IS NULL"
+        )
+    if _safe_column_exists(db, "supervisor_human_reviews", "override_ai"):
+        db.execute(
+            "UPDATE supervisor_human_reviews "
+            "SET is_ai_override = COALESCE(is_ai_override, override_ai, 0) "
+            "WHERE is_ai_override IS NULL"
+        )
+
+    # Step 3: indexes are deliberately last.  Every indexed column above has
+    # now been verified or added for both fresh and legacy databases.
+    db.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_sup_escalations_app ON supervisor_escalations(application_id);
+        CREATE INDEX IF NOT EXISTS idx_sup_escalations_pipeline ON supervisor_escalations(pipeline_id);
+        CREATE INDEX IF NOT EXISTS idx_sup_escalations_status_created ON supervisor_escalations(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_sup_escalations_level_status ON supervisor_escalations(escalation_level, status);
+        CREATE INDEX IF NOT EXISTS idx_sup_reviews_app ON supervisor_human_reviews(application_id);
+        CREATE INDEX IF NOT EXISTS idx_sup_reviews_pipeline ON supervisor_human_reviews(pipeline_id);
+        CREATE INDEX IF NOT EXISTS idx_sup_reviews_reviewer ON supervisor_human_reviews(reviewer_id);
+        CREATE INDEX IF NOT EXISTS idx_sup_reviews_decision_at ON supervisor_human_reviews(decision_at);
+        CREATE INDEX IF NOT EXISTS idx_sup_overrides_app ON supervisor_overrides(application_id);
+        CREATE INDEX IF NOT EXISTS idx_sup_overrides_review ON supervisor_overrides(review_id);
+        CREATE INDEX IF NOT EXISTS idx_sup_overrides_created ON supervisor_overrides(created_at);
+        """
+    )
 
 
 def _ensure_company_registry_schema(db: DBConnection) -> None:
@@ -8323,6 +8685,10 @@ def _run_migrations(db: DBConnection):
     # These tables intentionally use the shared DB and portable timestamps;
     # HumanReviewService no longer creates or writes container-local SQLite.
     try:
+        # Reconcile legacy columns/types before the original v2.52 DDL reaches
+        # any index statement.  The DDL below remains the executable inline
+        # migration/fresh-schema contract and is safe after this preflight.
+        _ensure_supervisor_human_review_persistence_schema(db)
         if db.is_postgres:
             db.executescript(
                 """
@@ -8499,6 +8865,7 @@ def _run_migrations(db: DBConnection):
             db.rollback()
         except Exception:
             pass
+        raise
 
     # Migration v2.47 (P12-5 / DCI-006) runs from init_db AFTER
     # _ensure_supervisor_audit_log_schema so a legacy-audit-schema database
