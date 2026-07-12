@@ -465,6 +465,7 @@ class EscalationHandler(SupervisorBaseHandler):
             actor,
             "escalation_create",
             {
+                "escalated_by_id": actor["id"],
                 "escalated_by": actor["name"],
                 "escalated_by_role": actor["role"],
             },
@@ -475,6 +476,7 @@ class EscalationHandler(SupervisorBaseHandler):
             pipeline_id=body["pipeline_id"],
             escalation_level=body["escalation_level"],
             reason=body["reason"],
+            escalated_by_id=actor["id"],
             escalated_by=actor["name"],
             escalated_by_role=actor["role"],
             assigned_to=body.get("assigned_to"),

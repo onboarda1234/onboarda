@@ -295,6 +295,30 @@ class TestSupervisorSecurityHTTP(AsyncHTTPTestCase):
         assert kwargs["reviewer_role"] == "co"
         assert any("supervisor_actor_forgery_attempt" in line for line in logs.output)
 
+    def test_review_storage_failure_returns_controlled_500(self):
+        self.review_service.submit_review.side_effect = RuntimeError(
+            "synthetic storage failure"
+        )
+        response = self._post(
+            "/api/supervisor/review",
+            self._review_body(),
+            self._bearer(self.co_token),
+        )
+        assert response.code == 500
+        assert "synthetic storage failure" not in response.body.decode()
+
+    def test_review_read_failure_is_not_returned_as_empty_success(self):
+        self.review_service.get_reviews.side_effect = RuntimeError(
+            "synthetic read failure"
+        )
+        response = self.fetch(
+            "/api/supervisor/reviews",
+            headers=self._bearer(self.co_token),
+            raise_error=False,
+        )
+        assert response.code == 500
+        assert "synthetic read failure" not in response.body.decode()
+
     def test_escalation_ignores_forged_actor_and_persists_session_actor(self):
         response = self._post(
             "/api/supervisor/escalate",
@@ -310,6 +334,7 @@ class TestSupervisorSecurityHTTP(AsyncHTTPTestCase):
         )
         assert response.code == 200, response.body.decode()
         kwargs = self.review_service.escalate_case.call_args.kwargs
+        assert kwargs["escalated_by_id"] == "server-co-1"
         assert kwargs["escalated_by"] == "Server CO"
         assert kwargs["escalated_by_role"] == "co"
 
