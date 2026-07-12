@@ -53,6 +53,7 @@ APP_ID = {
     "SCEN-09": "f1xed00000000009",
     "SCEN-10": "f1xed00000000010",
     "SCEN-11": "f1xed00000000011",
+    **{f"SCEN-{n}": f"f1xed000000000{n:02d}" for n in range(12, 24)},
 }
 
 APP_REF = {
@@ -67,6 +68,7 @@ APP_REF = {
     "SCEN-09": "ARF-2026-900009",
     "SCEN-10": "ARF-2026-900010",
     "SCEN-11": "ARF-2026-900011",
+    **{f"SCEN-{n}": f"ARF-2026-9000{n:02d}" for n in range(12, 24)},
 }
 
 
@@ -170,6 +172,9 @@ class ScenarioDef:
     review_spec: Optional[ReviewSpec] = None
     edd_spec: Optional[EddSpec] = None
     proves: List[str] = field(default_factory=list)
+    fixture_key: Optional[str] = None
+    state_kind: Optional[str] = None
+    application_status: str = "in_review"
 
 
 SCENARIOS: List[ScenarioDef] = [
@@ -472,6 +477,114 @@ SCENARIOS: List[ScenarioDef] = [
         ],
     ),
 ]
+
+
+# Item 36 extends the existing registry; it does not introduce a second fixture
+# engine.  These twelve persisted data-state fixtures are consumed by the same
+# seeder/cleanup CLI and deliberately keep request-only negative paths in their
+# existing tests.
+_ITEM36_SCENARIOS = [
+    (12, "active-approval-blockers", "Active approval blockers", "approval_blockers", "in_review"),
+    (13, "stale-memo", "Stale compliance memo", "stale_memo", "in_review"),
+    (14, "stale-risk-provenance", "Stale risk provenance", "stale_risk", "in_review"),
+    (15, "missing-idv", "Missing identity verification", "missing_idv", "in_review"),
+    (16, "missing-required-documents", "Missing required documents", "missing_documents", "in_review"),
+    (17, "pending-rmi", "Pending request for more information", "pending_rmi", "rmi_sent"),
+    (18, "synthetic-sanctions-hit", "Synthetic sanctions hit", "sanctions_hit", "in_review"),
+    (19, "outstanding-pep-review", "Outstanding PEP review", "pep_review", "in_review"),
+    (20, "periodic-review-blockers", "Periodic review with blockers", "periodic_blocked", "in_review"),
+    (21, "completed-periodic-review", "Completed periodic review", "periodic_completed", "in_review"),
+    (22, "similar-reference-cross-client", "Similar references under separate synthetic clients", "similar_reference_pair", "in_review"),
+    (23, "already-consumed-approval", "Already-consumed approval replay substrate", "consumed_approval", "approved"),
+]
+
+for number, key, purpose, state_kind, status in _ITEM36_SCENARIOS:
+    code = f"SCEN-{number}"
+    SCENARIOS.append(ScenarioDef(
+        code=code,
+        fixture_key=key,
+        state_kind=state_kind,
+        application_status=status,
+        purpose=purpose,
+        company_name=f"FIX-SCEN{number} Item36 {purpose} Ltd",
+        risk_level="HIGH" if state_kind in {"sanctions_hit", "pep_review", "stale_risk"} else "MEDIUM",
+        country="Mauritius",
+        sector="financial_services",
+        proves=[f"Item 36 persisted control substrate: {purpose}"],
+    ))
+
+
+def _manifest(code, key, expected_state, tables, regulated, cleanup, control, http, retain):
+    return {
+        "fixture_key": key,
+        "scenario_code": code,
+        "synthetic_ref": APP_REF[code],
+        "marker": f"FIX_{code.replace('-', '_')}_ITEM36",
+        "expected_state": expected_state,
+        "tables_written": tuple(tables),
+        "regulated_tables_written": tuple(regulated),
+        "cleanup_order": tuple(cleanup),
+        "expected_control": control,
+        "expected_HTTP_result": http,
+        "safe_to_retain_in_staging": retain,
+    }
+
+
+NEGATIVE_PATH_FIXTURES = {
+    key: _manifest(
+        f"SCEN-{number}", key, state_kind,
+        {
+            "stale_memo": ("applications", "compliance_memos", "audit_log"),
+            "missing_idv": ("applications", "directors", "audit_log"),
+            "pending_rmi": ("applications", "rmi_requests", "rmi_request_items", "audit_log"),
+            "pep_review": ("applications", "directors", "audit_log"),
+            "periodic_blocked": ("applications", "periodic_reviews", "audit_log"),
+            "periodic_completed": ("applications", "periodic_reviews", "audit_log"),
+            "similar_reference_pair": ("clients", "applications", "audit_log"),
+            "consumed_approval": ("applications", "decision_records", "audit_log"),
+        }.get(state_kind, ("applications", "audit_log")),
+        {
+            "stale_memo": ("compliance_memos", "audit_log"),
+            "pending_rmi": ("rmi_request_items", "rmi_requests", "audit_log"),
+            "periodic_blocked": ("periodic_reviews", "audit_log"),
+            "periodic_completed": ("periodic_reviews", "audit_log"),
+            "consumed_approval": ("decision_records", "audit_log"),
+        }.get(state_kind, ("audit_log",)),
+        {
+            "stale_memo": ("compliance_memos", "audit_log", "applications"),
+            "missing_idv": ("audit_log", "directors", "applications"),
+            "pending_rmi": ("rmi_request_items", "rmi_requests", "audit_log", "applications"),
+            "pep_review": ("audit_log", "directors", "applications"),
+            "periodic_blocked": ("periodic_reviews", "audit_log", "applications"),
+            "periodic_completed": ("periodic_reviews", "audit_log", "applications"),
+            "similar_reference_pair": ("audit_log", "applications", "clients"),
+            "consumed_approval": ("decision_records", "audit_log", "applications"),
+        }.get(state_kind, ("audit_log", "applications")),
+        {
+            "stale_memo": "memo staleness gate reports the persisted memo stale",
+            "stale_risk": "risk provenance staleness gate blocks approval",
+            "missing_idv": "approval blocker summary reports unresolved identity verification",
+            "missing_documents": "document reliance gate reports required evidence missing",
+            "pending_rmi": "RMI continuation readiness blocks workflow continuation",
+            "sanctions_hit": "screening adverse-truth gate reports a prohibited hit",
+            "pep_review": "approval route requires compliance for a declared PEP",
+            "periodic_blocked": "periodic-review readiness reports an open required item",
+            "periodic_completed": "completed periodic review remains readable",
+            "similar_reference_pair": "cross-client ownership denial",
+            "consumed_approval": "decision replay denied",
+        }.get(state_kind, "approval gate blocks the persisted negative state"),
+        {
+            "stale_risk": 409,
+            "pending_rmi": 409,
+            "periodic_blocked": 409,
+            "periodic_completed": 200,
+            "similar_reference_pair": 403,
+            "consumed_approval": 409,
+        }.get(state_kind, 400),
+        state_kind in {"approval_blockers", "missing_idv", "missing_documents", "sanctions_hit", "pep_review", "periodic_blocked"},
+    )
+    for number, key, _purpose, state_kind, _status in _ITEM36_SCENARIOS
+}
 
 
 def by_code(code: str) -> ScenarioDef:
