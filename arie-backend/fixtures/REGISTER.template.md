@@ -25,3 +25,20 @@
 - SCEN-09 — Fresh EDD from routing
 - SCEN-10 — Routing reuses existing active EDD (no duplicate)
 - SCEN-11 — Agent 6 rich review-prep fixture
+- SCEN-12 — Active approval blockers
+- SCEN-13 — Stale compliance memo
+- SCEN-14 — Stale risk provenance
+- SCEN-15 — Missing identity verification
+- SCEN-16 — Missing required documents
+- SCEN-17 — Pending request for more information
+- SCEN-18 — Synthetic sanctions hit
+- SCEN-19 — Outstanding PEP review
+- SCEN-20 — Periodic review with blockers
+- SCEN-21 — Completed periodic review
+- SCEN-22 — Similar-reference applications under different synthetic clients
+- SCEN-23 — Already-consumed approval replay substrate
+
+SCEN-12 through SCEN-23 also have machine-readable manifests in
+`fixtures.registry.NEGATIVE_PATH_FIXTURES`; those manifests are authoritative
+for expected controls, table scope, regulated-table scope, cleanup order, and
+staging-retention eligibility.

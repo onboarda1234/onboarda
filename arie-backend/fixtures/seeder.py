@@ -39,6 +39,7 @@ from fixtures.registry import (
     APP_REF,
     SCENARIOS,
     ScenarioDef,
+    _days_ago_iso,
     _now_iso,
 )
 
@@ -175,11 +176,25 @@ def _upsert_application(db, audit, scen: ScenarioDef) -> str:
 
     existing = _fetch_id(db, "SELECT id FROM applications WHERE id = ?", (app_id,))
     now = _now_iso()
-    prescreening = json.dumps({"fixture": scen.code, "source": "fixtures.seeder"})
+    prescreening_payload = {"fixture": scen.code, "source": "fixtures.seeder"}
+    if scen.state_kind == "sanctions_hit":
+        prescreening_payload.update({
+            "screening_report": {
+                "provider": "complyadvantage",
+                "screened_at": _now_iso(),
+                "company_screening": {
+                    "source": "complyadvantage", "api_status": "live",
+                    "matched": True,
+                    "results": [{"name": "FIX-SCEN18 Synthetic Sanctions Match", "is_sanctioned": True}],
+                    "sanctions": {"matched": True, "api_status": "live", "source": "complyadvantage"},
+                },
+            },
+        })
+    prescreening = json.dumps(prescreening_payload)
 
     # NB: applications.status CHECK enum does NOT include 'active'. We use
     # 'in_review' which is a real, valid value for a fixture under monitoring.
-    status_value = "in_review"
+    status_value = scen.application_status
 
     if existing:
         # NB: is_fixture is BOOLEAN on Postgres / INTEGER on SQLite.  Pass the
@@ -252,6 +267,130 @@ def _upsert_application(db, audit, scen: ScenarioDef) -> str:
         after_state={"id": app_id, "ref": ref, "company_name": scen.company_name},
     )
     return app_id
+
+
+def _upsert_item36_state(db, audit, app_id: str, scen: ScenarioDef) -> Dict[str, Any]:
+    """Persist the narrow extra state declared by an Item 36 registry entry."""
+    kind = scen.state_kind
+    result: Dict[str, Any] = {}
+    if not kind:
+        return result
+
+    if kind == "stale_memo":
+        memo_id = _upsert_fixture_compliance_memo(db, audit, app_id, scen)
+        db.execute(
+            "UPDATE compliance_memos SET review_status='approved', validation_status='pass', "
+            "supervisor_status='approved', rule_engine_status='pass', is_stale=?, "
+            "stale_reason=?, stale_trigger=?, stale_marked_at=CURRENT_TIMESTAMP WHERE id=?",
+            (True, "FIX-SCEN13 material facts changed after memo generation", "item36_fixture", memo_id),
+        )
+        result["memo_id"] = memo_id
+    elif kind == "stale_risk":
+        db.execute(
+            "UPDATE applications SET risk_config_version=?, risk_computed_at=?, "
+            "inputs_updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            ("stale:recompute_failed:item36", _days_ago_iso(30), app_id),
+        )
+    elif kind == "pending_rmi":
+        request_id = "fix-scen17-rmi"
+        db.execute(
+            "INSERT OR IGNORE INTO rmi_requests "
+            "(id,application_id,status,reason,deadline,created_by_name) VALUES (?,?,?,?,?,?)",
+            (request_id, app_id, "open", "FIX-SCEN17 pending information request", _days_ago_iso(-14), "fixture_seed"),
+        )
+        db.execute(
+            "INSERT OR IGNORE INTO rmi_request_items "
+            "(id,request_id,doc_type,label,description,status) VALUES (?,?,?,?,?,?)",
+            ("fix-scen17-rmi-item", request_id, "source_of_funds", "Source of funds", "Synthetic pending RMI", "requested"),
+        )
+        result["rmi_request_id"] = request_id
+    elif kind == "missing_idv":
+        db.execute(
+            "INSERT OR IGNORE INTO directors "
+            "(id,application_id,full_name,nationality,is_pep,pep_declaration) VALUES (?,?,?,?,?,?)",
+            (
+                "fix-scen15-director", app_id, "FIX-SCEN15 Unverified Director",
+                "Mauritius", False, json.dumps({"fixture": True}),
+            ),
+        )
+        result["director_id"] = "fix-scen15-director"
+    elif kind == "pep_review":
+        db.execute(
+            "INSERT OR IGNORE INTO directors "
+            "(id,application_id,full_name,nationality,is_pep,pep_declaration) VALUES (?,?,?,?,?,?)",
+            (
+                "fix-scen19-pep", app_id, "FIX-SCEN19 Synthetic PEP", "Mauritius", True,
+                json.dumps({
+                    "fixture": True,
+                    "declared": True,
+                    "role": "FIX-SCEN19 synthetic former public official",
+                    "pep_status": "declared_yes",
+                    "review_status": "outstanding",
+                }),
+            ),
+        )
+        result["director_id"] = "fix-scen19-pep"
+    elif kind in {"periodic_blocked", "periodic_completed"}:
+        marker = f"FIX_{scen.code.replace('-', '_')}_ITEM36"
+        existing = _fetch_id(db, "SELECT id FROM periodic_reviews WHERE trigger_reason=?", (marker,))
+        status = "completed" if kind == "periodic_completed" else "in_progress"
+        required_items = json.dumps([] if kind == "periodic_completed" else [{
+            "id": "fix-scen20-open-item",
+            "item_type": "custom_evidence_requirement",
+            "label": "FIX-SCEN20 Provide refreshed ownership evidence",
+            "rationale": "Synthetic outstanding periodic-review blocker",
+            "severity": "high",
+            "status": "open",
+        }])
+        if existing:
+            db.execute(
+                "UPDATE periodic_reviews SET status=?, decision_reason=?, required_items=?, completed_at=? WHERE id=?",
+                (status, "Synthetic outstanding periodic-review evidence" if kind == "periodic_blocked" else "Synthetic completed periodic review", required_items, _now_iso() if kind == "periodic_completed" else None, existing),
+            )
+            review_id = existing
+        else:
+            review_id = _insert_returning_id(
+                db, "periodic_reviews",
+                "application_id,client_name,risk_level,trigger_type,trigger_reason,status,decision_reason,required_items,completed_at",
+                (app_id, scen.company_name, scen.risk_level, "item36_fixture", marker, status, "Synthetic outstanding periodic-review evidence" if kind == "periodic_blocked" else "Synthetic completed periodic review", required_items, _now_iso() if kind == "periodic_completed" else None),
+            )
+        result["review_id"] = review_id
+    elif kind == "similar_reference_pair":
+        for suffix in ("a", "b"):
+            client_id = f"fix-scen22-client-{suffix}"
+            db.execute(
+                "INSERT OR IGNORE INTO clients (id,email,password_hash,company_name,status) VALUES (?,?,?,?,?)",
+                (client_id, f"fix-scen22-{suffix}@fixture.invalid", "fixture-no-login", f"FIX-SCEN22 Client {suffix.upper()}", "active"),
+            )
+        db.execute("UPDATE applications SET client_id=? WHERE id=?", ("fix-scen22-client-a", app_id))
+        pair_id = "f1xed0000000022b"
+        db.execute(
+            "INSERT OR IGNORE INTO applications "
+            "(id,ref,client_id,company_name,country,sector,status,risk_level,is_fixture) VALUES (?,?,?,?,?,?,?,?,?)",
+            (pair_id, "ARF-2026-900022A", "fix-scen22-client-b", "FIX-SCEN22 Similar Reference Pair B Ltd", "Mauritius", "financial_services", "in_review", "MEDIUM", True),
+        )
+        result["paired_application_id"] = pair_id
+    elif kind == "consumed_approval":
+        db.execute(
+            "UPDATE applications SET status='approved', decided_at=CURRENT_TIMESTAMP, "
+            "decision_notes=? WHERE id=?",
+            ("FIX-SCEN23 approval already consumed", app_id),
+        )
+        db.execute(
+            "INSERT OR IGNORE INTO decision_records "
+            "(id,application_ref,decision_type,risk_level,source,actor_user_id,actor_role,timestamp,key_flags) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            ("fix-scen23-decision", APP_REF[scen.code], "approve", scen.risk_level, "manual", "fixture_seed", "sco", _now_iso(), json.dumps(["item36_fixture"])),
+        )
+        result["decision_id"] = "fix-scen23-decision"
+
+    audit(
+        action="item36_state",
+        target=f"application:{app_id}",
+        detail=f"Persisted Item 36 state {kind} for {scen.code}",
+        after_state={"fixture_key": scen.fixture_key, "state_kind": kind, **result},
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -690,6 +829,7 @@ def _seed_one(db, audit, scen: ScenarioDef) -> Dict[str, Any]:
     alert_id = _upsert_alert(db, audit, app_id, scen)
     review_id = _upsert_review(db, audit, app_id, scen, alert_id)
     edd_id = _upsert_edd(db, audit, app_id, scen, review_id, alert_id)
+    item36 = _upsert_item36_state(db, audit, app_id, scen)
     return {
         "scenario": scen.code,
         "company_name": scen.company_name,
@@ -700,6 +840,8 @@ def _seed_one(db, audit, scen: ScenarioDef) -> Dict[str, Any]:
         "review_id": review_id,
         "edd_id": edd_id,
         "proves": scen.proves,
+        "fixture_key": scen.fixture_key,
+        "item36": item36,
     }
 
 
