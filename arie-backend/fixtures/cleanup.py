@@ -7,6 +7,7 @@ touch inside the yielded sanctioned context.
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import contextmanager
 
@@ -15,7 +16,7 @@ from regulated_deletion import (
     is_verified_isolated_test_database,
     sanctioned_delete_context,
 )
-from fixtures.registry import APP_ID, NEGATIVE_PATH_FIXTURES
+from fixtures.registry import NEGATIVE_PATH_FIXTURES
 
 
 class FixtureCleanupDenied(RuntimeError):
@@ -26,6 +27,23 @@ def _truthy(value) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _identity_matches(row, manifest, role="root") -> bool:
+    data = row.get("prescreening_data")
+    if not isinstance(data, dict):
+        try:
+            data = json.loads(data or "{}")
+        except (TypeError, ValueError):
+            data = {}
+    expected = {
+        "fixture": manifest["scenario_code"],
+        "fixture_key": manifest["fixture_key"],
+        "fixture_marker": manifest["marker"],
+        "fixture_role": role,
+        "source": "fixtures.seeder",
+    }
+    return all(data.get(key) == value for key, value in expected.items())
 
 
 @contextmanager
@@ -81,8 +99,27 @@ def cleanup_registered_fixture(
     manifest = NEGATIVE_PATH_FIXTURES.get(fixture_key)
     if not manifest:
         raise FixtureCleanupDenied(f"unknown registered fixture: {fixture_key}")
-    app_id = APP_ID[manifest["scenario_code"]]
-    pair_id = "f1xed0000000022b" if fixture_key == "similar-reference-cross-client" else None
+    root = db.execute(
+        "SELECT id, ref, is_fixture, prescreening_data FROM applications WHERE ref=?",
+        (manifest["synthetic_ref"],),
+    ).fetchone()
+    if not root or not _truthy(root.get("is_fixture")) or not _identity_matches(root, manifest):
+        raise FixtureCleanupDenied(
+            f"registered fixture identity is missing or mismatched: {fixture_key}"
+        )
+    app_id = root["id"]
+    pair = None
+    if manifest.get("paired_synthetic_ref"):
+        pair = db.execute(
+            "SELECT id, ref, is_fixture, prescreening_data FROM applications WHERE ref=?",
+            (manifest["paired_synthetic_ref"],),
+        ).fetchone()
+        if not pair or not _truthy(pair.get("is_fixture")) or not _identity_matches(
+            pair, manifest, "pair_b"
+        ):
+            raise FixtureCleanupDenied(
+                f"registered paired fixture identity is missing or mismatched: {fixture_key}"
+            )
     allowed = manifest["regulated_tables_written"]
     counts = {}
 
@@ -102,7 +139,11 @@ def cleanup_registered_fixture(
         ):
             for table in manifest["cleanup_order"]:
                 if table == "rmi_request_items":
-                    remove(table, "request_id=?", ("fix-scen17-rmi",))
+                    remove(
+                        table,
+                        "request_id IN (SELECT id FROM rmi_requests WHERE application_id=? AND reason=?)",
+                        (app_id, "FIX-SCEN17 pending information request"),
+                    )
                 elif table == "rmi_requests":
                     remove(table, "application_id=?", (app_id,))
                 elif table == "compliance_memos":
@@ -110,26 +151,41 @@ def cleanup_registered_fixture(
                 elif table == "periodic_reviews":
                     remove(table, "application_id=? AND trigger_reason LIKE ?", (app_id, "FIX_SCEN%_ITEM36%"))
                 elif table == "decision_records":
-                    remove(table, "id=?", ("fix-scen23-decision",))
+                    remove(
+                        table,
+                        "application_ref=? AND actor_user_id=? AND key_flags LIKE ?",
+                        (manifest["synthetic_ref"], "fixture_seed", f"%{manifest['marker']}%"),
+                    )
                 elif table == "audit_log":
                     remove(table, "user_id='fixture_seed' AND detail LIKE ?", (f"%{manifest['scenario_code']}%",))
                 elif table == "directors":
-                    director_id = {
-                        "missing-idv": "fix-scen15-director",
-                        "outstanding-pep-review": "fix-scen19-pep",
+                    full_name = {
+                        "missing-idv": "FIX-SCEN15 Unverified Director",
+                        "outstanding-pep-review": "FIX-SCEN19 Synthetic PEP",
                     }.get(fixture_key)
-                    if not director_id:
+                    if not full_name:
                         raise FixtureCleanupDenied(
                             f"cleanup has no director marker for {fixture_key}"
                         )
-                    remove(table, "application_id=? AND id=?", (app_id, director_id))
+                    remove(table, "application_id=? AND full_name=?", (app_id, full_name))
                 elif table == "applications":
-                    ids = (app_id, pair_id) if pair_id else (app_id,)
-                    for fixture_app_id in ids:
-                        remove(table, "id=? AND is_fixture=?", (fixture_app_id, True))
+                    applications = [root] + ([pair] if pair else [])
+                    for fixture_app in applications:
+                        remove(
+                            table,
+                            "id=? AND ref=? AND is_fixture=?",
+                            (fixture_app["id"], fixture_app["ref"], True),
+                        )
                 elif table == "clients":
-                    for client_id in ("fix-scen22-client-a", "fix-scen22-client-b"):
-                        remove(table, "id=?", (client_id,))
+                    for suffix in ("a", "b"):
+                        remove(
+                            table,
+                            "email=? AND company_name=?",
+                            (
+                                f"fix-scen22-{suffix}@fixture.invalid",
+                                f"FIX-SCEN22 Client {suffix.upper()}",
+                            ),
+                        )
                 else:
                     raise FixtureCleanupDenied(
                         f"cleanup table has no marker-scoped implementation: {table}"

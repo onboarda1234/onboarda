@@ -73,7 +73,8 @@ schema churn.
 |---|---|---|
 | `applications.risk_level` (lowercase) | UPPERCASE | Schema CHECK requires UPPERCASE |
 | `applications.status='active'` | `'in_review'` | `'active'` is not in the CHECK enum |
-| `applications.id` | 16-char hex `f1xed...` | Reserved deterministic namespace |
+| `applications.id` | SCEN-01..11 use `f1xed...`; Item 36 uses generated TEXT ids | Item 36 identity is its fixture key + marker + synthetic ref + `is_fixture`, not a global PK |
+| `applications.ref` | `FX-ITEM36-*` for Item 36 | Reserved synthetic namespace; normal application generation remains `ARF-*` |
 | `monitoring_alerts.dismissal_payload` | `officer_notes` with `FIX_PAYLOAD_JSON:` sentinel | Recoverable via `fixtures.seeder.parse_dismissal_payload` |
 | `monitoring_alerts.updated_at` | (omitted) | Column doesn't exist on PG |
 | `periodic_reviews.status` | `trigger_type` | Free text in both schemas |
@@ -99,7 +100,8 @@ schema churn.
 
 | Table | Key | Example |
 |---|---|---|
-| `applications` | `id` | `f1xed00000000001` |
+| `applications` (SCEN-01..11) | `id` | `f1xed00000000001` |
+| `applications` (Item 36) | `fixture_key` + marker in `prescreening_data`, exact synthetic ref, `is_fixture=true` | `FX-ITEM36-SCEN12-BLOCKERS` |
 | `monitoring_alerts` | `source_reference` | `FIX_SCEN01_ALERT` |
 | `periodic_reviews` | `trigger_reason LIKE 'FIX_SCENxx_REVIEW%'` | |
 | `edd_cases` | `trigger_notes LIKE 'FIX_SCENxx_EDD%'` | |
@@ -112,7 +114,14 @@ schema churn.
 for SCEN-12 through SCEN-23. Each entry declares its stable fixture key and
 synthetic marker, expected state/control/HTTP result, every table written,
 regulated tables, teardown order, and whether founder-approved staging
-retention may be considered. The expected HTTP statuses come from the existing
+retention may be considered.
+
+Item 36 refs are collision-preflighted for all selected roots before any root,
+client, child, or evidence write. A matching identity is updated idempotently;
+a non-fixture owner or mismatched fixture identity fails the whole transaction.
+The cross-client pair is preflighted as two explicit roles under the same key.
+
+The expected HTTP statuses come from the existing
 gate suites; the fixture tests invoke the exact non-mutating backend gate/helper
 where an API decision call could mutate evidence.
 

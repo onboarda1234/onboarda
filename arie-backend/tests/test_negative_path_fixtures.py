@@ -10,7 +10,7 @@ import pytest
 import db as db_module
 from fixtures.cleanup import cleanup_registered_fixture
 from fixtures.cli import _enforce_apply_gates
-from fixtures.registry import APP_ID, NEGATIVE_PATH_FIXTURES
+from fixtures.registry import NEGATIVE_PATH_FIXTURES
 from fixtures.seeder import seed_all
 from regulated_deletion import RegulatedDeleteDenied
 from security_hardening import collect_approval_gate_blockers
@@ -70,8 +70,8 @@ def test_item36_manifest_is_complete_and_capped():
 def test_seed_control_and_sanctioned_cleanup_round_trip(temp_db, fixture_key):
     manifest = NEGATIVE_PATH_FIXTURES[fixture_key]
     code = manifest["scenario_code"]
-    app_id = APP_ID[code]
     result = seed_all(dry_run=False, only=[code])[0]
+    app_id = result["application_id"]
     assert result["fixture_key"] == fixture_key
     # Deterministic upsert: reseeding the same logical key must retain the same
     # application and state identifiers rather than creating a second fixture.
@@ -101,13 +101,17 @@ def test_seed_control_and_sanctioned_cleanup_round_trip(temp_db, fixture_key):
             labels = {item["label"] for item in readiness["operational_blockers"]}
             assert "FIX-SCEN20 Provide refreshed ownership evidence" in labels
     elif state == "similar_reference_pair":
-        pair = _row(db, "SELECT client_id FROM applications WHERE id=? AND is_fixture=?", ("f1xed0000000022b", True))
+        pair = _row(
+            db,
+            "SELECT id, client_id FROM applications WHERE ref=? AND is_fixture=?",
+            (manifest["paired_synthetic_ref"], True),
+        )
         assert pair and pair["client_id"] != app["client_id"]
         import change_management
         with pytest.raises(PermissionError, match="do not own"):
             change_management.create_change_request(
                 db,
-                "f1xed0000000022b",
+                pair["id"],
                 "portal_client",
                 "portal",
                 "FIX-SCEN22 cross-client denial",
@@ -121,7 +125,11 @@ def test_seed_control_and_sanctioned_cleanup_round_trip(temp_db, fixture_key):
             )
     elif state == "consumed_approval":
         assert app["status"] == "approved"
-        assert _row(db, "SELECT id FROM decision_records WHERE id='fix-scen23-decision'")
+        assert _row(
+            db,
+            "SELECT id FROM decision_records WHERE application_ref=? AND actor_user_id='fixture_seed'",
+            (manifest["synthetic_ref"],),
+        )
     else:
         # One call into the existing backend approval-summary helper; no gate
         # logic is recreated in this fixture test.
@@ -155,23 +163,27 @@ def test_seed_control_and_sanctioned_cleanup_round_trip(temp_db, fixture_key):
     cleanup_registered_fixture(db, fixture_key, actor_id="pytest:item36")
     assert not _row(db, "SELECT id FROM applications WHERE id=?", (app_id,))
     if state == "similar_reference_pair":
-        assert not _row(db, "SELECT id FROM applications WHERE id='f1xed0000000022b'")
-        assert not _row(db, "SELECT id FROM clients WHERE id LIKE 'fix-scen22-client-%'")
+        assert not _row(db, "SELECT id FROM applications WHERE ref=?", (manifest["paired_synthetic_ref"],))
+        assert not _row(db, "SELECT id FROM clients WHERE email LIKE 'fix-scen22-%@fixture.invalid'")
     for table in manifest["tables_written"]:
         if table == "audit_log":
             residue = _row(db, "SELECT count(*) AS n FROM audit_log WHERE user_id='fixture_seed' AND detail LIKE ?", (f"%{code}%",))
         elif table == "decision_records":
-            residue = _row(db, "SELECT count(*) AS n FROM decision_records WHERE id='fix-scen23-decision'")
+            residue = _row(db, "SELECT count(*) AS n FROM decision_records WHERE application_ref=?", (manifest["synthetic_ref"],))
         elif table == "rmi_request_items":
-            residue = _row(db, "SELECT count(*) AS n FROM rmi_request_items WHERE request_id='fix-scen17-rmi'")
+            residue = _row(db, "SELECT count(*) AS n FROM rmi_request_items WHERE description='FIX-SCEN17 Synthetic pending RMI'")
         elif table == "clients":
-            residue = _row(db, "SELECT count(*) AS n FROM clients WHERE id LIKE 'fix-scen22-client-%'")
+            residue = _row(db, "SELECT count(*) AS n FROM clients WHERE email LIKE 'fix-scen22-%@fixture.invalid'")
         elif table == "directors":
             residue = _row(db, "SELECT count(*) AS n FROM directors WHERE application_id=?", (app_id,))
         elif table == "applications":
-            ids = (app_id, "f1xed0000000022b") if state == "similar_reference_pair" else (app_id,)
-            placeholders = ",".join("?" for _ in ids)
-            residue = _row(db, f"SELECT count(*) AS n FROM applications WHERE id IN ({placeholders})", ids)
+            refs = (
+                (manifest["synthetic_ref"], manifest["paired_synthetic_ref"])
+                if state == "similar_reference_pair"
+                else (manifest["synthetic_ref"],)
+            )
+            placeholders = ",".join("?" for _ in refs)
+            residue = _row(db, f"SELECT count(*) AS n FROM applications WHERE ref IN ({placeholders})", refs)
         else:
             residue = _row(db, f"SELECT count(*) AS n FROM {table} WHERE application_id=?", (app_id,))
         assert residue["n"] == 0, (fixture_key, table)

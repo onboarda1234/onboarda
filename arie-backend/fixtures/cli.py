@@ -56,7 +56,8 @@ def _enforce_apply_gates(confirm: Optional[str]) -> None:
 def cmd_list(args: argparse.Namespace) -> int:
     print(f"Fixtures registry ({len(SCENARIOS)} scenarios):\n")
     for scen in SCENARIOS:
-        print(f"  {scen.code}  app_id={APP_ID[scen.code]}  ref={APP_REF[scen.code]}")
+        app_id = APP_ID.get(scen.code, "generated-by-ref")
+        print(f"  {scen.code}  app_id={app_id}  ref={APP_REF[scen.code]}")
         print(f"    purpose: {scen.purpose}")
         print(f"    risk:    {scen.risk_level}  country: {scen.country}  sector: {scen.sector}")
         components = []
