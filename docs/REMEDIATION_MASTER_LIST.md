@@ -57,7 +57,7 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 >
 > These are the *code* blockers. A controlled pilot also has 🟠 **operational gates**, flagged 🟠 inline where they exist as rows:
 > - 🟠 **item 33** — Pilot-scope guards (server-side) — Phase 13
-> - 🟠 **item 36** — Persisted negative-path fixtures — Phase 13
+> - ✅ **item 36** — Persisted negative-path fixtures — Phase 13 — **CLOSED for controlled pilot** (#748, #749; staging PASS 2026-07-12; staging left clean)
 > - 🟠 **P13-7** — Compliance-officer SOP pack (+ refresh the pilot runbook, item 38 ✅) — Phase 13
 > - 🟠 **ComplyAdvantage production workspace validation** (#498) — complete OR explicitly exclude from pilot scope — Phase 13
 > - 🟠 **ops-enforce-staging-sha-alignment-gate** — staging SHA aligned + smoke-tested — Phase 7
@@ -312,10 +312,27 @@ closure-evidence docs) was **closed unmerged** — its closure record is carried
 | 🟠 33 | Pilot-scope guards (server-side) **— pilot operational gate** | — | ⬜ |
 | 34 | Dashboard API performance (15.1s → sub-2s) | — | ⬜ |
 | 35 | Screening full-evidence hydration performance | — | ⬜ |
-| 🟠 36 | Persisted negative-path fixtures **— pilot operational gate** | — | ⬜ |
+| ✅ 36 | Persisted negative-path fixtures **— controlled-pilot staging evidence** | #748, #749 | ✅ |
 | 37 | Lower-privilege fixture authz regression tests | #692 | ✅ |
 | 38 | Pilot operations runbook | #689 | ✅ |
 | 🟠 — | ComplyAdvantage production workspace validation **— pilot operational gate** (complete OR explicitly exclude from pilot scope) | #498 | ⏸ blocked (dashboard-mode evidence) |
+
+**Item 36 closure evidence (2026-07-12).** #748 introduced the registered
+negative-path fixture substrate; #749 moved it to the reserved
+`FX-ITEM36-*` namespace after the original ARF refs collided with long-lived
+staging rows. Hotfix merge `6197734bc7a64ee83fba6e261625c8b6ec45a856`
+was deployed through staging run `29204426827`. The complete synthetic
+walkthrough passed: 12 logical fixtures / 13 application refs seeded, all refs
+read back through the authenticated API, a second seed retained every root and
+child ID/count, blocked approval returned 400, terminal replay returned 409,
+cross-client access returned 403, and the representative P12-1 direct delete
+was denied without mutation. Sanctioned cleanup left zero Item 36 residue, and
+all 12 previously occupied ARF refs (including non-fixture application
+`acf4ade81e694d31`) remained unchanged. Retention decision: **A — staging left
+clean**. CloudWatch was clean of runtime/deploy/fixture errors; one corrected
+read-only operator preflight query produced a wrapper `IndexError` and no
+mutation, classified separately as validation-harness noise. This closes Item
+36 for controlled-pilot scope only and is not a production-readiness claim.
 
 ## Phase 14 — Production readiness
 | # | Item | Type | GitHub | Status |
