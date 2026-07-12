@@ -1935,6 +1935,87 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_sup_pipeline_status ON supervisor_pipeline_results(status);
     CREATE INDEX IF NOT EXISTS idx_sup_pipeline_completed ON supervisor_pipeline_results(completed_at);
 
+    -- Durable supervisor officer decisions (BSA-003B)
+    CREATE TABLE IF NOT EXISTS supervisor_escalations (
+        id TEXT PRIMARY KEY,
+        pipeline_id TEXT NOT NULL,
+        application_id TEXT NOT NULL,
+        escalation_source TEXT NOT NULL,
+        source_id TEXT,
+        escalation_level TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        context_json TEXT DEFAULT '{}',
+        assigned_to TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        sla_deadline TIMESTAMP,
+        resolved_at TIMESTAMP,
+        escalated_by_id TEXT NOT NULL,
+        escalated_by_name TEXT NOT NULL,
+        escalated_by_role TEXT NOT NULL,
+        request_id TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_sup_escalations_app ON supervisor_escalations(application_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_escalations_pipeline ON supervisor_escalations(pipeline_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_escalations_status_created ON supervisor_escalations(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sup_escalations_level_status ON supervisor_escalations(escalation_level, status);
+
+    CREATE TABLE IF NOT EXISTS supervisor_human_reviews (
+        id TEXT PRIMARY KEY,
+        pipeline_id TEXT NOT NULL,
+        application_id TEXT NOT NULL,
+        escalation_id TEXT REFERENCES supervisor_escalations(id),
+        review_type TEXT NOT NULL,
+        reviewer_id TEXT NOT NULL,
+        reviewer_name TEXT NOT NULL,
+        reviewer_role TEXT NOT NULL,
+        ai_recommendation TEXT,
+        ai_confidence REAL,
+        ai_risk_level TEXT,
+        rules_recommendation TEXT,
+        rules_triggered TEXT DEFAULT '[]',
+        contradictions_json TEXT DEFAULT '[]',
+        decision TEXT NOT NULL,
+        decision_reason TEXT NOT NULL,
+        risk_level_assigned TEXT,
+        conditions TEXT,
+        follow_up_required INTEGER NOT NULL DEFAULT 0,
+        follow_up_details TEXT,
+        is_ai_override INTEGER NOT NULL DEFAULT 0,
+        override_reason TEXT,
+        review_started_at TIMESTAMP,
+        decision_at TIMESTAMP NOT NULL,
+        request_id TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_sup_reviews_app ON supervisor_human_reviews(application_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_reviews_pipeline ON supervisor_human_reviews(pipeline_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_reviews_reviewer ON supervisor_human_reviews(reviewer_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_reviews_decision_at ON supervisor_human_reviews(decision_at);
+
+    CREATE TABLE IF NOT EXISTS supervisor_overrides (
+        id TEXT PRIMARY KEY,
+        review_id TEXT NOT NULL REFERENCES supervisor_human_reviews(id),
+        application_id TEXT NOT NULL,
+        agent_type TEXT,
+        override_type TEXT NOT NULL,
+        original_value TEXT NOT NULL,
+        override_value TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        officer_id TEXT NOT NULL,
+        officer_name TEXT NOT NULL,
+        officer_role TEXT NOT NULL,
+        approver_id TEXT,
+        approver_name TEXT,
+        approved_at TIMESTAMP,
+        request_id TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_sup_overrides_app ON supervisor_overrides(application_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_overrides_review ON supervisor_overrides(review_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_overrides_created ON supervisor_overrides(created_at);
+
     -- Supervisor audit log (production-grade, uses shared DB)
     CREATE TABLE IF NOT EXISTS supervisor_audit_log (
         id TEXT PRIMARY KEY,
@@ -3215,6 +3296,87 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_sup_pipeline_app ON supervisor_pipeline_results(application_id);
     CREATE INDEX IF NOT EXISTS idx_sup_pipeline_status ON supervisor_pipeline_results(status);
     CREATE INDEX IF NOT EXISTS idx_sup_pipeline_completed ON supervisor_pipeline_results(completed_at);
+
+    -- Durable supervisor officer decisions (BSA-003B)
+    CREATE TABLE IF NOT EXISTS supervisor_escalations (
+        id TEXT PRIMARY KEY,
+        pipeline_id TEXT NOT NULL,
+        application_id TEXT NOT NULL,
+        escalation_source TEXT NOT NULL,
+        source_id TEXT,
+        escalation_level TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        context_json TEXT DEFAULT '{}',
+        assigned_to TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        sla_deadline TEXT,
+        resolved_at TEXT,
+        escalated_by_id TEXT NOT NULL,
+        escalated_by_name TEXT NOT NULL,
+        escalated_by_role TEXT NOT NULL,
+        request_id TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_sup_escalations_app ON supervisor_escalations(application_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_escalations_pipeline ON supervisor_escalations(pipeline_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_escalations_status_created ON supervisor_escalations(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_sup_escalations_level_status ON supervisor_escalations(escalation_level, status);
+
+    CREATE TABLE IF NOT EXISTS supervisor_human_reviews (
+        id TEXT PRIMARY KEY,
+        pipeline_id TEXT NOT NULL,
+        application_id TEXT NOT NULL,
+        escalation_id TEXT REFERENCES supervisor_escalations(id),
+        review_type TEXT NOT NULL,
+        reviewer_id TEXT NOT NULL,
+        reviewer_name TEXT NOT NULL,
+        reviewer_role TEXT NOT NULL,
+        ai_recommendation TEXT,
+        ai_confidence REAL,
+        ai_risk_level TEXT,
+        rules_recommendation TEXT,
+        rules_triggered TEXT DEFAULT '[]',
+        contradictions_json TEXT DEFAULT '[]',
+        decision TEXT NOT NULL,
+        decision_reason TEXT NOT NULL,
+        risk_level_assigned TEXT,
+        conditions TEXT,
+        follow_up_required INTEGER NOT NULL DEFAULT 0,
+        follow_up_details TEXT,
+        is_ai_override INTEGER NOT NULL DEFAULT 0,
+        override_reason TEXT,
+        review_started_at TEXT,
+        decision_at TEXT NOT NULL,
+        request_id TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_sup_reviews_app ON supervisor_human_reviews(application_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_reviews_pipeline ON supervisor_human_reviews(pipeline_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_reviews_reviewer ON supervisor_human_reviews(reviewer_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_reviews_decision_at ON supervisor_human_reviews(decision_at);
+
+    CREATE TABLE IF NOT EXISTS supervisor_overrides (
+        id TEXT PRIMARY KEY,
+        review_id TEXT NOT NULL REFERENCES supervisor_human_reviews(id),
+        application_id TEXT NOT NULL,
+        agent_type TEXT,
+        override_type TEXT NOT NULL,
+        original_value TEXT NOT NULL,
+        override_value TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        officer_id TEXT NOT NULL,
+        officer_name TEXT NOT NULL,
+        officer_role TEXT NOT NULL,
+        approver_id TEXT,
+        approver_name TEXT,
+        approved_at TEXT,
+        request_id TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_sup_overrides_app ON supervisor_overrides(application_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_overrides_review ON supervisor_overrides(review_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_overrides_created ON supervisor_overrides(created_at);
 
     -- Supervisor audit log (production-grade, uses shared DB)
     CREATE TABLE IF NOT EXISTS supervisor_audit_log (
@@ -8152,6 +8314,187 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.51: shared_rate_limits table ensured")
     except Exception as e:
         logger.error("Migration v2.51 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.52 (BSA-003B): durable supervisor human-review evidence.
+    # These tables intentionally use the shared DB and portable timestamps;
+    # HumanReviewService no longer creates or writes container-local SQLite.
+    try:
+        if db.is_postgres:
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS supervisor_escalations (
+                    id TEXT PRIMARY KEY,
+                    pipeline_id TEXT NOT NULL,
+                    application_id TEXT NOT NULL,
+                    escalation_source TEXT NOT NULL,
+                    source_id TEXT,
+                    escalation_level TEXT NOT NULL,
+                    priority TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    context_json TEXT DEFAULT '{}',
+                    assigned_to TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    sla_deadline TIMESTAMP,
+                    resolved_at TIMESTAMP,
+                    escalated_by_id TEXT NOT NULL,
+                    escalated_by_name TEXT NOT NULL,
+                    escalated_by_role TEXT NOT NULL,
+                    request_id TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_sup_escalations_app ON supervisor_escalations(application_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_escalations_pipeline ON supervisor_escalations(pipeline_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_escalations_status_created ON supervisor_escalations(status, created_at);
+                CREATE INDEX IF NOT EXISTS idx_sup_escalations_level_status ON supervisor_escalations(escalation_level, status);
+
+                CREATE TABLE IF NOT EXISTS supervisor_human_reviews (
+                    id TEXT PRIMARY KEY,
+                    pipeline_id TEXT NOT NULL,
+                    application_id TEXT NOT NULL,
+                    escalation_id TEXT REFERENCES supervisor_escalations(id),
+                    review_type TEXT NOT NULL,
+                    reviewer_id TEXT NOT NULL,
+                    reviewer_name TEXT NOT NULL,
+                    reviewer_role TEXT NOT NULL,
+                    ai_recommendation TEXT,
+                    ai_confidence REAL,
+                    ai_risk_level TEXT,
+                    rules_recommendation TEXT,
+                    rules_triggered TEXT DEFAULT '[]',
+                    contradictions_json TEXT DEFAULT '[]',
+                    decision TEXT NOT NULL,
+                    decision_reason TEXT NOT NULL,
+                    risk_level_assigned TEXT,
+                    conditions TEXT,
+                    follow_up_required INTEGER NOT NULL DEFAULT 0,
+                    follow_up_details TEXT,
+                    is_ai_override INTEGER NOT NULL DEFAULT 0,
+                    override_reason TEXT,
+                    review_started_at TIMESTAMP,
+                    decision_at TIMESTAMP NOT NULL,
+                    request_id TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_sup_reviews_app ON supervisor_human_reviews(application_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_reviews_pipeline ON supervisor_human_reviews(pipeline_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_reviews_reviewer ON supervisor_human_reviews(reviewer_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_reviews_decision_at ON supervisor_human_reviews(decision_at);
+
+                CREATE TABLE IF NOT EXISTS supervisor_overrides (
+                    id TEXT PRIMARY KEY,
+                    review_id TEXT NOT NULL REFERENCES supervisor_human_reviews(id),
+                    application_id TEXT NOT NULL,
+                    agent_type TEXT,
+                    override_type TEXT NOT NULL,
+                    original_value TEXT NOT NULL,
+                    override_value TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    officer_id TEXT NOT NULL,
+                    officer_name TEXT NOT NULL,
+                    officer_role TEXT NOT NULL,
+                    approver_id TEXT,
+                    approver_name TEXT,
+                    approved_at TIMESTAMP,
+                    request_id TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_sup_overrides_app ON supervisor_overrides(application_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_overrides_review ON supervisor_overrides(review_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_overrides_created ON supervisor_overrides(created_at);
+                """
+            )
+        else:
+            db.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS supervisor_escalations (
+                    id TEXT PRIMARY KEY,
+                    pipeline_id TEXT NOT NULL,
+                    application_id TEXT NOT NULL,
+                    escalation_source TEXT NOT NULL,
+                    source_id TEXT,
+                    escalation_level TEXT NOT NULL,
+                    priority TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    context_json TEXT DEFAULT '{}',
+                    assigned_to TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    sla_deadline TEXT,
+                    resolved_at TEXT,
+                    escalated_by_id TEXT NOT NULL,
+                    escalated_by_name TEXT NOT NULL,
+                    escalated_by_role TEXT NOT NULL,
+                    request_id TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_sup_escalations_app ON supervisor_escalations(application_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_escalations_pipeline ON supervisor_escalations(pipeline_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_escalations_status_created ON supervisor_escalations(status, created_at);
+                CREATE INDEX IF NOT EXISTS idx_sup_escalations_level_status ON supervisor_escalations(escalation_level, status);
+
+                CREATE TABLE IF NOT EXISTS supervisor_human_reviews (
+                    id TEXT PRIMARY KEY,
+                    pipeline_id TEXT NOT NULL,
+                    application_id TEXT NOT NULL,
+                    escalation_id TEXT REFERENCES supervisor_escalations(id),
+                    review_type TEXT NOT NULL,
+                    reviewer_id TEXT NOT NULL,
+                    reviewer_name TEXT NOT NULL,
+                    reviewer_role TEXT NOT NULL,
+                    ai_recommendation TEXT,
+                    ai_confidence REAL,
+                    ai_risk_level TEXT,
+                    rules_recommendation TEXT,
+                    rules_triggered TEXT DEFAULT '[]',
+                    contradictions_json TEXT DEFAULT '[]',
+                    decision TEXT NOT NULL,
+                    decision_reason TEXT NOT NULL,
+                    risk_level_assigned TEXT,
+                    conditions TEXT,
+                    follow_up_required INTEGER NOT NULL DEFAULT 0,
+                    follow_up_details TEXT,
+                    is_ai_override INTEGER NOT NULL DEFAULT 0,
+                    override_reason TEXT,
+                    review_started_at TEXT,
+                    decision_at TEXT NOT NULL,
+                    request_id TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_sup_reviews_app ON supervisor_human_reviews(application_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_reviews_pipeline ON supervisor_human_reviews(pipeline_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_reviews_reviewer ON supervisor_human_reviews(reviewer_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_reviews_decision_at ON supervisor_human_reviews(decision_at);
+
+                CREATE TABLE IF NOT EXISTS supervisor_overrides (
+                    id TEXT PRIMARY KEY,
+                    review_id TEXT NOT NULL REFERENCES supervisor_human_reviews(id),
+                    application_id TEXT NOT NULL,
+                    agent_type TEXT,
+                    override_type TEXT NOT NULL,
+                    original_value TEXT NOT NULL,
+                    override_value TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    officer_id TEXT NOT NULL,
+                    officer_name TEXT NOT NULL,
+                    officer_role TEXT NOT NULL,
+                    approver_id TEXT,
+                    approver_name TEXT,
+                    approved_at TEXT,
+                    request_id TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_sup_overrides_app ON supervisor_overrides(application_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_overrides_review ON supervisor_overrides(review_id);
+                CREATE INDEX IF NOT EXISTS idx_sup_overrides_created ON supervisor_overrides(created_at);
+                """
+            )
+        db.commit()
+        logger.info("Migration v2.52: durable supervisor review tables ensured")
+    except Exception as e:
+        logger.error("Migration v2.52 failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

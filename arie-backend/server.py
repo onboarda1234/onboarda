@@ -5862,6 +5862,9 @@ _APPLICATION_REGULATED_EVIDENCE_TABLES = (
     "screening_reviews",
     "sumsub_applicant_mappings",
     "supervisor_audit_log",
+    "supervisor_escalations",
+    "supervisor_human_reviews",
+    "supervisor_overrides",
     "supervisor_pipeline_results",
     "transactions",
 )

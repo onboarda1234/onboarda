@@ -19,10 +19,10 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
+
+from observability import get_request_id
 
 from .audit import AuditLogger
 from .schemas import (
@@ -38,6 +38,34 @@ from .supervisor import SupervisorPipelineResult
 
 logger = logging.getLogger("arie.supervisor.human_review")
 
+_REVIEW_READ_COLUMNS = (
+    "id", "pipeline_id", "application_id", "escalation_id", "review_type",
+    "reviewer_id", "reviewer_name", "reviewer_role", "ai_recommendation",
+    "ai_confidence", "ai_risk_level", "rules_recommendation",
+    "rules_triggered", "contradictions_json", "decision", "decision_reason",
+    "risk_level_assigned", "conditions", "follow_up_required",
+    "follow_up_details", "is_ai_override", "override_reason",
+    "review_started_at", "decision_at", "created_at",
+)
+_OVERRIDE_READ_COLUMNS = (
+    "id", "review_id", "application_id", "agent_type", "override_type",
+    "original_value", "override_value", "reason", "officer_id",
+    "officer_name", "officer_role", "approver_id", "approver_name",
+    "approved_at", "created_at",
+)
+_ESCALATION_READ_COLUMNS = (
+    "id", "pipeline_id", "application_id", "escalation_source", "source_id",
+    "escalation_level", "priority", "reason", "context_json", "assigned_to",
+    "status", "sla_deadline", "resolved_at", "created_at",
+)
+
+
+def _get_db():
+    """Resolve the shared application DB lazily to avoid import cycles."""
+    from db import get_db
+
+    return get_db()
+
 
 class HumanReviewService:
     """
@@ -45,81 +73,20 @@ class HumanReviewService:
     """
 
     def __init__(self, db_path: Optional[str] = None, audit_logger: Optional[AuditLogger] = None):
+        # Retained only for backwards-compatible construction. Human-review
+        # evidence always uses the shared DB abstraction below.
         self.db_path = db_path
         self.audit = audit_logger or AuditLogger(db_path=db_path)
 
-        if db_path:
-            self._init_db()
+    @staticmethod
+    def _require_context(application_id: str, pipeline_id: str) -> None:
+        if not application_id or not pipeline_id:
+            raise ValueError("application_id and pipeline_id are required for supervisor evidence")
 
-    def _init_db(self):
-        """Create review-related tables if needed."""
-        db = sqlite3.connect(self.db_path)
-        db.executescript("""
-            CREATE TABLE IF NOT EXISTS supervisor_human_reviews (
-                id TEXT PRIMARY KEY,
-                pipeline_id TEXT NOT NULL,
-                application_id TEXT NOT NULL,
-                escalation_id TEXT,
-                review_type TEXT NOT NULL,
-                reviewer_id TEXT NOT NULL,
-                reviewer_name TEXT NOT NULL,
-                reviewer_role TEXT NOT NULL,
-                ai_recommendation TEXT,
-                ai_confidence REAL,
-                ai_risk_level TEXT,
-                rules_recommendation TEXT,
-                rules_triggered TEXT DEFAULT '[]',
-                contradictions_json TEXT DEFAULT '[]',
-                decision TEXT NOT NULL,
-                decision_reason TEXT NOT NULL,
-                risk_level_assigned TEXT,
-                conditions TEXT,
-                follow_up_required INTEGER DEFAULT 0,
-                follow_up_details TEXT,
-                is_ai_override INTEGER DEFAULT 0,
-                override_reason TEXT,
-                review_started_at TEXT,
-                decision_at TEXT DEFAULT (datetime('now')),
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS supervisor_overrides (
-                id TEXT PRIMARY KEY,
-                review_id TEXT NOT NULL,
-                application_id TEXT NOT NULL,
-                agent_type TEXT,
-                override_type TEXT NOT NULL,
-                original_value TEXT NOT NULL,
-                override_value TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                officer_id TEXT NOT NULL,
-                officer_name TEXT NOT NULL,
-                officer_role TEXT NOT NULL,
-                approver_id TEXT,
-                approver_name TEXT,
-                approved_at TEXT,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS supervisor_escalations (
-                id TEXT PRIMARY KEY,
-                pipeline_id TEXT NOT NULL,
-                application_id TEXT NOT NULL,
-                escalation_source TEXT NOT NULL,
-                source_id TEXT,
-                escalation_level TEXT NOT NULL,
-                priority TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                context_json TEXT DEFAULT '{}',
-                assigned_to TEXT,
-                status TEXT DEFAULT 'pending',
-                sla_deadline TEXT,
-                resolved_at TEXT,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-        """)
-        db.commit()
-        db.close()
+    @staticmethod
+    def _require_actor(actor_id: str, actor_name: str, actor_role: str) -> None:
+        if not actor_id or not actor_name or not actor_role:
+            raise ValueError("server-derived supervisor actor is required")
 
     def prepare_review_package(
         self, pipeline_result: SupervisorPipelineResult
@@ -322,22 +289,10 @@ class HumanReviewService:
             override_reason=override_reason,
         )
 
-        # Persist
-        if self.db_path:
-            self._persist_review(review)
+        self._require_context(review.application_id, review.pipeline_id)
+        self._require_actor(reviewer_id, reviewer_name, reviewer_role)
 
-        # Audit log
-        self.audit.log_human_review(
-            review_id=review.review_id,
-            application_id=review.application_id,
-            pipeline_id=review.pipeline_id,
-            reviewer_name=reviewer_name,
-            reviewer_role=reviewer_role,
-            decision=decision,
-            is_override=is_override,
-        )
-
-        # Create override record if applicable
+        override = None
         if is_override:
             override = Override(
                 review_id=review.review_id,
@@ -354,9 +309,39 @@ class HumanReviewService:
                 officer_name=reviewer_name,
                 officer_role=reviewer_role,
             )
-            if self.db_path:
-                self._persist_override(override)
 
+        # Review and optional override are one durable transaction. Any DB
+        # error propagates to the existing supervisor handler's controlled
+        # error path; success is never returned before the commit succeeds.
+        request_id = get_request_id()
+        db = _get_db()
+        try:
+            self._insert_review(db, review, request_id=request_id)
+            if override:
+                self._insert_override(db, override, request_id=request_id)
+            db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Failed to persist supervisor review %s", review.review_id)
+            raise
+        finally:
+            db.close()
+
+        # Audit log
+        self.audit.log_human_review(
+            review_id=review.review_id,
+            application_id=review.application_id,
+            pipeline_id=review.pipeline_id,
+            reviewer_name=reviewer_name,
+            reviewer_role=reviewer_role,
+            decision=decision,
+            is_override=is_override,
+        )
+
+        if override:
             self.audit.log_override(
                 override_id=override.override_id,
                 application_id=review.application_id,
@@ -381,24 +366,41 @@ class HumanReviewService:
         pipeline_id: str,
         escalation_level: str,
         reason: str,
+        escalated_by_id: str,
         escalated_by: str,
         escalated_by_role: str,
         assigned_to: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Manually escalate a case to a higher review level."""
+        self._require_context(application_id, pipeline_id)
+        self._require_actor(escalated_by_id, escalated_by, escalated_by_role)
         escalation_id = str(uuid4())
         level = EscalationLevel(escalation_level)
 
-        if self.db_path:
-            db = sqlite3.connect(self.db_path)
+        db = _get_db()
+        try:
             db.execute("""
                 INSERT INTO supervisor_escalations
                 (id, pipeline_id, application_id, escalation_source,
-                 escalation_level, priority, reason, assigned_to, status)
-                VALUES (?, ?, ?, 'manual', ?, 'high', ?, ?, 'pending')
-            """, (escalation_id, pipeline_id, application_id,
-                  level.value, reason, assigned_to))
+                 escalation_level, priority, reason, assigned_to, status,
+                 escalated_by_id, escalated_by_name, escalated_by_role,
+                 request_id, created_at)
+                VALUES (?, ?, ?, 'manual', ?, 'high', ?, ?, 'pending',
+                        ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (
+                escalation_id, pipeline_id, application_id, level.value,
+                reason, assigned_to, escalated_by_id, escalated_by,
+                escalated_by_role, get_request_id(),
+            ))
             db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Failed to persist supervisor escalation %s", escalation_id)
+            raise
+        finally:
             db.close()
 
         self.audit.log(
@@ -427,10 +429,9 @@ class HumanReviewService:
 
     # ─── Persistence ──────────────────────────────────────
 
-    def _persist_review(self, review: HumanReview):
-        try:
-            db = sqlite3.connect(self.db_path)
-            db.execute("""
+    @staticmethod
+    def _insert_review(db, review: HumanReview, request_id: Optional[str] = None) -> None:
+        db.execute("""
                 INSERT INTO supervisor_human_reviews
                 (id, pipeline_id, application_id, escalation_id, review_type,
                  reviewer_id, reviewer_name, reviewer_role,
@@ -438,47 +439,42 @@ class HumanReviewService:
                  rules_recommendation, rules_triggered, contradictions_json,
                  decision, decision_reason, risk_level_assigned, conditions,
                  follow_up_required, follow_up_details,
-                 is_ai_override, override_reason, decision_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 is_ai_override, override_reason, decision_at, request_id,
+                 created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """, (
-                review.review_id, review.pipeline_id, review.application_id,
-                review.escalation_id, review.review_type,
-                review.reviewer_id, review.reviewer_name, review.reviewer_role,
-                review.ai_recommendation, review.ai_confidence, review.ai_risk_level,
-                review.rules_recommendation,
-                json.dumps(review.rules_triggered),
-                json.dumps(review.contradictions),
-                review.decision.value, review.decision_reason,
-                review.risk_level_assigned, review.conditions,
-                int(review.follow_up_required), review.follow_up_details,
-                int(review.is_ai_override), review.override_reason,
-                review.decision_at,
-            ))
-            db.commit()
-            db.close()
-        except Exception as e:
-            logger.error("Failed to persist review %s: %s", review.review_id, e)
+            review.review_id, review.pipeline_id, review.application_id,
+            review.escalation_id, review.review_type,
+            review.reviewer_id, review.reviewer_name, review.reviewer_role,
+            review.ai_recommendation, review.ai_confidence, review.ai_risk_level,
+            review.rules_recommendation,
+            json.dumps(review.rules_triggered),
+            json.dumps(review.contradictions),
+            review.decision.value, review.decision_reason,
+            review.risk_level_assigned, review.conditions,
+            int(review.follow_up_required), review.follow_up_details,
+            int(review.is_ai_override), review.override_reason,
+            review.decision_at, request_id,
+        ))
 
-    def _persist_override(self, override: Override):
-        try:
-            db = sqlite3.connect(self.db_path)
-            db.execute("""
+    @staticmethod
+    def _insert_override(db, override: Override, request_id: Optional[str] = None) -> None:
+        db.execute("""
                 INSERT INTO supervisor_overrides
                 (id, review_id, application_id, agent_type, override_type,
                  original_value, override_value, reason,
-                 officer_id, officer_name, officer_role)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 officer_id, officer_name, officer_role, approver_id,
+                 approver_name, approved_at, request_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                override.override_id, override.review_id, override.application_id,
-                override.agent_type.value if override.agent_type else None,
-                override.override_type.value,
-                override.original_value, override.override_value, override.reason,
-                override.officer_id, override.officer_name, override.officer_role,
-            ))
-            db.commit()
-            db.close()
-        except Exception as e:
-            logger.error("Failed to persist override %s: %s", override.override_id, e)
+            override.override_id, override.review_id, override.application_id,
+            override.agent_type.value if override.agent_type else None,
+            override.override_type.value,
+            override.original_value, override.override_value, override.reason,
+            override.officer_id, override.officer_name, override.officer_role,
+            override.approver_id, override.approver_name, override.approved_at,
+            request_id, override.created_at,
+        ))
 
     # ─── Query ──────────────────────────────────────────
 
@@ -489,14 +485,12 @@ class HumanReviewService:
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Query review history."""
-        if not self.db_path:
-            return []
-
+        db = _get_db()
         try:
-            db = sqlite3.connect(self.db_path)
-            db.row_factory = sqlite3.Row
-
-            query = "SELECT * FROM supervisor_human_reviews WHERE 1=1"
+            query = (
+                f"SELECT {', '.join(_REVIEW_READ_COLUMNS)} "
+                "FROM supervisor_human_reviews WHERE 1=1"
+            )
             params = []
             if application_id:
                 query += " AND application_id = ?"
@@ -508,11 +502,12 @@ class HumanReviewService:
             params.append(limit)
 
             rows = db.execute(query, params).fetchall()
-            db.close()
             return [dict(row) for row in rows]
-        except Exception as e:
-            logger.error("Failed to query reviews: %s", e)
-            return []
+        except Exception:
+            logger.exception("Failed to query supervisor reviews")
+            raise
+        finally:
+            db.close()
 
     def get_overrides(
         self,
@@ -520,14 +515,12 @@ class HumanReviewService:
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Query override history."""
-        if not self.db_path:
-            return []
-
+        db = _get_db()
         try:
-            db = sqlite3.connect(self.db_path)
-            db.row_factory = sqlite3.Row
-
-            query = "SELECT * FROM supervisor_overrides WHERE 1=1"
+            query = (
+                f"SELECT {', '.join(_OVERRIDE_READ_COLUMNS)} "
+                "FROM supervisor_overrides WHERE 1=1"
+            )
             params = []
             if application_id:
                 query += " AND application_id = ?"
@@ -536,11 +529,12 @@ class HumanReviewService:
             params.append(limit)
 
             rows = db.execute(query, params).fetchall()
-            db.close()
             return [dict(row) for row in rows]
-        except Exception as e:
-            logger.error("Failed to query overrides: %s", e)
-            return []
+        except Exception:
+            logger.exception("Failed to query supervisor overrides")
+            raise
+        finally:
+            db.close()
 
     def get_pending_escalations(
         self,
@@ -548,14 +542,12 @@ class HumanReviewService:
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Query pending escalations."""
-        if not self.db_path:
-            return []
-
+        db = _get_db()
         try:
-            db = sqlite3.connect(self.db_path)
-            db.row_factory = sqlite3.Row
-
-            query = "SELECT * FROM supervisor_escalations WHERE status = 'pending'"
+            query = (
+                f"SELECT {', '.join(_ESCALATION_READ_COLUMNS)} "
+                "FROM supervisor_escalations WHERE status = 'pending'"
+            )
             params = []
             if escalation_level:
                 query += " AND escalation_level = ?"
@@ -564,8 +556,9 @@ class HumanReviewService:
             params.append(limit)
 
             rows = db.execute(query, params).fetchall()
-            db.close()
             return [dict(row) for row in rows]
-        except Exception as e:
-            logger.error("Failed to query escalations: %s", e)
-            return []
+        except Exception:
+            logger.exception("Failed to query supervisor escalations")
+            raise
+        finally:
+            db.close()
