@@ -9,6 +9,8 @@ approval control.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import hashlib
+import json
 import re
 import unicodedata
 from typing import Any, Dict, Mapping, Optional
@@ -18,6 +20,8 @@ from environment import flags
 
 ACTIVATION_FLAG = "ENABLE_RSMP_TIER0A_MAPPING_FIDELITY"
 REGISTRY_VERSION = "rsmp-tier0a-v1"
+UNMAPPED_SENTINEL_PREFIX = "stale:unmapped_"
+SHORT_HASH_LENGTH = 12
 
 
 def mapping_fidelity_enabled() -> bool:
@@ -392,3 +396,85 @@ def resolve_tier0a_country_alias(value: Any) -> str:
     """Return only the three approved Tier 0A geography aliases."""
     normalized = normalize_controlled_value(value)
     return COUNTRY_EXACT_ALIASES.get(normalized, normalized)
+
+
+def controlled_value_hash(family: str, normalized_value: Any) -> str:
+    """Return the non-reversible short identity used by unmapped sentinels."""
+    payload = f"{str(family or '').strip().lower()}\x1f{normalize_controlled_value(normalized_value)}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:SHORT_HASH_LENGTH]
+
+
+def unresolved_mapping_sentinel(family: str, normalized_value: Any) -> str:
+    family_key = re.sub(r"[^a-z0-9_]+", "_", str(family or "").strip().lower()).strip("_")
+    return f"{UNMAPPED_SENTINEL_PREFIX}{family_key}:{controlled_value_hash(family_key, normalized_value)}"
+
+
+def structured_mapping_evidence(
+    resolution: ControlledResolution,
+    *,
+    application_id: Any,
+    request_id: Any,
+    config_version: Any,
+) -> Dict[str, Any]:
+    """Build durable evidence without embedding the raw value in the sentinel."""
+    digest = controlled_value_hash(resolution.family, resolution.normalized_value)
+    evidence = {
+        "family": resolution.family,
+        "raw_value": resolution.raw_value,
+        "normalized_value": resolution.normalized_value,
+        "hash": digest,
+        "application_id": str(application_id or ""),
+        "request_id": str(request_id or ""),
+        "config_version": str(config_version or resolution.config_version or REGISTRY_VERSION),
+        "resolution_status": resolution.status,
+        "controlled_id": resolution.controlled_id,
+        "canonical_label": resolution.canonical_label,
+        "score": resolution.score,
+    }
+    if resolution.status == "unresolved":
+        evidence["sentinel"] = unresolved_mapping_sentinel(
+            resolution.family, resolution.normalized_value
+        )
+    return evidence
+
+
+def _reason_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item or "").strip()]
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return []
+        return _reason_list(parsed)
+    return []
+
+
+def reconcile_mapping_staleness(
+    current_reasons: Any,
+    previous_reasons: Any,
+    mapping_evidence: Any,
+) -> list[str]:
+    """Replace mapping sentinels while preserving unrelated stale reasons.
+
+    A fresh score recomputes every controlled field.  Therefore all previous
+    mapping sentinels can be replaced atomically by the currently unresolved
+    set, while non-mapping ``stale:*`` controls remain untouched.
+    """
+    output: list[str] = []
+
+    def append(reason: Any):
+        text = str(reason or "").strip()
+        if text and text not in output:
+            output.append(text)
+
+    for reason in _reason_list(current_reasons):
+        append(reason)
+    for reason in _reason_list(previous_reasons):
+        if reason.startswith("stale:") and not reason.startswith(UNMAPPED_SENTINEL_PREFIX):
+            append(reason)
+    for item in mapping_evidence or []:
+        if not isinstance(item, Mapping) or item.get("resolution_status") != "unresolved":
+            continue
+        append(item.get("sentinel"))
+    return output

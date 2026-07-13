@@ -15,9 +15,15 @@ import logging
 from datetime import datetime, timezone
 
 from risk_controlled_values import (
+    COUNTRY_EXACT_ALIASES,
+    ControlledResolution,
+    REGISTRY_VERSION,
     mapping_fidelity_enabled,
+    normalize_controlled_value,
+    reconcile_mapping_staleness,
     resolve_controlled_score,
     resolve_tier0a_country_alias,
+    structured_mapping_evidence,
 )
 
 logger = logging.getLogger("arie")
@@ -777,6 +783,12 @@ def load_risk_config():
                     result[key] = _parse_config_column(config[key])
                 except (KeyError, IndexError):
                     result[key] = None
+            try:
+                result["_config_version"] = (
+                    f"risk_config:{config['updated_at']}" if config["updated_at"] else ""
+                )
+            except (KeyError, IndexError):
+                result["_config_version"] = ""
 
             # ── Full schema validation with normalization ──
             validated, errors = validate_risk_config(result)
@@ -884,6 +896,90 @@ def _score_entity_type(entity_type_str, config_entity_scores=None):
         if k in et:
             return int(v)
     return 2
+
+
+def _controlled_mapping_evidence(data, config, country_scores, sector_scores, entity_scores):
+    """Resolve only the approved Tier 0A/0B controlled families."""
+    if not mapping_fidelity_enabled():
+        return []
+
+    try:
+        from observability import get_request_id
+        request_id = get_request_id() or data.get("request_id") or ""
+    except Exception:
+        request_id = data.get("request_id") or ""
+    application_id = data.get("application_id") or data.get("id") or ""
+    config_version = (
+        (config or {}).get("_config_version")
+        or (
+            f"risk_config:{(config or {}).get('updated_at')}"
+            if (config or {}).get("updated_at")
+            else ""
+        )
+        or data.get("_risk_config_version")
+        or REGISTRY_VERSION
+    )
+    values = {
+        "sector": data.get("sector"),
+        "entity_type": data.get("entity_type"),
+        "ownership": data.get("ownership_structure"),
+        "complexity": data.get("transaction_complexity") or data.get("payment_corridors"),
+        "introduction": data.get("introduction_method"),
+        "monthly_volume": data.get("monthly_volume") or data.get("expected_volume"),
+    }
+    configurable = {
+        "sector": sector_scores,
+        "entity_type": entity_scores,
+    }
+    evidence = []
+    for family, raw_value in values.items():
+        resolution = resolve_controlled_score(
+            family,
+            raw_value,
+            configured_scores=configurable.get(family),
+            config_version=config_version,
+        )
+        evidence.append(structured_mapping_evidence(
+            resolution,
+            application_id=application_id,
+            request_id=request_id,
+            config_version=config_version,
+        ))
+
+    raw_country = data.get("country")
+    normalized_country = normalize_controlled_value(raw_country)
+    country_resolution = None
+    if not normalized_country:
+        country_resolution = ControlledResolution(
+            family="incorporation_country",
+            raw_value=str(raw_country or ""),
+            normalized_value="",
+            status="unresolved",
+            config_version=config_version,
+        )
+    elif normalized_country in COUNTRY_EXACT_ALIASES:
+        canonical = COUNTRY_EXACT_ALIASES[normalized_country]
+        country_resolution = ControlledResolution(
+            family="incorporation_country",
+            raw_value=str(raw_country or ""),
+            normalized_value=normalized_country,
+            status="mapped",
+            score=classify_country(raw_country, country_scores),
+            controlled_id=f"country_alias.{canonical.replace(' ', '_')}",
+            canonical_label=canonical,
+            config_key=canonical,
+            config_version=config_version,
+        )
+    # Every other country and every region remain deferred to Tier 1B. They
+    # retain pilot manual FATF treatment and do not enter Tier 0B staleness.
+    if country_resolution:
+        evidence.append(structured_mapping_evidence(
+            country_resolution,
+            application_id=application_id,
+            request_id=request_id,
+            config_version=config_version,
+        ))
+    return evidence
 
 
 # ══════════════════════════════════════════════════════════
@@ -1513,17 +1609,29 @@ def compute_risk_score(app_data, config_override=None):
             "Opaque ownership floor: opaque/complex ownership requires at least HIGH final risk",
         )
 
-    # ── ESCALATION RULE A: Any sub-factor scores 4 → mandatory compliance approval ──
-    # Per Excel Methodology: "Compliance approval is MANDATORY when any individual
-    # sub-factor scores 4 (Very High Risk)"
-    all_sub_scores = [
+    # ── ESCALATION RULE A: score-4 evidence ──
+    # Volume has an explicit compliance-review reason and no tier floor. The
+    # generic reason remains for every other score-4 factor so sector, PEP,
+    # ownership, and other existing behavior cannot inherit the volume rule.
+    non_volume_sub_scores = [
         d1_entity, d1_owner, d1_pep, d1_adverse, d1_sow, d1_sof,
         d2_inc, d2_ubo_nat, d2_inter, d2_op, d2_tgt,
-        d3_svc, d3_vol, d3_complexity,
+        d3_svc, d3_complexity,
         d4,
         d5_intro, d5_interaction
     ]
-    if any(s >= 4 for s in all_sub_scores):
+    if mapping_fidelity_enabled():
+        if any(s >= 4 for s in non_volume_sub_scores):
+            escalations.append("sub_factor_score_4")
+        if (
+            volume_resolution
+            and volume_resolution.mapped
+            and volume_resolution.controlled_id == "monthly_volume.over_usd_5m"
+            and int(volume_resolution.score) == 4
+        ):
+            escalations.append("monthly_volume_score_4")
+    elif any(s >= 4 for s in non_volume_sub_scores + [d3_vol]):
+        # Flag OFF preserves the pre-Tier-0A scoring/evidence path.
         escalations.append("sub_factor_score_4")
 
     # ── ESCALATION RULE B: Very High Risk sector → mandatory compliance approval ──
@@ -1536,10 +1644,28 @@ def compute_risk_score(app_data, config_override=None):
     if composite >= 85:
         escalations.append("composite_score_85_plus")
 
+    mapping_evidence = _controlled_mapping_evidence(
+        data, config, country_scores, sector_scores, entity_scores
+    )
+    if mapping_fidelity_enabled():
+        escalations = reconcile_mapping_staleness(
+            escalations,
+            data.get("_existing_risk_escalations"),
+            mapping_evidence,
+        )
     requires_compliance_approval = len(escalations) > 0
 
     elevation_reason_text = "; ".join(elevation_reasons) if elevation_reasons else ""
     country_risk_provenance = country_risk_details(data.get("country"), country_scores)
+    risk_dimensions = {
+        "d1": round(d1, 2),
+        "d2": round(d2, 2),
+        "d3": round(d3, 2),
+        "d4": round(d4, 2),
+        "d5": round(d5, 2),
+    }
+    if mapping_fidelity_enabled():
+        risk_dimensions["controlled_mapping_evidence"] = mapping_evidence
 
     return {
         "score": composite,
@@ -1547,9 +1673,10 @@ def compute_risk_score(app_data, config_override=None):
         "base_risk_score": base_score,
         "base_risk_level": base_level,
         "final_risk_level": level,
-        "dimensions": {"d1": round(d1, 2), "d2": round(d2, 2), "d3": round(d3, 2), "d4": round(d4, 2), "d5": round(d5, 2)},
+        "dimensions": risk_dimensions,
         "lane": RISK_LANE_MAP.get(level, "Standard Review"),
         "escalations": escalations,
+        "controlled_mapping_evidence": mapping_evidence,
         "elevation_reason_text": elevation_reason_text,
         "requires_compliance_approval": requires_compliance_approval,
         "declared_pep_present": bool(pep_scores),

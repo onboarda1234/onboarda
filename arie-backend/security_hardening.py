@@ -779,10 +779,12 @@ _APPROVAL_ROUTE_REASON_LABELS = {
     "edd_trigger": "EDD trigger",
     "high_or_very_high_risk": "High or very high risk",
     "material_screening_concern": "Material screening concern",
+    "monthly_volume_score_4": "Monthly volume over USD 5m",
     "officer_submitted_to_compliance": "Submitted to Compliance",
     "pre_approval_route": "Pre-approval route",
     "prohibited_screening_hit": "Prohibited screening hit",
     "provider_pep_match_unresolved": "Provider PEP match unresolved",
+    "unresolved_risk_mapping": "Unresolved controlled risk mapping",
 }
 
 
@@ -942,6 +944,8 @@ def _approval_escalation_reasons(
         if _approval_text(value)
     ]
     escalation_text = " ".join(escalation_values + [_approval_text(app.get("elevation_reason_text"))])
+    if "monthly_volume_score_4" in escalation_values:
+        reasons.append("monthly_volume_score_4")
     if "edd" in escalation_text:
         reasons.append("edd_trigger")
     if "declared_pep" in escalation_text or "declared pep" in escalation_text:
@@ -1012,6 +1016,14 @@ def classify_approval_route(app: Mapping[str, Any], db=None) -> Dict[str, Any]:
         reasons.append("application_missing")
     if not risk_level:
         reasons.append("risk_unavailable")
+
+    risk_escalations = [
+        _approval_text(value)
+        for value in _json_list_value(app.get("risk_escalations"))
+        if _approval_text(value)
+    ]
+    if any(value.startswith("stale:unmapped_") for value in risk_escalations):
+        reasons.append("unresolved_risk_mapping")
 
     pre_decision_states = {
         "draft",
@@ -1378,6 +1390,14 @@ class ApprovalGateValidator:
             if risk_integrity_error:
                 return (False, risk_integrity_error)
             route_policy = dict(approval_route) if isinstance(approval_route, Mapping) else classify_approval_route(app, db)
+            if (
+                route_policy.get("route") == APPROVAL_ROUTE_BLOCKED
+                and "unresolved_risk_mapping" in (route_policy.get("reasons") or [])
+            ):
+                return (
+                    False,
+                    "Approval is blocked until every unresolved controlled risk mapping is resolved and risk is recomputed.",
+                )
 
             # 2. Check screening exists in prescreening_data and mode is live
             prescreening_data = app.get('prescreening_data', '{}')
@@ -2192,6 +2212,17 @@ def can_decide_application(user, app, decision, *, risk_level=None, override_ai=
     route_name = meta.get("approval_route")
     if (
         decision == "approve"
+        and route_name == APPROVAL_ROUTE_BLOCKED
+        and "unresolved_risk_mapping" in (meta.get("approval_route_reasons") or [])
+    ):
+        return (
+            False,
+            403,
+            "Approval blocked: resolve every controlled risk mapping and recompute risk before approval.",
+            meta,
+        )
+    if (
+        decision == "approve"
         and role == "co"
         and route_name in {APPROVAL_ROUTE_COMPLIANCE_REQUIRED, APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED}
     ):
@@ -2265,6 +2296,19 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
             cta_label="Recompute risk",
             tab="overview",
             anchor_id="detail-risk-breakdown",
+        ))
+
+    if "unresolved_risk_mapping" in (route_policy.get("reasons") or []):
+        blockers.append(_approval_gate_blocker(
+            "unresolved_risk_mapping",
+            "Risk Mapping",
+            "Controlled risk mapping is unresolved",
+            "Resolve every unmapped controlled value and recompute risk before approval.",
+            cta_label="Resolve risk mapping",
+            tab="overview",
+            anchor_id="detail-risk-breakdown",
+            blocker_group="risk_route",
+            blocker_group_label="Risk Route",
         ))
 
     prescreening = _json_object(app.get("prescreening_data"))
