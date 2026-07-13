@@ -27,6 +27,10 @@ CLIENT_SAFE_UPLOAD_LATENCY_FLAGS = (
 
 _UPLOAD_LATENCY_DEFAULTS = {flag: False for flag in UPLOAD_LATENCY_FLAGS}
 
+# RSMP Tier 0A scoring changes must be activated deliberately after the
+# staging config diff and read-only historical dry run have been approved.
+RSMP_TIER0A_ACTIVATION_FLAG = "ENABLE_RSMP_TIER0A_MAPPING_FIDELITY"
+
 # ══════════════════════════════════════════════════════════════
 # 1. ENVIRONMENT DETECTION
 # ══════════════════════════════════════════════════════════════
@@ -199,6 +203,7 @@ _DEFAULT_FLAGS = {
 _DEFAULT_FLAGS["testing"] = dict(_DEFAULT_FLAGS["development"])
 for _env_flags in _DEFAULT_FLAGS.values():
     _env_flags.update(_UPLOAD_LATENCY_DEFAULTS)
+    _env_flags.setdefault(RSMP_TIER0A_ACTIVATION_FLAG, False)
 
 
 class FeatureFlags:

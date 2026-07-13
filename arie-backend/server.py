@@ -6338,7 +6338,7 @@ PORTAL_OWNERSHIP_STRUCTURE_OPTIONS = (
     "Simple — direct identifiable UBOs",
     "1–2 ownership layers",
     "3+ ownership layers / nominee shareholders",
-    "Complex multi-jurisdiction / opaque structure",
+    "Opaque — UBOs cannot be fully identified",
 )
 PORTAL_INTRODUCTION_METHOD_OPTIONS = (
     "Direct application — client initiated",
@@ -6374,6 +6374,7 @@ PORTAL_OPTION_ALIASES = {
     ("sector", "technology"): "Software / SaaS",
     ("sector", "technology / saas"): "Software / SaaS",
     ("sector", "professional services"): "Law Firm / Legal Services",
+    ("ownership_structure", "complex multi-jurisdiction / opaque structure"): "Opaque — UBOs cannot be fully identified",
     ("country", "uk"): "United Kingdom",
     ("country", "gb"): "United Kingdom",
     ("country", "usa"): "United States",
