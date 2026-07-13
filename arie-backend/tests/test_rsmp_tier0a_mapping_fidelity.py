@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import environment
+import risk_controlled_values
 from risk_controlled_values import (
     ACTIVATION_FLAG,
     COMPLEXITY_RECORDS,
@@ -24,6 +25,53 @@ from risk_controlled_values import (
     resolve_controlled_score,
 )
 from rule_engine import classify_country, compute_risk_score, normalize_country_key
+
+
+_MISSING = object()
+
+
+def _activation_flag_targets():
+    """Return every live flag singleton used by this collected test process."""
+    targets = []
+    for target in (environment.flags, risk_controlled_values.flags):
+        if all(target is not existing for existing in targets):
+            targets.append(target)
+    return targets
+
+
+def _set_mapping_fidelity_state(enabled):
+    """Set the environment override and all collected singleton caches together."""
+    os.environ[ACTIVATION_FLAG] = "true" if enabled else "false"
+    for target in _activation_flag_targets():
+        target._cache[ACTIVATION_FLAG] = bool(enabled)
+
+
+@pytest.fixture(autouse=True)
+def restore_mapping_fidelity_state():
+    """Restore the flag environment and caches after every test deterministically.
+
+    Several earlier full-suite tests reload ``environment``.  Reloading replaces
+    ``environment.flags``, while already-imported modules retain the previous
+    singleton.  Snapshot both identities so this module cannot leak into, or be
+    affected by, collection order.
+    """
+    env_before = os.environ.get(ACTIVATION_FLAG, _MISSING)
+    cache_before = [
+        (target, target._cache.get(ACTIVATION_FLAG, _MISSING))
+        for target in _activation_flag_targets()
+    ]
+    try:
+        yield
+    finally:
+        if env_before is _MISSING:
+            os.environ.pop(ACTIVATION_FLAG, None)
+        else:
+            os.environ[ACTIVATION_FLAG] = env_before
+        for target, previous in cache_before:
+            if previous is _MISSING:
+                target._cache.pop(ACTIVATION_FLAG, None)
+            else:
+                target._cache[ACTIVATION_FLAG] = previous
 
 
 def _portal_constant(name):
@@ -51,8 +99,8 @@ def _actual_portal_sector_options():
 
 
 @pytest.fixture
-def mapping_fidelity(monkeypatch):
-    monkeypatch.setitem(environment.flags._cache, ACTIVATION_FLAG, True)
+def mapping_fidelity():
+    _set_mapping_fidelity_state(True)
     assert mapping_fidelity_enabled() is True
 
 
@@ -213,10 +261,10 @@ def test_formatted_portal_values_resolve_exactly(family, label, expected_score):
     assert resolution.score == expected_score
 
 
-def test_feature_flag_changes_formatted_volume_only_when_enabled(monkeypatch):
-    monkeypatch.setitem(environment.flags._cache, ACTIVATION_FLAG, False)
+def test_feature_flag_changes_formatted_volume_only_when_enabled():
+    _set_mapping_fidelity_state(False)
     legacy = compute_risk_score(_base_input())
-    monkeypatch.setitem(environment.flags._cache, ACTIVATION_FLAG, True)
+    _set_mapping_fidelity_state(True)
     exact = compute_risk_score(_base_input())
     assert legacy["dimensions"]["d3"] == pytest.approx(1.35)
     assert exact["dimensions"]["d3"] == pytest.approx(1.0)
