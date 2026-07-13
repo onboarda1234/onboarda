@@ -2,6 +2,7 @@
 
 **Document:** P13-7
 **Status:** Draft for pilot review
+**Version:** Draft v0.2
 **Audience:** Compliance Officers, Senior Compliance Officers, Admins, Analysts, and pilot management
 **Operating environment:** Approved RegMind controlled-pilot scope only
 
@@ -76,6 +77,15 @@ At the end of the day, reconcile open escalations, unanswered information reques
 - A backend-denied action must not be recreated manually through another interface or database path.
 - If the officer cannot explain why a case meets the applicable standard, the case must be escalated or left pending.
 
+### Precedence rule
+
+When documents, policy, displayed risk, supervisor output, and runtime controls appear inconsistent:
+
+1. Backend enforcement is authoritative.
+2. Apply the stricter control.
+3. Escalate to the Senior Compliance Officer (SCO).
+4. Record the rationale.
+
 ## 6. Application review
 
 Use `PILOT_REVIEW_CHECKLIST.md` for the detailed review. At minimum, confirm:
@@ -93,6 +103,55 @@ Do not infer a clean result from a missing result. Missing, stale, failed, or un
 ## 7. Pre-approval and final decisions
 
 Before pre-approval, verify the risk and memo are current, screening and IDV are complete for the route, required evidence is available, and any four-eyes or senior review obligation is satisfied.
+
+### LOW / MEDIUM Fast-Path Approval
+
+The approved [LOW/MEDIUM Fast-Path Approval Policy](../compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md) permits a shorter approval route for eligible LOW and MEDIUM applications. This SOP summarises the operating control; the policy is the source for detailed eligibility and evidence requirements.
+
+**Purpose:** allow an eligible LOW or MEDIUM application to be approved without the full compliance-memo package while retaining deterministic gates, officer sign-off, audit evidence, and QA sampling.
+
+**Eligibility:** all of the following must be true:
+
+- risk is LOW or MEDIUM and the score is current and freshly computed;
+- completed AML screening and identity verification are present and within the applicable freshness window; and
+- none of the disqualifiers below is present.
+
+**Disqualifiers:** the application exits the fast path when any of the following exists:
+
+- sanctioned or FATF-listed jurisdiction anywhere in the structure;
+- PEP requiring escalation;
+- unresolved adverse media, watchlist, or sanctions hit;
+- stale, incomplete, expired, errored, or pending-second-review screening;
+- stale screening result;
+- stale memo where the applicable route requires a memo;
+- stale, missing, zero, quarantined, or otherwise non-current risk;
+- failed or incomplete IDV;
+- missing mandatory evidence;
+- unresolved RMI or enhanced-requirement blocker;
+- any backend approval blocker.
+
+An authorized onboarding/compliance officer may approve an eligible fast-path application alone. The approval must still carry the required officer sign-off, audit entry, decision record, and eligibility basis. A second officer retrospectively reviews the policy-required 20% QA sample; that QA sample is not a substitute for an approval-time gate.
+
+When any disqualifier exists, the application exits the fast-path and follows the normal approval workflow.
+
+### Approval control tiers and maker-checker
+
+The following describes the existing approval controls; officers must follow the live backend gate and any route-specific review requirement rather than infer an exception from a displayed risk label.
+
+**Tier 1 - LOW / MEDIUM**
+
+- An eligible fast-path case may be approved by one authorized onboarding/compliance officer.
+- Maker-checker still applies when the case is not eligible for fast path, requires the full memo route, has a screening second review, has a `requires_four_eyes` or ownership control, or is otherwise routed by the backend for a second or senior review.
+- Retrospective QA sampling of fast-path approvals does not turn the sampled review into an approval-time second signature.
+
+**Tier 2 - HIGH / VERY HIGH and senior-review cases**
+
+- HIGH and VERY_HIGH approvals use the existing dual-approval path: a first authorized reviewer records the first approval leg, and a distinct authorized second reviewer completes the second leg.
+- EDD, PEP, sanctions, material adverse media, complex ownership, and other high-concern cases are senior-escalation triggers. Where the existing route requires senior approval, the SCO or Admin completes that approval through the permitted backend path.
+- The first reviewer records the evidence review, decision rationale, and any required first-approval state; the second reviewer independently checks the evidence, blockers, and rationale before completing the approval.
+- The same officer must not complete both legs of a dual-approval control. Four-eyes control is complete only when the required distinct second reviewer or senior approver has recorded the permitted completion and the audit/decision records are present.
+
+Do not invent a second approval step for a route that the backend does not require, and do not treat a fast-path QA sample as maker-checker approval.
 
 Before final approval, rejection, or other terminal decision:
 
@@ -147,7 +206,18 @@ For each periodic review:
 
 ## 12. Monitoring and alerts
 
-Monitoring and alert handling is in pilot scope only where management has explicitly enabled and documented it. If it is excluded, officers must not represent the screen, alert, or queue as an active pilot control.
+Monitoring inclusion in the pilot is a management decision. The operating status must be verified and recorded before pilot commencement; this SOP does not infer the current runtime setting. If monitoring is excluded, officers must not represent a screen, alert, or queue as an active pilot control.
+
+### Monitoring Operational Status
+
+Before pilot commencement, management must confirm and retain evidence of:
+
+- [ ] Monitoring included / excluded.
+- [ ] Automated due-review sweep enabled / disabled.
+- [ ] Provider calls enabled / disabled.
+- [ ] Notification emails enabled / disabled.
+- [ ] Responsible owner recorded.
+- [ ] Evidence of configuration retained.
 
 Where enabled, review alert ownership, source, severity, evidence, linked application, status, and follow-up. Do not dismiss, clear, or close an alert without the required rationale and authorization. Escalate suspected sanctions, PEP, adverse media, suspicious activity, or data-integrity issues. Follow the separate monitoring procedure when one is approved.
 
@@ -191,18 +261,24 @@ Nothing in this SOP establishes production readiness, broad customer authorizati
 
 ## 16. Pilot readiness sign-off
 
-Before pilot use, management should confirm:
+**Documentation Complete** means this SOP pack and its related procedures have been reviewed and are available as the controlled pilot operating documents. Documentation completion does not by itself complete the pilot operational gate.
+
+**Operational Gate Complete** is reached only after all of the following have been executed and recorded:
 
 - [ ] Approved pilot users are listed and trained.
 - [ ] Approved pilot clients/applications are defined.
 - [ ] Provider scope and sandbox/prohibition rules are confirmed.
-- [ ] Monitoring scope is confirmed or explicitly excluded.
+- [ ] Monitoring inclusion/exclusion and operating settings are confirmed and recorded.
 - [ ] Risk scoring model status and review owner are documented.
 - [ ] This SOP and the related checklists are reviewed.
 - [ ] Escalation and support contacts are assigned.
 - [ ] Evidence export procedure is understood.
 - [ ] Known limitations are accepted.
 - [ ] Each pilot application has a named officer of record.
+- [ ] Officers have completed the required training/briefing.
+- [ ] Founder/management approval is recorded.
+- [ ] Compliance owner approval is recorded.
+- [ ] Required signatures are completed.
 
 **Founder / management approval:** ____________________
 
@@ -213,3 +289,12 @@ Before pilot use, management should confirm:
 **Scope approved:** ____________________
 
 **Limitations accepted:** ____________________
+
+### Controlled Document
+
+- **Version:** Draft v0.2
+- **Approval date:** ____________________
+- **Owner:** ____________________
+- **Repository reference:** `docs/pilot/COMPLIANCE_OFFICER_SOP.md`
+
+The Markdown file in the repository is the controlled master. Word and PDF exports are review copies unless they are separately version-controlled and approved. Every distributed copy must retain its version, approval date, owner, and repository reference to prevent document drift.

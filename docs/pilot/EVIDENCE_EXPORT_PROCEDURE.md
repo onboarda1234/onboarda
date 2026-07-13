@@ -1,6 +1,7 @@
 # Evidence Export Procedure
 
 **Use with:** `docs/pilot/COMPLIANCE_OFFICER_SOP.md`
+**Version:** Draft v0.2
 
 An evidence export is a controlled snapshot for a defined purpose. It is not automatically a complete regulatory file, a guarantee of chain continuity, or proof that a decision was correct.
 
@@ -107,3 +108,12 @@ For a regulator or external request, obtain management approval before release a
 **Senior reviewer/management approval, if required:** ____________________
 
 **Date/time (UTC):** ____________________
+
+## Controlled Document
+
+- **Version:** Draft v0.2
+- **Approval date:** ____________________
+- **Owner:** ____________________
+- **Repository reference:** `docs/pilot/EVIDENCE_EXPORT_PROCEDURE.md`
+
+The Markdown file in the repository is the controlled master. Word and PDF exports are review copies unless they are separately version-controlled and approved. Every distributed copy must retain its version, approval date, owner, and repository reference to prevent document drift.

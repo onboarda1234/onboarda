@@ -1,6 +1,7 @@
 # Override and Escalation Procedure
 
 **Use with:** `docs/pilot/COMPLIANCE_OFFICER_SOP.md`
+**Version:** Draft v0.2
 
 An override is an accountable human exception within an authorized control path. It is not a way around a backend gate, missing evidence, or a regulatory prohibition.
 
@@ -116,3 +117,12 @@ The senior reviewer must be able to explain the outcome from the underlying evid
 ## 8. Pilot limitation
 
 This procedure does not authorize SAR/STR, live provider, GDPR erasure, production notification, or other excluded workflows. Those require separate management approval and an approved operating procedure.
+
+## Controlled Document
+
+- **Version:** Draft v0.2
+- **Approval date:** ____________________
+- **Owner:** ____________________
+- **Repository reference:** `docs/pilot/OVERRIDE_AND_ESCALATION_PROCEDURE.md`
+
+The Markdown file in the repository is the controlled master. Word and PDF exports are review copies unless they are separately version-controlled and approved. Every distributed copy must retain its version, approval date, owner, and repository reference to prevent document drift.
