@@ -22064,6 +22064,27 @@ def _dedup_screening_results(results):
     return deduped
 
 
+def _entity_sanctions_record(company_screening):
+    """Return the entity AML/sanctions sub-record used to derive entity state.
+
+    Defense-in-depth for the entity screening queue: a clean provider payload
+    may omit the ``sanctions`` sub-record entirely. Passing an empty dict to
+    ``derive_screening_state`` yields ``not_started``, which pins the entity on
+    "Screening In Progress" even though the provider returned a terminal, live,
+    no-match answer. When ``sanctions`` is absent but the top-level company
+    screening record carries a real provider answer (``api_status`` /
+    ``matched`` / ``results``), fall back to that record so the terminal state
+    is read correctly. When ``sanctions`` is present it is returned unchanged.
+    """
+    company = company_screening or {}
+    sanctions = company.get("sanctions")
+    if not sanctions and (
+        company.get("api_status") or company.get("matched") or company.get("results")
+    ):
+        return company
+    return sanctions or {}
+
+
 def _screening_combined_company_facts(company_screening):
     company = company_screening or {}
     sanctions = company.get("sanctions") or {}
@@ -22114,7 +22135,7 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             _load_application_monitoring_alerts(db, app["id"])
         )
         company_screening = report.get("company_screening") or {}
-        company_sanctions = company_screening.get("sanctions") or {}
+        company_sanctions = _entity_sanctions_record(company_screening)
         company_adverse = company_screening.get("adverse_media") or {}
         company_state = derive_screening_state(company_sanctions)
         company_subject = derive_subject_state(company_sanctions)
@@ -23044,7 +23065,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
                 intermediary_screenings[item.get("entity_name") or item.get("person_name") or item.get("name")] = item
 
         company_screening = (report or {}).get("company_screening") or {}
-        company_sanctions = company_screening.get("sanctions") or {}
+        company_sanctions = _entity_sanctions_record(company_screening)
         company_adverse = company_screening.get("adverse_media") or {}
         company_ip = (report or {}).get("ip_geolocation") or {}
         company_kyc = (report or {}).get("kyc_applicants") or []

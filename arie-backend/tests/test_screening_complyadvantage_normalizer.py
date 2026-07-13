@@ -489,6 +489,19 @@ def test_normalize_company_clean_baseline_preserves_live_provider_evidence():
     assert report["has_company_screening_hit"] is False
     assert report["company_screening"]["source"] == "complyadvantage"
     assert report["company_screening"]["api_status"] == "live"
+    # A clean entity must still carry terminal, live sub-records so downstream
+    # consumers that key entity state off company_screening["sanctions"] read a
+    # real completed_clear answer instead of an absent sub-record (which would
+    # resolve to not_started and pin the entity on "Screening In Progress").
+    from screening_state import derive_screening_state, COMPLETED_CLEAR
+
+    sanctions = report["company_screening"]["sanctions"]
+    adverse = report["company_screening"]["adverse_media"]
+    assert sanctions["api_status"] == "live"
+    assert sanctions["matched"] is False
+    assert adverse["api_status"] == "live"
+    assert adverse["matched"] is False
+    assert derive_screening_state(sanctions) == COMPLETED_CLEAR
 
 
 def test_two_pass_strict_misses_relaxed_catches_canonical():
