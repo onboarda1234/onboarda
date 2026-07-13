@@ -1,6 +1,7 @@
 """RSMP Tier 0A exact controlled-value mapping and activation tests."""
 
 import ast
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -153,7 +154,7 @@ def test_every_portal_sector_has_an_explicit_mapped_or_unresolved_disposition():
         ("monthly_volume", MONTHLY_VOLUME_RECORDS),
     ],
 )
-def test_every_approved_label_resolves_to_its_exact_seeded_score(family, records):
+def test_every_runtime_registry_label_resolves_to_its_exact_seeded_score(family, records):
     for label, record in records.items():
         resolution = resolve_controlled_score(family, label)
         assert resolution.status == "mapped", label
@@ -161,7 +162,7 @@ def test_every_approved_label_resolves_to_its_exact_seeded_score(family, records
         assert resolution.controlled_id == record["id"], label
 
 
-def test_lane_b_sector_labels_are_unresolved_and_never_default_to_two():
+def test_runtime_unimplemented_sector_labels_are_unresolved_and_never_default_to_two():
     for label in UNRESOLVED_SECTOR_LABELS:
         resolution = resolve_controlled_score("sector", label)
         assert resolution.status == "unresolved", label
@@ -173,7 +174,7 @@ def test_entity_collisions_use_exact_config_keys(mapping_fidelity):
     configured = {
         "regulated": 1,
         "regulated fund": 2,
-        "unregulated fund": 4,
+        "unregulated fund": 3,
     }
     regulated = resolve_controlled_score(
         "entity_type", "Regulated Fund (CIS / Licensed)", configured_scores=configured
@@ -182,7 +183,7 @@ def test_entity_collisions_use_exact_config_keys(mapping_fidelity):
         "entity_type", "Unregulated Fund / SPV", configured_scores=configured
     )
     assert regulated.score == 2
-    assert unregulated.score == 4
+    assert unregulated.score == 3
 
 
 def test_sector_collision_labels_use_exact_seed_keys(mapping_fidelity):
@@ -192,7 +193,7 @@ def test_sector_collision_labels_use_exact_seed_keys(mapping_fidelity):
         "bank": 1,
         "banking": 2,
         "precious": 3,
-        "precious metals": 4,
+        "precious metals": 3,
     }
     assert resolve_controlled_score(
         "sector", "Forex / FX Trading (Retail)", configured_scores=configured
@@ -202,7 +203,53 @@ def test_sector_collision_labels_use_exact_seed_keys(mapping_fidelity):
     ).score == 2
     assert resolve_controlled_score(
         "sector", "Precious Metals / Gems", configured_scores=configured
-    ).score == 4
+    ).score == 3
+
+
+def test_corrected_gate0_catalogue_is_internally_consistent_and_hash_verified():
+    gate0_path = Path(__file__).parents[2] / "docs/risk-programme/RSMP_GATE0_V4_FOUNDER_APPROVAL.md"
+    gate0 = gate0_path.read_text(encoding="utf-8")
+    sector = gate0.split("### 3.1 Sector — exact labels and scores", 1)[1].split(
+        "### 3.2 Entity type — exact labels and scores", 1
+    )[0]
+    approved, lane_b = sector.split(
+        "The following 22 current portal options have no Gate 0 v4 score", 1
+    )
+    approved_rows = re.findall(r"^\| ([^|]+?) \| ([1-4]) \|$", approved, re.MULTILINE)
+    lane_b_rows = re.findall(
+        r"^\| ([^|]+?) \| QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED \|$",
+        lane_b,
+        re.MULTILINE,
+    )
+    assert len(approved_rows) == 39
+    assert len(lane_b_rows) == 22
+    approved_scores = dict(approved_rows)
+    assert approved_scores["Investment Management"] == "3"
+    assert approved_scores["Cloud Services"] == "2"
+    assert approved_scores["Private Banking"] == "4"
+    assert approved_scores["Precious Metals / Gems"] == "3"
+    assert "Investment Management" not in lane_b_rows
+    assert "Cloud Services" not in lane_b_rows
+    assert "`Private Banking` is a score-4 sector and the existing sector-score-4 High floor applies." in sector
+
+    entity = gate0.split("### 3.2 Entity type — exact labels and scores", 1)[1].split(
+        "### 3.3 Ownership — exact labels and scores", 1
+    )[0]
+    assert "| Unregulated Fund / SPV | 3 |" in entity
+
+    hash_match = re.search(
+        r"(?m)^\*\*Canonical Markdown SHA-256:\*\* `([0-9a-f]{64})`$", gate0
+    )
+    assert hash_match
+    canonical = gate0[: hash_match.start(1)] + "{{CANONICAL_SHA256}}" + gate0[hash_match.end(1) :]
+    assert hashlib.sha256(canonical.encode("utf-8")).hexdigest() == hash_match.group(1)
+
+
+@pytest.mark.parametrize("label", ["Investment Management", "Cloud Services", "Private Banking"])
+def test_gate0_sector_corrections_remain_pending_runtime_implementation(label):
+    resolution = resolve_controlled_score("sector", label)
+    assert resolution.status == "unresolved"
+    assert resolution.score is None
 
 
 def test_a9_is_rename_only_and_preserves_score_floor_and_legacy_alias(mapping_fidelity):

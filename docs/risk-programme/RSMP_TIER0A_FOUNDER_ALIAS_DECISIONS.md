@@ -82,7 +82,7 @@
 | A-076 | sector | Import export trading | Import / Export | 3 | 1 | APPROVE pending founder confirmation |
 | A-077 | sector | Logistics | Logistics / Freight Forwarding | 2 | 1 | APPROVE pending founder confirmation |
 
-## B. The 107 quarantine rows
+## B. The 105 quarantine rows
 
 | Row ID | Family | Legacy label | Canonical label | Score | Nonfixture count | Decision |
 |---|---|---|---|---:|---:|---|
@@ -166,33 +166,31 @@
 | B-078 | sector | crypto | — | — | 1 | QUARANTINE |
 | B-079 | sector | Crypto virtual asset services | — | — | 3 | QUARANTINE |
 | B-080 | sector | Infrastructure / Construction / Engineering | — | — | 3 | QUARANTINE |
-| B-081 | sector | Investment Management | — | — | 2 | QUARANTINE |
-| B-082 | sector | technology | — | — | 3 | QUARANTINE |
-| B-083 | sector | Virtual Asset Service Provider | — | — | 2 | QUARANTINE |
-| B-084 | sector | Crypto VASP exchange | — | — | 2 | QUARANTINE |
-| B-085 | sector | Cryptocurrency / Virtual Assets | — | — | 2 | QUARANTINE |
-| B-086 | sector | Retail | — | — | 2 | QUARANTINE |
-| B-087 | sector | Technology consulting | — | — | 2 | QUARANTINE |
-| B-088 | sector | Virtual asset service provider and cryptocurrency exchange | — | — | 2 | QUARANTINE |
-| B-089 | sector | Cloud Services | — | — | 1 | QUARANTINE |
-| B-090 | sector | Corporate administration | — | — | 1 | QUARANTINE |
-| B-091 | sector | Crypto / VASP virtual asset exchange and high-value cross-border payments | — | — | 1 | QUARANTINE |
-| B-092 | sector | Crypto / Virtual Asset Service Provider (VASP) | — | — | 1 | QUARANTINE |
-| B-093 | sector | Crypto / Virtual Asset Services | — | — | 0 | QUARANTINE |
-| B-094 | sector | Crypto/VASP | — | — | 1 | QUARANTINE |
-| B-095 | sector | Crypto/VASP virtual asset services | — | — | 1 | QUARANTINE |
-| B-096 | sector | Cryptocurrency VASP / virtual asset exchange | — | — | 1 | QUARANTINE |
-| B-097 | sector | General trading | — | — | 1 | QUARANTINE |
-| B-098 | sector | investment | — | — | 0 | QUARANTINE |
-| B-099 | sector | Professional Services / Consulting | — | — | 1 | QUARANTINE |
-| B-100 | sector | Real Estate | — | — | 1 | QUARANTINE |
-| B-101 | sector | real_estate | — | — | 0 | QUARANTINE |
-| B-102 | sector | Retail and distribution | — | — | 1 | QUARANTINE |
-| B-103 | sector | Software development and business consulting | — | — | 1 | QUARANTINE |
-| B-104 | sector | trading | — | — | 0 | QUARANTINE |
-| B-105 | sector | Virtual Asset Service | — | — | 1 | QUARANTINE |
-| B-106 | sector | Virtual Asset Service Provider / Crypto | — | — | 1 | QUARANTINE |
-| B-107 | sector | Virtual assets and crypto exchange | — | — | 1 | QUARANTINE |
+| B-081 | sector | technology | — | — | 3 | QUARANTINE |
+| B-082 | sector | Virtual Asset Service Provider | — | — | 2 | QUARANTINE |
+| B-083 | sector | Crypto VASP exchange | — | — | 2 | QUARANTINE |
+| B-084 | sector | Cryptocurrency / Virtual Assets | — | — | 2 | QUARANTINE |
+| B-085 | sector | Retail | — | — | 2 | QUARANTINE |
+| B-086 | sector | Technology consulting | — | — | 2 | QUARANTINE |
+| B-087 | sector | Virtual asset service provider and cryptocurrency exchange | — | — | 2 | QUARANTINE |
+| B-088 | sector | Corporate administration | — | — | 1 | QUARANTINE |
+| B-089 | sector | Crypto / VASP virtual asset exchange and high-value cross-border payments | — | — | 1 | QUARANTINE |
+| B-090 | sector | Crypto / Virtual Asset Service Provider (VASP) | — | — | 1 | QUARANTINE |
+| B-091 | sector | Crypto / Virtual Asset Services | — | — | 0 | QUARANTINE |
+| B-092 | sector | Crypto/VASP | — | — | 1 | QUARANTINE |
+| B-093 | sector | Crypto/VASP virtual asset services | — | — | 1 | QUARANTINE |
+| B-094 | sector | Cryptocurrency VASP / virtual asset exchange | — | — | 1 | QUARANTINE |
+| B-095 | sector | General trading | — | — | 1 | QUARANTINE |
+| B-096 | sector | investment | — | — | 0 | QUARANTINE |
+| B-097 | sector | Professional Services / Consulting | — | — | 1 | QUARANTINE |
+| B-098 | sector | Real Estate | — | — | 1 | QUARANTINE |
+| B-099 | sector | real_estate | — | — | 0 | QUARANTINE |
+| B-100 | sector | Retail and distribution | — | — | 1 | QUARANTINE |
+| B-101 | sector | Software development and business consulting | — | — | 1 | QUARANTINE |
+| B-102 | sector | trading | — | — | 0 | QUARANTINE |
+| B-103 | sector | Virtual Asset Service | — | — | 1 | QUARANTINE |
+| B-104 | sector | Virtual Asset Service Provider / Crypto | — | — | 1 | QUARANTINE |
+| B-105 | sector | Virtual assets and crypto exchange | — | — | 1 | QUARANTINE |
 
 ## C. The 9 synthetic/reject rows
 

@@ -55,7 +55,7 @@ def test_dry_run_is_offline_pseudonymized_and_restores_flag(monkeypatch):
     assert environment.flags.is_enabled(ACTIVATION_FLAG) is False
 
 
-def test_dry_run_reports_explicit_unresolved_sector():
+def test_dry_run_reports_gate0_approved_sector_pending_runtime_implementation():
     payload = _payload()
     payload["applications"][0]["application"]["sector"] = "Cloud Services"
     report = run_dry_run(payload)

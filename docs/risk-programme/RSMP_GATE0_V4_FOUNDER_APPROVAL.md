@@ -8,7 +8,7 @@
 
 **GitHub baseline SHA:** `02eeae5062d1f1d8f77e7ca69c4629bac72c57b0`
 
-**Canonical Markdown SHA-256:** `e293d6cae66751c3da0bf7cd7743446c9395dd39bd781f86ae76afa9418151a6`
+**Canonical Markdown SHA-256:** `90d55edb060bf2358e16f2eec00a63d9d77acdfe59e33c8debf3948174ea8565`
 
 **Operational status:** `HOLD — DRAFT PRS; FLAG OFF; NO MERGE, DEPLOYMENT, ACTIVATION, OR RECOMPUTATION`
 
@@ -24,7 +24,7 @@ Approval of this record is not a production-readiness claim. PR #753 and stacked
 
 | Decision | Founder-approved disposition |
 |---|---|
-| A1 | The approved Tier 0A sector catalogue consists only of the 36 exact mapped labels and scores in Section 3.1. The remaining 24 current portal sector labels are Lane B and remain unresolved/fail-closed; no score is inferred. |
+| A1 | The approved Tier 0A sector catalogue consists only of the 39 exact labels and scores in Section 3.1. The remaining 22 current portal sector labels are Lane B and remain unresolved/fail-closed; no score is inferred. `Private Banking` is approved at score 4 and the existing sector-score-4 High floor applies. |
 | A2 | The approved Tier 0A entity-type catalogue consists only of the 12 exact labels and scores in Section 3.2. |
 | A3 | The approved Tier 0A ownership catalogue consists only of the four exact labels and scores in Section 3.3, including the A9 rename-only decision. |
 | A4 | The approved Tier 0A transaction-complexity catalogue consists only of the four exact labels and scores in Section 3.4. |
@@ -54,14 +54,17 @@ Approval of this record is not a production-readiness claim. PR #753 and stacked
 | Remittance / Money Transfer | 3 |
 | E-Money / E-Wallet Provider | 3 |
 | Insurance / InsurTech | 2 |
+| Investment Management | 3 |
 | Family Office / Wealth Management | 3 |
+| Private Banking | 4 |
 | Banking-as-a-Service | 2 |
 | E-Commerce / Online Retail | 2 |
 | Import / Export | 3 |
-| Precious Metals / Gems | 4 |
+| Precious Metals / Gems | 3 |
 | Oil & Gas / Energy Trading | 3 |
 | Logistics / Freight Forwarding | 2 |
 | Software / SaaS | 2 |
+| Cloud Services | 2 |
 | Telecommunications | 2 |
 | Media Technology | 2 |
 | iGaming / Online Gambling | 4 |
@@ -82,13 +85,14 @@ Approval of this record is not a production-readiness claim. PR #753 and stacked
 | Charity / NGO / Non-Profit | 3 |
 | Government / Public Sector | 1 |
 
-The following 24 current portal options have no Gate 0 v4 score. They remain Lane B and must fail closed; no score is invented:
+`Private Banking` is a score-4 sector and the existing sector-score-4 High floor applies. These catalogue corrections are founder decisions only; runtime implementation is outside this documentation-only correction.
+
+The following 22 current portal options have no Gate 0 v4 score. They remain Lane B and must fail closed; no score is invented:
 
 | Exact current portal label | Disposition |
 |---|---|
 | Payment Processing / Gateway | QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED |
 | Lending / Credit Services | QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED |
-| Investment Management | QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED |
 | Capital Markets / Brokerage | QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED |
 | Private Equity / Venture Capital | QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED |
 | Hedge Fund | QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED |
@@ -99,7 +103,6 @@ The following 24 current portal options have no Gate 0 v4 score. They remain Lan
 | IT Services / Outsourcing | QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED |
 | Cybersecurity | QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED |
 | Artificial Intelligence / ML | QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED |
-| Cloud Services | QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED |
 | Video Games / Esports | QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED |
 | Streaming / Content Platforms | QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED |
 | Bureau de Change | QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED |
@@ -124,7 +127,7 @@ The following 24 current portal options have no Gate 0 v4 score. They remain Lan
 | Trust | 3 |
 | Foundation | 3 |
 | Regulated Fund (CIS / Licensed) | 2 |
-| Unregulated Fund / SPV | 4 |
+| Unregulated Fund / SPV | 3 |
 | Non-Profit Organisation / NGO | 3 |
 | Shell Company / Special Purpose Vehicle | 4 |
 
