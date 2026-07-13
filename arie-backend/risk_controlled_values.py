@@ -99,6 +99,7 @@ SECTOR_RECORDS = {
     "Manufacturing": _record("sector.manufacturing", "Manufacturing", 2, config_key="manufacturing"),
     "Construction": _record("sector.construction", "Construction", 3, config_key="construction"),
     "Charity / NGO / Non-Profit": _record("sector.charity", "Charity / NGO / Non-Profit", 3, config_key="charity"),
+    "Government / Public Sector": _record("sector.government", "Government / Public Sector", 1, config_key="government"),
 }
 
 UNRESOLVED_SECTOR_LABELS = frozenset({
@@ -125,6 +126,7 @@ UNRESOLVED_SECTOR_LABELS = frozenset({
     "Travel & Hospitality",
     "Food & Beverage",
     "Fashion / Luxury Goods",
+    "Other",
 })
 
 ENTITY_TYPE_RECORDS = {

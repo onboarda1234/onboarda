@@ -6333,6 +6333,8 @@ PORTAL_SECTOR_OPTIONS = (
     "Manufacturing",
     "Construction",
     "Charity / NGO / Non-Profit",
+    "Government / Public Sector",
+    "Other",
 )
 PORTAL_OWNERSHIP_STRUCTURE_OPTIONS = (
     "Simple — direct identifiable UBOs",

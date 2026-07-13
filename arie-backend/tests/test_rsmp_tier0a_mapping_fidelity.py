@@ -3,6 +3,7 @@
 import ast
 import os
 from pathlib import Path
+import re
 import sys
 
 import pytest
@@ -34,6 +35,19 @@ def _portal_constant(name):
         if any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
             return tuple(ast.literal_eval(node.value))
     raise AssertionError(f"{name} not found")
+
+
+def _actual_portal_sector_options():
+    source = (Path(__file__).parents[2] / "arie-portal.html").read_text(encoding="utf-8")
+    select = re.search(r'<select id="f-sector"[^>]*>(.*?)</select>', source, re.DOTALL)
+    assert select, "portal sector select not found"
+    values = []
+    for attrs, text in re.findall(r"<option([^>]*)>(.*?)</option>", select.group(1), re.DOTALL):
+        explicit = re.search(r'value="([^"]*)"', attrs)
+        value = explicit.group(1) if explicit else re.sub(r"<[^>]+>", "", text).strip()
+        if value:
+            values.append(value)
+    return tuple(values)
 
 
 @pytest.fixture
@@ -74,9 +88,10 @@ def test_activation_flag_is_off_by_default():
 
 
 def test_every_portal_sector_has_an_explicit_mapped_or_unresolved_disposition():
-    portal = set(_portal_constant("PORTAL_SECTOR_OPTIONS"))
+    portal = set(_actual_portal_sector_options())
     assert portal == set(SECTOR_RECORDS) | set(UNRESOLVED_SECTOR_LABELS)
     assert not (set(SECTOR_RECORDS) & set(UNRESOLVED_SECTOR_LABELS))
+    assert portal == set(_portal_constant("PORTAL_SECTOR_OPTIONS"))
 
 
 @pytest.mark.parametrize(
