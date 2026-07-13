@@ -627,6 +627,28 @@ def _empty_company_screening(screened_at: str | None = None):
             "screened_at": screened_at,
             "matched": False,
             "results": [],
+            # Emit the terminal, live sub-records for a clean entity so
+            # downstream consumers that key entity state off
+            # ``company_screening["sanctions"]`` (e.g. the screening queue
+            # builder's ``derive_screening_state``) read a real
+            # ``completed_clear`` answer instead of an absent sub-record —
+            # which would otherwise resolve to ``not_started`` and pin the
+            # entity on "Screening In Progress". Mirrors the sub-record shape
+            # produced by ``derive_company_screening_from_matches``.
+            "sanctions": {
+                "source": "complyadvantage",
+                "api_status": "live",
+                "screened_at": screened_at,
+                "matched": False,
+                "results": [],
+            },
+            "adverse_media": {
+                "source": "complyadvantage",
+                "api_status": "live",
+                "screened_at": screened_at,
+                "matched": False,
+                "results": [],
+            },
         },
     }
 

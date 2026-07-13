@@ -1413,3 +1413,59 @@ def test_screening_queue_monitoring_candidate_extracts_fields_from_evidence_json
     assert candidate["source_url"] == "https://evidence.example.test/article"
     assert candidate["publication_date"] == "2026-06-01"
     assert candidate["snippet"] == "Evidence JSON snippet"
+
+
+def test_entity_sanctions_record_falls_back_to_top_level_when_sub_record_absent():
+    """A clean CA entity payload may omit the sanctions sub-record.
+
+    The entity queue must still read a terminal live answer rather than
+    not_started (which would pin the entity on "Screening In Progress").
+    """
+    import server
+    from screening_state import derive_screening_state, COMPLETED_CLEAR, NOT_STARTED
+
+    # Present sanctions sub-record → returned unchanged.
+    present = {"sanctions": {"api_status": "live", "matched": False, "results": []}}
+    assert server._entity_sanctions_record(present) == present["sanctions"]
+
+    # Absent sanctions but live top-level record → fall back to top-level.
+    absent = {"api_status": "live", "matched": False, "results": []}
+    assert derive_screening_state(server._entity_sanctions_record(absent)) == COMPLETED_CLEAR
+
+    # Genuinely empty → not_started (unchanged behaviour).
+    assert derive_screening_state(server._entity_sanctions_record({})) == NOT_STARTED
+
+
+def test_clean_ca_entity_report_resolves_terminal_clear_not_in_progress():
+    """End-to-end: a clean CA entity resolves to a terminal clear queue state."""
+    from screening_complyadvantage.normalizer import _empty_company_screening
+    from screening_state import (
+        derive_screening_state,
+        resolve_screening_queue_state,
+        COMPLETED_CLEAR,
+    )
+    import server
+
+    company_screening = _empty_company_screening(
+        screened_at="2026-01-01T00:00:00Z"
+    )["company_screening"]
+    company_sanctions = server._entity_sanctions_record(company_screening)
+    company_state = derive_screening_state(company_sanctions)
+    assert company_state == COMPLETED_CLEAR
+
+    resolved = resolve_screening_queue_state({
+        "subject_type": "entity",
+        "status_key": "screened_no_match",
+        "status_label": "No Match",
+        "screening_state": company_state,
+        "screening_truth_state": company_state,
+        "provider_mode": "live_provider",
+        "provider_availability": "available",
+        "screening_result": "clear",
+        "terminal": True,
+        "defensible_clear": True,
+        "total_hits": 0,
+    })
+    assert resolved["status_key"] != "screening_in_progress"
+    assert resolved["terminal"] is True
+    assert resolved["defensible_clear"] is True
