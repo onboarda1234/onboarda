@@ -3989,6 +3989,7 @@ def _persist_normalized_screening_report_if_enabled(db, client_id, application_i
 from screening_state import (
     derive_screening_state,
     derive_screening_truth,
+    provider_mode_from_record,
     build_screening_truth_summary,
     build_screening_terminality_summary,
     sanitize_screening_readiness_summary,
@@ -19973,6 +19974,49 @@ def _screening_hit_facts(screening_record):
     }
 
 
+# Least-defensible-first ordering for combining provider modes across the
+# entity's sub-records. A lower rank must win so a genuinely failed / sandbox /
+# pending sub-record can never be masked by a live sibling (fail-closed).
+_PROVIDER_MODE_SEVERITY_RANK = {
+    "failed": 0,
+    "not_configured": 1,
+    "sandbox_provider": 2,
+    "simulated_fallback": 3,
+    "pending": 4,
+    "live_provider": 5,
+}
+
+
+def _entity_provider_mode_record(company_screening, company_sanctions):
+    """Select the provider record that drives the entity row's mode badge.
+
+    The queue previously space-joined ``api_status``/``source``/``provider``
+    from the top-level company record and its ``sanctions`` sub-record into one
+    pseudo-record. ``provider_mode_from_record`` matches ``api_status`` tokens
+    exactly, so two live records joined to ``"live live"``, matched nothing,
+    and fell through to ``pending`` — rendering a false "Screening Pending —
+    Blocks Approval" badge on rows whose real state was terminal clear/match.
+
+    Instead, derive the provider mode of each real record independently and
+    return the record with the least defensible mode (fail-closed): a pending
+    or sandbox sub-record still surfaces, while two live records read as live.
+    Ties keep the first record considered — ``sanctions`` before the top-level
+    company record, since sanctions is the entity AML source of truth.
+    """
+    candidates = []
+    for record in (company_sanctions, company_screening):
+        if isinstance(record, dict) and record and not any(record is seen for seen in candidates):
+            candidates.append(record)
+    if not candidates:
+        return {}
+    return min(
+        candidates,
+        key=lambda record: _PROVIDER_MODE_SEVERITY_RANK.get(
+            provider_mode_from_record(record), _PROVIDER_MODE_SEVERITY_RANK["pending"]
+        ),
+    )
+
+
 def _screening_queue_row_mode(report_mode, state, status_key, entity_context=None, provider_record=None):
     """Return truthful row-level screening provenance for queue display."""
     context_text = " ".join(str(x or "") for x in (entity_context or [])).lower()
@@ -23104,20 +23148,10 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
                 company_context.append("KYC RED: " + ", ".join(rejected_kyc))
             if company_facts["adverse_media_hit"] or company_adverse.get("matched") or company_media_alerts["matched"]:
                 company_context.append("Company adverse media match")
-            company_provider_record = {
-                "source": " ".join(str(x or "") for x in (
-                    company_screening.get("source"),
-                    company_sanctions.get("source"),
-                )),
-                "provider": " ".join(str(x or "") for x in (
-                    company_screening.get("provider"),
-                    company_sanctions.get("provider"),
-                )),
-                "api_status": " ".join(str(x or "") for x in (
-                    company_screening.get("api_status"),
-                    company_sanctions.get("api_status"),
-                )),
-            }
+            company_provider_record = _entity_provider_mode_record(
+                company_screening,
+                company_sanctions,
+            )
             company_screening_truth = derive_screening_truth(
                 company_sanctions or company_provider_record,
                 name="company_watchlist",

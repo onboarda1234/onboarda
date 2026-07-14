@@ -1327,3 +1327,81 @@ class TestInlineScreeningRuntime:
         assert "Screening Review Completed" not in result["riskHtml"]
         assert "Unexpected Vendor Event" in result["systemHtml"]
         assert "Risk Recomputed" not in result["systemHtml"]
+
+
+def _queue_pager_runtime_js(html):
+    region = _extract_between(
+        html,
+        "function screeningQueuePageSize() {",
+        "function providerTruthValue(status, key, fallback) {",
+    )
+    return "\n".join(
+        [
+            textwrap.dedent(
+                """
+                var SCREENING_QUEUE = {
+                  rows: [],
+                  is_loading: false,
+                  load_error: null,
+                  pagination: { limit: 50, offset: 100, returned: 50, total_rows: 573, has_next: true, has_prev: true }
+                };
+                var statusEl = { textContent: '' };
+                var pagerEl = { innerHTML: '' };
+                var document = {
+                  getElementById: function(id) {
+                    if (id === 'screening-queue-status') return statusEl;
+                    if (id === 'screening-queue-pagination') return pagerEl;
+                    return null;
+                  }
+                };
+                """
+            ),
+            region,
+            textwrap.dedent(
+                """
+                renderScreeningQueueMeta();
+                var midPage = { status: statusEl.textContent, pager: pagerEl.innerHTML };
+                SCREENING_QUEUE.pagination = { limit: 50, offset: 550, returned: 23, total_rows: 573, has_next: false, has_prev: true };
+                renderScreeningQueueMeta();
+                var lastPage = { pager: pagerEl.innerHTML };
+                SCREENING_QUEUE.pagination = { limit: 50, offset: 0, returned: 50, total_rows: 573, has_next: true, has_prev: false };
+                renderScreeningQueueMeta();
+                var firstPage = { pager: pagerEl.innerHTML };
+                SCREENING_QUEUE.pagination = { limit: 50, offset: 0, returned: 12, total_rows: 12, has_next: false, has_prev: false };
+                renderScreeningQueueMeta();
+                var singlePage = { pager: pagerEl.innerHTML };
+                console.log(JSON.stringify({ midPage: midPage, lastPage: lastPage, firstPage: firstPage, singlePage: singlePage }));
+                """
+            ),
+        ]
+    )
+
+
+class TestScreeningQueuePagerAndLayout:
+    def test_queue_pager_shows_page_position(self):
+        html = _read_backoffice()
+        result = _run_node(_queue_pager_runtime_js(html))
+        assert "Showing 101–150 of 573 queue rows" in result["midPage"]["status"]
+        assert "Page 3 of 12" in result["midPage"]["pager"]
+        assert "Page 12 of 12" in result["lastPage"]["pager"]
+        assert "Page 1 of 12" in result["firstPage"]["pager"]
+        assert "Page 1 of 1" in result["singlePage"]["pager"]
+        # Buttons stay present and disable at the boundaries.
+        assert result["firstPage"]["pager"].count("disabled") == 1
+        assert result["lastPage"]["pager"].count("disabled") == 1
+        assert result["singlePage"]["pager"].count("disabled") == 2
+        assert "disabled" not in result["midPage"]["pager"]
+
+    def test_queue_table_container_scrolls_horizontally_instead_of_clipping(self):
+        """The queue table wrapper must never clip the Actions column.
+
+        overflow:hidden on the card cut off the View button (no scrollbar) at
+        higher zoom levels / narrow viewports; wide content must scroll inside
+        its own container.
+        """
+        html = _read_backoffice()
+        tbody_idx = html.index('<tbody id="screening-body">')
+        container_idx = html.rindex('<div class="card"', 0, tbody_idx)
+        container_snippet = html[container_idx:tbody_idx]
+        assert "overflow-x:auto" in container_snippet
+        assert "overflow:hidden" not in container_snippet

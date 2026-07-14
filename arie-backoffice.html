@@ -1930,7 +1930,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <span id="screening-queue-status" style="font-size:12px;color:var(--text3);">Loading screening queue…</span>
     <div id="screening-queue-pagination"></div>
   </div>
-  <div class="card" style="padding:0;overflow:hidden;">
+  <div class="card" style="padding:0;overflow-x:auto;">
     <table class="data-table">
       <thead><tr><th>Subject</th><th>Type</th><th>Company</th><th>Watchlist</th><th>PEP (Declared / Screening)</th><th>Entity / Context</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody id="screening-body"></tbody>
@@ -13987,9 +13987,15 @@ function renderScreeningQueueMeta() {
     pagerEl.innerHTML = '';
     return;
   }
+  var pageLimit = (typeof pagination.limit === 'number' && pagination.limit > 0)
+    ? pagination.limit
+    : (returned || screeningQueuePageSize() || 1);
+  var totalPages = Math.max(1, Math.ceil(totalRows / pageLimit));
+  var currentPage = Math.min(totalPages, Math.floor(offset / pageLimit) + 1);
   pagerEl.innerHTML =
     '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
       '<button class="btn btn-outline btn-sm" onclick="changeScreeningQueuePage(-1)"' + (pagination.has_prev ? '' : ' disabled') + '>Previous</button>' +
+      '<span style="font-size:12px;color:var(--text2);white-space:nowrap;">Page ' + currentPage + ' of ' + totalPages + '</span>' +
       '<button class="btn btn-outline btn-sm" onclick="changeScreeningQueuePage(1)"' + (pagination.has_next ? '' : ' disabled') + '>Next</button>' +
     '</div>';
 }
