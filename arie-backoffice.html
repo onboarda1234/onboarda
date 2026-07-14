@@ -14095,7 +14095,7 @@ async function loadScreeningQueue(options) {
   } catch(e) {
     if (requestId !== SCREENING_QUEUE_ACTIVE_REQUEST_ID) return false;
     console.warn('Failed to load screening queue:', e);
-    SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:(e && e.message) || 'Queue unavailable', pagination: SCREENING_QUEUE.pagination, is_loading:false, available_type_filters:[] };
+    SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:(e && e.message) || 'Queue unavailable', pagination: null, is_loading:false, available_type_filters:[] };
     updateScreeningQueueTypeFilterOptions();
     renderScreeningQueueMeta();
     return false;
@@ -14128,7 +14128,7 @@ function screeningBusinessStatusLabel(label) {
   if (key === 'incomplete record') return 'Incomplete Screening Record';
   if (key === 'declared pep review') return 'Declared PEP Review';
   if (key === 'match confirmed') return 'Confirmed True Match';
-  if (key === 'follow up required') return 'Request More Information';
+  if (key === 'follow up required' || key === 'review follow up required') return 'Follow-up Required';
   return raw;
 }
 
@@ -17535,9 +17535,10 @@ async function renderScreening(options) {
 
   // Update screening stat cards
   var el;
-  el = document.getElementById('screening-stat-awaiting'); if (el) el.textContent = SCREENING_QUEUE.metrics ? SCREENING_QUEUE.metrics.applications_awaiting_screening : 0;
-  el = document.getElementById('screening-stat-screened'); if (el) el.textContent = SCREENING_QUEUE.metrics ? SCREENING_QUEUE.metrics.applications_screened : 0;
-  el = document.getElementById('screening-stat-hits'); if (el) el.textContent = SCREENING_QUEUE.metrics ? SCREENING_QUEUE.metrics.applications_requiring_review : 0;
+  var statFallback = SCREENING_QUEUE.load_error ? '—' : 0;
+  el = document.getElementById('screening-stat-awaiting'); if (el) el.textContent = SCREENING_QUEUE.metrics ? SCREENING_QUEUE.metrics.applications_awaiting_screening : statFallback;
+  el = document.getElementById('screening-stat-screened'); if (el) el.textContent = SCREENING_QUEUE.metrics ? SCREENING_QUEUE.metrics.applications_screened : statFallback;
+  el = document.getElementById('screening-stat-hits'); if (el) el.textContent = SCREENING_QUEUE.metrics ? SCREENING_QUEUE.metrics.applications_requiring_review : statFallback;
 }
 
 var EDD_CASES = [];

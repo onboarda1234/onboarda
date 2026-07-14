@@ -86,8 +86,10 @@ def test_terminal_hits_cleared_by_officer_get_distinct_status():
     })
 
     assert resolved["status_key"] == "cleared_by_officer"
-    assert resolved["canonical_status_key"] == "clear"
-    assert resolved["canonical_status"] == "Clear"
+    # PR-A audit fix: an adjudicated false positive is a distinct assertion
+    # from a provider no-hit "Clear" and keeps its own officer-facing label.
+    assert resolved["canonical_status_key"] == "cleared_by_officer"
+    assert resolved["canonical_status"] == "Cleared False Positive"
     assert resolved["officer_review_status"] == "cleared"
     assert resolved["review_evidence_present"] is True
     assert resolved["defensible_clear"] is True
@@ -244,8 +246,10 @@ def test_follow_up_officer_disposition_drives_follow_up_required():
     })
 
     assert resolved["status_key"] == "follow_up_required"
-    assert resolved["canonical_status_key"] == "review_required"
-    assert resolved["canonical_status"] == "Review Required"
+    # PR-A audit fix: RFI-pending rows carry their own label instead of
+    # flattening into Review Required (filter/label coherence).
+    assert resolved["canonical_status_key"] == "follow_up_required"
+    assert resolved["canonical_status"] == "Follow-up Required"
     assert resolved["defensible_clear"] is False
     assert resolved["review_required"] is False
 

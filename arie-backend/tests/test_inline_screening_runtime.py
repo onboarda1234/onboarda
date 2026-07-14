@@ -1607,3 +1607,112 @@ class TestScreeningQueueSlimRowTemplate:
         assert "function screeningQueueContextCell" not in html
         assert "Registry lookup not performed" in html
         assert "'Awaiting screening'" not in html.split("Registry Status")[1][:400]
+
+
+def _queue_error_state_runtime_js(html):
+    region = _extract_between(
+        html,
+        "function screeningBadge(status) {",
+        "var EDD_CASES = [];",
+    )
+    return "\n".join(
+        [
+            textwrap.dedent(
+                """
+                var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null };
+                var SCREENING_QUEUE_DIRTY = false;
+                var SCREENING_QUEUE_FILTERS = { search:'', status:'', type:'', pep:'', application_ref:'' };
+                var SCREENING_QUEUE_SEARCH_TIMER = null;
+                var SCREENING_QUEUE_ACTIVE_REQUEST_ID = 0;
+                var SCREENING_REVIEW_ROWS = {};
+                var currentUser = { role: 'co', name: 'Officer Test' };
+                var BO_AUTH_TOKEN = 'token';
+                function escapeHtml(value) {
+                  return String(value == null ? '' : value)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+                }
+                function showToast() {}
+                function openScreeningReviewByRow() {}
+                function openScreeningDispositionModalByRow() {}
+                function canClearScreeningDisposition() { return true; }
+                function getCurrentBoSessionId() { return 'error-state-test-session'; }
+                var tbody = {
+                  _innerHTML: '',
+                  rows: [],
+                  set innerHTML(value) { this._innerHTML = value; this.rows = []; },
+                  get innerHTML() { return this._innerHTML; },
+                  appendChild(node) { this.rows.push(node); }
+                };
+                var statusEl = { textContent: '' };
+                var pagerEl = { innerHTML: 'stale pager html' };
+                var stats = {};
+                ['screening-stat-awaiting', 'screening-stat-screened', 'screening-stat-hits'].forEach(function(id) {
+                  stats[id] = { textContent: 'stale' };
+                });
+                var document = {
+                  getElementById(id) {
+                    if (id === 'screening-body') return tbody;
+                    if (id === 'screening-queue-status') return statusEl;
+                    if (id === 'screening-queue-pagination') return pagerEl;
+                    if (stats[id]) return stats[id];
+                    return null;
+                  },
+                  createElement() { return { innerHTML: '' }; }
+                };
+                // Simulate a prior successful load, then a failing refresh.
+                SCREENING_QUEUE.pagination = { limit: 50, offset: 0, returned: 50, total_rows: 573, has_next: true, has_prev: false };
+                async function boApiCall(method, path) {
+                  throw new Error('Failed to fetch');
+                }
+                """
+            ),
+            region,
+            textwrap.dedent(
+                """
+                (async () => {
+                  markScreeningQueueDirty();
+                  await renderScreening({ force: true });
+                  renderScreeningQueueMeta();
+                  console.log(JSON.stringify({
+                    loadError: SCREENING_QUEUE.load_error,
+                    pagination: SCREENING_QUEUE.pagination,
+                    pagerHtml: pagerEl.innerHTML,
+                    statusText: statusEl.textContent,
+                    bodyHtml: tbody._innerHTML || (tbody.rows[0] && tbody.rows[0].innerHTML) || '',
+                    statAwaiting: stats['screening-stat-awaiting'].textContent,
+                    statScreened: stats['screening-stat-screened'].textContent,
+                    statHits: stats['screening-stat-hits'].textContent
+                  }));
+                })().catch((err) => {
+                  console.error(err);
+                  process.exit(1);
+                });
+                """
+            ),
+        ]
+    )
+
+
+class TestScreeningQueueErrorState:
+    def test_queue_failure_clears_pager_and_dashes_stat_cards(self):
+        """Audit regression: on API failure the cards reset to 0 while the
+        pager kept asserting 'Page 1 of 12' over zero rows."""
+        html = _read_backoffice()
+        result = _run_node(_queue_error_state_runtime_js(html))
+        assert result["loadError"] == "Failed to fetch"
+        assert result["pagination"] is None
+        assert result["pagerHtml"] == ""
+        assert "Page" not in result["pagerHtml"]
+        assert result["statusText"] == "Failed to fetch"
+        assert result["statAwaiting"] == "—"
+        assert result["statScreened"] == "—"
+        assert result["statHits"] == "—"
+
+    def test_follow_up_business_label_is_a_state_not_an_action(self):
+        html = _read_backoffice()
+        assert "if (key === 'follow up required' || key === 'review follow up required') return 'Follow-up Required';" in html
+        assert "return 'Request More Information';\n  return raw;" not in html
