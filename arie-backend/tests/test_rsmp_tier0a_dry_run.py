@@ -56,6 +56,23 @@ def test_dry_run_is_offline_pseudonymized_and_restores_flag(monkeypatch):
     assert report["applications"][0]["proposed_flag_enabled"]["approval_route"]
     assert report["applications"][0]["application_key"] != "app-1"
     assert "app-1" not in str(report)
+    required_evidence_fields = {
+        "family",
+        "raw_value",
+        "normalized_value",
+        "hash",
+        "application_id",
+        "request_id",
+        "config_version",
+        "status",
+        "resolution_status",
+        "controlled_id",
+        "canonical_label",
+        "score",
+    }
+    for item in report["applications"][0]["mapping_evidence"]:
+        assert required_evidence_fields <= item.keys()
+        assert item["status"] == item["resolution_status"]
     assert environment.flags.is_enabled(ACTIVATION_FLAG) is False
 
 

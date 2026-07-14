@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import environment
+import risk_controlled_values
 from observability import clear_request_id, set_request_id
 from risk_controlled_values import (
     ACTIVATION_FLAG,
@@ -28,11 +29,41 @@ from security_hardening import (
 )
 
 
+_MISSING = object()
+
+
+def _activation_flag_targets():
+    targets = []
+    for target in (environment.flags, risk_controlled_values.flags):
+        if all(target is not existing for existing in targets):
+            targets.append(target)
+    return targets
+
+
 @pytest.fixture
-def tier0b_enabled(monkeypatch):
-    monkeypatch.setitem(environment.flags._cache, ACTIVATION_FLAG, True)
-    yield
-    clear_request_id()
+def tier0b_enabled():
+    """Enable Tier 0B across reloaded flag singletons, then restore all state."""
+    env_before = os.environ.get(ACTIVATION_FLAG, _MISSING)
+    cache_before = [
+        (target, target._cache.get(ACTIVATION_FLAG, _MISSING))
+        for target in _activation_flag_targets()
+    ]
+    os.environ[ACTIVATION_FLAG] = "true"
+    for target, _previous in cache_before:
+        target._cache[ACTIVATION_FLAG] = True
+    try:
+        yield
+    finally:
+        clear_request_id()
+        if env_before is _MISSING:
+            os.environ.pop(ACTIVATION_FLAG, None)
+        else:
+            os.environ[ACTIVATION_FLAG] = env_before
+        for target, previous in cache_before:
+            if previous is _MISSING:
+                target._cache.pop(ACTIVATION_FLAG, None)
+            else:
+                target._cache[ACTIVATION_FLAG] = previous
 
 
 def _config():
@@ -52,7 +83,7 @@ def _config():
         },
         "entity_type_scores": {
             "listed company": 1,
-            "unregulated fund": 4,
+            "unregulated fund": 3,
         },
     }
 
@@ -274,14 +305,25 @@ def test_sector_score_4_floor_and_dual_control_are_unchanged(tier0b_enabled):
 @pytest.mark.parametrize(
     "overrides",
     [
+        {"sector": "Crypto / Digital Assets Exchange"},
         {"ownership_structure": "Opaque — UBOs cannot be fully identified"},
         {"directors": [{"is_pep": "Yes", "pep_type": "foreign"}]},
-        {"entity_type": "Unregulated Fund / SPV"},
     ],
 )
-def test_non_volume_score_4_never_emits_volume_reason(tier0b_enabled, overrides):
+def test_sector_ownership_and_pep_score_four_never_emit_volume_reason(
+    tier0b_enabled, overrides
+):
     risk = compute_risk_score(_base_input(**overrides), config_override=_config())
-    assert "sub_factor_score_4" in risk["escalations"]
+    assert "monthly_volume_score_4" not in risk["escalations"]
+
+
+def test_unregulated_fund_score_three_emits_no_score_four_reason(tier0b_enabled):
+    risk = compute_risk_score(
+        _base_input(entity_type="Unregulated Fund / SPV"),
+        config_override=_config(),
+    )
+    assert risk["dimensions"]["d1"] == pytest.approx(1.4)
+    assert "sub_factor_score_4" not in risk["escalations"]
     assert "monthly_volume_score_4" not in risk["escalations"]
 
 

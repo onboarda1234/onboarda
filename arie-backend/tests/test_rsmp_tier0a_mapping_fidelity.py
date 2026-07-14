@@ -368,15 +368,37 @@ def test_private_banking_score_four_preserves_existing_sector_high_floor(mapping
 
 
 def test_founder_config_contract_changes_are_inert_while_flag_is_off():
+    # Pin the legacy configuration instead of inheriting whichever disposable
+    # test DB a preceding module happened to seed. Its key order mirrors the
+    # existing seed and therefore preserves the flag-OFF substring behavior.
+    legacy_config = {
+        "country_risk_scores": {"united kingdom": 1},
+        "sector_risk_scores": {"bank": 1, "software": 2},
+        "entity_type_scores": {
+            "regulated": 1,
+            "unregulated fund": 4,
+            "listed company": 1,
+        },
+    }
     _set_mapping_fidelity_state(False)
-    legacy_sector = compute_risk_score(_base_input(sector="Private Banking"))
-    legacy_entity = compute_risk_score(_base_input(entity_type="Unregulated Fund / SPV"))
+    legacy_sector = compute_risk_score(
+        _base_input(sector="Private Banking"), config_override=legacy_config
+    )
+    legacy_entity = compute_risk_score(
+        _base_input(entity_type="Unregulated Fund / SPV"),
+        config_override=legacy_config,
+    )
     assert legacy_sector["dimensions"]["d4"] == 1
-    assert legacy_entity["dimensions"]["d1"] == pytest.approx(1.2)
+    assert legacy_entity["dimensions"]["d1"] == pytest.approx(1.0)
 
     _set_mapping_fidelity_state(True)
-    approved_sector = compute_risk_score(_base_input(sector="Private Banking"))
-    approved_entity = compute_risk_score(_base_input(entity_type="Unregulated Fund / SPV"))
+    approved_sector = compute_risk_score(
+        _base_input(sector="Private Banking"), config_override=legacy_config
+    )
+    approved_entity = compute_risk_score(
+        _base_input(entity_type="Unregulated Fund / SPV"),
+        config_override=legacy_config,
+    )
     assert approved_sector["dimensions"]["d4"] == 4
     assert approved_entity["dimensions"]["d1"] == pytest.approx(1.4)
 

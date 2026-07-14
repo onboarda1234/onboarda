@@ -29,6 +29,7 @@ from risk_controlled_values import (
     COUNTRY_EXACT_ALIASES,
     FAMILY_RECORDS,
     REGISTRY_VERSION,
+    controlled_value_hash,
     normalize_controlled_value,
     resolve_controlled_score,
 )
@@ -125,6 +126,58 @@ def _mapping_evidence(scoring_input: Mapping[str, Any], config: Mapping[str, Any
     return evidence
 
 
+_REPLAY_EVIDENCE_FIELDS = frozenset({
+    "family",
+    "raw_value",
+    "normalized_value",
+    "hash",
+    "application_id",
+    "request_id",
+    "config_version",
+    "status",
+    "resolution_status",
+    "controlled_id",
+    "canonical_label",
+    "score",
+})
+
+
+def _portable_mapping_evidence(
+    value: Mapping[str, Any],
+    *,
+    application_key: str,
+    config_version: str,
+) -> Dict[str, Any]:
+    """Normalize runtime/fallback evidence to the portable replay schema."""
+    item = dict(value)
+    family = str(item.get("family") or "").strip()
+    status = str(item.get("resolution_status") or item.get("status") or "").strip()
+    if not family or not status:
+        raise ValueError("Replay mapping evidence requires family and status")
+
+    normalized_value = str(item.get("normalized_value") or "")
+    item.update({
+        "family": family,
+        "normalized_value": normalized_value,
+        "hash": str(item.get("hash") or controlled_value_hash(family, normalized_value)),
+        "application_id": application_key,
+        "request_id": str(item.get("request_id") or ""),
+        "config_version": str(item.get("config_version") or config_version),
+        "status": status,
+        "resolution_status": status,
+        "controlled_id": str(item.get("controlled_id") or ""),
+        "canonical_label": str(
+            item.get("canonical_label") or item.get("canonical_value") or ""
+        ),
+        "score": item.get("score"),
+    })
+    item.setdefault("raw_value", "")
+    missing = _REPLAY_EVIDENCE_FIELDS.difference(item)
+    if missing:
+        raise ValueError(f"Replay mapping evidence missing fields: {sorted(missing)}")
+    return item
+
+
 def _policy_routes(risk: Mapping[str, Any]) -> Dict[str, Any]:
     edd = evaluate_edd_routing({
         "final_risk_level": risk.get("final_risk_level") or risk.get("level"),
@@ -181,18 +234,21 @@ def run_dry_run(payload: Mapping[str, Any]) -> Dict[str, Any]:
             proposed = compute_risk_score(scoring_input, config_override=config)
         legacy_routes = _policy_routes(legacy)
         proposed_routes = _policy_routes(proposed)
-        evidence = [
-            dict(item)
-            for item in (
-                proposed.get("controlled_mapping_evidence")
-                or _mapping_evidence(scoring_input, config)
-            )
-        ]
+        raw_evidence = (
+            proposed.get("controlled_mapping_evidence")
+            or _mapping_evidence(scoring_input, config)
+        )
         # Runtime persistence retains the real application_id. The portable
         # founder-review artifact pseudonymizes it to avoid exporting a direct
         # staging identifier.
-        for item in evidence:
-            item["application_id"] = application_key
+        evidence = [
+            _portable_mapping_evidence(
+                item,
+                application_key=application_key,
+                config_version=str(config.get("updated_at") or REGISTRY_VERSION),
+            )
+            for item in raw_evidence
+        ]
         for item in evidence:
             resolution_status = item.get("resolution_status", item.get("status"))
             if str(resolution_status or "").startswith("unresolved"):
