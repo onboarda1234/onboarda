@@ -1651,3 +1651,104 @@ def test_status_filter_supports_failed_follow_up_and_stale():
     assert [r["subject_name"] for r in server._filter_screening_queue_rows(rows, {"status": "follow_up_required"})] == ["FU"]
     assert [r["subject_name"] for r in server._filter_screening_queue_rows(rows, {"status": "stale"})] == ["ST"]
     assert [r["subject_name"] for r in server._filter_screening_queue_rows(rows, {"status": "no_match"})] == ["OK"]
+
+
+def test_legacy_registry_wrapper_never_votes_on_provider_mode():
+    """Audit regression (ARF-PR-SCR-GATE-API/BROWSER-20260618074409).
+
+    Legacy report shapes use the top-level company_screening as a registry
+    container (OpenCorporates lookup + nested sanctions). The container has no
+    provider execution signal, derives vacuously as 'pending', and must never
+    out-vote the genuine live AML sub-record — that is how officer-cleared
+    live rows rendered "Screening Pending — Blocks Approval" next to "Clear".
+    """
+    import server
+    from screening_state import provider_mode_from_record
+
+    wrapper = {"found": True, "source": "opencorporates", "companies": [{"name": "PR Screening Gate Api Case 7 Ltd"}]}
+    sanctions = {"api_status": "live", "source": "sumsub", "matched": True, "results": [{"name": "hit"}]}
+    company_screening = dict(wrapper, sanctions=sanctions)
+
+    assert server._entity_record_is_aml_provider_record(company_screening) is False
+    assert server._entity_record_is_aml_provider_record(sanctions) is True
+
+    selected = server._entity_provider_mode_record(company_screening, sanctions)
+    assert selected is sanctions
+    assert provider_mode_from_record(selected) == "live_provider"
+
+    mode = server._screening_queue_row_mode(
+        None, "completed_match", "reviewed_false_positive_cleared", ["Registry found"], selected
+    )
+    assert mode == "live"
+
+    # A genuine AML record that is pending/simulated still vetoes fail-closed.
+    pending_aml = {"api_status": "pending", "source": "complyadvantage"}
+    assert server._entity_record_is_aml_provider_record(pending_aml) is True
+    selected = server._entity_provider_mode_record(company_screening, pending_aml)
+    assert selected is pending_aml
+    # An identity-only CA record with no terminal status stays fail-closed too.
+    ca_no_status = {"source": "complyadvantage", "matched": False}
+    assert server._entity_record_is_aml_provider_record(ca_no_status) is True
+    assert provider_mode_from_record(ca_no_status) == "pending"
+
+
+def test_live_record_asserts_live_over_stale_stored_report_mode():
+    """A live terminal record must not inherit a stale stored screening_mode."""
+    import server
+
+    live = {"api_status": "live", "source": "complyadvantage", "matched": False, "results": []}
+    # Stored report snapshot says pending (written before the terminal webhook).
+    assert server._screening_queue_row_mode("pending", "completed_clear", "screened_no_match", [], live) == "live"
+    # Absent stored mode used to render "unknown" (Unverified — Blocks Approval).
+    assert server._screening_queue_row_mode(None, "completed_clear", "screened_no_match", [], live) == "live"
+    # No usable provider record: stored report mode remains the fallback.
+    assert server._screening_queue_row_mode("pending", "completed_clear", "screened_no_match", [], {}) == "pending"
+    assert server._screening_queue_row_mode(None, "completed_clear", "screened_no_match", [], {}) == "unknown"
+    # Fail-closed vetoes still precede the live assertion.
+    assert server._screening_queue_row_mode(
+        "live", "pending_provider", "screening_pending", [], live
+    ) == "pending"
+    assert server._screening_queue_row_mode(
+        "live", "completed_clear", "screened_no_match", ["codex-smoke seed"], live
+    ) == "simulated"
+
+
+def test_follow_up_and_officer_cleared_keep_distinct_business_labels():
+    """Audit regression: follow-up rows were labelled 'Review Required' and
+    officer-cleared matches flattened to bare 'Clear'."""
+    from screening_state import resolve_screening_queue_state
+
+    follow_up = resolve_screening_queue_state({
+        "status_key": "follow_up_required",
+        "review_disposition": "follow_up_required",
+        "screening_state": "completed_match",
+        "terminal": True,
+        "total_hits": 1,
+    })
+    assert follow_up["status_key"] == "follow_up_required"
+    assert follow_up["canonical_status_key"] == "follow_up_required"
+    assert follow_up["canonical_status"] == "Follow-up Required"
+    assert follow_up["display_status_label"] == "Follow-up Required"
+
+    cleared = resolve_screening_queue_state({
+        "status_key": "reviewed_false_positive_cleared",
+        "review_disposition": "cleared",
+        "review_disposition_code": "false_positive_cleared",
+        "reviewer_id": "u1",
+        "review_rationale": "documented",
+        "reviewed_at": "2026-06-18T00:00:00Z",
+        "audit_confirmed": True,
+        "screening_state": "completed_match",
+        "screening_truth_state": "completed_match",
+        "provider_mode": "live_provider",
+        "terminal": True,
+        "total_hits": 1,
+    })
+    assert cleared["status_key"] == "cleared_by_officer"
+    assert cleared["canonical_status_key"] == "cleared_by_officer"
+    assert cleared["canonical_status"] == "Cleared False Positive"
+
+    # Filter buckets are unchanged: cleared -> no_match, follow-up -> its own.
+    import server
+    assert server._screening_queue_status_group(cleared) == "no_match"
+    assert server._screening_queue_status_group(follow_up) == "follow_up_required"

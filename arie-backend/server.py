@@ -19990,6 +19990,28 @@ _PROVIDER_MODE_SEVERITY_RANK = {
 }
 
 
+_AML_PROVIDER_TOKENS = ("complyadvantage", "sumsub")
+
+
+def _entity_record_is_aml_provider_record(record):
+    """True when the record itself claims an AML provider identity or status.
+
+    Legacy report shapes use the top-level ``company_screening`` as a registry
+    container (OpenCorporates lookup fields such as ``found``/``companies``
+    with the real AML answer nested in ``sanctions``). A container carries no
+    provider execution signal, so deriving a provider mode from it reads
+    vacuously as "pending" — which must never out-vote the genuine AML record
+    (that is how officer-cleared live rows rendered "Screening Pending —
+    Blocks Approval").
+    """
+    if not isinstance(record, dict) or not record:
+        return False
+    if record.get("api_status") or record.get("provider_mode") or record.get("screening_mode"):
+        return True
+    identity = " ".join(str(record.get(key) or "") for key in ("provider", "source")).lower()
+    return any(token in identity for token in _AML_PROVIDER_TOKENS)
+
+
 def _entity_provider_mode_record(company_screening, company_sanctions):
     """Select the provider record that drives the entity row's mode badge.
 
@@ -20000,15 +20022,20 @@ def _entity_provider_mode_record(company_screening, company_sanctions):
     and fell through to ``pending`` — rendering a false "Screening Pending —
     Blocks Approval" badge on rows whose real state was terminal clear/match.
 
-    Instead, derive the provider mode of each real record independently and
-    return the record with the least defensible mode (fail-closed): a pending
-    or sandbox sub-record still surfaces, while two live records read as live.
-    Ties keep the first record considered — ``sanctions`` before the top-level
-    company record, since sanctions is the entity AML source of truth.
+    Instead, derive the provider mode of each real AML record independently
+    and return the record with the least defensible mode (fail-closed): a
+    pending or sandbox AML sub-record still surfaces, while two live records
+    read as live. Only records that claim an AML provider identity/status
+    qualify (see ``_entity_record_is_aml_provider_record``) — registry
+    containers do not vote. Ties keep the first record considered —
+    ``sanctions`` before the top-level company record, since sanctions is the
+    entity AML source of truth.
     """
     candidates = []
     for record in (company_sanctions, company_screening):
-        if isinstance(record, dict) and record and not any(record is seen for seen in candidates):
+        if not _entity_record_is_aml_provider_record(record):
+            continue
+        if not any(record is seen for seen in candidates):
             candidates.append(record)
     if not candidates:
         return {}
@@ -20055,6 +20082,14 @@ def _screening_queue_row_mode(report_mode, state, status_key, entity_context=Non
     # progress; rows from simulated legacy enrichment must not show as live.
     if "opencorporates" in combined and not OPENCORPORATES_API_KEY:
         return "simulated" if report_mode != "live" else "mixed"
+    if provider_mode == "live_provider":
+        # A live terminal provider record asserts live provenance directly.
+        # The stored report-level mode is a write-time snapshot that can go
+        # stale (provider state advances via webhooks after persistence) and
+        # must not out-vote the row's own record. Every fail-closed veto above
+        # (blocking modes, simulated tokens, explicit pending status/state,
+        # legacy enrichment) has already had its chance by this point.
+        return "live"
     return report_mode or "unknown"
 
 
@@ -23858,12 +23893,18 @@ class ScreeningReviewHandler(BaseHandler):
             and existing_review_fields.get("review_four_eyes_status") == "pending_second_review"
             and disposition != "cleared"
         ):
+            locked_message = (
+                "This subject's screening review is locked: a false-positive "
+                "clearance is awaiting second review. A different reviewer must "
+                "complete or reject that clearance before a "
+                f"{disposition.replace('_', ' ')} disposition can be recorded."
+            )
             self.log_governance_attempt(
                 user, "screening.review_disposition", app["ref"], "rejected", 409,
-                "This screening clear already awaits a second reviewer",
+                locked_message,
                 attempt_summary, db=db)
             db.close()
-            return self.error("This screening clear already awaits a second reviewer", 409)
+            return self.error(locked_message, 409)
 
         sensitivity_flags = _screening_sensitive_flags(
             app,
