@@ -14,6 +14,12 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from risk_controlled_values import (
+    mapping_fidelity_enabled,
+    resolve_controlled_score,
+    resolve_tier0a_country_alias,
+)
+
 logger = logging.getLogger("arie")
 
 CONTROLLED_PRESCREENING_CORRECTION_SOURCE = "application_overview_prescreening_correction_mode"
@@ -214,6 +220,8 @@ def normalize_country_key(country):
     for prefix in ("republic of ", "state of ", "the ", "federation of "):
         if value.startswith(prefix) and len(value) > len(prefix):
             value = value[len(prefix):].strip()
+    if mapping_fidelity_enabled():
+        value = resolve_tier0a_country_alias(value)
     return COUNTRY_ALIASES.get(value, value)
 
 
@@ -822,6 +830,12 @@ def score_sector(sector_name, config_sector_scores=None):
     """Return risk score 1-4 for a sector. Uses DB config if provided, else hardcoded."""
     if not sector_name:
         return 2
+    if mapping_fidelity_enabled():
+        resolution = resolve_controlled_score(
+            "sector", sector_name, configured_scores=config_sector_scores
+        )
+        if resolution.mapped:
+            return int(resolution.score)
     s = sector_name.lower()
     # Type guard: if config is not a dict, discard it and log
     if config_sector_scores is not None and not isinstance(config_sector_scores, dict):
@@ -842,6 +856,12 @@ def _score_entity_type(entity_type_str, config_entity_scores=None):
     """Return risk score 1-4 for an entity type. Uses DB config if provided, else hardcoded."""
     if not entity_type_str:
         return 2
+    if mapping_fidelity_enabled():
+        resolution = resolve_controlled_score(
+            "entity_type", entity_type_str, configured_scores=config_entity_scores
+        )
+        if resolution.mapped:
+            return int(resolution.score)
     et = entity_type_str.lower()
     # Hardcoded fallback entity map
     _default_entity_map = {
@@ -1064,16 +1084,22 @@ def compute_risk_score(app_data, config_override=None):
         d1_w = [0.20, 0.20, 0.25, 0.15, 0.10, 0.10]
 
     # D1: Customer / Entity Risk
-    owner_map = {"simple": 1, "1-2": 2, "3+": 3, "complex": 4}
+    owner_map = {"simple": 1, "1-2": 2, "3+": 3, "complex": 4, "opaque": 4}
 
     d1_entity = _score_entity_type(data.get("entity_type"), entity_scores)
 
     d1_owner = 2
-    os_val = (data.get("ownership_structure") or "").lower()
-    for k, v in owner_map.items():
-        if k in os_val:
-            d1_owner = v
-            break
+    owner_resolution = None
+    if mapping_fidelity_enabled():
+        owner_resolution = resolve_controlled_score("ownership", data.get("ownership_structure"))
+    if owner_resolution and owner_resolution.mapped:
+        d1_owner = int(owner_resolution.score)
+    else:
+        os_val = (data.get("ownership_structure") or "").lower()
+        for k, v in owner_map.items():
+            if k in os_val:
+                d1_owner = v
+                break
 
     # D1.3 PEP Status — 3-tier scoring (v1.6)
     all_persons = data.get("directors", []) + data.get("ubos", [])
@@ -1218,20 +1244,33 @@ def compute_risk_score(app_data, config_override=None):
 
     # D3.2 Monthly volume — ordered checks to avoid substring false matches
     d3_vol = 2
-    vol = (data.get("monthly_volume") or data.get("expected_volume") or "").lower()
-    if "over" in vol or "5,000,000" in vol or "5000000" in vol or "> 5" in vol:
-        d3_vol = 4
-    elif "500,000" in vol or "500000" in vol:
-        d3_vol = 3
-    elif "50,000" in vol or "50000" in vol:
-        d3_vol = 2
-    elif "under" in vol or "< 50" in vol or "below" in vol:
-        d3_vol = 1
+    raw_volume = data.get("monthly_volume") or data.get("expected_volume") or ""
+    volume_resolution = None
+    if mapping_fidelity_enabled():
+        volume_resolution = resolve_controlled_score("monthly_volume", raw_volume)
+    if volume_resolution and volume_resolution.mapped:
+        d3_vol = int(volume_resolution.score)
+    else:
+        vol = str(raw_volume).lower()
+        if "over" in vol or "5,000,000" in vol or "5000000" in vol or "> 5" in vol:
+            d3_vol = 4
+        elif "500,000" in vol or "500000" in vol:
+            d3_vol = 3
+        elif "50,000" in vol or "50000" in vol:
+            d3_vol = 2
+        elif "under" in vol or "< 50" in vol or "below" in vol:
+            d3_vol = 1
 
     # D3.3 Transaction Complexity & Corridors — scored from data (v1.6)
     d3_complexity = 2  # default
-    complexity_val = (data.get("transaction_complexity") or data.get("payment_corridors") or "").lower()
-    if "simple" in complexity_val or "single currency" in complexity_val or "domestic" in complexity_val:
+    raw_complexity = data.get("transaction_complexity") or data.get("payment_corridors") or ""
+    complexity_resolution = None
+    if mapping_fidelity_enabled():
+        complexity_resolution = resolve_controlled_score("complexity", raw_complexity)
+    complexity_val = str(raw_complexity).lower()
+    if complexity_resolution and complexity_resolution.mapped:
+        d3_complexity = int(complexity_resolution.score)
+    elif "simple" in complexity_val or "single currency" in complexity_val or "domestic" in complexity_val:
         d3_complexity = 1
     elif "standard" in complexity_val or "multi-currency" in complexity_val:
         d3_complexity = 2
@@ -1266,11 +1305,18 @@ def compute_risk_score(app_data, config_override=None):
     # D5.1 Introduction / Referral Method
     intro_map = {"direct": 1, "regulated": 1, "non-regulated": 3, "unsolicited": 4}
     d5_intro = 2
-    intro = (data.get("introduction_method") or "").lower()
-    for k, v in intro_map.items():
-        if k in intro:
-            d5_intro = v
-            break
+    raw_intro = data.get("introduction_method") or ""
+    intro_resolution = None
+    if mapping_fidelity_enabled():
+        intro_resolution = resolve_controlled_score("introduction", raw_intro)
+    if intro_resolution and intro_resolution.mapped:
+        d5_intro = int(intro_resolution.score)
+    else:
+        intro = str(raw_intro).lower()
+        for k, v in intro_map.items():
+            if k in intro:
+                d5_intro = v
+                break
 
     # D5.2 Customer Interaction Type — scored from data (v1.6)
     d5_interaction = 2  # default = non-face-to-face low risk

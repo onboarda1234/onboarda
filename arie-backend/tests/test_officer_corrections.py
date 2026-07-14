@@ -634,7 +634,13 @@ def test_pr410b_selected_risk_fields_trigger_backend_recompute(officer_correctio
     assert "risk_after" in body["after_state"]
 
     detail = _detail(base_url, case["app_id"])
-    assert detail["officer_correction_display_values"][field_path] == new_value
+    expected_display_value = (
+        "Opaque — UBOs cannot be fully identified"
+        if field_path == "ownership_structure"
+        and new_value == "Complex multi-jurisdiction / opaque structure"
+        else new_value
+    )
+    assert detail["officer_correction_display_values"][field_path] == expected_display_value
     assert detail["memo_is_stale"] is True
     assert detail["officer_correction_display_metadata"][field_path]["risk_relevant"] is True
 
@@ -651,7 +657,7 @@ def test_pr410b_selected_risk_fields_trigger_backend_recompute(officer_correctio
     if field_path == "entity_type":
         assert stored["entity_type"] == new_value
     if field_path == "ownership_structure":
-        assert stored["ownership_structure"] == new_value
+        assert stored["ownership_structure"] == expected_display_value
 
 
 def test_pr410b_controlled_endpoint_rejects_analyst_for_risk_relevant_correction(officer_correction_api_server):
