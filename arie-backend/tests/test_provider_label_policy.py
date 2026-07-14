@@ -109,13 +109,23 @@ def test_complyadvantage_is_not_labelled_identity_verification():
     assert _scan_for(prohibited) == []
 
 
-def test_screening_queue_filter_is_source_not_runtime_provider_selector():
+def test_screening_queue_has_no_runtime_provider_selector():
+    """The screening queue must not offer a provider/source selector.
+
+    CA Mesh is the only active AML screening source; Sumsub is IDV/KYC and
+    OpenCorporates is registry enrichment. A "Source" dropdown on the
+    screening queue implied those were selectable screening sources, which is
+    the exact confusion the provider-truth policy exists to prevent. Legacy
+    rows remain findable via queue search (provider names are indexed in the
+    search blob) and the backend `provider=` filter param stays accepted for
+    API compatibility.
+    """
     html = (REPO_ROOT / "arie-backoffice.html").read_text()
-    assert ">Source" in html
+    assert "screening-filter-provider" not in html
     assert "Provider/source" not in html
-    assert "ComplyAdvantage Mesh screening source" in html
-    assert "Sumsub IDV/KYC source" in html
-    assert "OpenCorporates registry source" in html
+    assert "ComplyAdvantage Mesh screening source" not in html
+    assert "Sumsub IDV/KYC source" not in html
+    assert "OpenCorporates registry source" not in html
 
 
 def test_provider_status_panel_uses_backend_runtime_truth():

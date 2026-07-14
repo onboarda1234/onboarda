@@ -1547,3 +1547,107 @@ def test_clean_ca_entity_row_mode_is_live_end_to_end():
         "live", "completed_clear", "screened_no_match", [], record
     )
     assert mode == "live"
+
+
+def test_pep_filter_tags_are_membership_not_single_bucket():
+    """PEP filter semantics: a row can satisfy several PEP filters at once.
+
+    'review' explicitly means a terminal hit in another dimension only
+    (sanctions / adverse media) — it must never count as a provider PEP hit.
+    """
+    import server
+
+    # Sanctions-only person: NOT a provider PEP hit (was the false positive).
+    tags = server._screening_queue_pep_tags(
+        {"pep_declared_status": "not_declared", "pep_screening_status": "review"}
+    )
+    assert "provider_pep_hit" not in tags
+    assert tags == {"not_declared"}
+
+    # Declared PEP with a live provider PEP match: findable under BOTH.
+    tags = server._screening_queue_pep_tags(
+        {"pep_declared_status": "declared", "pep_screening_status": "match"}
+    )
+    assert tags == {"declared", "provider_pep_hit"}
+
+    # Non-declared subject with a provider PEP match: findable under BOTH.
+    tags = server._screening_queue_pep_tags(
+        {"pep_declared_status": "not_declared", "pep_screening_status": "match"}
+    )
+    assert tags == {"not_declared", "provider_pep_hit"}
+
+    # Entity rows are N/A for PEP.
+    tags = server._screening_queue_pep_tags(
+        {"pep_declared_status": "not_applicable", "pep_screening_status": "not_applicable"}
+    )
+    assert tags == {"na"}
+
+
+def test_pep_filter_rows_returns_all_provider_pep_hits_and_no_false_positives():
+    import server
+
+    declared_with_hit = {
+        "subject_name": "Declared Hit", "subject_type": "director",
+        "pep_declared_status": "declared", "pep_screening_status": "match",
+    }
+    undeclared_with_hit = {
+        "subject_name": "Undeclared Hit", "subject_type": "ubo",
+        "pep_declared_status": "not_declared", "pep_screening_status": "match",
+    }
+    sanctions_only = {
+        "subject_name": "Sanctions Only", "subject_type": "director",
+        "pep_declared_status": "not_declared", "pep_screening_status": "review",
+    }
+    entity = {
+        "subject_name": "Entity Co", "subject_type": "entity",
+        "pep_declared_status": "not_applicable", "pep_screening_status": "not_applicable",
+    }
+    rows = [declared_with_hit, undeclared_with_hit, sanctions_only, entity]
+
+    hits = server._filter_screening_queue_rows(rows, {"pep": "provider_pep_hit"})
+    assert [r["subject_name"] for r in hits] == ["Declared Hit", "Undeclared Hit"]
+
+    declared = server._filter_screening_queue_rows(rows, {"pep": "declared"})
+    assert [r["subject_name"] for r in declared] == ["Declared Hit"]
+
+    not_declared = server._filter_screening_queue_rows(rows, {"pep": "not_declared"})
+    assert [r["subject_name"] for r in not_declared] == ["Undeclared Hit", "Sanctions Only"]
+
+    na = server._filter_screening_queue_rows(rows, {"pep": "na"})
+    assert [r["subject_name"] for r in na] == ["Entity Co"]
+
+
+def test_status_filter_match_bucket_covers_all_confirmed_match_codes():
+    """true_match / material_concern are confirmed matches for filtering even
+    though the queue resolver renders them with an escalated status; the
+    escalated bucket keeps pure escalation dispositions."""
+    import server
+
+    for canonical in ("confirmed_match", "true_match", "material_concern"):
+        row = {"status_key": "escalated", "canonical_disposition": canonical}
+        assert server._screening_queue_status_group(row) == "match", canonical
+
+    row = {"status_key": "escalated", "canonical_disposition": "escalated_to_edd"}
+    assert server._screening_queue_status_group(row) == "escalated"
+    row = {"status_key": "escalated", "review_disposition": "escalated"}
+    assert server._screening_queue_status_group(row) == "escalated"
+
+
+def test_status_filter_supports_failed_follow_up_and_stale():
+    """The operationally urgent states must be filterable."""
+    import server
+
+    failed_rows = [
+        {"subject_name": "F1", "status_key": "failed"},
+        {"subject_name": "F2", "status_key": "screening_not_configured"},
+        {"subject_name": "F3", "status_key": "screening_unavailable"},
+    ]
+    follow_up_row = {"subject_name": "FU", "status_key": "follow_up_required"}
+    stale_row = {"subject_name": "ST", "status_key": "stale"}
+    clear_row = {"subject_name": "OK", "status_key": "clear"}
+    rows = failed_rows + [follow_up_row, stale_row, clear_row]
+
+    assert [r["subject_name"] for r in server._filter_screening_queue_rows(rows, {"status": "failed"})] == ["F1", "F2", "F3"]
+    assert [r["subject_name"] for r in server._filter_screening_queue_rows(rows, {"status": "follow_up_required"})] == ["FU"]
+    assert [r["subject_name"] for r in server._filter_screening_queue_rows(rows, {"status": "stale"})] == ["ST"]
+    assert [r["subject_name"] for r in server._filter_screening_queue_rows(rows, {"status": "no_match"})] == ["OK"]

@@ -1405,3 +1405,16 @@ class TestScreeningQueuePagerAndLayout:
         container_snippet = html[container_idx:tbody_idx]
         assert "overflow-x:auto" in container_snippet
         assert "overflow:hidden" not in container_snippet
+
+    def test_status_filter_offers_actionable_states_and_no_source_dropdown(self):
+        """Officers must be able to filter to failed / follow-up / stale rows;
+        the provider 'Source' dropdown is removed (CA is the only active AML
+        screening source — legacy rows remain findable via queue search)."""
+        html = _read_backoffice()
+        filter_start = html.index('id="screening-filter-status"')
+        filter_end = html.index("</select>", filter_start)
+        status_options = html[filter_start:filter_end]
+        assert '<option value="follow_up_required">Follow-up Required</option>' in status_options
+        assert '<option value="failed">Failed / Provider Error</option>' in status_options
+        assert '<option value="stale">Stale / Requires Refresh</option>' in status_options
+        assert "screening-filter-provider" not in html

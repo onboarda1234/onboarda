@@ -1891,6 +1891,9 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <option value="match">Match/Confirmed</option>
           <option value="escalated">Escalated</option>
           <option value="pending_provider">Pending Provider</option>
+          <option value="follow_up_required">Follow-up Required</option>
+          <option value="failed">Failed / Provider Error</option>
+          <option value="stale">Stale / Requires Refresh</option>
         </select>
       </label>
       <label style="font-size:11px;font-weight:700;color:var(--text2);">Type
@@ -1900,15 +1903,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <option value="director">Director</option>
           <option value="ubo">UBO</option>
           <option value="intermediary">Intermediary</option>
-        </select>
-      </label>
-      <label style="font-size:11px;font-weight:700;color:var(--text2);">Source
-        <select class="form-select" id="screening-filter-provider" onchange="applyScreeningQueueFilters()" style="margin-top:6px;">
-          <option value="">All</option>
-          <option value="complyadvantage">ComplyAdvantage Mesh screening source</option>
-          <option value="sumsub">Sumsub IDV/KYC source</option>
-          <option value="opencorporates">OpenCorporates registry source</option>
-          <option value="other">Other available values</option>
         </select>
       </label>
       <label style="font-size:11px;font-weight:700;color:var(--text2);">PEP declared/screening
@@ -6356,7 +6350,7 @@ var APPLICATIONS_SEARCH_DEBOUNCE = null;
 var SCREENING_QUEUE_PAGE_SIZE = 50;
 var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null, pagination:null, is_loading:false };
 var SCREENING_QUEUE_DIRTY = false;
-var SCREENING_QUEUE_FILTERS = { search:'', status:'', type:'', provider:'', pep:'', application_ref:'' };
+var SCREENING_QUEUE_FILTERS = { search:'', status:'', type:'', pep:'', application_ref:'' };
 var SCREENING_QUEUE_SEARCH_TIMER = null;
 var SCREENING_QUEUE_ACTIVE_REQUEST_ID = 0;
 var SCREENING_PROVIDER_STATUS = null;
@@ -13925,7 +13919,6 @@ function readScreeningQueueFiltersFromDom() {
     search: val('screening-queue-search'),
     status: val('screening-filter-status'),
     type: val('screening-filter-type'),
-    provider: val('screening-filter-provider'),
     pep: val('screening-filter-pep')
   };
   return SCREENING_QUEUE_FILTERS;
@@ -13957,7 +13950,7 @@ function applyScreeningQueueFilters() {
 }
 
 function resetScreeningQueueFilters() {
-  ['screening-queue-search', 'screening-filter-status', 'screening-filter-type', 'screening-filter-provider', 'screening-filter-pep'].forEach(function(id) {
+  ['screening-queue-search', 'screening-filter-status', 'screening-filter-type', 'screening-filter-pep'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.value = '';
   });
