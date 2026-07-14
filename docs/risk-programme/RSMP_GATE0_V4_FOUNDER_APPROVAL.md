@@ -4,11 +4,11 @@
 
 **Founder / accountable executive:** Aisha Sudally
 
-**Approval date:** 2026-07-13
+**Approval date:** 2026-07-14
 
 **GitHub baseline SHA:** `02eeae5062d1f1d8f77e7ca69c4629bac72c57b0`
 
-**Canonical Markdown SHA-256:** `90d55edb060bf2358e16f2eec00a63d9d77acdfe59e33c8debf3948174ea8565`
+**Canonical Markdown SHA-256:** `33cdcaac5f01ba431776a4b8a300aee4cb6e48f0d585d9c1665c726d655f66f0`
 
 **Operational status:** `HOLD — DRAFT PRS; FLAG OFF; NO MERGE, DEPLOYMENT, ACTIVATION, OR RECOMPUTATION`
 
@@ -16,7 +16,7 @@
 
 This is the Founder-approved Gate 0 v4 decision record for the RSMP Tier 0A′ and Tier 0B scope only. It supersedes the prior D01–D12 / eight-signatory Gate 0 record only for Tier 0A′/0B. It does not supersede that record for Tier 1B geography, later model work, production release governance, or any topic expressly deferred below.
 
-This record approves the exact decision catalogue in Sections 2–5. It does not approve any proposed C4 legacy alias other than the exact A9 legacy alias recorded below. The C4 founder-review list remains pending in draft PR #753. No runtime alias may be added from that proposal until the founder records explicit PR-review approval.
+This record approves the exact decision catalogue in Sections 2–5 and all 77 exact C4 legacy aliases in `RSMP_TIER0A_FOUNDER_ALIAS_DECISIONS.md`. The remaining 105 ambiguous rows stay quarantined and all nine synthetic/test markers stay rejected. The earlier 107-row quarantine count was the pre-correction count; `Investment Management` and `Cloud Services` were subsequently removed from quarantine by the founder-approved Gate 0 correction, leaving 105 actual quarantine rows. They must not be re-quarantined.
 
 Approval of this record is not a production-readiness claim. PR #753 and stacked PR #755 remain draft; the activation flag remains OFF; merge, deployment, activation, and Tier 0C recomputation are outside this approval.
 
@@ -33,7 +33,7 @@ Approval of this record is not a production-readiness claim. PR #753 and stacked
 | A7 | Every declared portal PEP role/type in Section 3.7 scores 4. This is an approved decision, but the current runtime gap must remain a HOLD item until separately implemented, reviewed, and replayed. |
 | A9 | Rename only: `Opaque — UBOs cannot be fully identified` scores 4; the former label is an exact legacy alias; the existing ownership floor and EDD route are preserved; no new option or transparent/opaque split is introduced. |
 | C2 | Monthly-volume score 4 uses only `monthly_volume_score_4`; it requires compliance review and introduces no automatic High tier floor. Generic score-4 evidence from sector, PEP, ownership, or other factors must not trigger the volume rule. |
-| C4 | Exact legacy aliases only. Ambiguous labels are `QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED`; synthetic/fixture markers are rejected, not mapped. The current proposed C4 list is not yet approved and is not part of runtime. |
+| C4 | The 77 exact legacy alias rows in the founder decision artifact are approved for flag-gated runtime implementation. The 105 remaining ambiguous labels are `QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED`; all nine synthetic/fixture markers are rejected, not mapped. No fuzzy or substring matching is approved. |
 | C9 | Tier 0A controlled-value migration applies only to sector, entity type, ownership, complexity, introduction, and monthly volume. It does not automatically apply to deferred countries or regions. |
 | D1a | Geography is limited to the three exact aliases in Section 4 plus blank/missing incorporation country as fail-closed unresolved. All other country scoring and all regions remain deferred to Tier 1B with the pilot manual FATF check. |
 | S1 | Unresolved sentinels use `stale:unmapped_<family>:<short_hash>`; raw labels are not embedded. Structured evidence is separate, coexistence is supported, and approval remains blocked until every unresolved mapping is cleared. |
@@ -85,7 +85,7 @@ Approval of this record is not a production-readiness claim. PR #753 and stacked
 | Charity / NGO / Non-Profit | 3 |
 | Government / Public Sector | 1 |
 
-`Private Banking` is a score-4 sector and the existing sector-score-4 High floor applies. These catalogue corrections are founder decisions only; runtime implementation is outside this documentation-only correction.
+`Private Banking` is a score-4 sector and the existing sector-score-4 High floor applies. These catalogue corrections are implemented only in the flag-gated Tier 0A resolver; the flag remains OFF and staging configuration is unchanged.
 
 The following 22 current portal options have no Gate 0 v4 score. They remain Lane B and must fail closed; no score is invented:
 
@@ -181,7 +181,7 @@ Only the exact approved `Over USD 5,000,000 per month` resolution emits `monthly
 | Family member of a PEP | 4 |
 | Close associate of a PEP | 4 |
 
-The baseline/current branch does not yet score every one of these categories at 4. This approval records the decision; it does not silently authorize an unreviewed runtime change. The gap remains a HOLD item and must be implemented and replayed under separately reviewed scope before activation.
+The baseline/current branch does not yet score every one of these categories at 4. PEP is outside the six-family C9 runtime boundary reviewed for PR #753, so the implementation remains a HOLD for a separate narrowly scoped PR and replay. Declared PEP retains the existing High floor.
 
 ## 4. Geography — D1a only
 
@@ -303,16 +303,19 @@ The following blocks preserve the founder directions verbatim for the decisions 
 
 ## 6. C4 alias approval boundary
 
-The only founder-approved legacy alias in this artifact is the exact A9 alias. The proposed C4 table prepared from the 640-application read-only replay is review evidence, not an approved mapping source. Until explicit founder/compliance approval is recorded in PR #753:
+Founder/accountable executive Aisha Sudally approved the exact 77-row C4 table on 2026-07-14. Runtime implementation is limited to those exact rows plus the previously approved A9 alias:
 
-- no proposed C4 alias may be added to runtime;
-- ambiguous labels remain `QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED`;
-- synthetic/fixture markers are rejected and never mapped to real sectors or entity types;
+- the 77 exact aliases may resolve only to their recorded canonical label and score;
+- the 105 remaining ambiguous rows remain `QUARANTINE — FOUNDER/COMPLIANCE DECISION REQUIRED`;
+- the nine synthetic/fixture markers are rejected and never mapped to real sectors or entity types;
+- case, whitespace, Unicode normalization, and dash-form normalization are permitted only as the existing identity-normalization boundary; fuzzy and substring matching remain prohibited;
 - the activation flag remains OFF.
+
+The founder instruction referenced 107 ambiguous rows, matching the pre-correction artifact. The authoritative corrected artifact has 105 because the later founder correction moved `Investment Management` and `Cloud Services` into the approved catalogue. This reconciliation preserves both later score decisions and every genuinely ambiguous row.
 
 ## 7. Activation and validation hold
 
-After C4 approval, PR #753 must first be rebased if `main` has advanced, only approved aliases may be implemented, and the read-only replay must be rerun against the same pinned population or a refreshed explicitly pinned snapshot. The report must include score, tier, approval-route and EDD-route changes; sentinel acquisitions/removals; bidirectional score changes; top remaining unresolved labels; quarantines; and every unexplained delta.
+After C4 implementation, the read-only replay must be rerun against the same pinned population or a refreshed explicitly pinned snapshot. The report must include score, tier, approval-route and EDD-route changes; sentinel acquisitions/removals; bidirectional score changes; top remaining unresolved labels; quarantines; and every unexplained delta. Founder review of that revised report remains required before any deliberate activation.
 
 Focused validation must continue to prove flag-OFF runtime equivalence, no schema/migration change, no default-to-2 within the migrated flag-enabled path, exact approved-alias resolution, quarantine of ambiguous labels, rejection of fixture markers, unchanged sector-score-4 High floor, and isolation of the volume-specific escalation reason.
 

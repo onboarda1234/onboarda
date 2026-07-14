@@ -15,6 +15,7 @@ import environment
 import risk_controlled_values
 from risk_controlled_values import (
     ACTIVATION_FLAG,
+    APPROVED_EXACT_ALIAS_ROWS,
     COMPLEXITY_RECORDS,
     ENTITY_TYPE_RECORDS,
     INTRODUCTION_RECORDS,
@@ -138,7 +139,10 @@ def test_activation_flag_is_off_by_default():
 
 def test_every_portal_sector_has_an_explicit_mapped_or_unresolved_disposition():
     portal = set(_actual_portal_sector_options())
-    assert portal == set(SECTOR_RECORDS) | set(UNRESOLVED_SECTOR_LABELS)
+    # Private Banking is approved in Gate 0 and resolvable behind the flag, but
+    # is not exposed as a new portal option before deliberate activation.
+    assert portal == (set(SECTOR_RECORDS) - {"Private Banking"}) | set(UNRESOLVED_SECTOR_LABELS)
+    assert set(SECTOR_RECORDS) - portal == {"Private Banking"}
     assert not (set(SECTOR_RECORDS) & set(UNRESOLVED_SECTOR_LABELS))
     assert portal == set(_portal_constant("PORTAL_SECTOR_OPTIONS"))
 
@@ -245,11 +249,149 @@ def test_corrected_gate0_catalogue_is_internally_consistent_and_hash_verified():
     assert hashlib.sha256(canonical.encode("utf-8")).hexdigest() == hash_match.group(1)
 
 
-@pytest.mark.parametrize("label", ["Investment Management", "Cloud Services", "Private Banking"])
-def test_gate0_sector_corrections_remain_pending_runtime_implementation(label):
-    resolution = resolve_controlled_score("sector", label)
-    assert resolution.status == "unresolved"
-    assert resolution.score is None
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "docs/risk-programme/RSMP_TIER0A_FOUNDER_ALIAS_DECISIONS.md",
+        "docs/risk-programme/RSMP_LIVE_CONFIG_DISPOSITION.md",
+        "docs/audits/RSMP_TIER0A_CI_ISOLATION_FIX.md",
+        "docs/risk-programme/RSMP_TIER0A_POST_APPROVAL_DRY_RUN.md",
+    ],
+)
+def test_amended_founder_artifact_canonical_hashes_are_verified(relative_path):
+    text = (Path(__file__).parents[2] / relative_path).read_text(encoding="utf-8")
+    hash_match = re.search(
+        r"(?m)^\*\*Canonical Markdown SHA-256:\*\* `([0-9a-f]{64})`$", text
+    )
+    assert hash_match
+    canonical = (
+        text[: hash_match.start(1)]
+        + "{{CANONICAL_SHA256}}"
+        + text[hash_match.end(1) :]
+    )
+    assert hashlib.sha256(canonical.encode("utf-8")).hexdigest() == hash_match.group(1)
+
+
+@pytest.mark.parametrize(
+    "family,label,score",
+    [
+        ("sector", "Family Office / Wealth Management", 3),
+        ("sector", "Private Banking", 4),
+        ("sector", "Investment Management", 3),
+        ("sector", "Cloud Services", 2),
+        ("sector", "Precious Metals / Gems", 3),
+        ("entity_type", "Unregulated Fund / SPV", 3),
+    ],
+)
+def test_founder_approved_config_contract_scores_are_fixed_behind_flag(family, label, score):
+    configured = {
+        "wealth management": 1,
+        "private banking": 1,
+        "investment management": 1,
+        "cloud services": 4,
+        "precious metals": 4,
+        "unregulated fund": 4,
+    }
+    resolution = resolve_controlled_score(family, label, configured_scores=configured)
+    assert resolution.status == "mapped"
+    assert resolution.score == score
+
+
+def _founder_alias_sections():
+    path = Path(__file__).parents[2] / "docs/risk-programme/RSMP_TIER0A_FOUNDER_ALIAS_DECISIONS.md"
+    text = path.read_text(encoding="utf-8")
+
+    def rows(prefix, start, end):
+        section = text.split(start, 1)[1].split(end, 1)[0]
+        parsed = []
+        for line in section.splitlines():
+            if not line.startswith(f"| {prefix}-"):
+                continue
+            parsed.append(tuple(value.strip() for value in line.strip("|").split("|")))
+        return parsed
+
+    return (
+        rows("A", "## A.", "## B."),
+        rows("B", "## B.", "## C."),
+        rows("C", "## C.", "## D."),
+    )
+
+
+def test_all_77_founder_approved_alias_rows_match_runtime_and_exact_scores():
+    approved_rows, _, _ = _founder_alias_sections()
+    documented = tuple(
+        (row_id, family, legacy, canonical, int(score))
+        for row_id, family, legacy, canonical, score, _count, decision in approved_rows
+        if decision == "APPROVED"
+    )
+    assert len(documented) == 77
+    assert documented == APPROVED_EXACT_ALIAS_ROWS
+    for row_id, family, legacy, canonical, score in documented:
+        resolution = resolve_controlled_score(family, legacy)
+        assert resolution.status == "mapped", row_id
+        assert resolution.canonical_label == canonical, row_id
+        assert resolution.score == score, row_id
+
+
+def test_quarantined_and_rejected_rows_remain_unresolved_without_score_two_fallback():
+    _, quarantined, rejected = _founder_alias_sections()
+    assert len(quarantined) == 105
+    assert len(rejected) == 9
+    for row in quarantined + rejected:
+        row_id, family, legacy = row[:3]
+        resolution = resolve_controlled_score(family, legacy)
+        assert resolution.status == "unresolved", row_id
+        assert resolution.score is None, row_id
+        assert resolution.controlled_id == "", row_id
+
+
+def test_alias_matching_does_not_use_fuzzy_or_substring_rules():
+    for family, value in (
+        ("sector", "Software consulting"),
+        ("entity_type", "SME holding trust"),
+        ("ownership", "Simple-ish ownership"),
+        ("complexity", "Predictable international arrangement"),
+        ("introduction", "Directly referred"),
+        ("monthly_volume", "Approximately USD 25,000 monthly"),
+    ):
+        resolution = resolve_controlled_score(family, value)
+        assert resolution.status == "unresolved", (family, value)
+        assert resolution.score is None, (family, value)
+
+
+def test_private_banking_score_four_preserves_existing_sector_high_floor(mapping_fidelity):
+    result = compute_risk_score(_base_input(sector="Private Banking"))
+    assert result["dimensions"]["d4"] == 4
+    assert result["level"] == "HIGH"
+    assert "floor_rule_high_risk_sector" in result["escalations"]
+    assert "very_high_risk_sector" in result["escalations"]
+
+
+def test_founder_config_contract_changes_are_inert_while_flag_is_off():
+    _set_mapping_fidelity_state(False)
+    legacy_sector = compute_risk_score(_base_input(sector="Private Banking"))
+    legacy_entity = compute_risk_score(_base_input(entity_type="Unregulated Fund / SPV"))
+    assert legacy_sector["dimensions"]["d4"] == 1
+    assert legacy_entity["dimensions"]["d1"] == pytest.approx(1.2)
+
+    _set_mapping_fidelity_state(True)
+    approved_sector = compute_risk_score(_base_input(sector="Private Banking"))
+    approved_entity = compute_risk_score(_base_input(entity_type="Unregulated Fund / SPV"))
+    assert approved_sector["dimensions"]["d4"] == 4
+    assert approved_entity["dimensions"]["d1"] == pytest.approx(1.4)
+
+
+def test_unsolicited_score_four_requires_review_without_floor_or_volume_reason(mapping_fidelity):
+    result = compute_risk_score(
+        _base_input(introduction_method="Unsolicited / unknown referral source")
+    )
+    assert result["dimensions"]["d5"] == pytest.approx(2.5)
+    assert result["base_risk_level"] == result["level"]
+    assert result["level"] == "LOW"
+    assert result["requires_compliance_approval"] is True
+    assert "sub_factor_score_4" in result["escalations"]
+    assert not any(reason.startswith("floor_rule_") for reason in result["escalations"])
+    assert "monthly_volume_score_4" not in result["escalations"]
 
 
 def test_a9_is_rename_only_and_preserves_score_floor_and_legacy_alias(mapping_fidelity):

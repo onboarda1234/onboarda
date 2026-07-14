@@ -55,10 +55,15 @@ def test_dry_run_is_offline_pseudonymized_and_restores_flag(monkeypatch):
     assert environment.flags.is_enabled(ACTIVATION_FLAG) is False
 
 
-def test_dry_run_reports_gate0_approved_sector_pending_runtime_implementation():
+def test_dry_run_resolves_founder_approved_config_contract_sector():
     payload = _payload()
     payload["applications"][0]["application"]["sector"] = "Cloud Services"
     report = run_dry_run(payload)
-    assert report["summary"]["applications_with_unresolved_mappings"] == 1
-    unresolved = report["summary"]["unresolved_counts"]
-    assert {"family": "sector", "normalized_value": "cloud services", "count": 1} in unresolved
+    assert report["summary"]["applications_with_unresolved_mappings"] == 0
+    sector = next(
+        item
+        for item in report["applications"][0]["mapping_evidence"]
+        if item["family"] == "sector"
+    )
+    assert sector["status"] == "mapped"
+    assert sector["score"] == 2

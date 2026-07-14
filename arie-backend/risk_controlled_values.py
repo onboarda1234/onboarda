@@ -52,12 +52,20 @@ class ControlledResolution:
         return asdict(self)
 
 
-def _record(controlled_id: str, label: str, score: int, *, config_key: str = "") -> Dict[str, Any]:
+def _record(
+    controlled_id: str,
+    label: str,
+    score: int,
+    *,
+    config_key: str = "",
+    locked_score: bool = False,
+) -> Dict[str, Any]:
     return {
         "id": controlled_id,
         "label": label,
         "score": int(score),
         "config_key": config_key,
+        "locked_score": bool(locked_score),
     }
 
 
@@ -73,14 +81,17 @@ SECTOR_RECORDS = {
     "Remittance / Money Transfer": _record("sector.remittance", "Remittance / Money Transfer", 3, config_key="remittance"),
     "E-Money / E-Wallet Provider": _record("sector.e_money", "E-Money / E-Wallet Provider", 3, config_key="e-money"),
     "Insurance / InsurTech": _record("sector.insurance", "Insurance / InsurTech", 2, config_key="insurance"),
-    "Family Office / Wealth Management": _record("sector.family_office", "Family Office / Wealth Management", 3, config_key="wealth management"),
+    "Investment Management": _record("sector.investment_management", "Investment Management", 3, config_key="investment management", locked_score=True),
+    "Family Office / Wealth Management": _record("sector.family_office", "Family Office / Wealth Management", 3, config_key="wealth management", locked_score=True),
+    "Private Banking": _record("sector.private_banking", "Private Banking", 4, config_key="private banking", locked_score=True),
     "Banking-as-a-Service": _record("sector.banking_as_a_service", "Banking-as-a-Service", 2, config_key="banking"),
     "E-Commerce / Online Retail": _record("sector.ecommerce", "E-Commerce / Online Retail", 2, config_key="e-commerce"),
     "Import / Export": _record("sector.import_export", "Import / Export", 3, config_key="import"),
-    "Precious Metals / Gems": _record("sector.precious_metals", "Precious Metals / Gems", 4, config_key="precious metals"),
+    "Precious Metals / Gems": _record("sector.precious_metals", "Precious Metals / Gems", 3, config_key="precious metals", locked_score=True),
     "Oil & Gas / Energy Trading": _record("sector.oil_gas", "Oil & Gas / Energy Trading", 3, config_key="oil"),
     "Logistics / Freight Forwarding": _record("sector.logistics", "Logistics / Freight Forwarding", 2, config_key="logistics"),
     "Software / SaaS": _record("sector.software_saas", "Software / SaaS", 2, config_key="software"),
+    "Cloud Services": _record("sector.cloud_services", "Cloud Services", 2, config_key="cloud services", locked_score=True),
     "Telecommunications": _record("sector.telecommunications", "Telecommunications", 2, config_key="telecommunications"),
     "Media Technology": _record("sector.media_technology", "Media Technology", 2, config_key="media"),
     "iGaming / Online Gambling": _record("sector.igaming", "iGaming / Online Gambling", 4, config_key="gambling"),
@@ -105,7 +116,6 @@ SECTOR_RECORDS = {
 UNRESOLVED_SECTOR_LABELS = frozenset({
     "Payment Processing / Gateway",
     "Lending / Credit Services",
-    "Investment Management",
     "Capital Markets / Brokerage",
     "Private Equity / Venture Capital",
     "Hedge Fund",
@@ -116,7 +126,6 @@ UNRESOLVED_SECTOR_LABELS = frozenset({
     "IT Services / Outsourcing",
     "Cybersecurity",
     "Artificial Intelligence / ML",
-    "Cloud Services",
     "Video Games / Esports",
     "Streaming / Content Platforms",
     "Bureau de Change",
@@ -139,7 +148,7 @@ ENTITY_TYPE_RECORDS = {
     "Trust": _record("entity_type.trust", "Trust", 3, config_key="trust"),
     "Foundation": _record("entity_type.foundation", "Foundation", 3, config_key="foundation"),
     "Regulated Fund (CIS / Licensed)": _record("entity_type.regulated_fund", "Regulated Fund (CIS / Licensed)", 2, config_key="regulated fund"),
-    "Unregulated Fund / SPV": _record("entity_type.unregulated_fund_spv", "Unregulated Fund / SPV", 4, config_key="unregulated fund"),
+    "Unregulated Fund / SPV": _record("entity_type.unregulated_fund_spv", "Unregulated Fund / SPV", 3, config_key="unregulated fund", locked_score=True),
     "Non-Profit Organisation / NGO": _record("entity_type.non_profit", "Non-Profit Organisation / NGO", 3, config_key="non-profit"),
     "Shell Company / Special Purpose Vehicle": _record("entity_type.shell_spv", "Shell Company / Special Purpose Vehicle", 4, config_key="shell company"),
 }
@@ -185,9 +194,107 @@ FAMILY_RECORDS = {
     "monthly_volume": MONTHLY_VOLUME_RECORDS,
 }
 
-FAMILY_ALIASES = {
-    "ownership": OWNERSHIP_ALIASES,
-}
+# Founder-approved 2026-07-14 exact legacy aliases.  Keep every approved row
+# (including case-only duplicates) so the runtime catalogue remains directly
+# auditable against RSMP_TIER0A_FOUNDER_ALIAS_DECISIONS.md.
+APPROVED_EXACT_ALIAS_ROWS = (
+    ("A-001", "complexity", "Standard — multi-currency, low-risk corridors", "Standard — multi-currency, established corridors", 2),
+    ("A-002", "complexity", "simple", "Simple — single currency, domestic corridors", 1),
+    ("A-003", "complexity", "Simple / predictable", "Simple — single currency, domestic corridors", 1),
+    ("A-004", "complexity", "Very complex — includes high-risk corridors", "Very complex — includes monitored corridors", 4),
+    ("A-005", "complexity", "domestic low complexity", "Simple — single currency, domestic corridors", 1),
+    ("A-006", "complexity", "Multiple international corridors", "Complex — multiple international corridors", 3),
+    ("A-007", "complexity", "Very complex / high-risk corridors", "Very complex — includes monitored corridors", 4),
+    ("A-008", "complexity", "Domestic low complexity", "Simple — single currency, domestic corridors", 1),
+    ("A-009", "complexity", "Domestic low-volume payments", "Simple — single currency, domestic corridors", 1),
+    ("A-010", "complexity", "Simple domestic payments", "Simple — single currency, domestic corridors", 1),
+    ("A-011", "complexity", "simple domestic single currency", "Simple — single currency, domestic corridors", 1),
+    ("A-012", "complexity", "Standard domestic and low-risk cross-border transactions", "Standard — multi-currency, established corridors", 2),
+    ("A-013", "complexity", "very complex high-risk corridor", "Very complex — includes monitored corridors", 4),
+    ("A-014", "entity_type", "SME", "SME / Private Company", 2),
+    ("A-015", "entity_type", "Listed Company", "Listed Company on Regulated Exchange", 1),
+    ("A-016", "entity_type", "Shell company", "Shell Company / Special Purpose Vehicle", 4),
+    ("A-017", "entity_type", "Newly Incorporated", "Newly Incorporated Company (< 1 year)", 3),
+    ("A-018", "entity_type", "Newly Incorporated Private Company", "Newly Incorporated Company (< 1 year)", 3),
+    ("A-019", "entity_type", "Small Private Company (revenue < USD 1m)", "SME / Private Company", 2),
+    ("A-020", "introduction", "Direct", "Direct application — client initiated", 1),
+    ("A-021", "introduction", "Direct application", "Direct application — client initiated", 1),
+    ("A-022", "introduction", "direct", "Direct application — client initiated", 1),
+    ("A-023", "introduction", "Direct enquiry", "Direct application — client initiated", 1),
+    ("A-024", "introduction", "Direct application — I found Onboarda myself", "Direct application — client initiated", 1),
+    ("A-025", "introduction", "Direct online application", "Direct application — client initiated", 1),
+    ("A-026", "introduction", "Unsolicited", "Unsolicited / unknown referral source", 4),
+    ("A-027", "monthly_volume", "Less than USD 50,000", "Under USD 50,000 per month", 1),
+    ("A-028", "monthly_volume", "under usd 50,000", "Under USD 50,000 per month", 1),
+    ("A-029", "monthly_volume", "USD 25,000 monthly", "Under USD 50,000 per month", 1),
+    ("A-030", "monthly_volume", "500000-1000000", "USD 500,000 to USD 5,000,000 per month", 3),
+    ("A-031", "monthly_volume", "Over 5,000,000", "Over USD 5,000,000 per month", 4),
+    ("A-032", "monthly_volume", "USD 500,000 – USD 5,000,000", "USD 500,000 to USD 5,000,000 per month", 3),
+    ("A-033", "monthly_volume", "50,000 - 100,000", "USD 50,000 to USD 500,000 per month", 2),
+    ("A-034", "monthly_volume", "More than USD 10,000,000 monthly expected volume", "Over USD 5,000,000 per month", 4),
+    ("A-035", "monthly_volume", "Over 5M", "Over USD 5,000,000 per month", 4),
+    ("A-036", "monthly_volume", "Under 50,000", "Under USD 50,000 per month", 1),
+    ("A-037", "monthly_volume", "Under USD 50K", "Under USD 50,000 per month", 1),
+    ("A-038", "monthly_volume", "USD 500,000 - USD 1,000,000", "USD 500,000 to USD 5,000,000 per month", 3),
+    ("A-039", "ownership", "Simple", "Simple — direct identifiable UBOs", 1),
+    ("A-040", "ownership", "Simple direct ownership", "Simple — direct identifiable UBOs", 1),
+    ("A-041", "ownership", "Simple ownership structure", "Simple — direct identifiable UBOs", 1),
+    ("A-042", "ownership", "simple", "Simple — direct identifiable UBOs", 1),
+    ("A-043", "ownership", "Simple transparent ownership", "Simple — direct identifiable UBOs", 1),
+    ("A-044", "ownership", "Simple direct natural-person ownership; one UBO owns 100%", "Simple — direct identifiable UBOs", 1),
+    ("A-045", "ownership", "Simple ownership disclosure", "Simple — direct identifiable UBOs", 1),
+    ("A-046", "ownership", "Single tier direct ownership", "Simple — direct identifiable UBOs", 1),
+    ("A-047", "ownership", "complex opaque nominee structure", "Opaque — UBOs cannot be fully identified", 4),
+    ("A-048", "ownership", "Direct individual ownership", "Simple — direct identifiable UBOs", 1),
+    ("A-049", "ownership", "Multi-layered opaque nominee trust with undisclosed intermediate shareholders", "Opaque — UBOs cannot be fully identified", 4),
+    ("A-050", "ownership", "Simple direct ownership by one natural person", "Simple — direct identifiable UBOs", 1),
+    ("A-051", "ownership", "Complex multi-layer ownership with nominee exposure", "3+ ownership layers / nominee shareholders", 3),
+    ("A-052", "ownership", "Complex nominee 3+ layers", "3+ ownership layers / nominee shareholders", 3),
+    ("A-053", "ownership", "complex nominee 3+ layers", "3+ ownership layers / nominee shareholders", 3),
+    ("A-054", "ownership", "Direct ownership; one natural-person UBO at 100%", "Simple — direct identifiable UBOs", 1),
+    ("A-055", "ownership", "Direct UBO ownership", "Simple — direct identifiable UBOs", 1),
+    ("A-056", "ownership", "Simple single-layer ownership with one UBO at 100%", "Simple — direct identifiable UBOs", 1),
+    ("A-057", "ownership", "Three direct individual shareholders, all above threshold. Ownership totals 100 percent.", "Simple — direct identifiable UBOs", 1),
+    ("A-058", "ownership", "Complex multi-layered nominee trust structure with opaque ownership", "Opaque — UBOs cannot be fully identified", 4),
+    ("A-059", "ownership", "Complex multi-layered trust and nominee ownership structure with opaque controller arrangements", "Opaque — UBOs cannot be fully identified", 4),
+    ("A-060", "ownership", "Layered nominee/trust ownership with offshore holding company", "3+ ownership layers / nominee shareholders", 3),
+    ("A-061", "ownership", "Layered trust / nominee ownership with offshore holding company", "3+ ownership layers / nominee shareholders", 3),
+    ("A-062", "ownership", "multi-layered nominee opaque ownership", "Opaque — UBOs cannot be fully identified", 4),
+    ("A-063", "ownership", "Multi-layered nominee opaque ownership via holding SPV", "Opaque — UBOs cannot be fully identified", 4),
+    ("A-064", "ownership", "Nominee multi-layer ownership with opaque structure", "Opaque — UBOs cannot be fully identified", 4),
+    ("A-065", "ownership", "Opaque multi-layered nominee shareholder structure", "Opaque — UBOs cannot be fully identified", 4),
+    ("A-066", "ownership", "opaque nominee trust", "Opaque — UBOs cannot be fully identified", 4),
+    ("A-067", "ownership", "Simple ownership structure with one beneficial owner", "Simple — direct identifiable UBOs", 1),
+    ("A-068", "sector", "Software", "Software / SaaS", 2),
+    ("A-069", "sector", "Fintech", "Fintech / Payments", 3),
+    ("A-070", "sector", "Construction / Infrastructure", "Construction", 3),
+    ("A-071", "sector", "fintech", "Fintech / Payments", 3),
+    ("A-072", "sector", "Software/SaaS", "Software / SaaS", 2),
+    ("A-073", "sector", "Construction and infrastructure", "Construction", 3),
+    ("A-074", "sector", "Government", "Government / Public Sector", 1),
+    ("A-075", "sector", "Import / Export Trading", "Import / Export", 3),
+    ("A-076", "sector", "Import export trading", "Import / Export", 3),
+    ("A-077", "sector", "Logistics", "Logistics / Freight Forwarding", 2),
+)
+
+
+def _build_family_aliases() -> Dict[str, Dict[str, str]]:
+    aliases: Dict[str, Dict[str, str]] = {"ownership": dict(OWNERSHIP_ALIASES)}
+    normalized_targets: Dict[tuple[str, str], str] = {}
+    for row_id, family, legacy_label, canonical_label, approved_score in APPROVED_EXACT_ALIAS_ROWS:
+        record = FAMILY_RECORDS.get(family, {}).get(canonical_label)
+        if not record or int(record["score"]) != approved_score:
+            raise RuntimeError(f"Invalid approved alias target in {row_id}")
+        normalized_key = (family, normalize_controlled_value(legacy_label))
+        prior_target = normalized_targets.get(normalized_key)
+        if prior_target and prior_target != canonical_label:
+            raise RuntimeError(f"Conflicting normalized approved aliases in {row_id}")
+        normalized_targets[normalized_key] = canonical_label
+        aliases.setdefault(family, {})[legacy_label] = canonical_label
+    return aliases
+
+
+FAMILY_ALIASES = _build_family_aliases()
 
 
 def _normalized_lookup(records: Mapping[str, Mapping[str, Any]]) -> Dict[str, Mapping[str, Any]]:
@@ -228,7 +335,7 @@ def resolve_controlled_score(
 
     score = int(record["score"])
     config_key = str(record.get("config_key") or "")
-    if configured_scores is not None and config_key:
+    if configured_scores is not None and config_key and not record.get("locked_score"):
         if not isinstance(configured_scores, Mapping):
             return ControlledResolution(
                 family=family_key,
