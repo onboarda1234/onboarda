@@ -1469,3 +1469,81 @@ def test_clean_ca_entity_report_resolves_terminal_clear_not_in_progress():
     assert resolved["status_key"] != "screening_in_progress"
     assert resolved["terminal"] is True
     assert resolved["defensible_clear"] is True
+
+
+def test_entity_provider_mode_record_fail_closed_selection():
+    """The entity mode record must be a real record chosen fail-closed."""
+    import server
+
+    live_sanctions = {"api_status": "live", "source": "complyadvantage"}
+    live_company = {"api_status": "live", "source": "complyadvantage", "matched": False, "results": []}
+    pending_sanctions = {"api_status": "pending", "source": "complyadvantage"}
+    simulated_company = {"api_status": "simulated", "source": "simulated"}
+
+    # Both live -> sanctions record wins ties (entity AML source of truth).
+    assert server._entity_provider_mode_record(live_company, live_sanctions) is live_sanctions
+    # A pending sub-record beats a live sibling (fail-closed).
+    assert server._entity_provider_mode_record(live_company, pending_sanctions) is pending_sanctions
+    # A simulated top-level record beats a live sanctions record.
+    assert server._entity_provider_mode_record(simulated_company, live_sanctions) is simulated_company
+    # Guard aliasing (_entity_sanctions_record fallback): same object counted once.
+    assert server._entity_provider_mode_record(live_company, live_company) is live_company
+    # Nothing available -> empty record, never a synthetic one.
+    assert server._entity_provider_mode_record({}, {}) == {}
+    assert server._entity_provider_mode_record(None, None) == {}
+
+
+def test_entity_row_mode_two_live_records_is_live_not_pending():
+    """Regression: false "Screening Pending — Blocks Approval" badge.
+
+    The queue previously space-joined api_status from the company record and
+    its sanctions sub-record. Two live records produced api_status="live live",
+    which matched no provider-mode token and fell through to pending, so a
+    terminal-clear entity row rendered "Screening Pending — Blocks Approval".
+    """
+    import server
+    from screening_state import provider_mode_from_record
+
+    # The old joined pseudo-record demonstrates the trap this fix removes.
+    assert provider_mode_from_record({"api_status": "live live"}) == "pending"
+
+    company = {"api_status": "live", "source": "complyadvantage", "matched": False, "results": []}
+    sanctions = {"api_status": "live", "source": "complyadvantage", "matched": False, "results": []}
+    record = server._entity_provider_mode_record(company, sanctions)
+    assert provider_mode_from_record(record) == "live_provider"
+    mode = server._screening_queue_row_mode(
+        "live", "completed_clear", "screened_no_match", ["Registry found"], record
+    )
+    assert mode == "live"
+
+    # A genuinely pending sub-record must still surface as pending.
+    pending = {"api_status": "pending", "source": "complyadvantage"}
+    record = server._entity_provider_mode_record(company, pending)
+    mode = server._screening_queue_row_mode(
+        "live", "pending_provider", "screening_pending", [], record
+    )
+    assert mode == "pending"
+
+    # Sandbox must still block honestly.
+    sandbox = {"api_status": "sandbox", "source": "complyadvantage"}
+    record = server._entity_provider_mode_record(company, sandbox)
+    mode = server._screening_queue_row_mode(
+        "live", "pending_provider", "screening_pending", [], record
+    )
+    assert mode == "sandbox"
+
+
+def test_clean_ca_entity_row_mode_is_live_end_to_end():
+    """Clean CA entity (normalizer shape + sanctions guard) renders a live badge."""
+    from screening_complyadvantage.normalizer import _empty_company_screening
+    import server
+
+    company_screening = _empty_company_screening(
+        screened_at="2026-01-01T00:00:00Z"
+    )["company_screening"]
+    company_sanctions = server._entity_sanctions_record(company_screening)
+    record = server._entity_provider_mode_record(company_screening, company_sanctions)
+    mode = server._screening_queue_row_mode(
+        "live", "completed_clear", "screened_no_match", [], record
+    )
+    assert mode == "live"
