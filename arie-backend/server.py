@@ -23191,7 +23191,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
     parties_by_app = get_application_parties_batch(db, app_ids) if app_ids else {}
     reviews_by_app = _load_screening_reviews_for_truth_batch(db, app_ref_by_id) if app_ids else {}
     monitoring_alerts_by_app = _load_application_monitoring_alerts_batch(db, app_ids) if app_ids else {}
-    monitoring_evidence_by_app = _load_monitoring_evidence_batch(db, app_ids) if include_evidence and app_ids else {}
+    # Monitoring evidence is loaded after pagination, only for the returned
+    # page's applications (see below) — never for the whole inventory.
     rows = []
     metrics = {
         "applications_awaiting_screening": 0,
@@ -23702,21 +23703,16 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         if application_requires_review:
             metrics["applications_requiring_review"] += 1
 
-    if include_evidence:
-        rows = [
-            _apply_screening_queue_canonical_state(
-                _enrich_screening_queue_evidence(
-                    _apply_screening_queue_canonical_state(row),
-                    monitoring_evidence_by_app.get(row.get("application_id"), []),
-                )
-            )
-            for row in rows
-        ]
-    else:
-        rows = [
-            _apply_screening_queue_canonical_state(row)
-            for row in rows
-        ]
+    # Resolve the canonical state for every row — filtering depends on it —
+    # but defer the expensive evidence enrichment until after pagination so a
+    # 50-row page never pays for the whole inventory (audit: 13.7s for 50
+    # rows when every row was enriched and resolved twice pre-filter). This
+    # also unifies filter semantics across evidence modes: which rows match a
+    # filter no longer depends on include_evidence.
+    rows = [
+        _apply_screening_queue_canonical_state(row)
+        for row in rows
+    ]
     metrics["applications_requiring_review"] = len({
         row.get("application_id")
         for row in rows
@@ -23735,6 +23731,25 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
     else:
         page_limit = max(1, int(limit))
         paginated_rows = filtered_rows[offset:offset + page_limit]
+    if include_evidence and paginated_rows:
+        page_app_ids = sorted({
+            row.get("application_id")
+            for row in paginated_rows
+            if row.get("application_id")
+        })
+        monitoring_evidence_by_app = _load_monitoring_evidence_batch(db, page_app_ids) if page_app_ids else {}
+        # Enrich only the returned page, then re-resolve so evidence-driven
+        # states (stale/partial evidence) still land exactly as before for
+        # every row the caller actually receives.
+        paginated_rows = [
+            _apply_screening_queue_canonical_state(
+                _enrich_screening_queue_evidence(
+                    row,
+                    monitoring_evidence_by_app.get(row.get("application_id"), []),
+                )
+            )
+            for row in paginated_rows
+        ]
     response_rows = paginated_rows if include_evidence else [
         _screening_queue_summary_row(row)
         for row in paginated_rows
