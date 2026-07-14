@@ -936,6 +936,7 @@ def run_full_screening(application_data, directors, ubos, client_ip=None):
                 report["overall_flags"].append(f"Director '{d_name}' screening unavailable: {d_err[:100]}")
             result = {
                 "person_name": d_name, "person_type": "director",
+                "person_key": d.get("person_key") or d.get("id") or None,
                 "nationality": d.get("nationality", ""), "declared_pep": d.get("is_pep", "No"),
                 "screening": screening,
             }
@@ -958,6 +959,7 @@ def run_full_screening(application_data, directors, ubos, client_ip=None):
                 report["overall_flags"].append(f"UBO '{u_name}' screening unavailable: {u_err[:100]}")
             result = {
                 "person_name": u_name, "person_type": "ubo",
+                "person_key": u.get("person_key") or u.get("id") or None,
                 "nationality": u.get("nationality", ""), "ownership_pct": u.get("ownership_pct", 0),
                 "declared_pep": u.get("is_pep", "No"), "screening": screening,
             }

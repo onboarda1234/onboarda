@@ -1716,3 +1716,64 @@ class TestScreeningQueueErrorState:
         html = _read_backoffice()
         assert "if (key === 'follow up required' || key === 'review follow up required') return 'Follow-up Required';" in html
         assert "return 'Request More Information';\n  return raw;" not in html
+
+
+def _subject_join_runtime_js(html):
+    region = _extract_between(
+        html,
+        "function screeningSubjectJoinName(value) {",
+        "function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {",
+    )
+    return "\n".join(
+        [
+            region,
+            textwrap.dedent(
+                """
+                var report = {
+                  director_screenings: [
+                    {
+                      person_name: 'thomas roberts',
+                      subject_name: 'Miles Thomas ROBERTS',
+                      person_key: 'director:3',
+                      screening: { api_status: 'live', matched: true, results: [{ name: 'hit' }] }
+                    },
+                    {
+                      person_name: 'THOMAS  Roberts',
+                      screening: { api_status: 'live', matched: false, results: [] }
+                    }
+                  ],
+                  ubo_screenings: [],
+                  intermediary_screenings: []
+                };
+                var byKey = findScreeningRecordForSubject(report, { person_key: 'director:3', name: 'Miles Thomas ROBERTS' });
+                var bySubjectName = findScreeningRecordForSubject(report, { name: 'miles thomas roberts' });
+                var byNormalizedName = findScreeningRecordForSubject(report, { name: 'thomas roberts' });
+                var wrongKeyFallsBackToName = findScreeningRecordForSubject(report, { person_key: 'director:9', name: 'Miles Thomas ROBERTS' });
+                var noMatch = findScreeningRecordForSubject(report, { name: 'Someone Else' });
+                console.log(JSON.stringify({
+                  byKey: byKey && byKey.person_key,
+                  bySubjectName: bySubjectName && bySubjectName.person_key,
+                  byNormalizedName: byNormalizedName && byNormalizedName.person_name,
+                  wrongKeyFallsBackToName: wrongKeyFallsBackToName && wrongKeyFallsBackToName.person_key,
+                  noMatch: noMatch
+                }));
+                """
+            ),
+        ]
+    )
+
+
+class TestScreeningSubjectJoin:
+    def test_detail_join_uses_person_key_then_normalized_names(self):
+        """Phase 2 audit fix: the detail cards join stored screening entries
+        by stable person_key first, then normalized names across every name
+        field — a provider profile name ('thomas roberts') no longer hides a
+        subject's screening record from the review card."""
+        html = _read_backoffice()
+        result = _run_node(_subject_join_runtime_js(html))
+        assert result["byKey"] == "director:3"
+        assert result["bySubjectName"] == "director:3"
+        # First matching entry wins on ambiguous provider-name lookups.
+        assert result["byNormalizedName"] == "thomas roberts"
+        assert result["wrongKeyFallsBackToName"] == "director:3"
+        assert result["noMatch"] is None

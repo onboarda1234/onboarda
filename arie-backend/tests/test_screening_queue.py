@@ -1752,3 +1752,54 @@ def test_follow_up_and_officer_cleared_keep_distinct_business_labels():
     import server
     assert server._screening_queue_status_group(cleared) == "no_match"
     assert server._screening_queue_status_group(follow_up) == "follow_up_required"
+
+
+def test_subject_screening_join_uses_person_key_then_normalized_name():
+    """Audit regression (ARF-2026-920624): stored entries can carry the
+    PROVIDER profile name ('thomas roberts') while the party record holds the
+    application name ('Miles Thomas ROBERTS'); the exact-name join silently
+    missed and the subject rendered as never screened."""
+    import server
+
+    entry = {
+        "person_name": "thomas roberts",          # provider profile name
+        "subject_name": "Miles Thomas ROBERTS",   # party name at screening time
+        "person_key": "director:3",
+        "screening": {"api_status": "live", "matched": True, "results": [{"name": "hit"}]},
+    }
+    index = server._index_subject_screenings([entry], ("person_name", "subject_name", "name"))
+
+    # Durable identity: person_key wins regardless of any name divergence.
+    party = {"full_name": "Miles Thomas ROBERTS", "person_key": "director:3"}
+    assert server._lookup_subject_screening(index, party, ("full_name", "name")) is entry
+
+    # Keyless party still joins via the stored party subject_name (normalized).
+    keyless_party = {"full_name": "miles thomas roberts"}
+    assert server._lookup_subject_screening(index, keyless_party, ("full_name", "name")) is entry
+
+    # Case/whitespace variants join via normalization on legacy entries.
+    legacy = {"person_name": "THOMAS  Roberts", "screening": {"api_status": "live"}}
+    legacy_index = server._index_subject_screenings([legacy], ("person_name", "subject_name", "name"))
+    assert server._lookup_subject_screening(
+        legacy_index, {"full_name": "thomas roberts"}, ("full_name", "name")
+    ) is legacy
+
+    # Honest limitation: a legacy keyless entry with a middle-name divergence
+    # still cannot be joined — that is exactly what person_key persistence fixes.
+    assert server._lookup_subject_screening(
+        legacy_index, {"full_name": "Miles Thomas Roberts"}, ("full_name", "name")
+    ) is None
+
+    # A mismatched person_key must not steal another subject's record.
+    other_party = {"full_name": "Someone Else", "person_key": "director:9"}
+    assert server._lookup_subject_screening(index, other_party, ("full_name", "name")) is None
+
+
+def test_subject_screening_index_duplicate_names_keep_legacy_last_wins():
+    import server
+
+    first = {"person_name": "John Smith", "screening": {"api_status": "live"}}
+    second = {"person_name": "john smith", "screening": {"api_status": "pending"}}
+    index = server._index_subject_screenings([first, second], ("person_name", "subject_name", "name"))
+    resolved = server._lookup_subject_screening(index, {"full_name": "John Smith"}, ("full_name", "name"))
+    assert resolved is second
