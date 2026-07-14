@@ -1803,3 +1803,109 @@ def test_subject_screening_index_duplicate_names_keep_legacy_last_wins():
     index = server._index_subject_screenings([first, second], ("person_name", "subject_name", "name"))
     resolved = server._lookup_subject_screening(index, {"full_name": "John Smith"}, ("full_name", "name"))
     assert resolved is second
+
+
+def _seed_queue_perf_apps(db, count):
+    """Seed minimal CA-shaped clean-entity applications for pagination tests."""
+    import json as _json
+
+    refs = []
+    report = {
+        "provider": "complyadvantage",
+        "screened_at": "2026-07-01T00:00:00Z",
+        "screening_mode": "live",
+        "company_screening_coverage": "full",
+        "has_company_screening_hit": False,
+        "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "screened_at": "2026-07-01T00:00:00Z",
+            "matched": False,
+            "results": [],
+            "sanctions": {
+                "source": "complyadvantage", "api_status": "live",
+                "screened_at": "2026-07-01T00:00:00Z", "matched": False, "results": [],
+            },
+            "adverse_media": {
+                "source": "complyadvantage", "api_status": "live",
+                "screened_at": "2026-07-01T00:00:00Z", "matched": False, "results": [],
+            },
+        },
+        "director_screenings": [],
+        "ubo_screenings": [],
+        "intermediary_screenings": [],
+        "overall_flags": [],
+        "total_hits": 0,
+    }
+    for idx in range(count):
+        ref = f"ARF-QPERF-{idx:03d}"
+        refs.append(ref)
+        db.execute("DELETE FROM applications WHERE ref = ?", (ref,))
+        db.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data, is_fixture)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"qperf-{idx:03d}", ref, "testclient001", f"Queue Perf {idx:03d} Ltd",
+                "Mauritius", "Technology", "SME", "in_review",
+                _json.dumps({"screening_report": report}), 0,
+            ),
+        )
+    db.commit()
+    return refs
+
+
+def test_evidence_hydration_only_touches_returned_page(db, monkeypatch):
+    """Audit perf finding: include_evidence=1 enriched (and double-resolved)
+    every row in the inventory before pagination — 13.7s for a 50-row page.
+    Enrichment must run exactly page-size times, never inventory-size."""
+    import server
+
+    _seed_queue_perf_apps(db, 6)
+    calls = {"count": 0}
+    real_enrich = server._enrich_screening_queue_evidence
+
+    def counting_enrich(row, monitoring_evidence):
+        calls["count"] += 1
+        return real_enrich(row, monitoring_evidence)
+
+    monkeypatch.setattr(server, "_enrich_screening_queue_evidence", counting_enrich)
+    payload = server._build_screening_queue_payload(
+        db,
+        {"type": "officer", "sub": "admin001"},
+        show_fixtures=True,
+        limit=2,
+        offset=0,
+        filters={"application_ref": "ARF-QPERF-"},
+        include_evidence=True,
+    )
+    assert payload["pagination"]["returned"] == 2
+    assert payload["pagination"]["total_rows"] == 6
+    assert calls["count"] == 2
+
+    # Every returned row is still fully enriched and canonically resolved.
+    for row in payload["rows"]:
+        assert "screening_evidence" in row
+        assert row.get("canonical_status_key")
+
+
+def test_queue_filter_results_identical_across_evidence_modes(db):
+    """Filter semantics must not depend on include_evidence: the same filter
+    returns the same rows in the same order in both modes."""
+    import server
+
+    _seed_queue_perf_apps(db, 6)
+    common = dict(show_fixtures=True, limit=50, offset=0, filters={"application_ref": "ARF-QPERF-"})
+    user = {"type": "officer", "sub": "admin001"}
+    summary = server._build_screening_queue_payload(db, user, include_evidence=False, **common)
+    full = server._build_screening_queue_payload(db, user, include_evidence=True, **common)
+
+    summary_keys = [(r["application_ref"], r["subject_type"], r["subject_name"]) for r in summary["rows"]]
+    full_keys = [(r["application_ref"], r["subject_type"], r["subject_name"]) for r in full["rows"]]
+    assert summary_keys == full_keys
+    assert summary["pagination"]["total_rows"] == full["pagination"]["total_rows"]
+    # Canonical statuses agree row-by-row across modes.
+    assert [r["canonical_status_key"] for r in summary["rows"]] == [r["canonical_status_key"] for r in full["rows"]]
