@@ -1926,7 +1926,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   </div>
   <div class="card" style="padding:0;overflow-x:auto;">
     <table class="data-table">
-      <thead><tr><th>Subject</th><th>Type</th><th>Company</th><th>Watchlist</th><th>PEP (Declared / Screening)</th><th>Entity / Context</th><th>Status</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Subject</th><th>Signals</th><th>Status</th><th>Screened</th><th>Actions</th></tr></thead>
       <tbody id="screening-body"></tbody>
     </table>
   </div>
@@ -14168,21 +14168,62 @@ function screeningReviewDisplayLabel(row) {
   return String(row.review_disposition || '').replace(/_/g, ' ');
 }
 
-function screeningQueueContextCell(row) {
-  var parts = (row.entity_context || []).slice();
-  if (row.screened_at) parts.push('Screened: ' + String(row.screened_at).substring(0, 19).replace('T', ' '));
-  var screeningProviderStatus = row.screening_provider_status || row.provider_status;
-  if (screeningProviderStatus) parts.push('Screening provider: ' + String(screeningProviderStatus).replace(/_/g, ' '));
-  if (row.officer_review_status && row.officer_review_status !== 'not_reviewed') parts.push('Review: ' + String(row.officer_review_status).replace(/_/g, ' '));
-  var modeBadge = row.screening_mode ? screeningModeBadge(row.screening_mode) : '';
+function screeningQueueSubjectCell(row) {
+  row = row || {};
+  var subject = String(row.subject_name || '');
+  var typeChip = '<span style="display:inline-block;padding:1px 7px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;background:rgba(43,47,143,0.08);color:var(--brand);">' +
+    escapeHtml(String(row.subject_type || 'subject').replace(/_/g, ' ')) + '</span>';
+  var metaParts = [];
+  var company = String(row.company_name || '');
+  if (company && company !== subject) metaParts.push(company);
+  if (row.application_ref) metaParts.push(String(row.application_ref));
+  return '<div style="font-weight:600;">' + escapeHtml(subject) + '</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:3px;">' + typeChip +
+    (metaParts.length ? '<span style="font-size:11px;color:var(--text3);">' + escapeHtml(metaParts.join(' · ')) + '</span>' : '') +
+    '</div>';
+}
+
+function screeningQueueSignalsCell(row) {
+  row = row || {};
+  var chips = [];
+  var watchlist = String(row.watchlist_status || '').toLowerCase();
+  // 'review' means the terminal hit is in ANOTHER dimension (see
+  // legacy_status_value) — that dimension renders its own chip instead.
+  if (watchlist === 'match' || watchlist === 'hit') chips.push(screeningTagBadge('Sanctions/Watchlist', 'high'));
+  if (String(row.pep_declared_status || '').toLowerCase() === 'declared') chips.push(screeningTagBadge('Declared PEP', 'pending'));
+  var pep = String(row.pep_screening_status || '').toLowerCase();
+  if (pep === 'match' || pep === 'hit' || pep === 'possible_match') chips.push(screeningTagBadge('PEP hit', 'high'));
+  var contextText = (Array.isArray(row.entity_context) ? row.entity_context : []).map(function(part) {
+    return String(part || '').toLowerCase();
+  }).join(' ');
+  if (contextText.indexOf('undeclared pep') >= 0) chips.push(screeningTagBadge('Undeclared PEP', 'high'));
+  if (row.adverse_media_hit || contextText.indexOf('adverse media') >= 0) chips.push(screeningTagBadge('Adverse media', 'pending'));
+  var totalHits = parseInt(row.total_hits, 10);
+  if (!isNaN(totalHits) && totalHits > 0) chips.push(screeningTagBadge(totalHits + ' provider hit' + (totalHits === 1 ? '' : 's'), 'pending'));
+  if (!chips.length) return '<span style="font-size:12px;color:var(--text3);">—</span>';
+  return '<div style="display:flex;flex-wrap:wrap;gap:4px;">' + chips.join('') + '</div>';
+}
+
+function screeningQueueStatusCell(row) {
+  row = row || {};
+  var canonicalStatus = screeningQueueCanonicalStatus(row);
+  var html = screeningQueueStatusBadge(canonicalStatus.key, canonicalStatus.label);
+  // Provenance is rendered only when it blocks: live screening is the norm,
+  // not news. Simulated / sandbox / pending / not-configured / unknown modes
+  // keep their explicit blocking badge.
+  var mode = String(row.screening_mode || '').toLowerCase();
+  if (mode && mode !== 'live' && mode !== 'live_provider') html += ' ' + screeningModeBadge(row.screening_mode);
   var integrityFlags = Array.isArray(row.state_integrity_flags) ? row.state_integrity_flags : [];
-  var integrityBadge = integrityFlags.length
-    ? '<span class="badge high" title="' + escapeHtml(integrityFlags.join(', ')) + '">State Integrity Flag</span>'
-    : '';
-  if (!parts.length && !modeBadge && !integrityBadge) return '<span style="font-size:12px;color:var(--text3);">—</span>';
-  return '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">' + modeBadge + integrityBadge + parts.map(function(part) {
-    return '<span class="explain-data-source" style="margin:0;">' + escapeHtml(part) + '</span>';
-  }).join('') + '</div>';
+  if (integrityFlags.length) {
+    html += ' <span class="badge high" title="' + escapeHtml(integrityFlags.join(', ')) + '">State Integrity Flag</span>';
+  }
+  html += screeningReviewBadge(row, { suppressChip: screeningReviewDisplayLabel(row) === String(canonicalStatus.label || '') });
+  return html;
+}
+
+function screeningQueueScreenedCell(row) {
+  var screenedAt = String((row || {}).screened_at || '').substring(0, 10);
+  return '<span style="font-size:12px;color:var(--text2);white-space:nowrap;">' + (screenedAt ? escapeHtml(screenedAt) : '—') + '</span>';
 }
 
 function screeningReviewBadge(row, options) {
@@ -16097,7 +16138,7 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   });
   body += renderInlineScreeningDispositionPanel(app, reviewRow, 'entity', app.company);
   body += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px;">';
-  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Registry Status</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(company.found ? 'Registry record found' : (screeningSummary.screening_run_recorded ? 'Registry record not found' : 'Awaiting screening')) + '</div></div>';
+  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Registry Status</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(company.found === true ? 'Registry record found' : (company.found === false ? 'Registry record not found' : 'Registry lookup not performed')) + '</div></div>';
   body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Provider Match Count</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(String(companyHits.total_hits || 0)) + '</div></div>';
   body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Last Screened</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(((screeningSummary.screened_at || 'Not recorded') + '').replace('T', ' ').slice(0, 19)) + '</div></div>';
   body += '</div>';
@@ -17449,7 +17490,7 @@ async function renderScreening(options) {
     tbody = document.getElementById('screening-body');
     if (!tbody) return;
   }
-  tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text3);font-size:13px;">Loading screening queue…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--text3);font-size:13px;">Loading screening queue…</td></tr>';
   renderScreeningProviderStatusPanel();
   renderScreeningQueueMeta();
 
@@ -17460,7 +17501,7 @@ async function renderScreening(options) {
 
   if (!SCREENING_QUEUE.rows.length) {
     var empty = document.createElement('tr');
-    empty.innerHTML = '<td colspan="8" style="padding:24px;text-align:center;color:var(--text3);font-size:13px;">' +
+    empty.innerHTML = '<td colspan="5" style="padding:24px;text-align:center;color:var(--text3);font-size:13px;">' +
       escapeHtml(SCREENING_QUEUE.load_error || 'No screening queue items available from the backend.') +
       '</td>';
     tbody.appendChild(empty);
@@ -17469,10 +17510,6 @@ async function renderScreening(options) {
       var rowKey = 'screening_row_' + idx;
       SCREENING_REVIEW_ROWS[rowKey] = row;
       var tr = document.createElement('tr');
-      var pepCell = '<div style="display:flex;flex-wrap:wrap;gap:4px;">' +
-        screeningBadge(row.pep_declared_status || 'not_applicable') +
-        screeningQueueSignalBadge(row.pep_screening_status || 'not_applicable', row) +
-        '</div>';
       var actions = '<button class="btn btn-outline btn-sm" onclick="openScreeningReviewByRow(\'' + rowKey + '\')">View</button>';
       if (row.review_required && row.review_actionable !== false) {
         if (canClearScreeningDisposition()) {
@@ -17487,14 +17524,10 @@ async function renderScreening(options) {
         }
       }
 
-      var canonicalStatus = screeningQueueCanonicalStatus(row);
-      tr.innerHTML = '<td>' + escapeHtml(row.subject_name) + '</td>' +
-        '<td style="font-size:12px;text-transform:capitalize;">' + escapeHtml(String(row.subject_type || '').replace('_', ' ')) + '</td>' +
-        '<td style="font-size:12px;">' + escapeHtml(row.company_name || '') + '</td>' +
-        '<td>' + screeningQueueSignalBadge(row.watchlist_status, row) + '</td>' +
-        '<td>' + pepCell + '</td>' +
-        '<td>' + screeningQueueContextCell(row) + '</td>' +
-        '<td>' + screeningQueueStatusBadge(canonicalStatus.key, canonicalStatus.label) + screeningReviewBadge(row, { suppressChip: screeningReviewDisplayLabel(row) === String(canonicalStatus.label || '') }) + '</td>' +
+      tr.innerHTML = '<td>' + screeningQueueSubjectCell(row) + '</td>' +
+        '<td>' + screeningQueueSignalsCell(row) + '</td>' +
+        '<td>' + screeningQueueStatusCell(row) + '</td>' +
+        '<td>' + screeningQueueScreenedCell(row) + '</td>' +
         '<td>' + actions + '</td>';
       tbody.appendChild(tr);
     });

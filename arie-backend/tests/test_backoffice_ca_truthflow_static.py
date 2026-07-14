@@ -125,7 +125,11 @@ def test_backoffice_screening_review_renders_triage_cockpit_layout():
     assert "screeningSubjectRoleBadge(subject.subject_type)" in triage_region
     assert "screeningQueueCanonicalStatus(subject)" in triage_region
     assert "screeningQueueStatusBadge(status.key, status.label)" in triage_region
-    assert "Screening provider:" in html
+    # Provider provenance moved from the queue context cell (removed in the
+    # queue slimming) to the review detail cards, which state the source for
+    # the entity and per-person records.
+    assert "Company screening source:" in html
+    assert "Provider source:" in html
     assert "Screening Subjects" in review_region
     assert "Select one subject to review comparison, evidence, and disposition state." in review_region
     assert "screeningTriageSubjectListItem(subject" in review_region
@@ -180,8 +184,13 @@ def test_backoffice_screening_queue_sidebar_alias_and_audit_formatters_exist():
     assert "Show technical details" in activity_region
     assert "Screening Review Completed" in activity_region
     assert "screeningAuditSourceLabel" in activity_region
-    assert "screeningQueueSignalBadge(row.watchlist_status, row)" in render_screening_region
-    assert "screeningQueueSignalBadge(row.pep_screening_status || 'not_applicable', row)" in render_screening_region
+    # Queue slimming: watchlist/PEP signals render through the truthful
+    # signals cell (chips only on real hits — 'review' means the hit is in
+    # another dimension), and status/provenance through the status cell
+    # (blocking provenance only; live is silent).
+    assert "screeningQueueSignalsCell(row)" in render_screening_region
+    assert "screeningQueueStatusCell(row)" in render_screening_region
+    assert "screeningQueueSubjectCell(row)" in render_screening_region
 
 
 def test_backoffice_audit_trail_has_filtered_ca_mesh_timeline():

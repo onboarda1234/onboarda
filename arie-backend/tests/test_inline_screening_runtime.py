@@ -1418,3 +1418,192 @@ class TestScreeningQueuePagerAndLayout:
         assert '<option value="failed">Failed / Provider Error</option>' in status_options
         assert '<option value="stale">Stale / Requires Refresh</option>' in status_options
         assert "screening-filter-provider" not in html
+
+
+def _queue_row_template_runtime_js(html):
+    region = _extract_between(
+        html,
+        "function screeningBadge(status) {",
+        "var EDD_CASES = [];",
+    )
+    return "\n".join(
+        [
+            textwrap.dedent(
+                """
+                var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null };
+                var SCREENING_QUEUE_DIRTY = false;
+                var SCREENING_QUEUE_FILTERS = { search:'', status:'', type:'', pep:'', application_ref:'' };
+                var SCREENING_QUEUE_SEARCH_TIMER = null;
+                var SCREENING_QUEUE_ACTIVE_REQUEST_ID = 0;
+                var SCREENING_REVIEW_ROWS = {};
+                var currentUser = { role: 'co', name: 'Officer Test' };
+                var BO_AUTH_TOKEN = 'token';
+                function escapeHtml(value) {
+                  return String(value == null ? '' : value)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+                }
+                function showToast() {}
+                function openScreeningReviewByRow() {}
+                function openScreeningDispositionModalByRow() {}
+                function canClearScreeningDisposition() { return true; }
+                function getCurrentBoSessionId() { return 'row-template-test-session'; }
+                var tbody = {
+                  _innerHTML: '',
+                  rows: [],
+                  set innerHTML(value) { this._innerHTML = value; this.rows = []; },
+                  get innerHTML() { return this._innerHTML; },
+                  appendChild(node) { this.rows.push(node); }
+                };
+                var stat = { textContent: '' };
+                var document = {
+                  getElementById(id) {
+                    if (id === 'screening-body') return tbody;
+                    if (id === 'screening-stat-awaiting' || id === 'screening-stat-screened' || id === 'screening-stat-hits') return stat;
+                    return null;
+                  },
+                  createElement() { return { innerHTML: '' }; }
+                };
+                async function boApiCall(method, path) {
+                  return {
+                    metrics: { applications_awaiting_screening: 0, applications_screened: 2, applications_requiring_review: 1 },
+                    rows: [
+                      {
+                        subject_name: 'Clean Entity Ltd',
+                        subject_type: 'entity',
+                        company_name: 'Clean Entity Ltd',
+                        application_ref: 'ARF-2026-000001',
+                        watchlist_status: 'clear',
+                        pep_declared_status: 'not_applicable',
+                        pep_screening_status: 'not_applicable',
+                        entity_context: ['Registry not found', 'Registry found'],
+                        screening_mode: 'live',
+                        screened_at: '2026-07-10T14:52:12',
+                        status_key: 'clear',
+                        status_label: 'Clear',
+                        total_hits: 0,
+                        review_required: false
+                      },
+                      {
+                        subject_name: 'Amara Okafor',
+                        subject_type: 'director',
+                        company_name: 'Blue Lagoon Payments Ltd',
+                        application_ref: 'ARF-2026-000002',
+                        watchlist_status: 'clear',
+                        pep_declared_status: 'declared',
+                        pep_screening_status: 'match',
+                        screening_mode: 'live',
+                        screened_at: '2026-07-11T09:14:00',
+                        status_key: 'review_required',
+                        status_label: 'Review Required',
+                        total_hits: 2,
+                        review_required: true,
+                        review_actionable: true,
+                        review_four_eyes_status: 'not_required'
+                      },
+                      {
+                        subject_name: 'Sim Subject',
+                        subject_type: 'director',
+                        company_name: 'Blue Lagoon Payments Ltd',
+                        watchlist_status: 'pending',
+                        pep_declared_status: 'not_declared',
+                        pep_screening_status: 'pending',
+                        screening_mode: 'simulated',
+                        status_key: 'screening_simulated',
+                        status_label: 'Simulated Screening — Not Live',
+                        review_required: false
+                      },
+                      {
+                        subject_name: 'Meridian Shipping Co Ltd',
+                        subject_type: 'entity',
+                        company_name: 'Meridian Shipping Co Ltd',
+                        watchlist_status: 'match',
+                        pep_declared_status: 'not_applicable',
+                        pep_screening_status: 'not_applicable',
+                        entity_context: ['Company adverse media match'],
+                        screening_mode: 'live',
+                        screened_at: '2026-07-11T10:02:00',
+                        status_key: 'review_required',
+                        status_label: 'Review Required',
+                        total_hits: 3,
+                        review_required: true,
+                        review_actionable: true,
+                        review_four_eyes_status: 'not_required'
+                      }
+                    ]
+                  };
+                }
+                """
+            ),
+            region,
+            textwrap.dedent(
+                """
+                (async () => {
+                  markScreeningQueueDirty();
+                  await renderScreening({ force: true });
+                  console.log(JSON.stringify({
+                    rows: tbody.rows.map(function(node) { return node.innerHTML; })
+                  }));
+                })().catch((err) => {
+                  console.error(err);
+                  process.exit(1);
+                });
+                """
+            ),
+        ]
+    )
+
+
+class TestScreeningQueueSlimRowTemplate:
+    def test_slim_rows_render_five_truthful_cells(self):
+        html = _read_backoffice()
+        result = _run_node(_queue_row_template_runtime_js(html))
+        rows = result["rows"]
+        assert len(rows) == 4
+        clean_entity, declared_pep, simulated, sanctions_entity = rows
+
+        for row in rows:
+            assert row.count("<td>") == 5
+
+        # Entity rows: company name rendered once (no Subject/Company dupe),
+        # type chip present, context chips (incl. registry) gone from the list,
+        # live provenance silent, screened is date-only.
+        assert clean_entity.count("Clean Entity Ltd") == 1
+        assert "entity" in clean_entity
+        assert "ARF-2026-000001" in clean_entity
+        assert "Registry" not in clean_entity
+        assert "Live Screening" not in clean_entity
+        assert "2026-07-10" in clean_entity
+        assert "14:52" not in clean_entity
+        assert "—" in clean_entity  # clean row: signals dash
+
+        # Person row: company subline kept, both PEP facts as signal chips,
+        # total hit count chip, and the disposition quick actions preserved.
+        assert "Blue Lagoon Payments Ltd" in declared_pep
+        assert "Declared PEP" in declared_pep
+        assert "PEP hit" in declared_pep
+        assert "2 provider hits" in declared_pep
+        assert "Clear as False Positive" in declared_pep
+        assert "Confirm True Match" in declared_pep
+        assert "Escalate" in declared_pep
+        assert "Request More Information" in declared_pep
+
+        # Blocking provenance still surfaces next to Status.
+        assert "Simulated" in simulated
+
+        # Sanctions + adverse media chips on a matched entity.
+        assert "Sanctions/Watchlist" in sanctions_entity
+        assert "Adverse media" in sanctions_entity
+        assert "3 provider hits" in sanctions_entity
+
+    def test_queue_header_is_five_columns_and_registry_tile_is_honest(self):
+        html = _read_backoffice()
+        assert "<thead><tr><th>Subject</th><th>Signals</th><th>Status</th><th>Screened</th><th>Actions</th></tr></thead>" in html
+        assert "<th>Entity / Context</th>" not in html
+        assert "<th>PEP (Declared / Screening)</th>" not in html
+        assert "function screeningQueueContextCell" not in html
+        assert "Registry lookup not performed" in html
+        assert "'Awaiting screening'" not in html.split("Registry Status")[1][:400]
