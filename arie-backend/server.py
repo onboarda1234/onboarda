@@ -22831,7 +22831,12 @@ def _screening_queue_status_group(row):
     if status_key in ("clear", "cleared_by_officer") or raw_status_key == "cleared_by_officer" or status_key in ("screened_no_match", "reviewed_false_positive_cleared"):
         return "no_match"
     canonical = _screening_queue_filter_value(row.get("canonical_disposition") or row.get("review_disposition_code"))
-    if canonical == "confirmed_match":
+    # All three confirmed-match canonical codes belong to the officer-facing
+    # "Match/Confirmed" bucket. true_match and material_concern rows resolve
+    # to an escalated queue status, but for filtering they are confirmed
+    # matches first; the "escalated" bucket keeps pure escalation dispositions
+    # (e.g. escalated_to_edd, provider_unresolved).
+    if canonical in ("confirmed_match", "true_match", "material_concern"):
         return "match"
     if status_key in ("escalated", "review_escalated") or raw_status_key in ("escalated", "review_escalated") or disposition == "escalated":
         return "escalated"
@@ -22918,16 +22923,31 @@ def _apply_screening_queue_canonical_state(row):
     return row
 
 
-def _screening_queue_pep_group(row):
+def _screening_queue_pep_tags(row):
+    """Return the set of PEP filter tags a row satisfies.
+
+    Membership, not a single bucket: a declared PEP with a live provider PEP
+    match must be findable under both "declared" and "provider_pep_hit", and a
+    non-declared subject with a provider hit under both "not_declared" and
+    "provider_pep_hit".
+
+    ``pep_screening_status == "review"`` explicitly means "terminal answer
+    with hits in another dimension only" (sanctions / adverse media, no PEP
+    hit — see ``legacy_status_value``) and therefore must NOT count as a
+    provider PEP hit.
+    """
     declared = _screening_queue_filter_value(row.get("pep_declared_status"))
     screening = _screening_queue_filter_value(row.get("pep_screening_status"))
+    tags = set()
     if declared == "declared":
-        return "declared"
-    if screening in ("match", "hit", "possible_match", "review"):
-        return "provider_pep_hit"
-    if declared == "not_declared":
-        return "not_declared"
-    return "na"
+        tags.add("declared")
+    elif declared == "not_declared":
+        tags.add("not_declared")
+    if screening in ("match", "hit", "possible_match"):
+        tags.add("provider_pep_hit")
+    if not tags:
+        tags.add("na")
+    return tags
 
 
 def _filter_screening_queue_rows(rows, filters):
@@ -22951,7 +22971,7 @@ def _filter_screening_queue_rows(rows, filters):
             continue
         if provider_filter and provider_filter != "all" and _screening_queue_provider_group(row) != provider_filter:
             continue
-        if pep_filter and pep_filter != "all" and _screening_queue_pep_group(row) != pep_filter:
+        if pep_filter and pep_filter != "all" and pep_filter not in _screening_queue_pep_tags(row):
             continue
         filtered.append(row)
     return filtered
