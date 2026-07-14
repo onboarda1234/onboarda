@@ -16169,17 +16169,39 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   return screeningReviewCard('Entity Screening — ' + escapeHtml(app.company), badges.join(''), body, screeningFocusMatches(focus, 'entity', app.company));
 }
 
+function screeningSubjectJoinName(value) {
+  return String(value == null ? '' : value).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function findScreeningRecordForSubject(report, person) {
+  // Stored entries can carry the PROVIDER profile name (e.g. "thomas
+  // roberts") while the application party holds "Miles Thomas ROBERTS".
+  // Join by the stable person_key persisted at screening time; fall back to
+  // a normalized-name match across every name field the entry carries.
+  if (!report) return null;
+  var combined = (report.director_screenings || [])
+    .concat(report.ubo_screenings || [])
+    .concat(report.intermediary_screenings || []);
+  var personKey = person && (person.person_key || person.id);
+  if (personKey) {
+    var byKey = combined.find(function(item) {
+      return item && item.person_key && String(item.person_key) === String(personKey);
+    });
+    if (byKey) return byKey;
+  }
+  var target = screeningSubjectJoinName(person && person.name);
+  if (!target) return null;
+  return combined.find(function(item) {
+    if (!item) return false;
+    return [item.entity_name, item.person_name, item.subject_name, item.name].some(function(candidate) {
+      return candidate && screeningSubjectJoinName(candidate) === target;
+    });
+  }) || null;
+}
+
 function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
   var screeningSummary = getApplicationScreeningSummary(app);
-  var screeningRecord = null;
-  if (screeningSummary.report) {
-    var combined = (screeningSummary.report.director_screenings || [])
-      .concat(screeningSummary.report.ubo_screenings || [])
-      .concat(screeningSummary.report.intermediary_screenings || []);
-    screeningRecord = combined.find(function(item) {
-      return (item.entity_name || item.person_name || item.name) === person.name;
-    }) || null;
-  }
+  var screeningRecord = findScreeningRecordForSubject(screeningSummary.report, person);
   var screening = (screeningRecord || {}).screening || null;
   var facts = screeningResultFacts(screening);
   var personDeclaredPep = declaredPepFromScreeningRecord(screeningRecord, person.pep);
@@ -16378,21 +16400,13 @@ function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap
   });
 
   var people = [];
-  (app.directors || []).forEach(function(d) { people.push({ subject_type:'director', name:d.name, nat:d.nat, dob:d.dob, pct:null, pep:d.pep, first_name:d.first_name, last_name:d.last_name, aliases:d.aliases }); });
-  (app.ubos || []).forEach(function(u) { people.push({ subject_type:'ubo', name:u.name, nat:u.nat, dob:u.dob, pct:u.pct, pep:u.pep, first_name:u.first_name, last_name:u.last_name, aliases:u.aliases }); });
-  (app.intermediaries || []).forEach(function(i) { people.push({ subject_type:'intermediary', name:i.name || 'Unnamed intermediary', nat:i.jurisdiction || '', dob:'', pct:i.pct, pep:'No' }); });
+  (app.directors || []).forEach(function(d) { people.push({ subject_type:'director', person_key:d.person_key || d.id || '', name:d.name, nat:d.nat, dob:d.dob, pct:null, pep:d.pep, first_name:d.first_name, last_name:d.last_name, aliases:d.aliases }); });
+  (app.ubos || []).forEach(function(u) { people.push({ subject_type:'ubo', person_key:u.person_key || u.id || '', name:u.name, nat:u.nat, dob:u.dob, pct:u.pct, pep:u.pep, first_name:u.first_name, last_name:u.last_name, aliases:u.aliases }); });
+  (app.intermediaries || []).forEach(function(i) { people.push({ subject_type:'intermediary', person_key:i.person_key || i.id || '', name:i.name || 'Unnamed intermediary', nat:i.jurisdiction || '', dob:'', pct:i.pct, pep:'No' }); });
 
   people.forEach(function(person) {
     var reviewRow = getMergedScreeningReviewRow(app, queueMap[person.subject_type + '|' + person.name], reviewMap[person.subject_type + '|' + person.name], person.subject_type, person.name);
-    var screeningRecord = null;
-    if (screeningSummary.report) {
-      var combined = (screeningSummary.report.director_screenings || [])
-        .concat(screeningSummary.report.ubo_screenings || [])
-        .concat(screeningSummary.report.intermediary_screenings || []);
-      screeningRecord = combined.find(function(item) {
-        return (item.entity_name || item.person_name || item.name) === person.name;
-      }) || null;
-    }
+    var screeningRecord = findScreeningRecordForSubject(screeningSummary.report, person);
     var screening = (screeningRecord || {}).screening || null;
     var facts = screeningResultFacts(screening);
     var personDeclaredPep = declaredPepFromScreeningRecord(screeningRecord, person.pep);

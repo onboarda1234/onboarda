@@ -292,11 +292,17 @@ def test_backoffice_screening_review_includes_intermediary_subjects():
     html = BACKOFFICE_HTML.read_text()
 
     summary_region = _function_region(html, "deriveScreeningTruthSummary", "screeningTruthBlockedReasons")
+    join_region = _function_region(html, "findScreeningRecordForSubject", "buildPersonScreeningReviewCard")
     person_region = _function_region(html, "buildPersonScreeningReviewCard", "buildScreeningTriageSubjects")
     triage_region = _function_region(html, "buildScreeningTriageSubjects", "renderScreeningReviewPanel")
 
     assert "report.intermediary_screenings" in summary_region
-    assert ".concat(screeningSummary.report.intermediary_screenings || [])" in person_region
+    # Phase 2 subject-identity fix: the record lookup moved into the shared
+    # findScreeningRecordForSubject helper (person_key first, normalized-name
+    # fallback) which still spans director + ubo + intermediary entries.
+    assert ".concat(report.intermediary_screenings || [])" in join_region
+    assert "person_key" in join_region
+    assert "findScreeningRecordForSubject(screeningSummary.report, person)" in person_region
     assert "(app.intermediaries || []).forEach" in triage_region
     assert "subject_type:'intermediary'" in triage_region
 

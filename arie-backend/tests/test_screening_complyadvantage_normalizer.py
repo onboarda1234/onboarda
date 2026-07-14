@@ -614,3 +614,72 @@ def test_normalized_record_provider_field_is_complyadvantage():
 
 def test_normalized_record_normalized_version_is_2_0():
     assert _single("pep_canonical.json")["normalized_version"] == "2.0"
+
+
+def test_person_and_intermediary_entries_persist_stable_person_key():
+    """Phase 2 subject-identity fix: every subject entry written by the CA
+    normalizer carries the party's stable person_key plus the party name
+    (subject_name), so downstream joins never depend on the provider profile
+    name matching the application party name."""
+    from screening_complyadvantage.normalizer import (
+        ScreeningApplicationContext,
+        _empty_person_screening,
+        _intermediary_screening_from_company,
+    )
+
+    ctx = ScreeningApplicationContext(
+        application_id="app-1",
+        client_id="client-1",
+        screening_subject_kind="director",
+        screening_subject_name="Miles Thomas ROBERTS",
+        screening_subject_person_key="director:3",
+    )
+    entry = _empty_person_screening(ctx, "director", screened_at="2026-01-01T00:00:00Z")
+    assert entry["person_key"] == "director:3"
+
+    intermediary_ctx = ScreeningApplicationContext(
+        application_id="app-1",
+        client_id="client-1",
+        screening_subject_kind="intermediary",
+        screening_subject_name="Holdings Ltd",
+        screening_subject_person_key="intermediary:1",
+    )
+    intermediary = _intermediary_screening_from_company(
+        intermediary_ctx, {"company_screening": {}}, screened_at="2026-01-01T00:00:00Z"
+    )
+    assert intermediary["person_key"] == "intermediary:1"
+
+    # Keyless contexts write None rather than omitting inconsistently.
+    keyless = ScreeningApplicationContext(
+        application_id="app-1",
+        client_id="client-1",
+        screening_subject_kind="director",
+        screening_subject_name="Jane Doe",
+    )
+    assert _empty_person_screening(keyless, "director")["person_key"] is None
+
+
+def test_matched_person_entry_keeps_party_identity_alongside_profile_name():
+    """The matched-person path stores the provider profile name as
+    person_name; person_key and subject_name must preserve the party identity."""
+    from screening_complyadvantage.normalizer import derive_person_screening_from_matches
+
+    profile = CAProfile.model_validate({"identifier": "prof-1", "matching_name": "thomas roberts", "person": {}})
+    match = MergedMatch(
+        risk=CARiskDetail(),
+        surfaced_by_pass="strict",
+        profile=profile,
+        profile_identifier="prof-1",
+        risk_id="risk-1",
+    )
+    ctx = ScreeningApplicationContext(
+        application_id="app-1",
+        client_id="client-1",
+        screening_subject_kind="director",
+        screening_subject_name="Miles Thomas ROBERTS",
+        screening_subject_person_key="director:3",
+    )
+    entry = derive_person_screening_from_matches([match], ctx, "director", screened_at="2026-01-01T00:00:00Z")
+    assert entry["person_key"] == "director:3"
+    assert entry["subject_name"] == "Miles Thomas ROBERTS"
+    assert entry["person_name"] == "thomas roberts"

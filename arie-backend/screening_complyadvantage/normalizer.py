@@ -296,6 +296,12 @@ def derive_person_screening_from_matches(
     declared_pep = bool(application_context.declared_pep)
     return {
         "person_name": _profile_name(profile) or application_context.screening_subject_name,
+        # Stable join identity: person_name above may be the PROVIDER profile
+        # name (e.g. "thomas roberts"), which can diverge from the party name
+        # on the application ("Miles Thomas ROBERTS"). Downstream joins must
+        # use person_key when present, never the display name.
+        "person_key": application_context.screening_subject_person_key or None,
+        "subject_name": application_context.screening_subject_name,
         "person_type": person_type,
         "nationality": nationality,
         "declared_pep": "Yes" if declared_pep else "No",
@@ -573,6 +579,7 @@ def _intermediary_screening_from_company(context, company_screening, screened_at
     return {
         "person_name": context.screening_subject_name,
         "entity_name": context.screening_subject_name,
+        "person_key": context.screening_subject_person_key or None,
         "person_type": "intermediary",
         "subject_type": "intermediary",
         "nationality": "",
@@ -594,6 +601,7 @@ def _intermediary_screening_from_company(context, company_screening, screened_at
 def _empty_person_screening(context, person_type, screened_at: str | None = None):
     return {
         "person_name": context.screening_subject_name,
+        "person_key": context.screening_subject_person_key or None,
         "person_type": person_type,
         "nationality": "",
         "declared_pep": "Yes" if context.declared_pep else "No",

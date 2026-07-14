@@ -19990,6 +19990,58 @@ _PROVIDER_MODE_SEVERITY_RANK = {
 }
 
 
+def _screening_subject_join_name(value):
+    """Casefolded, whitespace-collapsed name for report<->party joins."""
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _index_subject_screenings(entries, name_keys):
+    """Index stored screening entries by stable person_key and normalized name.
+
+    The queue previously joined report entries to application parties by
+    exact display-name equality. Stored entries can carry the PROVIDER
+    profile name (e.g. "thomas roberts") while the party record holds the
+    application name ("Miles Thomas ROBERTS"), so the join silently missed
+    and the subject rendered as never screened. person_key (persisted with
+    each entry at screening time) is the durable identity; the normalized
+    name remains the fallback for legacy entries written before keys.
+    """
+    by_key = {}
+    by_name = {}
+    for item in entries or []:
+        if not isinstance(item, dict):
+            continue
+        person_key = item.get("person_key") or item.get("subject_key")
+        if person_key not in (None, ""):
+            by_key[str(person_key)] = item
+        for key in name_keys:
+            name = _screening_subject_join_name(item.get(key))
+            if name:
+                # Last entry wins on duplicate names, matching the legacy
+                # dict-overwrite behaviour this index replaces.
+                by_name[name] = item
+    return {"by_key": by_key, "by_name": by_name}
+
+
+def _lookup_subject_screening(index, party, name_keys):
+    """Resolve a party's stored screening entry: person_key first, then name."""
+    if not index:
+        return None
+    party = party or {}
+    person_key = party.get("person_key") or party.get("id")
+    if person_key not in (None, ""):
+        item = index["by_key"].get(str(person_key))
+        if item is not None:
+            return item
+    for key in name_keys:
+        name = _screening_subject_join_name(party.get(key))
+        if name:
+            item = index["by_name"].get(name)
+            if item is not None:
+                return item
+    return None
+
+
 _AML_PROVIDER_TOKENS = ("complyadvantage", "sumsub")
 
 
@@ -22269,9 +22321,14 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             decrypt_pii_fields(dict(p), pii_fields)
             for p in db.execute(f"SELECT * FROM {table} WHERE application_id = ?", (app["id"],)).fetchall()
         ]
-        person = next((p for p in people if (p.get("full_name") or "") == subject_name), {})
+        subject_join_name = _screening_subject_join_name(subject_name)
+        person = next((p for p in people if _screening_subject_join_name(p.get("full_name")) == subject_join_name), {})
         combined = (report.get("director_screenings") or []) + (report.get("ubo_screenings") or [])
-        item = next((i for i in combined if (i.get("person_name") or i.get("name")) == subject_name), {})
+        item = _lookup_subject_screening(
+            _index_subject_screenings(combined, ("person_name", "subject_name", "name")),
+            person if person else {"full_name": subject_name},
+            ("full_name", "name"),
+        ) or {}
         subject_found = bool(person or item)
         declared_pep = _declared_pep_from_screening_item(item, person.get("is_pep", "No"))
         screening = (item or {}).get("screening") or {}
@@ -22312,14 +22369,22 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
 
     if subject_type == "intermediary":
         _, _, intermediaries = get_application_parties(db, app["id"])
-        person = next((p for p in intermediaries or [] if (p.get("entity_name") or p.get("full_name") or "") == subject_name), {})
-        item = next(
+        subject_join_name = _screening_subject_join_name(subject_name)
+        person = next(
             (
-                i for i in (report.get("intermediary_screenings") or [])
-                if (i.get("entity_name") or i.get("person_name") or i.get("name")) == subject_name
+                p for p in intermediaries or []
+                if _screening_subject_join_name(p.get("entity_name") or p.get("full_name")) == subject_join_name
             ),
             {},
         )
+        item = _lookup_subject_screening(
+            _index_subject_screenings(
+                report.get("intermediary_screenings") or [],
+                ("entity_name", "person_name", "subject_name", "name"),
+            ),
+            person if person else {"entity_name": subject_name},
+            ("entity_name", "full_name", "name"),
+        ) or {}
         screening = (item or {}).get("screening") or {}
         facts = _screening_hit_facts(screening)
         person_state = derive_screening_state(screening)
@@ -23158,13 +23223,17 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         else:
             metrics["applications_awaiting_screening"] += 1
 
-        person_screenings = {}
-        intermediary_screenings = {}
+        person_screening_index = None
+        intermediary_screening_index = None
         if report:
-            for item in (report.get("director_screenings") or []) + (report.get("ubo_screenings") or []):
-                person_screenings[item.get("person_name")] = item
-            for item in report.get("intermediary_screenings") or []:
-                intermediary_screenings[item.get("entity_name") or item.get("person_name") or item.get("name")] = item
+            person_screening_index = _index_subject_screenings(
+                (report.get("director_screenings") or []) + (report.get("ubo_screenings") or []),
+                ("person_name", "subject_name", "name"),
+            )
+            intermediary_screening_index = _index_subject_screenings(
+                report.get("intermediary_screenings") or [],
+                ("entity_name", "person_name", "subject_name", "name"),
+            )
 
         company_screening = (report or {}).get("company_screening") or {}
         company_sanctions = _entity_sanctions_record(company_screening)
@@ -23346,7 +23415,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
 
         for person, subject_type in [(d, "director") for d in directors] + [(u, "ubo") for u in ubos]:
             person_name = person.get("full_name", "")
-            item = person_screenings.get(person_name)
+            item = _lookup_subject_screening(person_screening_index, person, ("full_name", "name"))
             screening = (item or {}).get("screening") or {}
             facts = _screening_hit_facts(screening)
             # Priority A.2: declared PEP must survive any non-canonical
@@ -23519,7 +23588,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
 
         for intermediary in intermediaries:
             intermediary_name = intermediary.get("entity_name") or intermediary.get("full_name") or "Unnamed intermediary"
-            item = intermediary_screenings.get(intermediary_name)
+            item = _lookup_subject_screening(intermediary_screening_index, intermediary, ("entity_name", "full_name", "name"))
             screening = (item or {}).get("screening") or {}
             facts = _screening_hit_facts(screening)
             intermediary_state = derive_screening_state(screening)
