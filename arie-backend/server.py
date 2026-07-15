@@ -8195,6 +8195,32 @@ class ApplicationDetailHandler(BaseHandler):
             idv_payload = result.get("sumsub_idv_statuses") or {}
             result["idv_gate_summary"] = idv_payload.get("gate_summary") or build_idv_gate_summary(idv_payload)
             result["approval_route"] = classify_approval_route(result, db)
+            try:
+                from risk_model_view import (
+                    RISK_REPORT_EVIDENCE_UNAVAILABLE_MESSAGE,
+                    RiskModelProjectionUnavailable,
+                    build_authoritative_risk_report_evidence,
+                )
+
+                result["risk_report_evidence"] = build_authoritative_risk_report_evidence(
+                    result,
+                    load_risk_config(),
+                    approval_route=result["approval_route"],
+                )
+            except (RiskConfigUnavailable, RiskModelProjectionUnavailable) as exc:
+                logger.warning(
+                    "authoritative_risk_report_evidence_unavailable app_id=%s reason=%s",
+                    result.get("id"),
+                    str(exc)[:160],
+                )
+                result["risk_report_evidence"] = {
+                    "available": False,
+                    "authoritative": True,
+                    "read_only": True,
+                    "status": "blocked",
+                    "message": RISK_REPORT_EVIDENCE_UNAVAILABLE_MESSAGE,
+                    "reason_codes": ["runtime_risk_config_unavailable"],
+                }
             current_gate_blockers = collect_approval_gate_blockers(result, db)
             gate_presentation = _build_application_gate_presentation(db, result, current_gate_blockers)
             result["approval_gate_presentation"] = gate_presentation["approval_gate_presentation"]
@@ -14890,9 +14916,17 @@ class RiskConfigHandler(BaseHandler):
             config = load_risk_config()
             if not config:
                 return self.error("Runtime risk model is not configured", 503)
-            from risk_model_view import build_runtime_risk_model_view
+            from risk_model_view import (
+                RiskModelProjectionUnavailable,
+                build_runtime_risk_model_view,
+            )
 
             version = str(config.get("_config_version") or "")
+            try:
+                runtime_model = build_runtime_risk_model_view(config)
+            except RiskModelProjectionUnavailable as exc:
+                logger.error("runtime_risk_model_projection_unavailable: %s", exc)
+                return self.error("Runtime risk model is unavailable", 503)
             result = {
                 "dimensions": config.get("dimensions") or [],
                 "thresholds": config.get("thresholds") or [],
@@ -14900,7 +14934,7 @@ class RiskConfigHandler(BaseHandler):
                 "sector_risk_scores": config.get("sector_risk_scores") or {},
                 "entity_type_scores": config.get("entity_type_scores") or {},
                 "updated_at": version.removeprefix("risk_config:"),
-                "runtime_model": build_runtime_risk_model_view(config),
+                "runtime_model": runtime_model,
             }
             self.success(result)
         except RiskConfigUnavailable as exc:

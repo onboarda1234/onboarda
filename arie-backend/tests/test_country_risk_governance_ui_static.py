@@ -7,8 +7,10 @@ def test_backoffice_country_risk_settings_use_runtime_projection_only():
 
     assert "This screen reflects the currently active runtime scoring model." in html
     assert "var model = payload && payload.runtime_model;" in html
-    assert "var COUNTRY_RISK_LISTS = { FATF_BLACK:[], FATF_GREY:[], SANCTIONED:[], MEDIUM_RISK:[], LOW_RISK:[] };" in html
-    assert "countryScoreMapToCountryRiskLists" in html
+    assert "RUNTIME_RISK_MODEL = deepFreezeRiskProjection(model);" in html
+    assert "runtimeRiskCatalogLabels('country')" in html
+    assert "COUNTRY_RISK_LISTS" not in html
+    assert "countryScoreMapToCountryRiskLists" not in html
     assert "btn-edit-countries" not in html
     assert "toggleCountryEdit" not in html
     assert "boApiCall('PUT', '/config/risk-model'" not in html
@@ -23,4 +25,5 @@ def test_country_risk_ui_does_not_embed_manual_country_rows():
     risk_model = html[risk_start:risk_end]
     assert "Mauritius" not in risk_model
     assert "United Kingdom" not in risk_model
-    assert "FATF_GREY:[]" in risk_model
+    assert "FATF_GREY" not in risk_model
+    assert "countryScoreMapToCountryRiskLists" not in risk_model

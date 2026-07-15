@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from copy import deepcopy
+import json
 import logging
 from typing import Any, Dict, Iterable, Mapping
 
@@ -59,6 +60,58 @@ READ_ONLY_MESSAGE = (
     "This screen reflects the currently active runtime scoring model. "
     "Editing of the model will be introduced in a future governed release."
 )
+
+RISK_REPORT_EVIDENCE_UNAVAILABLE_MESSAGE = (
+    "Risk report export is unavailable because the authoritative risk evidence "
+    "is missing, incomplete, or stale. Recompute risk before exporting."
+)
+
+
+class RiskModelProjectionUnavailable(RuntimeError):
+    """A controlled, non-sensitive projection failure for invalid runtime config."""
+
+
+_REQUIRED_DIMENSION_IDS = ("D1", "D2", "D3", "D4", "D5")
+_REQUIRED_SUBCRITERIA_COUNTS = {"D1": 6, "D2": 5, "D3": 3, "D4": 1, "D5": 2}
+
+
+def _validate_projection_config(config: Mapping[str, Any]) -> None:
+    """Reject incomplete projection inputs before runtime probes are attempted."""
+    if not isinstance(config, Mapping):
+        raise RiskModelProjectionUnavailable("Runtime risk model projection is incomplete")
+    dimensions = config.get("dimensions")
+    thresholds = config.get("thresholds")
+    if not isinstance(dimensions, list):
+        raise RiskModelProjectionUnavailable("Runtime risk model projection is incomplete")
+    by_id = {
+        str(item.get("id") or "").upper(): item
+        for item in dimensions
+        if isinstance(item, Mapping)
+    }
+    if len(dimensions) != len(_REQUIRED_DIMENSION_IDS) or tuple(sorted(by_id)) != tuple(sorted(_REQUIRED_DIMENSION_IDS)):
+        raise RiskModelProjectionUnavailable("Runtime risk model projection is incomplete")
+    for dimension_id in _REQUIRED_DIMENSION_IDS:
+        dimension = by_id[dimension_id]
+        subcriteria = dimension.get("subcriteria")
+        if (
+            not isinstance(dimension.get("weight"), (int, float))
+            or isinstance(dimension.get("weight"), bool)
+            or not isinstance(subcriteria, list)
+            or len(subcriteria) != _REQUIRED_SUBCRITERIA_COUNTS[dimension_id]
+            or any(
+                not isinstance(item, Mapping)
+                or not str(item.get("name") or "").strip()
+                or not isinstance(item.get("weight"), (int, float))
+                or isinstance(item.get("weight"), bool)
+                for item in subcriteria
+            )
+        ):
+            raise RiskModelProjectionUnavailable("Runtime risk model projection is incomplete")
+    if not isinstance(thresholds, list) or not thresholds:
+        raise RiskModelProjectionUnavailable("Runtime risk model projection is incomplete")
+    for field in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
+        if not isinstance(config.get(field), Mapping) or not _normalized_score_map(config.get(field)):
+            raise RiskModelProjectionUnavailable("Runtime risk model projection is incomplete")
 
 
 _PROJECTION_PROBE_ACTIVE: ContextVar[bool] = ContextVar(
@@ -513,12 +566,15 @@ def _pep_catalog(config: Mapping[str, Any]) -> list[Dict[str, Any]]:
 
 
 def _rule_rows(config: Mapping[str, Any], catalogs: Mapping[str, list[Dict[str, Any]]]) -> list[Dict[str, Any]]:
-    volume_score_four = next(
-        item for item in catalogs["monthly_volume"] if item["runtime_score"] == 4
+    volume_score_four = _required_catalog_item(
+        catalogs,
+        "monthly_volume",
+        lambda item: item.get("runtime_score") == 4,
     )
-    unsolicited = next(
-        item for item in catalogs["introduction"]
-        if item["label"] == "Unsolicited / unknown referral source"
+    unsolicited = _required_catalog_item(
+        catalogs,
+        "introduction",
+        lambda item: item.get("label") == "Unsolicited / unknown referral source",
     )
     return [
         {
@@ -628,9 +684,199 @@ def _catalog_count(catalogs: Mapping[str, Iterable[Mapping[str, Any]]]) -> int:
     return sum(len(list(items)) for items in catalogs.values())
 
 
-def build_runtime_risk_model_view(config: Mapping[str, Any]) -> Dict[str, Any]:
-    """Return the complete read-only model view from runtime-owned sources."""
+def _required_catalog_item(
+    catalogs: Mapping[str, list[Dict[str, Any]]],
+    family: str,
+    predicate,
+) -> Dict[str, Any]:
+    items = catalogs.get(family)
+    if not isinstance(items, list):
+        raise RiskModelProjectionUnavailable("Runtime risk model projection is incomplete")
+    for item in items:
+        if isinstance(item, Mapping) and predicate(item):
+            return dict(item)
+    raise RiskModelProjectionUnavailable("Runtime risk model projection is incomplete")
+
+
+def _json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return dict(parsed) if isinstance(parsed, Mapping) else {}
+    return {}
+
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return []
+        return list(parsed) if isinstance(parsed, list) else []
+    return []
+
+
+def _declared_pep_roles(app: Mapping[str, Any]) -> list[str]:
+    """Read stored structured PEP declarations without evaluating PEP policy."""
+    roles: list[str] = []
+    for person in list(app.get("directors") or []) + list(app.get("ubos") or []):
+        if not isinstance(person, Mapping):
+            continue
+        declaration = _json_object(person.get("pep_declaration"))
+        status = str(person.get("pep_status") or declaration.get("pep_status") or "").strip().lower()
+        declared = any(
+            value is True
+            for value in (
+                person.get("client_declared_pep"),
+                person.get("declared_pep"),
+                person.get("officer_verified_pep"),
+                person.get("verified_pep"),
+                declaration.get("client_declared_pep"),
+                declaration.get("declared_pep"),
+                declaration.get("officer_verified_pep"),
+                declaration.get("verified_pep"),
+            )
+        ) or status in {"declared_yes", "confirmed_pep"}
+        if not declared:
+            continue
+        role = str(declaration.get("pep_role_type") or person.get("pep_role_type") or "declared_pep").strip()
+        if role and role not in roles:
+            roles.append(role)
+    return roles
+
+
+def _blocked_risk_report_evidence(*reason_codes: str) -> Dict[str, Any]:
+    return {
+        "available": False,
+        "authoritative": True,
+        "read_only": True,
+        "status": "blocked",
+        "message": RISK_REPORT_EVIDENCE_UNAVAILABLE_MESSAGE,
+        "reason_codes": sorted({str(code) for code in reason_codes if code}),
+    }
+
+
+def build_authoritative_risk_report_evidence(
+    app: Mapping[str, Any],
+    config: Mapping[str, Any],
+    *,
+    approval_route: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Package stored application risk truth for read-only CSV/PDF exports.
+
+    This function deliberately performs no scoring or weighted arithmetic. It
+    joins persisted application outcomes to the validated runtime configuration
+    that produced them and blocks export when provenance is incomplete or stale.
+    """
+    _validate_projection_config(config)
+    app = dict(app or {})
+    current_version = str(config.get("_config_version") or "").strip()
+    stored_version = str(app.get("risk_config_version") or "").strip()
+    computed_at = str(app.get("risk_computed_at") or "").strip()
+    dimensions = _json_object(app.get("risk_dimensions"))
+    escalations = [str(item) for item in _json_list(app.get("risk_escalations")) if str(item)]
+    route = dict(approval_route or {})
+
+    reasons: list[str] = []
+    if not current_version:
+        reasons.append("runtime_config_version_missing")
+    if not stored_version:
+        reasons.append("risk_config_version_missing")
+    elif stored_version.startswith("stale:"):
+        reasons.append("risk_evidence_stale")
+    elif current_version and stored_version != current_version:
+        reasons.append("risk_config_version_mismatch")
+    if not computed_at:
+        reasons.append("risk_computed_at_missing")
+
+    try:
+        score = float(app.get("risk_score"))
+    except (TypeError, ValueError):
+        score = None
+        reasons.append("risk_score_missing")
+    if score is not None and not 0 <= score <= 100:
+        reasons.append("risk_score_invalid")
+
+    tier = str(app.get("final_risk_level") or app.get("risk_level") or "").strip().upper().replace("-", "_").replace(" ", "_")
+    if tier not in {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}:
+        reasons.append("risk_tier_missing")
+    if not route.get("route"):
+        reasons.append("approval_route_missing")
+    edd_route = str(app.get("onboarding_lane") or "").strip()
+    if not edd_route:
+        reasons.append("edd_route_missing")
+
+    configured_dimensions = {
+        str(item.get("id") or "").upper(): item
+        for item in config.get("dimensions") or []
+        if isinstance(item, Mapping)
+    }
+    dimension_rows: list[Dict[str, Any]] = []
+    for index, dimension_id in enumerate(_REQUIRED_DIMENSION_IDS, start=1):
+        stored_key = f"d{index}"
+        try:
+            stored_score = float(dimensions[stored_key])
+        except (KeyError, TypeError, ValueError):
+            reasons.append(f"{stored_key}_evidence_missing")
+            continue
+        if not 1 <= stored_score <= 4:
+            reasons.append(f"{stored_key}_evidence_invalid")
+            continue
+        runtime_dimension = configured_dimensions[dimension_id]
+        dimension_rows.append({
+            "id": dimension_id,
+            "name": str(runtime_dimension.get("name") or dimension_id),
+            "weight": runtime_dimension.get("weight"),
+            "stored_score": stored_score,
+            "subcriteria": deepcopy(list(runtime_dimension.get("subcriteria") or [])),
+            "source": f"applications.risk_dimensions.{stored_key}",
+        })
+
+    if reasons:
+        return _blocked_risk_report_evidence(*reasons)
+
+    factor_evidence: list[Dict[str, Any]] = []
+    for role in _declared_pep_roles(app):
+        factor_evidence.append({
+            "family": "pep",
+            "label": role,
+            "score": GATE0_DECLARED_PEP_SCORE,
+            "source": "stored pep_declaration.pep_role_type + rule_engine.GATE0_DECLARED_PEP_SCORE",
+        })
+
+    floor_reasons = [item for item in escalations if item.startswith("floor_rule_")]
+    return {
+        "available": True,
+        "authoritative": True,
+        "read_only": True,
+        "status": "ready",
+        "source": "stored application risk evidence + validated runtime configuration",
+        "config_version": stored_version,
+        "risk_computed_at": computed_at,
+        "application": {
+            "score": score,
+            "tier": tier,
+            "dimensions": dimension_rows,
+            "escalations": escalations,
+            "floor_reasons": floor_reasons,
+            "edd_route": edd_route,
+            "approval_route": route,
+        },
+        "factor_evidence": factor_evidence,
+    }
+
+
+def _build_runtime_risk_model_view(config: Mapping[str, Any]) -> Dict[str, Any]:
     config = dict(config or {})
+    _validate_projection_config(config)
     catalogs = {
         "sector": _controlled_catalog(config, "sector"),
         "entity_type": _controlled_catalog(config, "entity_type"),
@@ -711,3 +957,15 @@ def build_runtime_risk_model_view(config: Mapping[str, Any]) -> Dict[str, Any]:
             "lane_b_items": len(lane_b),
         },
     }
+
+
+def build_runtime_risk_model_view(config: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return the complete read-only model view from runtime-owned sources."""
+    try:
+        return _build_runtime_risk_model_view(config)
+    except RiskModelProjectionUnavailable:
+        raise
+    except (IndexError, KeyError, StopIteration, TypeError, ValueError, ZeroDivisionError):
+        raise RiskModelProjectionUnavailable(
+            "Runtime risk model projection is incomplete"
+        ) from None

@@ -106,20 +106,21 @@ class TestBackofficeRiskSourceOfTruth:
         assert "Formal narrative investigation. Routine onboarding Enhanced Review Requirements remain in KYC Documents." in html
         assert '<span class="label">Trigger</span>' in html
 
-    def test_backoffice_risk_card_surfaces_authoritative_recomputed_and_delta_scores(self):
+    def test_backoffice_risk_card_uses_only_authoritative_backend_evidence(self):
         html = _backoffice_html()
         start = html.index("function renderStoredRiskComputationHtml(app)")
         end = html.index("\nfunction setMemoDownloadState", start)
         risk_card = html[start:end]
 
         assert "Authoritative score" in risk_card
-        assert "Latest recomputed score" in risk_card
-        assert "Delta" in risk_card
+        assert "Authoritative tier" in risk_card
+        assert "Approval route" in risk_card
         assert "riskScoreTile" in risk_card
-        assert "Formula:" in risk_card
-        assert "Weighted average from stored dimensions" in risk_card
-        assert "Stored score remains authoritative; recomputed score reflects current config." in risk_card
-        assert "This usually means the live risk weights changed after the application was scored." not in risk_card
+        assert "Risk computed at" in risk_card
+        assert "Configuration version" in risk_card
+        assert "Latest recomputed score" not in risk_card
+        assert "Weighted average" not in risk_card
+        assert "Formula:" not in risk_card
 
 
 class TestBackendRiskIntegrityMetadata:

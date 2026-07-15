@@ -6,6 +6,9 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
+import textwrap
 
 import pytest
 
@@ -14,7 +17,13 @@ import risk_controlled_values
 from edd_routing_policy import ALL_TRIGGERS, POLICY_VERSION as EDD_POLICY_VERSION
 from periodic_review_policy import ENHANCED_REVIEW_FLOOR_MONTHS, RISK_FREQUENCY_MONTHS
 from risk_controlled_values import FAMILY_RECORDS, UNRESOLVED_SECTOR_LABELS
-from risk_model_view import READ_ONLY_MESSAGE, build_runtime_risk_model_view
+from risk_model_view import (
+    READ_ONLY_MESSAGE,
+    RISK_REPORT_EVIDENCE_UNAVAILABLE_MESSAGE,
+    RiskModelProjectionUnavailable,
+    build_authoritative_risk_report_evidence,
+    build_runtime_risk_model_view,
+)
 from rule_engine import _score_entity_type, classify_country, compute_risk_score, load_risk_config, score_sector
 from rule_engine import (
     ADVERSE_MEDIA_CLEAR_VALUES,
@@ -325,17 +334,212 @@ def test_lane_b_is_excluded_from_every_active_catalog(temp_db):
     assert all(item["classification"] == "Lane B" for item in lane_b)
 
 
+def test_authoritative_report_evidence_uses_stored_outcome_and_runtime_weights(temp_db):
+    config = load_risk_config()
+    app = {
+        "risk_score": 64.5,
+        "risk_level": "MEDIUM",
+        "final_risk_level": "HIGH",
+        "risk_dimensions": {"d1": 4, "d2": 2, "d3": 3, "d4": 2, "d5": 1},
+        "risk_escalations": ["floor_rule_declared_pep", "monthly_volume_score_4"],
+        "risk_computed_at": "2026-07-15T10:00:00Z",
+        "risk_config_version": config["_config_version"],
+        "onboarding_lane": "EDD",
+        "directors": [{
+            "client_declared_pep": True,
+            "pep_declaration": {
+                "client_declared_pep": True,
+                "pep_status": "declared_yes",
+                "pep_role_type": "foreign_pep",
+            },
+        }],
+        "ubos": [],
+    }
+    approval_route = {
+        "route": APPROVAL_ROUTE_COMPLIANCE_REQUIRED,
+        "reasons": ["declared_pep_present", "monthly_volume_score_4"],
+    }
+
+    evidence = build_authoritative_risk_report_evidence(
+        app,
+        config,
+        approval_route=approval_route,
+    )
+
+    assert evidence["available"] is True
+    assert evidence["authoritative"] is True
+    assert evidence["application"]["score"] == app["risk_score"]
+    assert evidence["application"]["tier"] == app["final_risk_level"]
+    assert evidence["application"]["edd_route"] == app["onboarding_lane"]
+    assert evidence["application"]["approval_route"] == approval_route
+    assert evidence["application"]["floor_reasons"] == ["floor_rule_declared_pep"]
+    assert [row["stored_score"] for row in evidence["application"]["dimensions"]] == [4, 2, 3, 2, 1]
+    d3 = next(row for row in evidence["application"]["dimensions"] if row["id"] == "D3")
+    assert [row["weight"] for row in d3["subcriteria"]] == [40, 35, 25]
+    assert evidence["factor_evidence"] == [{
+        "family": "pep",
+        "label": "foreign_pep",
+        "score": 4,
+        "source": "stored pep_declaration.pep_role_type + rule_engine.GATE0_DECLARED_PEP_SCORE",
+    }]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("risk_computed_at", "", "risk_computed_at_missing"),
+        ("risk_config_version", "", "risk_config_version_missing"),
+        ("risk_config_version", "stale:unmapped_sector:abc123", "risk_evidence_stale"),
+        ("risk_dimensions", {"d1": 1}, "d2_evidence_missing"),
+    ],
+)
+def test_missing_or_stale_authoritative_evidence_blocks_export_contract(
+    temp_db, field, value, reason
+):
+    config = load_risk_config()
+    app = {
+        "risk_score": 10,
+        "risk_level": "LOW",
+        "risk_dimensions": {"d1": 1, "d2": 1, "d3": 1, "d4": 1, "d5": 1},
+        "risk_escalations": [],
+        "risk_computed_at": "2026-07-15T10:00:00Z",
+        "risk_config_version": config["_config_version"],
+        "onboarding_lane": "Standard Review",
+    }
+    app[field] = value
+    evidence = build_authoritative_risk_report_evidence(
+        app,
+        config,
+        approval_route={"route": APPROVAL_ROUTE_DIRECT_LOW_MEDIUM, "reasons": []},
+    )
+    assert evidence["available"] is False
+    assert evidence["status"] == "blocked"
+    assert evidence["message"] == RISK_REPORT_EVIDENCE_UNAVAILABLE_MESSAGE
+    assert reason in evidence["reason_codes"]
+
+
+def test_malformed_projection_raises_typed_controlled_exception(temp_db):
+    config = deepcopy(load_risk_config())
+    config["dimensions"] = []
+    with pytest.raises(RiskModelProjectionUnavailable) as exc_info:
+        build_runtime_risk_model_view(config)
+    assert type(exc_info.value) is RiskModelProjectionUnavailable
+    assert "StopIteration" not in str(exc_info.value)
+
+
+def test_csv_pdf_exports_use_authoritative_evidence_and_fail_closed():
+    html = Path(__file__).resolve().parents[2].joinpath("arie-backoffice.html").read_text(
+        encoding="utf-8"
+    )
+    evidence_start = html.index("function getAuthoritativeRiskEvidence(app)")
+    evidence_end = html.index("\nfunction computeDocumentReadinessSummary", evidence_start)
+    export_start = html.index("function riskReportCsvCell(value)")
+    export_end = html.index("\n</script>", export_start)
+    script = "\n".join([
+        textwrap.dedent(
+            """
+            const toasts = [];
+            const blobs = [];
+            const pdfDocuments = [];
+            const clicked = [];
+            const document = {
+              body: { appendChild() {}, removeChild() {} },
+              createElement() { return { href:'', download:'', click() { clicked.push(this.download); } }; }
+            };
+            const URL = {
+              createObjectURL(blob) { blobs.push(blob); return 'blob://risk-report'; },
+              revokeObjectURL() {}
+            };
+            const window = {
+              open() {
+                const output = { html:'', document: { write(value) { output.html += value; }, close() {} } };
+                pdfDocuments.push(output);
+                return output;
+              }
+            };
+            function showToast(message) { toasts.push(message); }
+            function escapeHtml(value) {
+              return String(value == null ? '' : value)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            }
+            var currentUser = { name:'Test Officer' };
+            var RUNTIME_RISK_MODEL = { runtime_source:{ config_version:'risk_config:v1' } };
+            const d3Subcriteria = [
+              {name:'Service Type',weight:40},
+              {name:'Monthly Volume',weight:35},
+              {name:'Transaction Complexity',weight:25}
+            ];
+            function dimension(id, score, subcriteria) {
+              return {id:id,name:id + ' risk',weight:20,stored_score:score,source:'applications.risk_dimensions.' + id.toLowerCase(),subcriteria:subcriteria || []};
+            }
+            var currentApp = {
+              ref:'ARF-TEST', company:'Evidence Ltd', brn:'BRN-1', country:'Mauritius', sector:'Private Banking', date:'2026-07-15',
+              riskReportEvidence:{
+                available:true, authoritative:true, read_only:true, status:'ready',
+                source:'stored application risk evidence + validated runtime configuration',
+                config_version:'risk_config:v1', risk_computed_at:'2026-07-15T10:00:00Z',
+                application:{
+                  score:64.5, tier:'HIGH', edd_route:'EDD',
+                  approval_route:{route:'compliance_required',reasons:['declared_pep_present']},
+                  floor_reasons:['floor_rule_declared_pep'], escalations:['floor_rule_declared_pep'],
+                  dimensions:[dimension('D1',4),dimension('D2',2),dimension('D3',3,d3Subcriteria),dimension('D4',2),dimension('D5',1)]
+                },
+                factor_evidence:[{family:'pep',label:'foreign_pep',score:4,source:'runtime PEP evidence'}]
+              }
+            };
+            """
+        ),
+        html[evidence_start:evidence_end],
+        html[export_start:export_end],
+        textwrap.dedent(
+            """
+            (async () => {
+              downloadRiskCSV();
+              downloadRiskPDF();
+              const csv = await blobs[0].text();
+              const pdf = pdfDocuments[0].html;
+              const beforeBlocked = {blobs:blobs.length,pdfs:pdfDocuments.length,clicks:clicked.length};
+              currentApp.riskReportEvidence.config_version = 'risk_config:old';
+              downloadRiskCSV();
+              downloadRiskPDF();
+              console.log(JSON.stringify({csv,pdf,beforeBlocked,afterBlocked:{blobs:blobs.length,pdfs:pdfDocuments.length,clicks:clicked.length},toasts}));
+            })().catch(error => { console.error(error); process.exit(1); });
+            """
+        ),
+    ])
+    assert shutil.which("node"), "Node.js is required for Tier 0D export tests"
+    completed = subprocess.run(
+        ["node", "-e", script],
+        cwd=Path(__file__).resolve().parents[2],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    result = json.loads(completed.stdout)
+    for rendered in (result["csv"], result["pdf"]):
+        assert "64.5" in rendered
+        assert "HIGH" in rendered
+        assert "EDD" in rendered
+        assert "compliance_required" in rendered
+        assert "floor_rule_declared_pep" in rendered
+        assert "foreign_pep" in rendered
+        assert ">4<" in rendered if rendered == result["pdf"] else '"4"' in rendered
+    assert '"Monthly Volume","35"' in result["csv"]
+    assert '"Transaction Complexity","25"' in result["csv"]
+    assert result["beforeBlocked"] == result["afterBlocked"]
+    assert any("stale relative to the current runtime configuration" in message for message in result["toasts"])
+
+
 def test_backoffice_risk_model_has_no_ui_score_source_or_editor():
     html = Path(__file__).resolve().parents[2].joinpath("arie-backoffice.html").read_text(
         encoding="utf-8"
     )
     assert READ_ONLY_MESSAGE in html.replace("<br>\n      ", " ")
-    assert "var RISK_THRESHOLDS = [];" in html
-    assert "var RISK_DIMENSIONS = [];" in html
-    assert "var SECTOR_RISK_CONFIG = [];" in html
-    assert "var ENTITY_TYPE_SCORES = [];" in html
     assert "applyRuntimeRiskModelPayload(riskResp);" in html
     assert "var model = payload && payload.runtime_model;" in html
+    assert "RUNTIME_RISK_MODEL = deepFreezeRiskProjection(model);" in html
     assert "Runtime-owned risk model unavailable. No fallback model is displayed." in html
     assert "btn-edit-risk" not in html
     assert "btn-edit-countries" not in html
@@ -343,6 +547,20 @@ def test_backoffice_risk_model_has_no_ui_score_source_or_editor():
     assert "btn-edit-entities" not in html
     assert "toggleRiskEditMode" not in html
     assert "saveRiskModel" not in html
+    assert "updateWeightDisplay" not in html
+    assert "computeSubCriteriaBreakdown" not in html
+    assert "buildStoredRiskComputation" not in html
+    assert "_buildRiskReportData" not in html
+    assert "RISK_DIMENSIONS" not in html
+    assert "COUNTRY_RISK_LISTS" not in html
+    assert "natToCountry" not in html
+    assert "weightedAverage" not in html
+    assert "Risk Scoring Model v1.4" not in html
+    assert "requireAuthoritativeRiskReportEvidence(app)" in html
+    assert "risk.floor_reasons" in html
+    assert "risk.approval_route" in html
+    assert "risk.edd_route" in html
+    assert "factor.score" in html
     assert "boApiCall('PUT', '/config/risk-model'" not in html
 
 

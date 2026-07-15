@@ -3941,208 +3941,6 @@ function looksLikeTestSmokeRecordSearch(query) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// LINE-BY-LINE SUB-CRITERIA RISK COMPUTATION ENGINE
-// Derives every sub-criterion score deterministically from application data
-// ═══════════════════════════════════════════════════════════
-
-function computeSubCriteriaBreakdown(app) {
-  if (!app) return [];
-  var dims = app.dims || {};
-  var country = (app.country || '').trim();
-  var sector = (app.sector || '').trim();
-  var ubos = app.ubos || [];
-  var directors = app.directors || [];
-  var pepCount = app.pepCount || 0;
-  var docs = app.docs || [];
-  var brn = app.brn || '';
-
-  // Helper: classify country risk
-  function countryScore(c) {
-    if (COUNTRY_RISK_LISTS.FATF_BLACK.indexOf(c) >= 0) return { score:4, label:'FATF Black List', tier:'VERY HIGH' };
-    if (COUNTRY_RISK_LISTS.SANCTIONED.indexOf(c) >= 0) return { score:4, label:'Sanctioned Jurisdiction', tier:'VERY HIGH' };
-    if (COUNTRY_RISK_LISTS.FATF_GREY.indexOf(c) >= 0) return { score:3, label:'FATF Grey List', tier:'HIGH' };
-    if (COUNTRY_RISK_LISTS.LOW_RISK.indexOf(c) >= 0) return { score:1, label:'FATF Member / Low Risk', tier:'LOW' };
-    return { score:2, label:'Standard Jurisdiction', tier:'MEDIUM' };
-  }
-
-  // Helper: classify sector risk
-  function sectorScore(s) {
-    var found = SECTOR_RISK_CONFIG.find(function(cfg) { return s.toLowerCase().indexOf(cfg.sector.toLowerCase().split('/')[0].trim()) >= 0 || cfg.sector.toLowerCase().indexOf(s.toLowerCase().split('/')[0].trim()) >= 0; });
-    if (found) return { score: found.score, label: found.sector + ' (Tier ' + found.score + ')', tier: found.score <= 1 ? 'LOW' : found.score <= 2 ? 'MEDIUM' : found.score <= 3 ? 'HIGH' : 'VERY HIGH' };
-    // Check for keywords
-    if (/crypto|virtual.*asset|vasp/i.test(s)) return { score:4, label:'Virtual Assets / Crypto (Tier 4)', tier:'VERY HIGH' };
-    if (/gambl|gaming/i.test(s)) return { score:4, label:'Gaming / Gambling (Tier 4)', tier:'VERY HIGH' };
-    if (/money.*service|remittance|msb/i.test(s)) return { score:3, label:'Money Services / Remittance (Tier 3)', tier:'HIGH' };
-    if (/precious.*metal|gold|mining/i.test(s)) return { score:3, label:'Precious Metals / Mining (Tier 3)', tier:'HIGH' };
-    return { score:2, label:s + ' (Standard)', tier:'MEDIUM' };
-  }
-
-  // Helper: entity type inference
-  function entityTypeScore() {
-    var sLow = sector.toLowerCase();
-    if (/regulated|licen|bank/i.test(sLow) || docs.indexOf('Licence') >= 0 || docs.indexOf('Reg Cert') >= 0) return { score:1, label:'Regulated / Licensed Entity', tier:'LOW' };
-    if (/gov|public/i.test(sLow)) return { score:1, label:'Government / Public Entity', tier:'LOW' };
-    if (ubos.length === 1 && ubos[0].pct === 100) return { score:2, label:'Private Company (Single Owner)', tier:'MEDIUM' };
-    if (/trust|foundation|nominee/i.test(sLow) || directors.some(function(d){ return /nominee/i.test(d.name); })) return { score:3, label:'Trust / Foundation / Nominee Structure', tier:'HIGH' };
-    if (/shell/i.test(sLow)) return { score:4, label:'Shell Company', tier:'VERY HIGH' };
-    return { score:2, label:'Private Corporate Entity', tier:'MEDIUM' };
-  }
-
-  // Helper: ownership complexity
-  function ownershipScore() {
-    var hasNominee = ubos.some(function(u) { return /nominee|unknown/i.test(u.name); }) || directors.some(function(d) { return /nominee/i.test(d.name); });
-    if (hasNominee) return { score:4, label:'Complex/Nominee ownership detected', tier:'VERY HIGH' };
-    if (ubos.length >= 3) return { score:3, label:ubos.length + ' UBOs — multi-layered structure', tier:'HIGH' };
-    if (ubos.length === 2) return { score:2, label:'2 UBOs — 1-2 layer structure', tier:'MEDIUM' };
-    return { score:1, label:'Simple ownership — single beneficial owner', tier:'LOW' };
-  }
-
-  // Helper: PEP status
-  function pepScore() {
-    if (pepCount === 0) return { score:1, label:'No PEP identified among directors/UBOs', tier:'LOW' };
-    var pepDirectors = directors.filter(function(d){ return d.pep === 'Yes'; }).map(function(d){ return d.name; });
-    var pepUbos = ubos.filter(function(u){ return u.pep === 'Yes'; }).map(function(u){ return u.name; });
-    var allPeps = pepDirectors.concat(pepUbos).filter(function(v,i,a){ return a.indexOf(v)===i; });
-    if (allPeps.length >= 2) return { score:4, label:'Multiple PEPs: ' + allPeps.join(', '), tier:'VERY HIGH' };
-    return { score:3, label:'PEP identified: ' + allPeps.join(', '), tier:'HIGH' };
-  }
-
-  var cScore = countryScore(country);
-  var sScore = sectorScore(sector);
-  var eScore = entityTypeScore();
-  var oScore = ownershipScore();
-  var pScore = pepScore();
-
-  // Build the full breakdown
-  var dimensions = [];
-
-  // D1: Customer / Entity Risk (weight 30%)
-  var d1subs = [
-    { criterion:'Entity Type', weight:20, score:eScore.score, input:eScore.label, tier:eScore.tier, rule:'Listed/Regulated/Gov=1, Large Private/SME=2, Newly Inc/Trust/Foundation=3, Shell=4' },
-    { criterion:'Ownership Structure', weight:20, score:oScore.score, input:oScore.label, tier:oScore.tier, rule:'Simple=1, 1-2 layers=2, 3+ layers=3, Complex/Nominee=4' },
-    { criterion:'PEP Status', weight:25, score:pScore.score, input:pScore.label, tier:pScore.tier, rule:'No PEP=1, Domestic PEP=2, Foreign PEP/RCA=3, Head of State/Senior=4' },
-    { criterion:'Adverse Media', weight:15, score: dims.d1 >= 3 ? 3 : dims.d1 >= 2 ? 2 : 1, input: dims.d1 >= 3 ? 'Adverse media flagged during screening' : dims.d1 >= 2 ? 'Minor media mentions identified' : 'No adverse media identified', tier: dims.d1 >= 3 ? 'HIGH' : dims.d1 >= 2 ? 'MEDIUM' : 'LOW', rule:'None=1, Minor=2, Moderate=3, Significant/Criminal=4' },
-    { criterion:'Source of Wealth', weight:10, score: Math.max(1, Math.min(4, Math.round(dims.d1 * 0.8))), input:'Assessed against entity profile and ' + sector + ' sector norms', tier: dims.d1 <= 1.5 ? 'LOW' : 'MEDIUM', rule:'Business revenue/Investment=1, Sale of assets/VC=2, Inheritance/Loan=3, Unknown=4' },
-    { criterion:'Source of Funds', weight:10, score: Math.max(1, Math.min(3, Math.round(dims.d1 * 0.7))), input:'Evaluated based on entity type and declared business model', tier: dims.d1 <= 1.5 ? 'LOW' : 'MEDIUM', rule:'Company transfer/Revenue=1, Shareholder/Investment=2, Sale of assets=2, Loan/Other=3' }
-  ];
-  var d1wa = d1subs.reduce(function(s,c){ return s + c.score * c.weight; },0) / d1subs.reduce(function(s,c){ return s + c.weight; },0);
-  dimensions.push({ id:'D1', name:'Customer / Entity Risk', weight:30, dimScore:dims.d1, computedScore:d1wa, subcriteria:d1subs });
-
-  // D2: Geographic Risk (weight 25%)
-  // Intermediary Shareholder Jurisdiction scoring
-  var intermediaries = app.intermediaries || [];
-  var interScore = { score:1, label:'No intermediary shareholders identified — direct ownership', tier:'LOW' };
-  if (intermediaries.length > 0) {
-    var interJurisdictions = intermediaries.map(function(i) { return i.jurisdiction || ''; });
-    var interScores = interJurisdictions.map(function(j) { return countryScore(j); });
-    var maxInterScore = Math.max.apply(null, interScores.map(function(s){ return s.score; }));
-    var highRiskInter = intermediaries.filter(function(i, idx) { return interScores[idx].score >= 3; });
-    var secrecyJurisdictions = ['BVI','Cayman Islands','Panama','Seychelles','Bermuda','Jersey','Guernsey','Isle of Man','Liechtenstein','Vanuatu','Samoa','Marshall Islands'];
-    var hasSecrecy = intermediaries.some(function(i) { return secrecyJurisdictions.some(function(s) { return (i.jurisdiction||'').indexOf(s) >= 0; }); });
-    if (hasSecrecy) maxInterScore = Math.max(maxInterScore, 3);
-
-    var interDetails = intermediaries.map(function(i, idx) {
-      return i.name + ' (' + i.jurisdiction + ', ' + i.pct + '%, ' + interScores[idx].label + ')';
-    }).join('; ');
-
-    if (maxInterScore >= 4) {
-      interScore = { score:4, label:intermediaries.length + ' intermediary(ies): ' + interDetails, tier:'VERY HIGH' };
-    } else if (maxInterScore >= 3 || hasSecrecy) {
-      interScore = { score:3, label:intermediaries.length + ' intermediary(ies): ' + interDetails, tier:'HIGH' };
-    } else if (maxInterScore >= 2) {
-      interScore = { score:2, label:intermediaries.length + ' intermediary(ies): ' + interDetails, tier:'MEDIUM' };
-    } else {
-      interScore = { score:1, label:intermediaries.length + ' intermediary(ies) in low-risk jurisdictions: ' + interDetails, tier:'LOW' };
-    }
-  }
-
-  // UBO Nationality scoring
-  var allPersons = (directors || []).concat(ubos || []);
-  var nationalities = allPersons.map(function(p) { return p.nat || ''; }).filter(function(n) { return n; });
-  var uniqueNats = nationalities.filter(function(v, i, a) { return a.indexOf(v) === i; });
-  var uboNatScore = { score:1, label:'No UBO nationality data', tier:'LOW' };
-  if (uniqueNats.length > 0) {
-    // Map nationality demonym to country — common mappings
-    var natToCountry = {
-      'Indian':'India','Singaporean':'Singapore','Swedish':'Sweden','Emirati':'UAE',
-      'Russian':'Russia','Estonian':'Estonia','Senegalese':'Senegal','French':'France',
-      'Mauritian':'Mauritius','Chinese':'China','Moroccan':'Morocco','Nigerian':'Nigeria',
-      'British':'United Kingdom','American':'United States','German':'Germany',
-      'Japanese':'Japan','Australian':'Australia','Canadian':'Canada','Dutch':'Netherlands',
-      'Italian':'Italy','Spanish':'Spain','Brazilian':'Brazil','South African':'South Africa',
-      'Lebanese':'Lebanon','Iranian':'Iran','Pakistani':'Pakistan','Afghan':'Afghanistan',
-      'Belarusian':'Belarus','Syrian':'Syria','Libyan':'Libya','Iraqi':'Iraq',
-      'Venezuelan':'Venezuela','Cuban':'Cuba','North Korean':'North Korea (DPRK)',
-      'Kenyan':'Kenya','Tanzanian':'Tanzania','Vietnamese':'Vietnam','Filipino':'Philippines',
-      'BVI':'BVI','Caymanian':'Cayman Islands','Panamanian':'Panama'
-    };
-    var natScores = uniqueNats.map(function(n) {
-      var mapped = natToCountry[n] || n;
-      return { nat: n, country: mapped, risk: countryScore(mapped) };
-    });
-    var maxNatScore = Math.max.apply(null, natScores.map(function(s) { return s.risk.score; }));
-    var natDetail = natScores.map(function(s) { return s.nat + ' (' + s.risk.label + ')'; }).join('; ');
-    var highRiskNats = natScores.filter(function(s) { return s.risk.score >= 3; });
-
-    if (maxNatScore >= 4) {
-      uboNatScore = { score:4, label:uniqueNats.length + ' nationality(ies): ' + natDetail, tier:'VERY HIGH' };
-    } else if (maxNatScore >= 3) {
-      uboNatScore = { score:3, label:uniqueNats.length + ' nationality(ies): ' + natDetail, tier:'HIGH' };
-    } else if (maxNatScore >= 2) {
-      uboNatScore = { score:2, label:uniqueNats.length + ' nationality(ies): ' + natDetail, tier:'MEDIUM' };
-    } else {
-      uboNatScore = { score:1, label:uniqueNats.length + ' nationality(ies) all low-risk: ' + natDetail, tier:'LOW' };
-    }
-  }
-
-  var d2subs = [
-    { criterion:'Country of Incorporation', weight:25, score:cScore.score, input:country + ' — ' + cScore.label, tier:cScore.tier, rule:'FATF Member/Low-risk=1, Standard=2, FATF Grey List=3, Black/Sanctioned=4' },
-    { criterion:'UBO Nationalities', weight:20, score:uboNatScore.score, input:uboNatScore.label, tier:uboNatScore.tier, rule:'All Low-risk=1, Mix Standard=2, FATF Grey/High-risk=3, Sanctioned/Blacklisted=4' },
-    { criterion:'Intermediary Shareholder Jurisdictions', weight:20, score:interScore.score, input:interScore.label, tier:interScore.tier, rule:'None or Low-risk only=1, Standard=2, FATF Grey/Opaque/Secrecy=3, Sanctioned/Blacklisted=4' },
-    { criterion:'Countries of Operation', weight:20, score: Math.max(1, Math.min(4, Math.round(dims.d2 * 0.9))), input:'Operations assessed — primary in ' + country, tier: dims.d2 >= 3 ? 'HIGH' : dims.d2 >= 2 ? 'MEDIUM' : 'LOW', rule:'Low-risk only=1, Mix standard=2, FATF Grey=3, Sanctioned=4' },
-    { criterion:'Target Markets', weight:15, score: Math.max(1, Math.min(4, Math.round(dims.d2 * 0.9))), input:'Target markets and payment corridors evaluated', tier: dims.d2 >= 3 ? 'HIGH' : dims.d2 >= 2 ? 'MEDIUM' : 'LOW', rule:'Low-risk only=1, Mix standard=2, FATF Grey=3, Sanctioned=4' }
-  ];
-  var d2wa = d2subs.reduce(function(s,c){ return s + c.score * c.weight; },0) / d2subs.reduce(function(s,c){ return s + c.weight; },0);
-  dimensions.push({ id:'D2', name:'Geographic Risk', weight:25, dimScore:dims.d2, computedScore:d2wa, subcriteria:d2subs });
-
-  // D3: Product / Service Risk (weight 20%)
-  var serviceScore = dims.d3 >= 3 ? 3 : dims.d3 >= 2 ? 2 : 1;
-  var volumeScore = dims.d3 >= 3.5 ? 4 : dims.d3 >= 2.5 ? 3 : dims.d3 >= 1.5 ? 2 : 1;
-  var complexScore = dims.d3 >= 3 ? 3 : dims.d3 >= 2 ? 2 : 1;
-  var d3subs = [
-    { criterion:'Service Type', weight:40, score:serviceScore, input: serviceScore >= 3 ? 'Cross-border / Correspondent services' : serviceScore >= 2 ? 'Multi-currency payment services' : 'Domestic payment services', tier: serviceScore >= 3 ? 'HIGH' : serviceScore >= 2 ? 'MEDIUM' : 'LOW', rule:'Domestic=1, Multi-currency=2, Cross-border=3, Correspondent/Nested=4' },
-    { criterion:'Monthly Volume', weight:30, score:volumeScore, input: volumeScore >= 4 ? '>5M expected monthly volume' : volumeScore >= 3 ? '500K-5M expected monthly volume' : volumeScore >= 2 ? '50K-500K expected monthly volume' : '<50K expected monthly volume', tier: volumeScore >= 3 ? 'HIGH' : volumeScore >= 2 ? 'MEDIUM' : 'LOW', rule:'<50K=1, 50K-500K=2, 500K-5M=3, >5M=4' },
-    { criterion:'Transaction Complexity', weight:30, score:complexScore, input: complexScore >= 3 ? 'Complex multi-corridor transactions' : complexScore >= 2 ? 'Standard multi-party transactions' : 'Simple payment flows', tier: complexScore >= 3 ? 'HIGH' : complexScore >= 2 ? 'MEDIUM' : 'LOW', rule:'Simple=1, Standard=2, Complex=3, Very Complex=4' }
-  ];
-  var d3wa = d3subs.reduce(function(s,c){ return s + c.score * c.weight; },0) / d3subs.reduce(function(s,c){ return s + c.weight; },0);
-  dimensions.push({ id:'D3', name:'Product / Service Risk', weight:20, dimScore:dims.d3, computedScore:d3wa, subcriteria:d3subs });
-
-  // D4: Industry / Sector Risk (weight 15%)
-  var d4subs = [
-    { criterion:'Industry Sector Classification', weight:100, score:sScore.score, input:sScore.label, tier:sScore.tier, rule:'Regulated/Gov/Listed=1, Tech/Healthcare/Retail=2, Real Estate/MSB/Mining=3, Crypto/Gambling/Arms=4' }
-  ];
-  dimensions.push({ id:'D4', name:'Industry / Sector Risk', weight:15, dimScore:dims.d4, computedScore:sScore.score, subcriteria:d4subs });
-
-  // D5: Delivery Channel Risk (weight 10%)
-  var introScore = dims.d5 >= 3 ? 3 : dims.d5 >= 2 ? 2 : 1;
-  var channelScore = dims.d5 >= 3 ? 3 : dims.d5 >= 2 ? 2 : 1;
-  var d5subs = [
-    { criterion:'Introduction Method', weight:50, score:introScore, input: introScore >= 3 ? 'Non-regulated intermediary / Unsolicited' : introScore >= 2 ? 'Online self-service application' : 'Direct / Regulated intermediary introduction', tier: introScore >= 3 ? 'HIGH' : introScore >= 2 ? 'MEDIUM' : 'LOW', rule:'Direct/Regulated=1, Non-regulated=3, Unsolicited=4' },
-    { criterion:'Delivery Channel', weight:50, score:channelScore, input: channelScore >= 3 ? 'Non face-to-face (no video verification)' : channelScore >= 2 ? 'Online portal with identity verification' : 'Face-to-face meeting completed', tier: channelScore >= 3 ? 'HIGH' : channelScore >= 2 ? 'MEDIUM' : 'LOW', rule:'Face-to-face=1, Online verified=2, Non F2F=3, Anonymous=4' }
-  ];
-  var d5wa = d5subs.reduce(function(s,c){ return s + c.score * c.weight; },0) / d5subs.reduce(function(s,c){ return s + c.weight; },0);
-  dimensions.push({ id:'D5', name:'Delivery Channel Risk', weight:10, dimScore:dims.d5, computedScore:d5wa, subcriteria:d5subs });
-
-  // Final composite
-  var totalWeighted = 0, totalW = 0;
-  dimensions.forEach(function(d) { totalWeighted += d.dimScore * (d.weight / 100); totalW += d.weight; });
-  var weightedAverage = totalW > 0 ? totalWeighted / (totalW / 100) : 0;
-  var composite = totalW > 0 ? (((weightedAverage - 1) / 3) * 100) : 0;
-
-  return { dimensions: dimensions, composite: composite, totalWeighted: totalWeighted, totalWeight: totalW, weightedAverage: weightedAverage };
-}
-
-// ═══════════════════════════════════════════════════════════
 // API INTEGRATION LAYER
 // ═══════════════════════════════════════════════════════════
 const BO_API_BASE = '/api';
@@ -5112,6 +4910,7 @@ function mapApplicationFromApi(a) {
     riskIntegrityWarnings: riskState.warnings,
     eddTriggerFlags: riskState.eddTriggerFlags,
     finalRiskLevel: a.final_risk_level || '',
+    riskReportEvidence: a.risk_report_evidence || null,
     lane: a.onboarding_lane || 'Standard Review',
     statusRaw: a.status || '',
     status: formatStatus(a.status),
@@ -9186,54 +8985,10 @@ function buildPartyDisplayName(person) {
   );
 }
 
-function buildStoredRiskComputation(app) {
-  if (!app || !app.dims || !Object.keys(app.dims).length) return null;
-  var dimMeta = [
-    { key: 'd1', id: 'D1', name: 'Customer / Entity Risk' },
-    { key: 'd2', id: 'D2', name: 'Geographic Risk' },
-    { key: 'd3', id: 'D3', name: 'Product / Service Risk' },
-    { key: 'd4', id: 'D4', name: 'Industry / Sector Risk' },
-    { key: 'd5', id: 'D5', name: 'Delivery Channel Risk' }
-  ];
-  var defaultWeights = { d1: 30, d2: 25, d3: 20, d4: 15, d5: 10 };
-  var uiWeights = {};
-  if (Array.isArray(RISK_DIMENSIONS)) {
-    RISK_DIMENSIONS.forEach(function(dim, idx) {
-      uiWeights['d' + (idx + 1)] = Number(dim.weight || 0);
-    });
-  }
-
-  var rows = [];
-  var totalWeight = 0;
-  var weightedAverage = 0;
-  dimMeta.forEach(function(meta) {
-    var value = Number(app.dims[meta.key]);
-    if (isNaN(value)) return;
-    var weight = uiWeights[meta.key] || defaultWeights[meta.key];
-    totalWeight += weight;
-    weightedAverage += value * (weight / 100);
-    rows.push({
-      id: meta.id,
-      name: meta.name,
-      weight: weight,
-      dimScore: value,
-      weightedContribution: value * (weight / 100)
-    });
-  });
-
-  if (!rows.length || !totalWeight) return null;
-  var normalizedAverage = weightedAverage / (totalWeight / 100);
-  var recomputed = Math.round((((normalizedAverage - 1) / 3) * 100) * 10) / 10;
-  var storedScoreRaw = normalizeRiskScore(app.score);
-  var storedScore = storedScoreRaw === null || isNaN(Number(storedScoreRaw)) ? null : Number(storedScoreRaw);
-  return {
-    rows: rows,
-    totalWeight: totalWeight,
-    weightedAverage: normalizedAverage,
-    recomputedScore: recomputed,
-    storedScore: storedScore,
-    drift: storedScore === null ? null : Math.round(Math.abs((storedScore - recomputed)) * 10) / 10
-  };
+function getAuthoritativeRiskEvidence(app) {
+  var evidence = app && (app.riskReportEvidence || app.risk_report_evidence);
+  if (!evidence || evidence.available !== true || evidence.authoritative !== true || evidence.status !== 'ready') return null;
+  return evidence;
 }
 
 function computeDocumentReadinessSummary(app) {
@@ -10871,52 +10626,40 @@ async function saveWorkflowTestEvidenceAcceptance(docId, enhancedRequirementId) 
 }
 
 function renderStoredRiskComputationHtml(app) {
-  var computation = buildStoredRiskComputation(app);
-  if (!computation) {
-    return '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No persisted risk breakdown is available for this application.</div>';
+  var evidence = getAuthoritativeRiskEvidence(app);
+  if (!evidence) {
+    return '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Authoritative risk evidence is missing, incomplete, or stale. Recompute risk before using this breakdown or exporting a report.</div>';
   }
-
-  var rowsHtml = computation.rows.map(function(row) {
+  var risk = evidence.application || {};
+  var rowsHtml = (risk.dimensions || []).map(function(row) {
     return '<tr>' +
       '<td style="padding:8px 10px;font-weight:600;">' + escapeHtml(row.id + ': ' + row.name) + '</td>' +
       '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(String(row.weight)) + '%</td>' +
-      '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(row.dimScore.toFixed(2)) + '</td>' +
-      '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(row.weightedContribution.toFixed(3)) + '</td>' +
+      '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(Number(row.stored_score).toFixed(2)) + '</td>' +
+      '<td style="padding:8px 10px;">' + escapeHtml(row.source || 'Stored application evidence') + '</td>' +
     '</tr>';
   }).join('');
-
-  var storedScoreDisplay = computation.storedScore === null ? 'Not yet scored' : computation.storedScore.toFixed(1);
-  var recomputedScoreDisplay = computation.recomputedScore === null ? '—' : computation.recomputedScore.toFixed(1);
-  var scoreDelta = computation.storedScore === null || computation.recomputedScore === null
-    ? null
-    : Math.round((computation.recomputedScore - computation.storedScore) * 10) / 10;
-  var scoreDeltaDisplay = scoreDelta === null ? '—' : ((scoreDelta > 0 ? '+' : '') + scoreDelta.toFixed(1));
-  function riskScoreTile(label, value, helper, color) {
+  function riskScoreTile(label, value, helper) {
     return '<div style="padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface1);">' +
       '<div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;color:var(--text3);">' + escapeHtml(label) + '</div>' +
-      '<div style="font-size:30px;line-height:1.1;font-weight:800;color:' + color + ';margin-top:6px;">' + escapeHtml(value) + '</div>' +
+      '<div style="font-size:24px;line-height:1.1;font-weight:800;color:var(--text1);margin-top:6px;">' + escapeHtml(value) + '</div>' +
       '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(helper) + '</div>' +
     '</div>';
   }
   var scoreSummaryHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:12px;">' +
-    riskScoreTile('Authoritative score', storedScoreDisplay, 'Persisted application score', 'var(--text1)') +
-    riskScoreTile('Latest recomputed score', recomputedScoreDisplay, 'Using current risk config', 'var(--text1)') +
-    riskScoreTile('Delta', scoreDeltaDisplay, 'Recomputed minus authoritative', (scoreDelta !== null && Math.abs(scoreDelta) > 0.2) ? '#d97706' : 'var(--green)') +
+    riskScoreTile('Authoritative score', Number(risk.score).toFixed(1), 'Persisted application score') +
+    riskScoreTile('Authoritative tier', risk.tier, 'Persisted final risk tier') +
+    riskScoreTile('Approval route', (risk.approval_route || {}).route || '—', 'Backend approval classifier') +
   '</div>';
-  var driftHtml = computation.drift !== null && computation.drift > 0.2
-    ? '<div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(217,119,6,0.25);border-radius:8px;background:rgba(217,119,6,0.06);font-size:11px;color:var(--text2);"><strong>Score delta detected.</strong> Stored score remains authoritative; recomputed score reflects current config.</div>'
-    : '';
 
   return '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);">' +
     scoreSummaryHtml +
     '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
-      '<thead><tr><th style="text-align:left;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Dimension</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Weight</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Stored Score</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Weighted Contribution</th></tr></thead>' +
+      '<thead><tr><th style="text-align:left;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Dimension</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Runtime weight</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Stored score</th><th style="text-align:left;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Evidence source</th></tr></thead>' +
       '<tbody>' + rowsHtml + '</tbody>' +
     '</table>' +
-    '<div style="margin-top:10px;font-size:12px;color:var(--text2);">Formula: <code style="font-size:11px;background:var(--surface3);padding:2px 6px;border-radius:4px;">((weighted average - 1) / 3) × 100</code></div>' +
-    '<div style="margin-top:6px;font-size:12px;color:var(--text2);">Weighted average from stored dimensions: <strong>' + escapeHtml(computation.weightedAverage.toFixed(3)) + '</strong></div>' +
-    '<div style="margin-top:6px;font-size:12px;color:var(--text2);">Authoritative stored application score: <strong>' + escapeHtml(storedScoreDisplay) + '</strong></div>' +
-    driftHtml +
+    '<div style="margin-top:10px;font-size:12px;color:var(--text2);">Risk computed at: <strong>' + escapeHtml(evidence.risk_computed_at) + '</strong></div>' +
+    '<div style="margin-top:6px;font-size:12px;color:var(--text2);">Configuration version: <strong>' + escapeHtml(evidence.config_version) + '</strong></div>' +
   '</div>';
 }
 
@@ -11191,6 +10934,7 @@ async function fetchApplicationDetail(ref) {
     preApprovalDecision: detail.pre_approval_decision || '',
     approvalRoute: detail.approval_route || detail.approvalRoute || {},
     approval_route: detail.approval_route || detail.approvalRoute || {},
+    riskReportEvidence: detail.risk_report_evidence || null,
     assignedId: detail.assigned_to || '',
     assigned: detail.assigned_name || detail.assigned_to || 'Unassigned',
     date: formatDetailDate(detail.created_at || detail.submitted_at),
@@ -27968,16 +27712,17 @@ function applicationValuesForCorrection(fieldName) {
   }));
 }
 
+function runtimeRiskCatalogLabels(family) {
+  var catalogs = (RUNTIME_RISK_MODEL && RUNTIME_RISK_MODEL.catalogs) || {};
+  return (catalogs[family] || []).map(function(item) { return item.label; }).filter(Boolean);
+}
+
 function officerCorrectionCountryOptions(currentValue) {
-  var configured = [];
-  Object.keys(COUNTRY_RISK_LISTS || {}).forEach(function(key) {
-    configured = configured.concat(COUNTRY_RISK_LISTS[key] || []);
-  });
   return uniqueOfficerCorrectionOptions(
     [currentValue, currentApp && currentApp.country]
       .concat(applicationValuesForCorrection('country'))
       .concat(OFFICER_PORTAL_COUNTRY_OPTIONS)
-      .concat(configured)
+      .concat(runtimeRiskCatalogLabels('country'))
   ).sort();
 }
 
@@ -27986,7 +27731,7 @@ function officerCorrectionSectorOptions(currentValue) {
     [currentValue, currentApp && currentApp.sector]
       .concat(applicationValuesForCorrection('sector'))
       .concat(OFFICER_PORTAL_SECTOR_OPTIONS)
-      .concat((SECTOR_RISK_CONFIG || []).map(function(item) { return item.sector; }))
+      .concat(runtimeRiskCatalogLabels('sector'))
   ).sort();
 }
 
@@ -27995,7 +27740,7 @@ function officerCorrectionEntityTypeOptions(currentValue) {
     [currentValue, currentApp && currentApp.entityType]
       .concat(applicationValuesForCorrection('entity_type'))
       .concat(OFFICER_PORTAL_ENTITY_TYPE_OPTIONS)
-      .concat((ENTITY_TYPE_SCORES || []).map(function(item) { return item.type; }))
+      .concat(runtimeRiskCatalogLabels('entity_type'))
   ).sort();
 }
 
@@ -29827,33 +29572,11 @@ function exportKPIReport() {
 // RISK SCORING MODEL — READ-ONLY RUNTIME PROJECTION
 // ═══════════════════════════════════════════════════════════
 var RUNTIME_RISK_MODEL = null;
-var RISK_THRESHOLDS = [];
-var RISK_DIMENSIONS = [];
-var COUNTRY_RISK_LISTS = { FATF_BLACK:[], FATF_GREY:[], SANCTIONED:[], MEDIUM_RISK:[], LOW_RISK:[] };
-var SECTOR_RISK_CONFIG = [];
-var ENTITY_TYPE_SCORES = [];
 
-function normalizeCountryRiskName(name) {
-  return String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-function displayCountryRiskName(key) {
-  return String(key || '').split(' ').map(function(part) {
-    return part ? part.charAt(0).toUpperCase() + part.slice(1) : part;
-  }).join(' ');
-}
-
-function countryScoreMapToCountryRiskLists(scores) {
-  var grouped = { FATF_BLACK:[], FATF_GREY:[], SANCTIONED:[], MEDIUM_RISK:[], LOW_RISK:[] };
-  Object.keys(scores || {}).sort().forEach(function(country) {
-    var score = Number(scores[country]);
-    var label = displayCountryRiskName(country);
-    if (score >= 4) grouped.SANCTIONED.push(label);
-    else if (score === 3) grouped.FATF_GREY.push(label);
-    else if (score === 2) grouped.MEDIUM_RISK.push(label);
-    else if (score === 1) grouped.LOW_RISK.push(label);
-  });
-  return grouped;
+function deepFreezeRiskProjection(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  Object.keys(value).forEach(function(key) { deepFreezeRiskProjection(value[key]); });
+  return Object.freeze(value);
 }
 
 function applyRuntimeRiskModelPayload(payload) {
@@ -29861,21 +29584,7 @@ function applyRuntimeRiskModelPayload(payload) {
   if (!model || model.read_only !== true) {
     throw new Error('Runtime-owned risk model projection is unavailable');
   }
-  RUNTIME_RISK_MODEL = model;
-  RISK_THRESHOLDS = Array.isArray(model.thresholds) ? model.thresholds : [];
-  RISK_DIMENSIONS = Array.isArray(model.dimensions) ? model.dimensions : [];
-  var catalogs = model.catalogs || {};
-  SECTOR_RISK_CONFIG = (catalogs.sector || []).map(function(item) {
-    return { sector:item.label, score:Number(item.runtime_score), classification:item.classification };
-  });
-  ENTITY_TYPE_SCORES = (catalogs.entity_type || []).map(function(item) {
-    return { type:item.label, score:Number(item.runtime_score), classification:item.classification };
-  });
-  var countryScores = {};
-  (catalogs.country || []).forEach(function(item) {
-    countryScores[item.label] = Number(item.runtime_score);
-  });
-  COUNTRY_RISK_LISTS = countryScoreMapToCountryRiskLists(countryScores);
+  RUNTIME_RISK_MODEL = deepFreezeRiskProjection(model);
 }
 
 function riskModelEscape(value) {
@@ -34073,17 +33782,6 @@ async function checkAPIStatus() {
 // ═══════════════════════════════════════════════════════════
 // RISK MODEL — SLIDER HELPERS
 // ═══════════════════════════════════════════════════════════
-function updateWeightDisplay(slider) {
-  var dimIdx = parseInt(slider.dataset.dim);
-  var val = parseInt(slider.value);
-  document.getElementById('weight-display-' + dimIdx).textContent = val + '%';
-  // Update hidden input
-  var hiddenInput = document.querySelector('.dim-weight[data-dim="' + dimIdx + '"]');
-  if (hiddenInput) hiddenInput.value = val;
-  // Update the data model live
-  RISK_DIMENSIONS[dimIdx].weight = val;
-}
-
 // ═══════════════════════════════════════════════════════════
 // OFFICER LOGIN (for API integration)
 // ═══════════════════════════════════════════════════════════
@@ -34162,296 +33860,184 @@ function toggleSubcriteriaView() {
 }
 
 // ═══════════════════════════════════════════════════════
-// RISK COMPUTATION DOWNLOAD FUNCTIONS
+// AUTHORITATIVE RISK EVIDENCE DOWNLOADS
 // ═══════════════════════════════════════════════════════
 
-function _buildRiskReportData(app) {
-  if (!app) return null;
-  var dimKeys = ['d1','d2','d3','d4','d5'];
-  var dimNames = ['D1: Customer / Entity Risk','D2: Geographic Risk','D3: Product / Service Risk','D4: Industry / Sector Risk','D5: Delivery Channel Risk'];
-  var weights = RISK_DIMENSIONS.map(function(d){ return d.weight; });
-  var rows = [];
-  var totalWeighted = 0, totalW = 0;
-  dimKeys.forEach(function(k, i) {
-    var val = app.dims[k];
-    var w = weights[i] || 20;
-    var weighted = val * (w / 100);
-    totalWeighted += weighted;
-    totalW += w;
-    var level = val <= 1.5 ? 'LOW' : val <= 2.5 ? 'MEDIUM' : val <= 3.2 ? 'HIGH' : 'VERY HIGH';
-    rows.push({ dimension: dimNames[i], weight: w, score: val, weighted: weighted, level: level });
+function riskReportCsvCell(value) {
+  var text = String(value == null ? '' : value);
+  return '"' + text.replace(/"/g, '""') + '"';
+}
+
+function requireAuthoritativeRiskReportEvidence(app) {
+  if (!app) throw new Error('No application selected');
+  var evidence = getAuthoritativeRiskEvidence(app);
+  if (!evidence) {
+    var blocked = app.riskReportEvidence || app.risk_report_evidence || {};
+    throw new Error(blocked.message || 'Authoritative risk evidence is missing, incomplete, or stale. Recompute risk before exporting.');
+  }
+  var risk = evidence.application || {};
+  var dimensions = risk.dimensions || [];
+  var route = risk.approval_route || {};
+  var projectionVersion = RUNTIME_RISK_MODEL && RUNTIME_RISK_MODEL.runtime_source
+    ? String(RUNTIME_RISK_MODEL.runtime_source.config_version || '')
+    : '';
+  if (!projectionVersion || projectionVersion !== String(evidence.config_version || '')) {
+    throw new Error('Authoritative risk evidence is stale relative to the current runtime configuration. Recompute risk before exporting.');
+  }
+  if (!Number.isFinite(Number(risk.score)) || !risk.tier || dimensions.length !== 5 || !route.route || !risk.edd_route) {
+    throw new Error('Authoritative risk evidence is incomplete. Recompute risk before exporting.');
+  }
+  dimensions.forEach(function(row) {
+    if (!row.id || !row.name || !Number.isFinite(Number(row.stored_score)) || !Number.isFinite(Number(row.weight))) {
+      throw new Error('Authoritative dimension evidence is incomplete. Recompute risk before exporting.');
+    }
   });
-  var weightedAverage = totalW > 0 ? totalWeighted / (totalW / 100) : 0;
-  var composite = totalW > 0 ? (((weightedAverage - 1) / 3) * 100) : 0;
-  return { rows: rows, composite: composite, totalWeighted: totalWeighted, totalWeight: totalW, weightedAverage: weightedAverage, app: app };
+  return evidence;
 }
 
 function downloadRiskCSV() {
   if (!currentApp) { showToast('No application selected'); return; }
   var app = currentApp;
-  var breakdown = computeSubCriteriaBreakdown(app);
+  var evidence;
+  try {
+    evidence = requireAuthoritativeRiskReportEvidence(app);
+  } catch (error) {
+    showToast(error.message || 'Authoritative risk evidence is unavailable');
+    return;
+  }
 
+  var risk = evidence.application;
+  var route = risk.approval_route || {};
   var lines = [];
-  lines.push('REGMIND RISK COMPUTATION REPORT — FULL AUDIT TRAIL');
-  lines.push('Generated,' + new Date().toISOString().slice(0,19).replace('T',' '));
-  lines.push('Generated By,"' + (currentUser.name || '').replace(/"/g,'""') + '"');
+  lines.push('REGMIND AUTHORITATIVE RISK EVIDENCE REPORT');
+  lines.push('Generated,' + riskReportCsvCell(new Date().toISOString()));
+  lines.push('Generated By,' + riskReportCsvCell(currentUser.name || ''));
+  lines.push('Evidence Source,' + riskReportCsvCell(evidence.source));
+  lines.push('Risk Computed At,' + riskReportCsvCell(evidence.risk_computed_at));
+  lines.push('Risk Config Version,' + riskReportCsvCell(evidence.config_version));
   lines.push('');
   lines.push('APPLICATION DETAILS');
-  lines.push('Reference,' + app.ref);
-  lines.push('Company,' + '"' + (app.company || '').replace(/"/g,'""') + '"');
-  lines.push('BRN,' + app.brn);
-  lines.push('Country,' + app.country);
-  lines.push('Sector,' + '"' + (app.sector || '').replace(/"/g,'""') + '"');
-  lines.push('Submission Date,' + app.date);
-  lines.push('Risk Level,' + app.risk);
-  lines.push('Composite Score,' + formatRiskScoreForRecord(app));
-  lines.push('Onboarding Lane,' + app.lane);
-  lines.push('Assigned To,' + app.assigned);
+  lines.push('Reference,' + riskReportCsvCell(app.ref));
+  lines.push('Company,' + riskReportCsvCell(app.company));
+  lines.push('BRN,' + riskReportCsvCell(app.brn));
+  lines.push('Country,' + riskReportCsvCell(app.country));
+  lines.push('Sector,' + riskReportCsvCell(app.sector));
+  lines.push('Submission Date,' + riskReportCsvCell(app.date));
   lines.push('');
-
-  // Dimension summary
-  lines.push('DIMENSION SUMMARY');
-  lines.push('Dimension,Global Weight (%),Score (1-4),Weighted Score,Sub-Criteria Count');
-  breakdown.dimensions.forEach(function(dim) {
-    var weighted = dim.dimScore * dim.weight;
-    lines.push('"' + dim.id + ': ' + dim.name + '",' + dim.weight + ',' + dim.dimScore.toFixed(2) + ',' + weighted.toFixed(1) + ',' + dim.subcriteria.length);
+  lines.push('AUTHORITATIVE OUTCOME');
+  lines.push('Stored Composite Score,' + riskReportCsvCell(risk.score));
+  lines.push('Stored Final Tier,' + riskReportCsvCell(risk.tier));
+  lines.push('EDD / Onboarding Route,' + riskReportCsvCell(risk.edd_route));
+  lines.push('Approval Route,' + riskReportCsvCell(route.route));
+  lines.push('Approval Reasons,' + riskReportCsvCell((route.reasons || []).join('; ')));
+  lines.push('High Floor Reasons,' + riskReportCsvCell((risk.floor_reasons || []).join('; ')));
+  lines.push('All Escalations,' + riskReportCsvCell((risk.escalations || []).join('; ')));
+  lines.push('');
+  lines.push('STORED DIMENSION EVIDENCE');
+  lines.push('Dimension,Runtime Global Weight (%),Stored Score (1-4),Authoritative Source');
+  (risk.dimensions || []).forEach(function(dimension) {
+    lines.push([
+      riskReportCsvCell(dimension.id + ': ' + dimension.name),
+      riskReportCsvCell(dimension.weight),
+      riskReportCsvCell(dimension.stored_score),
+      riskReportCsvCell(dimension.source)
+    ].join(','));
   });
   lines.push('');
-
-  // Line-by-line sub-criteria
-  lines.push('LINE-BY-LINE SUB-CRITERIA COMPUTATION');
-  lines.push('Dimension,Sub-Criterion,Sub-Weight (%),Score (1-4),Weighted Score,Risk Tier,Input / Evidence,Scoring Rule');
-  breakdown.dimensions.forEach(function(dim) {
-    dim.subcriteria.forEach(function(sub) {
-      var subWeighted = sub.score * sub.weight;
-      lines.push('"' + dim.id + ': ' + dim.name + '","' + sub.criterion.replace(/"/g,'""') + '",' + sub.weight + ',' + sub.score + ',' + subWeighted.toFixed(0) + ',' + sub.tier + ',"' + sub.input.replace(/"/g,'""') + '","' + sub.rule.replace(/"/g,'""') + '"');
+  lines.push('RUNTIME SUBCRITERIA CONFIGURATION REFERENCE');
+  lines.push('Dimension,Subcriterion,Runtime Weight (%)');
+  (risk.dimensions || []).forEach(function(dimension) {
+    (dimension.subcriteria || []).forEach(function(subcriterion) {
+      lines.push([
+        riskReportCsvCell(dimension.id + ': ' + dimension.name),
+        riskReportCsvCell(subcriterion.name),
+        riskReportCsvCell(subcriterion.weight)
+      ].join(','));
     });
-    // Dimension subtotal
-    var dimWA = dim.subcriteria.reduce(function(s,c){ return s + c.score * c.weight; },0);
-    var dimTotalW = dim.subcriteria.reduce(function(s,c){ return s + c.weight; },0);
-    lines.push('"' + dim.id + ' SUBTOTAL",Weighted Average,' + dimTotalW + ',' + dim.dimScore.toFixed(2) + ',' + dimWA.toFixed(0) + ',,,"(' + dimWA.toFixed(0) + '/' + dimTotalW + ')=' + (dimTotalW > 0 ? (dimWA/dimTotalW).toFixed(2) : '0') + '"');
-    lines.push('');
-  });
-
-  // Composite calculation
-  lines.push('COMPOSITE CALCULATION');
-  lines.push('Weighted Average,' + breakdown.weightedAverage.toFixed(3));
-  lines.push('Total Weight,' + breakdown.totalWeight);
-  lines.push('Formula,"((' + breakdown.weightedAverage.toFixed(3) + ' - 1) / 3) x 100"');
-  lines.push('Composite Score,' + breakdown.composite.toFixed(1));
-  lines.push('');
-
-  // Directors & UBOs
-  lines.push('DIRECTORS');
-  lines.push('Name,Nationality,PEP Status');
-  (app.directors || []).forEach(function(d) {
-    lines.push('"' + d.name + '",' + d.nat + ',' + (d.pep === 'Yes' ? 'PEP' : 'Non-PEP'));
   });
   lines.push('');
-  lines.push('ULTIMATE BENEFICIAL OWNERS');
-  lines.push('Name,Ownership %,PEP Status');
-  (app.ubos || []).forEach(function(u) {
-    lines.push('"' + u.name + '",' + u.pct + '%,' + (u.pep === 'Yes' ? 'PEP' : 'Non-PEP'));
+  lines.push('AUTHORITATIVE FACTOR EVIDENCE');
+  lines.push('Family,Stored Label,Runtime Score,Source');
+  (evidence.factor_evidence || []).forEach(function(factor) {
+    lines.push([
+      riskReportCsvCell(factor.family),
+      riskReportCsvCell(factor.label),
+      riskReportCsvCell(factor.score),
+      riskReportCsvCell(factor.source)
+    ].join(','));
   });
-  lines.push('');
-  lines.push('SCORING MODEL');
-  lines.push('Model Version,v1.4');
-  lines.push('Methodology,Rule-Based Weighted Average (Deterministic)');
-  lines.push('AI Verification,10-Agent Pipeline (verification only — does not alter deterministic score)');
-  lines.push('Regulatory Basis,"FATF Risk-Based Approach, FSC Mauritius AML/CFT Framework"');
 
-  var csv = lines.join('\n');
-  var blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+  var blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
   var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url;
-  a.download = 'Risk_Report_' + app.ref + '.csv';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  var link = document.createElement('a');
+  link.href = url;
+  link.download = 'Risk_Evidence_Report_' + app.ref + '.csv';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
   URL.revokeObjectURL(url);
-  showToast('CSV report downloaded');
+  showToast('Authoritative CSV risk report downloaded');
 }
 
 function downloadRiskPDF() {
   if (!currentApp) { showToast('No application selected'); return; }
   var app = currentApp;
-  var breakdown = computeSubCriteriaBreakdown(app);
+  var evidence;
+  try {
+    evidence = requireAuthoritativeRiskReportEvidence(app);
+  } catch (error) {
+    showToast(error.message || 'Authoritative risk evidence is unavailable');
+    return;
+  }
 
-  var w = window.open('', '_blank', 'width=900,height=1200');
-  if (!w) { showToast('Pop-up blocked — please allow pop-ups for this site'); return; }
+  var risk = evidence.application;
+  var route = risk.approval_route || {};
+  var reportWindow = window.open('', '_blank', 'width=900,height=1200');
+  if (!reportWindow) { showToast('Pop-up blocked — please allow pop-ups for this site'); return; }
 
-  var html = '<!DOCTYPE html><html><head><title>Risk Computation Report — ' + app.ref + '</title>';
-  html += '<style>';
-  html += 'body{font-family:"Segoe UI",system-ui,-apple-system,sans-serif;margin:40px 50px;color:#1a1a2e;font-size:13px;line-height:1.5;}';
-  html += '.header{border-bottom:3px solid #0f3460;padding-bottom:16px;margin-bottom:24px;}';
-  html += '.header h1{margin:0;font-size:22px;color:#0f3460;letter-spacing:-0.5px;}';
-  html += '.header .subtitle{font-size:12px;color:#666;margin-top:4px;}';
-  html += '.header .ref{font-family:monospace;font-size:14px;background:#f0f4ff;padding:2px 8px;border-radius:3px;}';
-  html += '.meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px;}';
-  html += '.meta-item{padding:10px 14px;background:#f8f9fc;border:1px solid #e2e6ee;border-radius:6px;}';
-  html += '.meta-label{font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:#888;margin-bottom:2px;}';
-  html += '.meta-value{font-size:14px;font-weight:600;}';
-  html += '.section-title{font-size:15px;font-weight:700;color:#0f3460;margin:24px 0 12px;padding-bottom:6px;border-bottom:1px solid #e2e6ee;}';
-  html += '.sub-section-title{font-size:13px;font-weight:700;color:#1e40af;margin:16px 0 8px;padding:8px 12px;background:#f0f4ff;border-left:3px solid #0f3460;}';
-  html += 'table{width:100%;border-collapse:collapse;margin-bottom:16px;}';
-  html += 'th{text-align:left;padding:6px 8px;font-size:9px;text-transform:uppercase;letter-spacing:0.4px;color:#666;background:#f0f4ff;border-bottom:2px solid #d0d8e8;}';
-  html += 'td{padding:6px 8px;border-bottom:1px solid #eee;font-size:11px;}';
-  html += '.score-low{color:#059669;} .score-med{color:#2563eb;} .score-high{color:#d97706;} .score-vhigh{color:#dc2626;}';
-  html += '.composite-box{background:#0f3460;color:white;padding:16px 20px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;margin:16px 0;}';
-  html += '.composite-box .label{font-size:12px;opacity:0.8;} .composite-box .value{font-size:28px;font-weight:800;}';
-  html += '.composite-box .formula{font-size:11px;opacity:0.7;font-family:monospace;}';
-  html += '.risk-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;}';
-  html += '.risk-LOW{background:#d1fae5;color:#065f46;} .risk-MEDIUM{background:#dbeafe;color:#1e40af;} .risk-HIGH{background:#fef3c7;color:#92400e;} .risk-VERY_HIGH{background:#fee2e2;color:#991b1b;}';
-  html += '.dim-box{margin-bottom:16px;border:1px solid #d0d8e8;border-radius:6px;overflow:hidden;}';
-  html += '.dim-header{padding:8px 12px;background:#f8f9fc;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #d0d8e8;font-weight:700;}';
-  html += '.rule-ref{font-size:9px;color:#888;font-style:italic;padding:2px 8px 4px 20px;}';
-  html += '.subtotal-row{background:#f0f4ff;font-weight:700;}';
-  html += '.persons-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}';
-  html += '.person-card{padding:6px 10px;background:#f8f9fc;border:1px solid #e2e6ee;border-radius:4px;font-size:11px;}';
-  html += '.footer{margin-top:32px;padding-top:12px;border-top:2px solid #e2e6ee;font-size:10px;color:#888;display:flex;justify-content:space-between;}';
-  html += '.page-break{page-break-before:always;}';
-  html += '@media print{body{margin:20px 30px;font-size:11px;} .no-print{display:none!important;} .dim-box{page-break-inside:avoid;}}';
-  html += '</style></head><body>';
-
-  // Header
-  html += '<div class="header">';
-  html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;">';
-  html += '<div><h1>RegMind Risk Computation Report</h1>';
-  html += '<div class="subtitle">Full Audit Trail — Line-by-Line Sub-Criteria Computation — Scoring Model v1.4</div></div>';
-  html += '<div style="text-align:right;"><div class="ref">' + app.ref + '</div>';
-  html += '<div style="font-size:11px;color:#888;margin-top:4px;">' + new Date().toLocaleDateString('en-GB', {day:'numeric',month:'long',year:'numeric'}) + '</div></div>';
-  html += '</div></div>';
-
-  // Print button
-  html += '<div class="no-print" style="margin-bottom:16px;"><button onclick="window.print()" style="padding:8px 20px;background:#0f3460;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">Print / Save as PDF</button></div>';
-
-  // Meta grid
-  html += '<div class="meta-grid">';
-  html += '<div class="meta-item"><div class="meta-label">Company Name</div><div class="meta-value">' + escapeHtml(app.company) + '</div></div>';
-  html += '<div class="meta-item"><div class="meta-label">Country / BRN</div><div class="meta-value">' + escapeHtml(app.country) + ' / ' + escapeHtml(app.brn) + '</div></div>';
-  html += '<div class="meta-item"><div class="meta-label">Business Sector</div><div class="meta-value">' + escapeHtml(app.sector) + '</div></div>';
-  html += '<div class="meta-item"><div class="meta-label">Risk Classification</div><div class="meta-value"><span class="risk-badge risk-' + app.risk + '">' + app.risk.replace('_',' ') + '</span></div></div>';
-  html += '<div class="meta-item"><div class="meta-label">Onboarding Lane</div><div class="meta-value">' + app.lane + '</div></div>';
-  html += '<div class="meta-item"><div class="meta-label">Submission / Assigned</div><div class="meta-value">' + app.date + ' / ' + escapeHtml(app.assigned) + '</div></div>';
+  function reportCell(value) { return escapeHtml(value == null ? '' : value); }
+  var html = '<!DOCTYPE html><html><head><title>Authoritative Risk Evidence — ' + reportCell(app.ref) + '</title>';
+  html += '<style>body{font-family:"Segoe UI",system-ui,sans-serif;margin:40px 50px;color:#1a1a2e;font-size:13px;line-height:1.5}.header{border-bottom:3px solid #0f3460;padding-bottom:16px;margin-bottom:24px}.header h1{margin:0;font-size:22px;color:#0f3460}.notice{padding:10px 12px;background:#eef4ff;border:1px solid #cbd8ee;border-radius:6px;margin:14px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.item{padding:10px 12px;background:#f8f9fc;border:1px solid #e2e6ee;border-radius:6px}.label{font-size:10px;text-transform:uppercase;color:#777}.value{font-size:14px;font-weight:700;overflow-wrap:anywhere}.section{font-size:15px;font-weight:700;color:#0f3460;margin:24px 0 10px;border-bottom:1px solid #d9dfeb;padding-bottom:5px}table{width:100%;border-collapse:collapse;margin-bottom:14px}th{text-align:left;padding:7px;background:#eef3fb;font-size:10px;text-transform:uppercase}td{padding:7px;border-bottom:1px solid #eee;font-size:11px}.outcome{background:#0f3460;color:#fff;padding:16px;border-radius:8px;margin:16px 0}.outcome strong{font-size:26px}.footer{margin-top:28px;border-top:1px solid #ddd;padding-top:10px;font-size:10px;color:#777}.no-print{margin-bottom:16px}@media print{body{margin:20px 30px}.no-print{display:none!important}}</style></head><body>';
+  html += '<div class="header"><h1>RegMind Authoritative Risk Evidence Report</h1><div>Application ' + reportCell(app.ref) + '</div></div>';
+  html += '<div class="no-print"><button onclick="window.print()" style="padding:8px 18px;background:#0f3460;color:white;border:0;border-radius:5px">Print / Save as PDF</button></div>';
+  html += '<div class="notice">This report displays stored application risk outcomes and the validated runtime configuration that produced them. No score is calculated in this document or in the browser.</div>';
+  html += '<div class="grid">';
+  [
+    ['Company', app.company], ['Country / BRN', (app.country || '') + ' / ' + (app.brn || '')],
+    ['Sector', app.sector], ['Risk computed at', evidence.risk_computed_at],
+    ['Configuration version', evidence.config_version], ['Evidence source', evidence.source]
+  ].forEach(function(item) {
+    html += '<div class="item"><div class="label">' + reportCell(item[0]) + '</div><div class="value">' + reportCell(item[1]) + '</div></div>';
+  });
   html += '</div>';
-
-  // Composite score box
-  html += '<div class="composite-box">';
-  html += '<div><div class="label">Composite Risk Score</div><div class="formula">';
-  var fParts = [];
-  breakdown.dimensions.forEach(function(dim) { fParts.push('(' + dim.dimScore.toFixed(2) + ' x ' + (dim.weight / 100).toFixed(2) + ')'); });
-  html += fParts.join(' + ') + ' = ' + breakdown.weightedAverage.toFixed(3);
-  html += '<br>((' + breakdown.weightedAverage.toFixed(3) + ' - 1) / 3) x 100</div></div>';
-  html += '<div class="value">' + breakdown.composite.toFixed(1) + ' <span style="font-size:14px;opacity:0.7;">/ 100</span></div>';
-  html += '</div>';
-
-  // Dimension summary table
-  html += '<div class="section-title">Dimension Summary</div>';
-  html += '<table><thead><tr><th>Dimension</th><th style="text-align:center;">Weight</th><th style="text-align:center;">Score (1-4)</th><th style="text-align:center;">Weighted</th><th style="text-align:center;">Sub-Criteria</th></tr></thead><tbody>';
-  breakdown.dimensions.forEach(function(dim) {
-    var weighted = dim.dimScore * (dim.weight / 100);
-    var cls = dim.dimScore <= 1.5 ? 'score-low' : dim.dimScore <= 2.5 ? 'score-med' : dim.dimScore <= 3.2 ? 'score-high' : 'score-vhigh';
-    html += '<tr><td style="font-weight:600;">' + dim.id + ': ' + dim.name + '</td>';
-    html += '<td style="text-align:center;">' + dim.weight + '%</td>';
-    html += '<td style="text-align:center;font-weight:700;" class="' + cls + '">' + dim.dimScore.toFixed(2) + '</td>';
-    html += '<td style="text-align:center;">' + weighted.toFixed(1) + '</td>';
-    html += '<td style="text-align:center;">' + dim.subcriteria.length + '</td></tr>';
+  html += '<div class="outcome"><div>Stored authoritative outcome</div><strong>' + reportCell(risk.score) + ' / 100 — ' + reportCell(risk.tier) + '</strong><div>EDD / onboarding route: ' + reportCell(risk.edd_route) + '</div><div>Approval route: ' + reportCell(route.route) + '</div></div>';
+  html += '<div class="section">Stored Dimension Evidence</div><table><thead><tr><th>Dimension</th><th>Runtime Weight</th><th>Stored Score</th><th>Source</th></tr></thead><tbody>';
+  (risk.dimensions || []).forEach(function(dimension) {
+    html += '<tr><td>' + reportCell(dimension.id + ': ' + dimension.name) + '</td><td>' + reportCell(dimension.weight) + '%</td><td>' + reportCell(dimension.stored_score) + '</td><td>' + reportCell(dimension.source) + '</td></tr>';
   });
-  html += '</tbody><tfoot><tr class="subtotal-row"><td>COMPOSITE</td><td style="text-align:center;">' + breakdown.totalWeight + '%</td>';
-  html += '<td colspan="2" style="text-align:center;font-size:14px;color:#0f3460;">' + breakdown.composite.toFixed(1) + ' / 100</td>';
-  html += '<td style="text-align:center;"><span class="risk-badge risk-' + app.risk + '">' + app.risk.replace('_',' ') + '</span></td></tr></tfoot></table>';
-
-  // Full sub-criteria detail
-  html += '<div class="section-title page-break">Line-by-Line Sub-Criteria Computation</div>';
-  html += '<p style="font-size:11px;color:#666;margin-bottom:16px;">Each dimension score is computed as the weighted average of its sub-criteria. Each sub-criterion is scored 1-4 based on deterministic rule-based lookups against the RegMind Risk Scoring Model v1.4. The input/evidence column shows the data point that determined the score.</p>';
-
-  breakdown.dimensions.forEach(function(dim) {
-    var dimColor = dim.dimScore <= 1.5 ? '#059669' : dim.dimScore <= 2.5 ? '#2563eb' : dim.dimScore <= 3.2 ? '#d97706' : '#dc2626';
-    html += '<div class="dim-box">';
-    html += '<div class="dim-header"><span>' + dim.id + ': ' + dim.name + ' (Global Weight: ' + dim.weight + '%)</span>';
-    html += '<span style="color:' + dimColor + ';font-size:16px;">' + dim.dimScore.toFixed(2) + ' <span style="font-size:10px;color:#888;font-weight:400;">/ 4.00</span></span></div>';
-
-    html += '<table style="margin:0;"><thead><tr>';
-    html += '<th style="width:22%;">Sub-Criterion</th>';
-    html += '<th style="text-align:center;width:8%;">Weight</th>';
-    html += '<th style="text-align:center;width:8%;">Score</th>';
-    html += '<th style="text-align:center;width:10%;">Wtd Score</th>';
-    html += '<th style="width:35%;">Input / Evidence</th>';
-    html += '<th style="text-align:center;width:8%;">Tier</th>';
-    html += '</tr></thead><tbody>';
-
-    var subTotal = 0, subWeightTotal = 0;
-    dim.subcriteria.forEach(function(sub) {
-      var subWeighted = sub.score * sub.weight;
-      subTotal += subWeighted;
-      subWeightTotal += sub.weight;
-      var subCls = sub.score <= 1 ? 'score-low' : sub.score <= 2 ? 'score-med' : sub.score <= 3 ? 'score-high' : 'score-vhigh';
-      html += '<tr>';
-      html += '<td style="font-weight:600;">' + sub.criterion + '</td>';
-      html += '<td style="text-align:center;">' + sub.weight + '%</td>';
-      html += '<td style="text-align:center;font-weight:700;" class="' + subCls + '">' + sub.score + '</td>';
-      html += '<td style="text-align:center;">' + subWeighted.toFixed(0) + '</td>';
-      html += '<td style="font-size:10px;">' + escapeHtml(sub.input) + '</td>';
-      html += '<td style="text-align:center;"><span class="risk-badge risk-' + sub.tier.replace(' ','_') + '">' + sub.tier + '</span></td>';
-      html += '</tr>';
-      html += '<tr><td colspan="6" class="rule-ref">Rule: ' + escapeHtml(sub.rule) + '</td></tr>';
-    });
-
-    var dimWA = subWeightTotal > 0 ? (subTotal / subWeightTotal) : 0;
-    html += '</tbody><tfoot><tr class="subtotal-row">';
-    html += '<td>' + dim.id + ' Weighted Average</td>';
-    html += '<td style="text-align:center;">' + subWeightTotal + '%</td>';
-    html += '<td style="text-align:center;font-weight:700;color:' + dimColor + ';">' + dimWA.toFixed(2) + '</td>';
-    html += '<td style="text-align:center;">' + subTotal.toFixed(0) + '</td>';
-    html += '<td colspan="2" style="font-size:10px;">Calculation: (' + subTotal.toFixed(0) + ' / ' + subWeightTotal + ') = ' + dimWA.toFixed(2) + '</td>';
-    html += '</tr></tfoot></table></div>';
-  });
-
-  // Final formula
-  html += '<div style="margin-top:16px;padding:14px 18px;background:#0f3460;color:white;border-radius:8px;">';
-  html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;opacity:0.8;margin-bottom:6px;">Final Composite Calculation</div>';
-  html += '<div style="font-family:monospace;font-size:12px;margin-bottom:4px;">' + fParts.join(' + ') + ' = ' + breakdown.weightedAverage.toFixed(3) + '</div>';
-  html += '<div style="font-family:monospace;font-size:12px;">((' + breakdown.weightedAverage.toFixed(3) + ' - 1) / 3) x 100 = <span style="font-size:20px;font-weight:800;">' + breakdown.composite.toFixed(1) + '</span> / 100</div>';
-  html += '</div>';
-
-  // Directors & UBOs
-  html += '<div class="section-title">Directors & Ultimate Beneficial Owners</div>';
-  html += '<div class="persons-grid">';
-  html += '<div><div style="font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:#888;margin-bottom:6px;">Directors</div>';
-  (app.directors || []).forEach(function(d) {
-    html += '<div class="person-card">' + escapeHtml(d.name) + ' <span style="color:#888;">(' + d.nat + ')</span>' + (d.pep === 'Yes' ? ' <span class="risk-badge risk-HIGH">PEP</span>' : '') + '</div>';
-  });
-  html += '</div><div><div style="font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:#888;margin-bottom:6px;">UBOs</div>';
-  (app.ubos || []).forEach(function(u) {
-    html += '<div class="person-card">' + escapeHtml(u.name) + ' <span style="color:#888;">(' + u.pct + '%)</span>' + (u.pep === 'Yes' ? ' <span class="risk-badge risk-HIGH">PEP</span>' : '') + '</div>';
-  });
-  html += '</div></div>';
-
-  // Methodology
-  html += '<div class="section-title">Scoring Methodology Reference</div>';
-  html += '<table><tbody>';
-  html += '<tr><td style="font-weight:600;width:200px;">Model Version</td><td>RegMind Risk Scoring Model v1.4</td></tr>';
-  html += '<tr><td style="font-weight:600;">Methodology</td><td>Rule-Based Weighted Average (Deterministic) — no AI influence on score computation</td></tr>';
-  html += '<tr><td style="font-weight:600;">Formula</td><td style="font-family:monospace;font-size:10px;">Composite = ((weighted average - 1) / 3) x 100</td></tr>';
-  html += '<tr><td style="font-weight:600;">Score Range</td><td>0 (Lowest Risk) to 100 (Highest Risk)</td></tr>';
-  html += '<tr><td style="font-weight:600;">Thresholds</td><td>LOW: 0-39.9 | MEDIUM: 40-54.9 | HIGH: 55-69.9 | VERY HIGH: 70-100</td></tr>';
-  html += '<tr><td style="font-weight:600;">Sub-Criteria Scoring</td><td>Each sub-criterion scored 1-4 per rule-based lookup tables. Dimension score = weighted avg of sub-criteria.</td></tr>';
-  html += '<tr><td style="font-weight:600;">AI Verification</td><td>10-Agent Pipeline (verification only — does not alter the deterministic score)</td></tr>';
-  html += '<tr><td style="font-weight:600;">Regulatory Basis</td><td>FATF Risk-Based Approach, FSC Mauritius AML/CFT Framework</td></tr>';
   html += '</tbody></table>';
-
-  // Footer
-  html += '<div class="footer">';
-  html += '<div>Onboarda | Powered by RegMind | Confidential — For Internal Use Only | Audit Trail Document</div>';
-  html += '<div>Generated by ' + escapeHtml(currentUser.name) + ' on ' + new Date().toLocaleString('en-GB') + '</div>';
-  html += '</div>';
-
+  html += '<div class="section">Runtime Subcriteria Configuration Reference</div><table><thead><tr><th>Dimension</th><th>Subcriterion</th><th>Runtime Weight</th></tr></thead><tbody>';
+  (risk.dimensions || []).forEach(function(dimension) {
+    (dimension.subcriteria || []).forEach(function(subcriterion) {
+      html += '<tr><td>' + reportCell(dimension.id) + '</td><td>' + reportCell(subcriterion.name) + '</td><td>' + reportCell(subcriterion.weight) + '%</td></tr>';
+    });
+  });
+  html += '</tbody></table>';
+  html += '<div class="section">Floors and Routes</div><table><tbody>';
+  html += '<tr><td>High floor reasons</td><td>' + reportCell((risk.floor_reasons || []).join('; ') || 'None recorded') + '</td></tr>';
+  html += '<tr><td>All escalation evidence</td><td>' + reportCell((risk.escalations || []).join('; ') || 'None recorded') + '</td></tr>';
+  html += '<tr><td>Approval reasons</td><td>' + reportCell((route.reasons || []).join('; ') || 'None recorded') + '</td></tr>';
+  html += '</tbody></table>';
+  html += '<div class="section">Authoritative Factor Evidence</div><table><thead><tr><th>Family</th><th>Stored Label</th><th>Runtime Score</th><th>Source</th></tr></thead><tbody>';
+  (evidence.factor_evidence || []).forEach(function(factor) {
+    html += '<tr><td>' + reportCell(factor.family) + '</td><td>' + reportCell(factor.label) + '</td><td>' + reportCell(factor.score) + '</td><td>' + reportCell(factor.source) + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  html += '<div class="footer">Onboarda | Powered by RegMind | Confidential — internal use only | Generated by ' + reportCell(currentUser.name || '') + ' on ' + reportCell(new Date().toISOString()) + '</div>';
   html += '</body></html>';
-  w.document.write(html);
-  w.document.close();
-
-  showToast('PDF report opened — use Print / Save as PDF');
+  reportWindow.document.write(html);
+  reportWindow.document.close();
+  showToast('Authoritative PDF risk report opened — use Print / Save as PDF');
 }
 </script>
 </body>

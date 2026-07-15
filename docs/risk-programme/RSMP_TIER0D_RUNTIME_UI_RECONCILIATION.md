@@ -4,7 +4,9 @@ Status: reconciled for the repository runtime and read-only Back Office projecti
 
 ## Scope and source of truth
 
-The Back Office Risk Scoring Model page now receives one read-only projection from `GET /api/config/risk-model`. The handler loads the validated model with `rule_engine.load_risk_config`; the projection evaluates parser-owned scores with `rule_engine.compute_risk_score`, uses the same controlled registry, and imports the exact EDD, approval, screening-floor, and monitoring policy constants used at runtime. The UI contains no score table and has no fallback model.
+The Back Office Risk Scoring Model page now receives one read-only projection from `GET /api/config/risk-model`. The handler loads the validated model with `rule_engine.load_risk_config`; the projection evaluates parser-owned scores with `rule_engine.compute_risk_score`, uses the same controlled registry, and imports the exact EDD, approval, screening-floor, and monitoring policy constants used at runtime. The UI contains no hardcoded score table and has no fallback model.
+
+Application-detail CSV/PDF risk reports now consume `risk_report_evidence` produced by the application-detail API. That read-only evidence package joins the persisted application score, final tier, five stored dimensions, escalation/floor reasons, EDD lane, and backend approval route to the exact validated runtime configuration version. The browser does not score, recompute, weight, classify, infer, or substitute any risk value. A missing computation timestamp, missing/stale/mismatched configuration version, incomplete dimension evidence, missing route, or malformed runtime projection blocks export with a controlled message.
 
 This repository snapshot was generated with `ENABLE_RSMP_TIER0A_MAPPING_FIDELITY=false`, matching the default activation state. The page reports the evaluated flag and parser mode dynamically; it does not activate, configure, recompute, or persist anything.
 
@@ -21,6 +23,8 @@ This repository snapshot was generated with `ENABLE_RSMP_TIER0A_MAPPING_FIDELITY
 | Duplicated UI scoring definitions removed | 160 | 103 country-list entries, 26 sector rows, 12 entity rows, 15 scoring strings, and 4 thresholds |
 | Editing controls removed | 6 | Model edit/save/cancel and country/sector/entity edit controls |
 | Hidden runtime rules surfaced | 7 | Sector keyword, two country floors, two screening rules, unresolved-mapping block, composite-85 review |
+| Browser risk calculators remaining | 0 | The CSV/PDF scorer and application-detail recomputation path were removed |
+| Client-side model mutation handlers remaining | 0 | Runtime projection is recursively frozen; no model save/update handler exists in the page |
 
 ## Classification findings
 
@@ -30,6 +34,21 @@ This repository snapshot was generated with `ENABLE_RSMP_TIER0A_MAPPING_FIDELITY
 - **Runtime only:** validated runtime lookup keys not represented by a controlled label remain visible and are explicitly classified as runtime-only.
 - **Hidden runtime rule:** seven enforced floor/review/block rules were absent from the old model page and are now shown.
 - **Lane B:** 22 unresolved sector labels are shown only in the pending-calibration section and never as active scoring entries.
+
+## Report/export and error-path reconciliation
+
+| UI / export item | Runtime or authoritative source | Displayed/exported value | Match? | Action |
+|---|---|---|---|---|
+| Composite score | `applications.risk_score` via `risk_report_evidence` | Persisted score | Yes | Export directly; no browser calculation |
+| Final tier | `applications.final_risk_level` / `risk_level` via `risk_report_evidence` | Persisted canonical tier | Yes | Export directly; no browser threshold table |
+| D1–D5 scores | `applications.risk_dimensions` via `risk_report_evidence` | Persisted dimension values | Yes | Export directly; no weighted contribution calculation |
+| D3 criterion weights | validated `risk_config.dimensions[D3].subcriteria` | 40 / 35 / 25 | Yes | Runtime configuration reference only |
+| Declared PEP policy evidence | stored `pep_declaration.pep_role_type` + `rule_engine.GATE0_DECLARED_PEP_SCORE` | 4 | Yes | Runtime-owned policy evidence; no role-specific browser score |
+| High floors | stored `risk_escalations` entries beginning `floor_rule_` | Persisted floor reasons | Yes | Export directly |
+| EDD / onboarding route | `applications.onboarding_lane` | Persisted lane | Yes | Export directly |
+| Approval route | `security_hardening.classify_approval_route` | Backend-classified route and reasons | Yes | Export directly |
+| Missing or stale evidence | API evidence validator | Export blocked | Yes | Fail closed; no fallback values |
+| Malformed runtime config | typed `RiskModelProjectionUnavailable` at API boundary | Controlled HTTP 503 | Yes | No `StopIteration`, traceback, or fallback substitution |
 
 ## Mandatory rule presentation
 
