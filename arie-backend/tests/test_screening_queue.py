@@ -1853,7 +1853,7 @@ def _seed_queue_perf_apps(db, count):
             (
                 f"qperf-{idx:03d}", ref, "testclient001", f"Queue Perf {idx:03d} Ltd",
                 "Mauritius", "Technology", "SME", "in_review",
-                _json.dumps({"screening_report": report}), 0,
+                _json.dumps({"screening_report": report}), False,
             ),
         )
     db.commit()

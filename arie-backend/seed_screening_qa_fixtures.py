@@ -147,7 +147,7 @@ FIXTURES = [
                 "person_key": "f1xed-dir-0001",
                 "full_name": "Nadia A. KOVAC",
                 "nationality": "HR",
-                "is_pep": 0,
+                "is_pep": False,
             }
         ],
         "review": None,
@@ -163,7 +163,7 @@ FIXTURES = [
             "disposition_code": "false_positive_cleared",
             "rationale": "QA fixture: first-officer false-positive clearance awaiting a second reviewer.",
             "sensitivity_flags": json.dumps(["director_ubo_sensitive_hit"]),
-            "requires_four_eyes": 1,
+            "requires_four_eyes": True,
             "reviewer_name": FIRST_REVIEWER_NAME,
         },
     },
@@ -178,7 +178,7 @@ FIXTURES = [
             "disposition_code": "needs_more_information",
             "rationale": "QA fixture: additional client information requested.",
             "sensitivity_flags": json.dumps([]),
-            "requires_four_eyes": 0,
+            "requires_four_eyes": False,
             "reviewer_name": FIRST_REVIEWER_NAME,
         },
     },
@@ -275,7 +275,11 @@ def seed_screening_qa_fixtures(db):
                     "screening_report": fixture["report"],
                     "last_screened_at": SCREENED_AT,
                 }),
-                1,
+                # Python bool, NOT an integer literal: is_fixture is BOOLEAN on
+                # PostgreSQL (psycopg2 raises DatatypeMismatch for ints, which
+                # SQLite silently tolerated — the first staging seeder run
+                # failed exactly here).
+                True,
             ),
         )
         for director in fixture["directors"]:
