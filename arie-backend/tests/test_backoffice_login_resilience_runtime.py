@@ -178,6 +178,12 @@ def _login_runtime_js(html, scenario):
                   }
                 }
                 function syncCurrentUserUI() {}
+                function applyRuntimeRiskModelPayload(payload) {
+                  const model = payload && payload.runtime_model;
+                  if (!model || model.read_only !== true) throw new Error('Runtime risk model unavailable');
+                  RISK_DIMENSIONS = model.dimensions || [];
+                  RISK_THRESHOLDS = model.thresholds || [];
+                }
                 function resetBackofficeSessionData() {
                   DASHBOARD_DATA = null;
                   DASHBOARD_BOOTSTRAP_STATE = 'idle';
@@ -325,7 +331,7 @@ def _base_api_behavior(extra_cases=""):
           if (path.indexOf('/applications?view=list') === 0) return {{ total: 1, returned: 1, limit: 20, offset: 0, applications: [{{ ref: 'ARF-1', company_name: 'Acme Ltd' }}] }};
           if (path === '/dashboard') return {{ metrics: [] }};
           if (path === '/users') return {{ users: [{{ id: 'u1', full_name: 'Officer Example', email: 'officer@example.com', role: 'co', status: 'active' }}] }};
-          if (path === '/config/risk-model') return {{ dimensions: [], thresholds: [] }};
+          if (path === '/config/risk-model') return {{ runtime_model: {{ read_only: true, dimensions: [], thresholds: [] }} }};
           if (path === '/config/ai-agents') return {{ agents: [] }};
           if (path === '/config/verification-checks') return {{ entity: [], person: [] }};
           if (path === '/monitoring/alerts') return {{ alerts: [] }};

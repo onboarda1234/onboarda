@@ -502,5 +502,5 @@ def test_person_document_polling_rejects_invalid_person_identifiers():
 def test_backoffice_retains_internal_risk_visibility():
     text = BACKOFFICE_PATH.read_text(encoding="utf-8")
     assert "Risk Rating" in text
-    assert "Composite Risk Score" in text
+    assert "Stored Composite Score" in text
     assert "Enhanced Due Diligence" in text

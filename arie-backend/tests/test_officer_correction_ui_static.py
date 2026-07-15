@@ -82,20 +82,11 @@ def _officer_runtime_js(html, scenario):
                   ubos: [{ id: 'ubo-1', name: 'John Harbor' }],
                   intermediaries: []
                 };
-                var COUNTRY_RISK_LISTS = {
-                  FATF_BLACK: [],
-                  FATF_GREY: [],
-                  SANCTIONED: [],
-                  LOW_RISK: ['Mauritius', 'United Kingdom', 'Singapore']
-                };
-                var SECTOR_RISK_CONFIG = [
-                  { sector: 'Professional Services', score: 3 },
-                  { sector: 'Technology / SaaS', score: 2 }
-                ];
-                var ENTITY_TYPE_SCORES = [
-                  { type: 'SME / Private Company', score: 2 },
-                  { type: 'Trust', score: 3 }
-                ];
+                var RUNTIME_RISK_MODEL = { catalogs: {
+                  country: [{label:'Mauritius'},{label:'United Kingdom'},{label:'Singapore'}],
+                  sector: [{label:'Professional Services'},{label:'Technology / SaaS'}],
+                  entity_type: [{label:'SME / Private Company'},{label:'Trust'}]
+                }};
                 var document = {
                   elements: {},
                   getElementById(id) { return this.elements[id] || null; }

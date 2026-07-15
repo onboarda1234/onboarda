@@ -1737,6 +1737,9 @@ def test_backoffice_html_exposes_officer_correction_controls():
         src = handle.read()
     topbar_start = src.index("<!-- Top bar: back button + action buttons (horizontal) -->")
     topbar_end = src.index('<div id="detail-case-command-centre">', topbar_start)
+    modal_start = src.index('<div class="modal-overlay" id="modal-officer-correction">')
+    modal_end = src.index("<!--", modal_start)
+    correction_modal = src[modal_start:modal_end]
     assert "openOfficerCorrectionModal()" not in src[topbar_start:topbar_end]
     assert "Add correction" in src
     assert "btn-prescreen-correction-mode" in src
@@ -1748,9 +1751,9 @@ def test_backoffice_html_exposes_officer_correction_controls():
     assert "Risk information" in src
     assert "Reason / Evidence" in src
     assert "Correction saved. RegMind updated the risk, Enhanced Review requirements, memo status, and approval blockers where required." in src
-    assert "Correction Target" not in src
-    assert "Evidence Source" not in src
-    assert "Correction Note" not in src
+    assert "Correction Target" not in correction_modal
+    assert "Evidence Source" not in correction_modal
+    assert "Correction Note" not in correction_modal
 
 
 def test_backoffice_html_uses_tri_state_pep_copy():

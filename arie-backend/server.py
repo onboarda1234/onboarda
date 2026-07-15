@@ -158,7 +158,7 @@ from rule_engine import (
     classify_country, score_sector, compute_risk_score, classify_risk_level,
     apply_risk_floor,
     normalize_country_key,
-    validate_risk_config,
+    validate_risk_config, load_risk_config,
     recompute_risk, recompute_risk_for_active_apps,
     RiskConfigUnavailable,
 )
@@ -8195,6 +8195,32 @@ class ApplicationDetailHandler(BaseHandler):
             idv_payload = result.get("sumsub_idv_statuses") or {}
             result["idv_gate_summary"] = idv_payload.get("gate_summary") or build_idv_gate_summary(idv_payload)
             result["approval_route"] = classify_approval_route(result, db)
+            try:
+                from risk_model_view import (
+                    RISK_REPORT_EVIDENCE_UNAVAILABLE_MESSAGE,
+                    RiskModelProjectionUnavailable,
+                    build_authoritative_risk_report_evidence,
+                )
+
+                result["risk_report_evidence"] = build_authoritative_risk_report_evidence(
+                    result,
+                    load_risk_config(),
+                    approval_route=result["approval_route"],
+                )
+            except (RiskConfigUnavailable, RiskModelProjectionUnavailable) as exc:
+                logger.warning(
+                    "authoritative_risk_report_evidence_unavailable app_id=%s reason=%s",
+                    result.get("id"),
+                    str(exc)[:160],
+                )
+                result["risk_report_evidence"] = {
+                    "available": False,
+                    "authoritative": True,
+                    "read_only": True,
+                    "status": "blocked",
+                    "message": RISK_REPORT_EVIDENCE_UNAVAILABLE_MESSAGE,
+                    "reason_codes": ["runtime_risk_config_unavailable"],
+                }
             current_gate_blockers = collect_approval_gate_blockers(result, db)
             gate_presentation = _build_application_gate_presentation(db, result, current_gate_blockers)
             result["approval_gate_presentation"] = gate_presentation["approval_gate_presentation"]
@@ -14883,26 +14909,37 @@ class RiskConfigHandler(BaseHandler):
         )
         if not user:
             return
-        db = get_db()
-        config = db.execute("SELECT * FROM risk_config WHERE id=1").fetchone()
-        db.close()
-        if config:
+        try:
+            # Tier 0D: load through the scorer's own validated loader.  The UI
+            # must not parse a parallel DB representation or maintain fallback
+            # score tables of its own.
+            config = load_risk_config()
+            if not config:
+                return self.error("Runtime risk model is not configured", 503)
+            from risk_model_view import (
+                RiskModelProjectionUnavailable,
+                build_runtime_risk_model_view,
+            )
+
+            version = str(config.get("_config_version") or "")
+            try:
+                runtime_model = build_runtime_risk_model_view(config)
+            except RiskModelProjectionUnavailable as exc:
+                logger.error("runtime_risk_model_projection_unavailable: %s", exc)
+                return self.error("Runtime risk model is unavailable", 503)
             result = {
-                "dimensions": safe_json_loads(config["dimensions"]),
-                "thresholds": safe_json_loads(config["thresholds"]),
-                "updated_at": config["updated_at"],
+                "dimensions": config.get("dimensions") or [],
+                "thresholds": config.get("thresholds") or [],
+                "country_risk_scores": config.get("country_risk_scores") or {},
+                "sector_risk_scores": config.get("sector_risk_scores") or {},
+                "entity_type_scores": config.get("entity_type_scores") or {},
+                "updated_at": version.removeprefix("risk_config:"),
+                "runtime_model": runtime_model,
             }
-            # Include scoring config columns (may not exist in older schemas)
-            for col in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
-                try:
-                    val = config[col]
-                    result[col] = safe_json_loads(val) if val else {}
-                except (KeyError, IndexError):
-                    result[col] = {}
             self.success(result)
-        else:
-            self.success({"dimensions": [], "thresholds": [],
-                         "country_risk_scores": {}, "sector_risk_scores": {}, "entity_type_scores": {}})
+        except RiskConfigUnavailable as exc:
+            logger.error("runtime_risk_model_unavailable: %s", exc)
+            return self.error("Runtime risk model is unavailable", 503)
 
     def put(self):
         user = self.require_backoffice_auth(

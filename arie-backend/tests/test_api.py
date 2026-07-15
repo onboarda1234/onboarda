@@ -7415,6 +7415,30 @@ class TestRiskModelAdminConfigSafety:
         after = self._risk_config(api_server, headers)
         assert after == before
 
+    def test_malformed_runtime_projection_returns_controlled_503(self, api_server, monkeypatch):
+        import server
+
+        malformed = {
+            "dimensions": [],
+            "thresholds": [],
+            "country_risk_scores": {},
+            "sector_risk_scores": {},
+            "entity_type_scores": {},
+            "_config_version": "risk_config:malformed-test",
+        }
+        monkeypatch.setattr(server, "load_risk_config", lambda: malformed)
+
+        resp = http_requests.get(
+            f"{api_server}/api/config/risk-model",
+            headers=self._admin_headers(),
+            timeout=5,
+        )
+
+        assert resp.status_code == 503
+        assert resp.json() == {"error": "Runtime risk model is unavailable"}
+        assert "StopIteration" not in resp.text
+        assert "Traceback" not in resp.text
+
     def test_partial_score_update_preserves_dimensions_and_thresholds(self, api_server):
         headers = self._admin_headers()
 
