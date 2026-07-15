@@ -561,7 +561,9 @@ def test_screening_queue_marks_smoke_provider_as_simulated(temp_db):
     )
     db.commit()
 
-    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    # %smoke% names are text-pattern fixtures: the default queue hides them
+    # (Phase 4 gating parity), so the mode assertion opts in explicitly.
+    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"}, show_fixtures=True)
     db.close()
     row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-SMOKE-MODE" and r["subject_name"] == "Smoke Director")
 

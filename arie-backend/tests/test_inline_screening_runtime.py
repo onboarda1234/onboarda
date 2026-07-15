@@ -1566,12 +1566,14 @@ class TestScreeningQueueSlimRowTemplate:
         clean_entity, declared_pep, simulated, sanctions_entity = rows
 
         for row in rows:
-            assert row.count("<td>") == 5
+            assert row.count("<td>") == 7
 
-        # Entity rows: company name rendered once (no Subject/Company dupe),
-        # type chip present, context chips (incl. registry) gone from the list,
+        # Entity rows: subject rendered once as text (plus its own tooltip —
+        # no Subject/Company duplication), type chip in its own column,
+        # reference in its own column, context chips (incl. registry) gone,
         # live provenance silent, screened is date-only.
-        assert clean_entity.count("Clean Entity Ltd") == 1
+        assert clean_entity.count(">Clean Entity Ltd</div>") == 1
+        assert 'title="Clean Entity Ltd"' in clean_entity
         assert "entity" in clean_entity
         assert "ARF-2026-000001" in clean_entity
         assert "Registry" not in clean_entity
@@ -1599,9 +1601,9 @@ class TestScreeningQueueSlimRowTemplate:
         assert "Adverse media" in sanctions_entity
         assert "3 provider hits" in sanctions_entity
 
-    def test_queue_header_is_five_columns_and_registry_tile_is_honest(self):
+    def test_queue_header_is_seven_columns_and_registry_tile_is_honest(self):
         html = _read_backoffice()
-        assert "<thead><tr><th>Subject</th><th>Signals</th><th>Status</th><th>Screened</th><th>Actions</th></tr></thead>" in html
+        assert "<thead><tr><th>Reference</th><th>Subject</th><th>Type</th><th>Signals</th><th>Status</th><th>Screened</th><th>Actions</th></tr></thead>" in html
         assert "<th>Entity / Context</th>" not in html
         assert "<th>PEP (Declared / Screening)</th>" not in html
         assert "function screeningQueueContextCell" not in html
