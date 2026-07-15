@@ -30,6 +30,62 @@ logger = logging.getLogger("arie")
 
 GATE0_DECLARED_PEP_SCORE = 4
 
+# Runtime-owned parser catalog. These immutable values are consumed directly
+# by ``compute_risk_score`` and exposed read-only by the Back Office model
+# projection. Keeping the vocabulary beside the scorer prevents a second,
+# manually maintained UI scoring list without changing scoring semantics.
+ADVERSE_MEDIA_SCORE_4_KEYWORDS = ("confirmed", "regulatory", "criminal")
+ADVERSE_MEDIA_SCORE_2_KEYWORDS = ("minor", "unsubstantiated")
+ADVERSE_MEDIA_CLEAR_VALUES = ("clear", "none", "no")
+
+SOURCE_OF_WEALTH_SCORE_MAP = {
+    "business revenue": 1,
+    "trading profits": 1,
+    "investment": 1,
+    "dividends": 1,
+    "government funding": 1,
+    "grants": 1,
+    "sale of assets": 2,
+    "property": 2,
+    "venture capital": 2,
+    "investor funding": 2,
+    "inheritance": 3,
+    "family wealth": 3,
+    "loan": 3,
+    "credit": 3,
+    "other": 3,
+}
+SOURCE_OF_WEALTH_UNKNOWN_VALUES = ("information not provided", "not provided", "unknown")
+
+SOURCE_OF_FUNDS_SCORE_MAP = {
+    "company bank": 1,
+    "parent company": 1,
+    "group entity": 1,
+    "client payments": 1,
+    "receivables": 1,
+    "revenue": 1,
+    "business operations": 1,
+    "shareholder": 2,
+    "director": 2,
+    "capital injection": 2,
+    "investment round": 2,
+    "fundraise": 2,
+    "sale of assets": 2,
+    "loan": 3,
+    "credit facility": 3,
+    "other": 3,
+}
+SOURCE_OF_FUNDS_UNKNOWN_VALUES = ("information not provided", "not provided", "unknown")
+
+SERVICE_DOMESTIC_REQUIRED_KEYWORDS = ("domestic", "single")
+SERVICE_SCORE_2_KEYWORDS = ("multi-currency", "multi currency")
+SERVICE_SCORE_3_KEYWORDS = ("cross-border", "international")
+
+DELIVERY_SCORE_1_KEYWORDS = ("face-to-face", "in-person", "in person")
+DELIVERY_SCORE_2_KEYWORDS = ("video",)
+DELIVERY_REMOTE_KEYWORDS = ("non-face", "remote")
+DELIVERY_SCORE_4_KEYWORDS = ("anonymous", "unverified")
+
 CONTROLLED_PRESCREENING_CORRECTION_SOURCE = "application_overview_prescreening_correction_mode"
 CONTROLLED_PRESCREENING_CORRECTION_OVERLAY_MAP = {
     "country_of_incorporation": {
@@ -1236,11 +1292,11 @@ def compute_risk_score(app_data, config_override=None):
     if adverse_media_data:
         am_status = (adverse_media_data if isinstance(adverse_media_data, str) else
                      adverse_media_data.get("status", "") if isinstance(adverse_media_data, dict) else "").lower()
-        if "confirmed" in am_status or "regulatory" in am_status or "criminal" in am_status:
+        if any(keyword in am_status for keyword in ADVERSE_MEDIA_SCORE_4_KEYWORDS):
             d1_adverse = 4
-        elif "minor" in am_status or "unsubstantiated" in am_status:
+        elif any(keyword in am_status for keyword in ADVERSE_MEDIA_SCORE_2_KEYWORDS):
             d1_adverse = 2
-        elif am_status in ("clear", "none", "no"):
+        elif am_status in ADVERSE_MEDIA_CLEAR_VALUES:
             d1_adverse = 1
         else:
             d1_adverse = 1  # No data = assume clear
@@ -1248,36 +1304,23 @@ def compute_risk_score(app_data, config_override=None):
         d1_adverse = 1  # No screening data available = assume clear
 
     # D1.5 Source of Wealth — scored from application data (v1.6)
-    _sow_map = {
-        "business revenue": 1, "trading profits": 1, "investment": 1, "dividends": 1,
-        "government funding": 1, "grants": 1,
-        "sale of assets": 2, "property": 2, "venture capital": 2, "investor funding": 2,
-        "inheritance": 3, "family wealth": 3, "loan": 3, "credit": 3, "other": 3,
-    }
     sow_val = (data.get("source_of_wealth") or "").lower()
     d1_sow = 2  # default medium if not declared
-    if not sow_val or sow_val in ("information not provided", "not provided", "unknown"):
+    if not sow_val or sow_val in SOURCE_OF_WEALTH_UNKNOWN_VALUES:
         d1_sow = 3  # Unknown source of wealth = high risk
     else:
-        for k, v in _sow_map.items():
+        for k, v in SOURCE_OF_WEALTH_SCORE_MAP.items():
             if k in sow_val:
                 d1_sow = v
                 break
 
     # D1.6 Initial Source of Funds — scored from application data (v1.6)
-    _sof_map = {
-        "company bank": 1, "parent company": 1, "group entity": 1, "client payments": 1,
-        "receivables": 1, "revenue": 1, "business operations": 1,
-        "shareholder": 2, "director": 2, "capital injection": 2, "investment round": 2,
-        "fundraise": 2, "sale of assets": 2,
-        "loan": 3, "credit facility": 3, "other": 3,
-    }
     sof_val = (data.get("source_of_funds") or "").lower()
     d1_sof = 2  # default medium if not declared
-    if not sof_val or sof_val in ("information not provided", "not provided", "unknown"):
+    if not sof_val or sof_val in SOURCE_OF_FUNDS_UNKNOWN_VALUES:
         d1_sof = 3  # Unknown source of funds = high risk
     else:
-        for k, v in _sof_map.items():
+        for k, v in SOURCE_OF_FUNDS_SCORE_MAP.items():
             if k in sof_val:
                 d1_sof = v
                 break
@@ -1350,11 +1393,11 @@ def compute_risk_score(app_data, config_override=None):
     # D3.1 Primary service
     d3_svc = 2  # default
     svc_val = (data.get("primary_service") or data.get("service_required") or "").lower()
-    if "domestic" in svc_val and "single" in svc_val:
+    if all(keyword in svc_val for keyword in SERVICE_DOMESTIC_REQUIRED_KEYWORDS):
         d3_svc = 1
-    elif "multi-currency" in svc_val or "multi currency" in svc_val:
+    elif any(keyword in svc_val for keyword in SERVICE_SCORE_2_KEYWORDS):
         d3_svc = 2
-    elif "cross-border" in svc_val or "international" in svc_val or data.get("cross_border"):
+    elif any(keyword in svc_val for keyword in SERVICE_SCORE_3_KEYWORDS) or data.get("cross_border"):
         d3_svc = 3
     elif data.get("cross_border"):
         d3_svc = 3
@@ -1438,18 +1481,18 @@ def compute_risk_score(app_data, config_override=None):
     # D5.2 Customer Interaction Type — scored from data (v1.6)
     d5_interaction = 2  # default = non-face-to-face low risk
     interaction_val = (data.get("customer_interaction") or data.get("interaction_type") or "").lower()
-    if "face-to-face" in interaction_val or "in-person" in interaction_val or "in person" in interaction_val:
+    if any(keyword in interaction_val for keyword in DELIVERY_SCORE_1_KEYWORDS):
         d5_interaction = 1
-    elif "video" in interaction_val:
+    elif any(keyword in interaction_val for keyword in DELIVERY_SCORE_2_KEYWORDS):
         d5_interaction = 2
-    elif "non-face" in interaction_val or "remote" in interaction_val:
+    elif any(keyword in interaction_val for keyword in DELIVERY_REMOTE_KEYWORDS):
         # Check if high-risk jurisdiction for non-face-to-face
         inc_country = data.get("country", "")
         if classify_country(inc_country, country_scores) >= 3:
             d5_interaction = 3
         else:
             d5_interaction = 2
-    elif "anonymous" in interaction_val or "unverified" in interaction_val:
+    elif any(keyword in interaction_val for keyword in DELIVERY_SCORE_4_KEYWORDS):
         d5_interaction = 4
 
     d5 = d5_intro * d5_w[0] + d5_interaction * d5_w[1]
