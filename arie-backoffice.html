@@ -3896,6 +3896,10 @@ function setShowTestSmokeRecords(checked) {
     MONITORING_ALERTS_FILTERS.page = 1;
     reloadMonitoringAlertsFromFilters(1);
   }
+  if (viewName === 'screening') {
+    markScreeningQueueDirty();
+    renderScreening({ force: true, offset: 0 });
+  }
   if (viewName === 'change-mgmt') {
     loadChangeManagementWorkspace({ force: true });
   }
@@ -13930,6 +13934,9 @@ function screeningQueueQueryParams(offset) {
     'limit=' + encodeURIComponent(screeningQueuePageSize()),
     'offset=' + encodeURIComponent(Math.max(0, offset || 0))
   ];
+  if (typeof showTestSmokeRecordsEnabled === 'function' && showTestSmokeRecordsEnabled()) {
+    params.push('show_fixtures=true');
+  }
   Object.keys(filters).forEach(function(key) {
     if (filters[key]) params.push(encodeURIComponent(key) + '=' + encodeURIComponent(filters[key]));
   });

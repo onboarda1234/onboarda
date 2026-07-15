@@ -7867,6 +7867,7 @@ def _run_migrations(db: DBConnection):
         "ARF-2026-100430",  # Probe Test Co
         "ARF-2026-100428",  # test 2
         "ARF-2026-100427",  # test [QA-R10-mnyuuv7q]
+        "ARF-2026-900372",  # Smoke Holdco Ltd (staging smoke row missed by name patterns)
     )
     # Dialect-aware truthy/falsy literals for the is_fixture column.
     # PostgreSQL declares the column as BOOLEAN, SQLite as INTEGER.  Writing

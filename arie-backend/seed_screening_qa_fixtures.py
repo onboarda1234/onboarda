@@ -211,12 +211,38 @@ def _guard_environment():
         )
 
 
+def _fixture_cleanup_context(reason):
+    """Sanctioned deletion context for the fixture reseed.
+
+    ``screening_reviews`` is a regulated table: the DB layer denies raw
+    DELETEs without an approved context (staging enforced this with
+    RegulatedDeleteDenied when the first seeder ran raw SQL). The
+    ``fixture_cleanup_nonprod`` context is the approved channel — it is only
+    valid in testing/staging environments, requires an explicit fixture
+    marker + confirmation, and scopes the permission to exactly the one
+    regulated table this seeder touches.
+    """
+    from regulated_deletion import sanctioned_delete_context
+
+    return sanctioned_delete_context(
+        "fixture_cleanup_nonprod",
+        actor_id="seed_screening_qa_fixtures",
+        role="system",
+        reason=reason,
+        allowed_tables=("screening_reviews",),
+        environment=os.environ.get("ENVIRONMENT"),
+        is_fixture=True,
+        confirmed=True,
+    )
+
+
 def wipe_screening_qa_fixtures(db):
     """Remove the QA fixture set (idempotent)."""
     _guard_environment()
     fixture_ids = [f["id"] for f in FIXTURES]
     placeholders = ",".join("?" for _ in fixture_ids)
-    db.execute(f"DELETE FROM screening_reviews WHERE application_id IN ({placeholders})", fixture_ids)
+    with _fixture_cleanup_context("Remove/refresh screening QA disposition fixtures (f1xedqa namespace)"):
+        db.execute(f"DELETE FROM screening_reviews WHERE application_id IN ({placeholders})", fixture_ids)
     db.execute(f"DELETE FROM directors WHERE application_id IN ({placeholders})", fixture_ids)
     db.execute(f"DELETE FROM applications WHERE id IN ({placeholders})", fixture_ids)
     db.commit()
