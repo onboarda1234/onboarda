@@ -28,6 +28,8 @@ from risk_controlled_values import (
 
 logger = logging.getLogger("arie")
 
+GATE0_DECLARED_PEP_SCORE = 4
+
 CONTROLLED_PRESCREENING_CORRECTION_SOURCE = "application_overview_prescreening_correction_mode"
 CONTROLLED_PRESCREENING_CORRECTION_OVERLAY_MAP = {
     "country_of_incorporation": {
@@ -112,6 +114,29 @@ def _party_has_declared_or_confirmed_pep(person):
     # state model. Keep them counted; explicit negative metadata wins.
     raw_pep = str(person.get("is_pep") or person.get("isPEP") or "").strip().lower()
     return not declaration and raw_pep in {"yes", "true", "1", "y", "confirmed_pep", "declared_yes"}
+
+
+def _declared_pep_score_evidence(person):
+    """Return the approved Gate 0 score with the declaration's role evidence.
+
+    The portal persists the authoritative role at
+    ``pep_declaration.pep_role_type``. Legacy top-level role fields remain a
+    read-only fallback, but role type never changes the approved score: every
+    declared or officer-confirmed PEP is score 4.
+    """
+    if not _party_has_declared_or_confirmed_pep(person):
+        return None
+
+    declaration = safe_json_loads(person.get("pep_declaration"))
+    if not isinstance(declaration, dict):
+        declaration = {}
+    role_type = declaration.get("pep_role_type")
+    if not str(role_type or "").strip():
+        role_type = person.get("pep_type") or person.get("pep_category") or ""
+    return {
+        "pep_role_type": str(role_type or "").strip(),
+        "score": GATE0_DECLARED_PEP_SCORE,
+    }
 
 
 def _apply_controlled_prescreening_correction_overlays(db, app_id, application, prescreening_data):
@@ -1197,17 +1222,13 @@ def compute_risk_score(app_data, config_override=None):
                 d1_owner = v
                 break
 
-    # D1.3 PEP Status — 3-tier scoring (v1.6)
+    # D1.3 PEP Status — Gate 0 v4 uniform declared-PEP scoring.
     all_persons = data.get("directors", []) + data.get("ubos", [])
     pep_scores = []
     for p in all_persons:
-        if _party_has_declared_or_confirmed_pep(p):
-            pep_type = (p.get("pep_type") or p.get("pep_category") or "").lower()
-            if "foreign" in pep_type or "international" in pep_type:
-                pep_scores.append(4)
-            else:
-                # Domestic PEP or close associate = 3
-                pep_scores.append(3)
+        pep_evidence = _declared_pep_score_evidence(p)
+        if pep_evidence:
+            pep_scores.append(pep_evidence["score"])
     d1_pep = max(pep_scores) if pep_scores else 1
 
     # D1.4 Adverse Media / Negative News — scored from screening data (v1.6)
