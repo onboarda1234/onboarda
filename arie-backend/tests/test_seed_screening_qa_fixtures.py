@@ -149,7 +149,7 @@ def test_text_pattern_fixture_rows_hidden_from_default_queue(db):
                 },
                 "director_screenings": [], "ubo_screenings": [], "intermediary_screenings": [],
                 "overall_flags": [], "total_hits": 0,
-            }}), 0,
+            }}), False,
         ),
     )
     db.commit()
@@ -193,3 +193,21 @@ def test_seeder_context_satisfies_the_regulated_delete_guard():
         assert_regulated_delete_allowed("screening_reviews")  # sanctioned
         with pytest.raises(RegulatedDeleteDenied):
             assert_regulated_delete_allowed("audit_log")  # outside scope
+
+
+def test_seeder_uses_python_booleans_for_postgres_boolean_columns():
+    """Staging regression (psycopg2 DatatypeMismatch): is_fixture / is_pep /
+    requires_four_eyes are BOOLEAN on PostgreSQL. Integer literals that SQLite
+    tolerates are rejected by psycopg2; Python bools adapt on both dialects."""
+    from seed_screening_qa_fixtures import FIXTURES
+    import inspect
+    import seed_screening_qa_fixtures as seeder_module
+
+    for fixture in FIXTURES:
+        for director in fixture["directors"]:
+            assert isinstance(director["is_pep"], bool)
+        if fixture["review"]:
+            assert isinstance(fixture["review"]["requires_four_eyes"], bool)
+    # The applications INSERT must bind is_fixture as a Python bool literal.
+    source = inspect.getsource(seeder_module.seed_screening_qa_fixtures)
+    assert "True," in source
