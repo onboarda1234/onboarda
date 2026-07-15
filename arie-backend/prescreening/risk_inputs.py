@@ -82,6 +82,11 @@ def build_prescreening_risk_input(
     business = safe_json_loads(normalized.get("business"))
     wealth = safe_json_loads(normalized.get("wealth"))
     entity = safe_json_loads(normalized.get("entity"))
+    existing_risk_escalations = safe_json_loads(
+        (application or {}).get("risk_escalations")
+    )
+    if not isinstance(existing_risk_escalations, list):
+        existing_risk_escalations = []
 
     primary_services = business.get("services", {}).get("primary_services", []) if isinstance(business, dict) else []
     primary_service = first_non_empty(
@@ -121,6 +126,9 @@ def build_prescreening_risk_input(
         "expected_volume": first_non_empty(normalized.get("expected_volume"), normalized.get("monthly_volume")),
         "payment_corridors": first_non_empty(normalized.get("payment_corridors"), normalized.get("transaction_complexity")),
         "cross_border": bool(normalized.get("cross_border")),
+        # Existing escalation evidence is input only for preserving unrelated
+        # stale controls while Tier 0B replaces the current mapping sentinels.
+        "_existing_risk_escalations": existing_risk_escalations,
     }
 
     scorer_input["_prescreening_mapping_corrections"] = _current_vs_corrected_flags(raw_prescreening, scorer_input)

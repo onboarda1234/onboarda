@@ -22,16 +22,19 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import environment
+from edd_routing_policy import evaluate_edd_routing
 from prescreening.risk_inputs import build_prescreening_risk_input
 from risk_controlled_values import (
     ACTIVATION_FLAG,
     COUNTRY_EXACT_ALIASES,
     FAMILY_RECORDS,
     REGISTRY_VERSION,
+    controlled_value_hash,
     normalize_controlled_value,
     resolve_controlled_score,
 )
 from rule_engine import compute_risk_score
+from security_hardening import classify_approval_route
 
 
 def _canonical_hash(value: Any) -> str:
@@ -123,6 +126,94 @@ def _mapping_evidence(scoring_input: Mapping[str, Any], config: Mapping[str, Any
     return evidence
 
 
+_REPLAY_EVIDENCE_FIELDS = frozenset({
+    "family",
+    "raw_value",
+    "normalized_value",
+    "hash",
+    "application_id",
+    "request_id",
+    "config_version",
+    "status",
+    "resolution_status",
+    "controlled_id",
+    "canonical_label",
+    "score",
+})
+
+
+def _portable_mapping_evidence(
+    value: Mapping[str, Any],
+    *,
+    application_key: str,
+    config_version: str,
+) -> Dict[str, Any]:
+    """Normalize runtime/fallback evidence to the portable replay schema."""
+    item = dict(value)
+    family = str(item.get("family") or "").strip()
+    status = str(item.get("resolution_status") or item.get("status") or "").strip()
+    if not family or not status:
+        raise ValueError("Replay mapping evidence requires family and status")
+
+    normalized_value = str(item.get("normalized_value") or "")
+    item.update({
+        "family": family,
+        "normalized_value": normalized_value,
+        "hash": str(item.get("hash") or controlled_value_hash(family, normalized_value)),
+        "application_id": application_key,
+        "request_id": str(item.get("request_id") or ""),
+        "config_version": str(item.get("config_version") or config_version),
+        "status": status,
+        "resolution_status": status,
+        "controlled_id": str(item.get("controlled_id") or ""),
+        "canonical_label": str(
+            item.get("canonical_label") or item.get("canonical_value") or ""
+        ),
+        "score": item.get("score"),
+    })
+    item.setdefault("raw_value", "")
+    missing = _REPLAY_EVIDENCE_FIELDS.difference(item)
+    if missing:
+        raise ValueError(f"Replay mapping evidence missing fields: {sorted(missing)}")
+    return item
+
+
+def _policy_routes(risk: Mapping[str, Any]) -> Dict[str, Any]:
+    edd = evaluate_edd_routing({
+        "final_risk_level": risk.get("final_risk_level") or risk.get("level"),
+        "declared_pep_present": bool(risk.get("declared_pep_present")),
+        "sector_risk_tier": risk.get("sector_risk_tier"),
+        "sector_label": risk.get("sector_label"),
+        "jurisdiction_risk_tier": risk.get("jurisdiction_risk_tier"),
+        "ownership_transparency_status": risk.get("ownership_transparency_status"),
+        "screening_terminality_summary": {
+            "terminal": True,
+            "has_terminal_match": False,
+            "has_non_terminal": False,
+        },
+        "edd_trigger_flags": [],
+        "supervisor_mandatory_escalation": False,
+        "supervisor_mandatory_escalation_reasons": [],
+    })
+    approval = classify_approval_route({
+        "id": "offline-dry-run",
+        "status": "compliance_review",
+        "risk_level": risk.get("level"),
+        "final_risk_level": risk.get("final_risk_level") or risk.get("level"),
+        "risk_escalations": list(risk.get("escalations") or []),
+        "prescreening_data": {
+            "declared_pep": bool(risk.get("declared_pep_present")),
+        },
+    })
+    return {
+        "edd_route": edd.get("route"),
+        "edd_triggers": edd.get("triggers") or [],
+        "approval_route": approval.get("route"),
+        "approval_reasons": approval.get("reasons") or [],
+        "approval_escalation_reasons": approval.get("escalation_reasons") or [],
+    }
+
+
 def run_dry_run(payload: Mapping[str, Any]) -> Dict[str, Any]:
     config = _dict(payload.get("risk_config"))
     applications = list(payload.get("applications") or [])
@@ -130,25 +221,49 @@ def run_dry_run(payload: Mapping[str, Any]) -> Dict[str, Any]:
     unresolved = Counter()
     score_delta_count = 0
     tier_delta_count = 0
+    edd_route_delta_count = 0
+    approval_route_delta_count = 0
 
     for case in applications:
+        app = _dict(case.get("application") or case)
+        application_key = _application_key(app.get("id") or app.get("ref"))
         scoring_input = _risk_input(case)
         with _activation_state(False):
             legacy = compute_risk_score(scoring_input, config_override=config)
         with _activation_state(True):
             proposed = compute_risk_score(scoring_input, config_override=config)
-        evidence = _mapping_evidence(scoring_input, config)
+        legacy_routes = _policy_routes(legacy)
+        proposed_routes = _policy_routes(proposed)
+        raw_evidence = (
+            proposed.get("controlled_mapping_evidence")
+            or _mapping_evidence(scoring_input, config)
+        )
+        # Runtime persistence retains the real application_id. The portable
+        # founder-review artifact pseudonymizes it to avoid exporting a direct
+        # staging identifier.
+        evidence = [
+            _portable_mapping_evidence(
+                item,
+                application_key=application_key,
+                config_version=str(config.get("updated_at") or REGISTRY_VERSION),
+            )
+            for item in raw_evidence
+        ]
         for item in evidence:
-            if str(item.get("status") or "").startswith("unresolved"):
+            resolution_status = item.get("resolution_status", item.get("status"))
+            if str(resolution_status or "").startswith("unresolved"):
                 unresolved[(item.get("family"), item.get("normalized_value"))] += 1
 
         score_changed = legacy.get("score") != proposed.get("score")
         tier_changed = legacy.get("level") != proposed.get("level")
         score_delta_count += int(score_changed)
         tier_delta_count += int(tier_changed)
-        app = _dict(case.get("application") or case)
+        edd_route_changed = legacy_routes["edd_route"] != proposed_routes["edd_route"]
+        approval_route_changed = legacy_routes["approval_route"] != proposed_routes["approval_route"]
+        edd_route_delta_count += int(edd_route_changed)
+        approval_route_delta_count += int(approval_route_changed)
         records.append({
-            "application_key": _application_key(app.get("id") or app.get("ref")),
+            "application_key": application_key,
             "is_fixture": bool(app.get("is_fixture")),
             "stored": {
                 "score": app.get("risk_score"),
@@ -160,15 +275,19 @@ def run_dry_run(payload: Mapping[str, Any]) -> Dict[str, Any]:
                 "level": legacy.get("level"),
                 "lane": legacy.get("lane"),
                 "escalations": legacy.get("escalations"),
+                **legacy_routes,
             },
             "proposed_flag_enabled": {
                 "score": proposed.get("score"),
                 "level": proposed.get("level"),
                 "lane": proposed.get("lane"),
                 "escalations": proposed.get("escalations"),
+                **proposed_routes,
             },
             "score_changed": score_changed,
             "tier_changed": tier_changed,
+            "edd_route_changed": edd_route_changed,
+            "approval_route_changed": approval_route_changed,
             "mapping_evidence": evidence,
         })
 
@@ -194,11 +313,13 @@ def run_dry_run(payload: Mapping[str, Any]) -> Dict[str, Any]:
             "active_scored_applications": len(records),
             "score_deltas": score_delta_count,
             "tier_deltas": tier_delta_count,
+            "edd_route_deltas": edd_route_delta_count,
+            "approval_route_deltas": approval_route_delta_count,
             "applications_with_unresolved_mappings": sum(
                 1
                 for record in records
                 if any(
-                    str(item.get("status") or "").startswith("unresolved")
+                    str(item.get("resolution_status", item.get("status")) or "").startswith("unresolved")
                     for item in record["mapping_evidence"]
                 )
             ),
