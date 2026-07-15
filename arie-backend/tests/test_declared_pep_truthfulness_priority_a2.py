@@ -19,6 +19,18 @@ import uuid
 import pytest
 
 
+def _queue_safe_suffix():
+    """Random suffix that can never collide with the fixture text patterns.
+
+    The default screening queue now applies the same text-pattern fixture
+    policy as the other back-office surfaces, and 'e2e' is the only banned
+    token expressible in hex — an 8-char hex suffix contains it roughly once
+    in 700 runs, silently hiding the seeded app from the default queue and
+    flaking these presence assertions (deploy CI run 29406756416).
+    """
+    return uuid.uuid4().hex[:8].replace("e", "d")
+
+
 # ── A. Queue serializer — declared PEP survives non-canonical truthy values ─
 
 
@@ -74,7 +86,7 @@ def test_queue_declared_pep_chip_robust_to_noncanonical_truthy(db, temp_db, is_p
     green 'Not Declared' chip while the underlying record is a PEP."""
     from server import _build_screening_queue_payload
 
-    ref = f"PEPNORM-{is_pep_value}-{uuid.uuid4().hex[:8]}"
+    ref = f"PEPNORM-{is_pep_value}-{_queue_safe_suffix()}"
     _insert_pep_app(db, ref, is_pep_value)
     db.commit()
 
@@ -105,9 +117,9 @@ def test_queue_terminal_clear_non_pep_still_renders_not_declared(db, temp_db):
     """Regression guard: non-PEP, terminal-clear case must not be elevated."""
     from server import _build_screening_queue_payload
 
-    app_id = "app_clean_" + uuid.uuid4().hex[:8]
-    ref = "ARF-CLEAN-" + uuid.uuid4().hex[:8]
-    client_id = "client_clean_" + uuid.uuid4().hex[:8]
+    app_id = "app_clean_" + _queue_safe_suffix()
+    ref = "ARF-CLEAN-" + _queue_safe_suffix()
+    client_id = "client_clean_" + _queue_safe_suffix()
     db.execute(
         """
         INSERT INTO applications
