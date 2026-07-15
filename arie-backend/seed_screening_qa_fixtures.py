@@ -44,6 +44,7 @@ import sys
 
 SCREENED_AT = "2026-07-01T00:00:00Z"
 QAFIX_CLIENT_ID = "qafix-client"
+QAFIX_CLIENT_EMAIL = "screening-qa-fixtures@fixtures.invalid"
 FIRST_REVIEWER_NAME = "QA First Reviewer"
 
 _HIT_RESULT = {
@@ -236,8 +237,33 @@ def _fixture_cleanup_context(reason):
     )
 
 
+def _ensure_qafix_client(db):
+    """Create the disabled owning client for the fixture applications.
+
+    ``applications.client_id`` is a foreign key to ``clients`` on PostgreSQL
+    (the isolated sqlite test database does not enforce it — the third
+    staging-only seeder failure was exactly this ForeignKeyViolation). The
+    client row is login-proof: ``inactive`` status plus a bcrypt hash of a
+    discarded random secret that is never stored anywhere.
+    """
+    existing = db.execute(
+        "SELECT id FROM clients WHERE id = ?", (QAFIX_CLIENT_ID,)
+    ).fetchone()
+    if existing:
+        return
+    import bcrypt
+
+    unusable_hash = bcrypt.hashpw(
+        os.urandom(24).hex().encode("utf-8"), bcrypt.gensalt()
+    ).decode("utf-8")
+    db.execute(
+        "INSERT INTO clients (id, email, password_hash, company_name, status) VALUES (?, ?, ?, ?, 'inactive')",
+        (QAFIX_CLIENT_ID, QAFIX_CLIENT_EMAIL, unusable_hash, "QA Fixture Client (disabled)"),
+    )
+
+
 def wipe_screening_qa_fixtures(db):
-    """Remove the QA fixture set (idempotent)."""
+    """Remove the QA fixture set, including its owning client (idempotent)."""
     _guard_environment()
     fixture_ids = [f["id"] for f in FIXTURES]
     placeholders = ",".join("?" for _ in fixture_ids)
@@ -245,6 +271,7 @@ def wipe_screening_qa_fixtures(db):
         db.execute(f"DELETE FROM screening_reviews WHERE application_id IN ({placeholders})", fixture_ids)
     db.execute(f"DELETE FROM directors WHERE application_id IN ({placeholders})", fixture_ids)
     db.execute(f"DELETE FROM applications WHERE id IN ({placeholders})", fixture_ids)
+    db.execute("DELETE FROM clients WHERE id = ?", (QAFIX_CLIENT_ID,))
     db.commit()
     return len(fixture_ids)
 
@@ -253,6 +280,7 @@ def seed_screening_qa_fixtures(db):
     """Seed (or refresh) the QA fixture set. Returns the seeded refs."""
     _guard_environment()
     wipe_screening_qa_fixtures(db)
+    _ensure_qafix_client(db)
     for fixture in FIXTURES:
         db.execute(
             """

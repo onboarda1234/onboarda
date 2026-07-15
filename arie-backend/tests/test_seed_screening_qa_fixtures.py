@@ -211,3 +211,38 @@ def test_seeder_uses_python_booleans_for_postgres_boolean_columns():
     # The applications INSERT must bind is_fixture as a Python bool literal.
     source = inspect.getsource(seeder_module.seed_screening_qa_fixtures)
     assert "True," in source
+
+
+def test_seeder_satisfies_every_foreign_key_and_client_is_login_proof(db):
+    """Staging regression #3 (psycopg2 ForeignKeyViolation on
+    applications_client_id_fkey): sqlite does not enforce foreign keys by
+    default, so referential integrity is asserted here by explicit query —
+    dialect-independent. The owning client must exist, be inactive (never a
+    usable login), and be removed again by the wipe."""
+    from seed_screening_qa_fixtures import QAFIX_CLIENT_ID
+
+    seed_screening_qa_fixtures(db)
+
+    client = db.execute(
+        "SELECT id, status, company_name FROM clients WHERE id = ?", (QAFIX_CLIENT_ID,)
+    ).fetchone()
+    assert client is not None
+    assert client["status"] == "inactive"
+
+    orphaned_apps = db.execute(
+        "SELECT ref FROM applications WHERE ref LIKE 'ARF-QAFIX-%' AND client_id NOT IN (SELECT id FROM clients)"
+    ).fetchall()
+    assert [dict(r) for r in orphaned_apps] == []
+    orphaned_directors = db.execute(
+        "SELECT id FROM directors WHERE application_id LIKE 'f1xedqa%' AND application_id NOT IN (SELECT id FROM applications)"
+    ).fetchall()
+    assert [dict(r) for r in orphaned_directors] == []
+    orphaned_reviews = db.execute(
+        "SELECT id FROM screening_reviews WHERE application_id LIKE 'f1xedqa%' AND application_id NOT IN (SELECT id FROM applications)"
+    ).fetchall()
+    assert [dict(r) for r in orphaned_reviews] == []
+
+    wipe_screening_qa_fixtures(db)
+    assert db.execute(
+        "SELECT id FROM clients WHERE id = ?", (QAFIX_CLIENT_ID,)
+    ).fetchone() is None
