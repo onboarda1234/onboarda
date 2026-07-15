@@ -1024,6 +1024,7 @@ class TestSeederSetsIsFixture(unittest.TestCase):
             "ARF-2026-100430",
             "ARF-2026-100428",
             "ARF-2026-100427",
+            "ARF-2026-900372",
             "ARF-2026-900031",
             "ARF-2026-900030",
             "ARF-2026-900029",

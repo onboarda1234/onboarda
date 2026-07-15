@@ -1779,3 +1779,29 @@ class TestScreeningSubjectJoin:
         assert result["byNormalizedName"] == "thomas roberts"
         assert result["wrongKeyFallsBackToName"] == "director:3"
         assert result["noMatch"] is None
+
+    def test_queue_requests_carry_fixture_opt_in_when_toggle_enabled(self):
+        """Audit follow-up: the "Show test/smoke records" toggle was checked in
+        the UI but Screening Queue requests never carried the opt-in param, so
+        fixture opt-in silently did nothing on this page."""
+        html = _read_backoffice()
+        region = _extract_between(
+            html,
+            "function screeningQueuePageSize() {",
+            "function providerTruthValue(status, key, fallback) {",
+        )
+        script = "\n".join(
+            [
+                "var SCREENING_QUEUE_FILTERS = {};",
+                "var showTestSmokeRecordsEnabled;",
+                "var document = { getElementById: function() { return null; } };",
+                region,
+                "var withoutToggle = screeningQueueQueryParams(0).join('&');",
+                "showTestSmokeRecordsEnabled = function() { return true; };",
+                "var withToggle = screeningQueueQueryParams(0).join('&');",
+                "console.log(JSON.stringify({ withoutToggle: withoutToggle, withToggle: withToggle }));",
+            ]
+        )
+        result = _run_node(script)
+        assert "show_fixtures=true" not in result["withoutToggle"]
+        assert "show_fixtures=true" in result["withToggle"]

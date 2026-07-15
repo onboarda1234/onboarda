@@ -113,6 +113,7 @@ ROGUE_FIXTURE_REFS: tuple = (
     "ARF-2026-100430",  # Probe Test Co
     "ARF-2026-100428",  # test 2
     "ARF-2026-100427",  # test [QA-R10-mnyuuv7q]
+    "ARF-2026-900372",  # Smoke Holdco Ltd (staging smoke row missed by name patterns)
     "ARF-2026-900031",  # PHASE4 Closeout Runtime 20260503160321 Ltd
     "ARF-2026-900030",  # PHASE4 Closeout Runtime 20260503160217 Ltd
     "ARF-2026-900029",  # PHASE2 Postdeploy Validation 20260503T122058Z Ltd

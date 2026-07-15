@@ -23,6 +23,22 @@ from seed_screening_qa_fixtures import (
 OFFICER = {"type": "officer", "sub": "admin001"}
 
 
+@pytest.fixture
+def db(temp_db):
+    """Guard-enforcing wrapped connection (overrides conftest's raw sqlite).
+
+    The first staging seeder run was denied by the regulated-delete
+    interceptor while the raw-sqlite test fixture had silently bypassed it.
+    These tests must run through the same DB wrapper staging uses so the
+    sanctioned-context path is what is actually exercised.
+    """
+    from db import get_db
+
+    conn = get_db()
+    yield conn
+    conn.close()
+
+
 def _rows_by_ref(db, *, show_fixtures):
     payload = server._build_screening_queue_payload(
         db,
@@ -158,3 +174,22 @@ def test_application_scan_cap_reported_in_metrics(db):
     assert metrics["application_scan_capped"] == (
         metrics["applications_scanned"] >= metrics["application_scan_cap"]
     )
+
+
+def test_seeder_context_satisfies_the_regulated_delete_guard():
+    """Fidelity check for the staging denial (RegulatedDeleteDenied on
+    screening_reviews). The SQL-level interceptor short-circuits on verified
+    isolated test databases, so exercise the guard function directly: without
+    a context it denies exactly as staging did; inside the seeder's
+    fixture_cleanup_nonprod context it allows screening_reviews and ONLY
+    screening_reviews."""
+    from regulated_deletion import RegulatedDeleteDenied, assert_regulated_delete_allowed
+    from seed_screening_qa_fixtures import _fixture_cleanup_context
+
+    with pytest.raises(RegulatedDeleteDenied):
+        assert_regulated_delete_allowed("screening_reviews")
+
+    with _fixture_cleanup_context("fidelity test"):
+        assert_regulated_delete_allowed("screening_reviews")  # sanctioned
+        with pytest.raises(RegulatedDeleteDenied):
+            assert_regulated_delete_allowed("audit_log")  # outside scope
