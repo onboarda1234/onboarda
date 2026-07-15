@@ -6290,6 +6290,21 @@ def _run_migrations(db: DBConnection):
     """Run incremental schema migrations for existing databases."""
     _ensure_country_risk_governance(db)
 
+    # Performance: index agent_executions by document_id.
+    # The application-detail document-reliance gate resolves the latest
+    # verify_document execution per document
+    # (document_reliance_gate._latest_agent_execution). agent_executions ships
+    # with no indexes, so that lookup was a full table scan for every document
+    # on every application-detail open — the dominant cost when opening a case.
+    # CREATE INDEX IF NOT EXISTS is idempotent and supported on SQLite + Postgres.
+    try:
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_executions_document_id "
+            "ON agent_executions(document_id)"
+        )
+    except Exception as e:
+        logger.debug(f"agent_executions document_id index may already exist: {e}")
+
     # Check if pre_approval columns exist on applications table
     if not _safe_column_exists(db, "applications", "pre_approval_decision"):
         logger.info("Migration v2.1: Adding pre-approval columns to applications table")
