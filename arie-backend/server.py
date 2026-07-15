@@ -23162,6 +23162,15 @@ def _screening_queue_summary_row(row):
     return summary_row
 
 
+# The queue scans the newest N applications per request. This is a hard
+# coverage boundary, not a tuning knob: subjects of older applications fall
+# outside the queue entirely. The payload reports when the cap is hit
+# (metrics.application_scan_capped) so the boundary is visible instead of
+# silent; application-level pagination is the durable fix (tracked in the
+# production-readiness plan).
+_SCREENING_QUEUE_APPLICATION_SCAN_CAP = 200
+
+
 def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None, offset=0, filters=None, include_evidence=True):
     filters = filters or {}
     query = """
@@ -23176,14 +23185,18 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
     if not show_fixtures:
         from fixture_filter import fixture_app_exclude_clause
 
-        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="")
+        # include_text_patterns keeps the queue on the same fixture policy as
+        # the Applications list and audit surfaces: historical smoke/E2E rows
+        # (PORTALE2E-*, *-smoke, ...) that predate reliable is_fixture marking
+        # must not appear in the default officer queue.
+        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="", include_text_patterns=True)
         query += f" AND {fx_excl}"
         params.extend(fx_params)
     app_ref_filter = _screening_queue_filter_value(filters.get("application_ref"))
     if app_ref_filter:
         query += " AND lower(ref) LIKE ?"
         params.append(f"%{app_ref_filter}%")
-    query += " ORDER BY created_at DESC LIMIT 200"
+    query += f" ORDER BY created_at DESC LIMIT {_SCREENING_QUEUE_APPLICATION_SCAN_CAP}"
 
     apps = [dict(r) for r in db.execute(query, params).fetchall()]
     app_ids = [app["id"] for app in apps]
@@ -23721,6 +23734,9 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
     filtered_rows = _filter_screening_queue_rows(rows, filters)
     metrics["subject_rows"] = len(rows)
     metrics["filtered_subject_rows"] = len(filtered_rows)
+    metrics["applications_scanned"] = len(apps)
+    metrics["application_scan_cap"] = _SCREENING_QUEUE_APPLICATION_SCAN_CAP
+    metrics["application_scan_capped"] = len(apps) >= _SCREENING_QUEUE_APPLICATION_SCAN_CAP
     total_rows = len(filtered_rows)
     available_type_filters = _screening_queue_available_type_filters(rows)
     if offset < 0:

@@ -1926,7 +1926,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   </div>
   <div class="card" style="padding:0;overflow-x:auto;">
     <table class="data-table">
-      <thead><tr><th>Subject</th><th>Signals</th><th>Status</th><th>Screened</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Reference</th><th>Subject</th><th>Type</th><th>Signals</th><th>Status</th><th>Screened</th><th>Actions</th></tr></thead>
       <tbody id="screening-body"></tbody>
     </table>
   </div>
@@ -13972,7 +13972,10 @@ function renderScreeningQueueMeta() {
     } else if (!totalRows) {
       statusEl.textContent = 'No screening queue items available.';
     } else {
-      statusEl.textContent = 'Showing ' + (offset + 1) + '–' + (offset + returned) + ' of ' + totalRows + ' queue rows';
+      var capNote = (SCREENING_QUEUE.metrics && SCREENING_QUEUE.metrics.application_scan_capped)
+        ? ' · scanning the newest ' + SCREENING_QUEUE.metrics.application_scan_cap + ' applications — older applications are not in this queue'
+        : '';
+      statusEl.textContent = 'Showing ' + (offset + 1) + '–' + (offset + returned) + ' of ' + totalRows + ' queue rows' + capNote;
     }
   }
   if (!pagerEl) return;
@@ -14168,19 +14171,25 @@ function screeningReviewDisplayLabel(row) {
   return String(row.review_disposition || '').replace(/_/g, ' ');
 }
 
+function screeningQueueReferenceCell(row) {
+  var ref = String((row || {}).application_ref || '');
+  return '<span style="font-size:12px;color:var(--text2);white-space:nowrap;">' + (ref ? escapeHtml(ref) : '—') + '</span>';
+}
+
+function screeningQueueTypeCell(row) {
+  return '<span style="display:inline-block;padding:1px 7px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;background:rgba(43,47,143,0.08);color:var(--brand);white-space:nowrap;">' +
+    escapeHtml(String((row || {}).subject_type || 'subject').replace(/_/g, ' ')) + '</span>';
+}
+
 function screeningQueueSubjectCell(row) {
   row = row || {};
   var subject = String(row.subject_name || '');
-  var typeChip = '<span style="display:inline-block;padding:1px 7px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;background:rgba(43,47,143,0.08);color:var(--brand);">' +
-    escapeHtml(String(row.subject_type || 'subject').replace(/_/g, ' ')) + '</span>';
-  var metaParts = [];
   var company = String(row.company_name || '');
-  if (company && company !== subject) metaParts.push(company);
-  if (row.application_ref) metaParts.push(String(row.application_ref));
-  return '<div style="font-weight:600;">' + escapeHtml(subject) + '</div>' +
-    '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:3px;">' + typeChip +
-    (metaParts.length ? '<span style="font-size:11px;color:var(--text3);">' + escapeHtml(metaParts.join(' · ')) + '</span>' : '') +
-    '</div>';
+  var html = '<div style="font-weight:600;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(subject) + '">' + escapeHtml(subject) + '</div>';
+  if (company && company !== subject) {
+    html += '<div style="font-size:11px;color:var(--text3);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;" title="' + escapeHtml(company) + '">' + escapeHtml(company) + '</div>';
+  }
+  return html;
 }
 
 function screeningQueueSignalsCell(row) {
@@ -14238,7 +14247,9 @@ function screeningReviewBadge(row, options) {
   var meta = row.reviewed_by ? ' by ' + row.reviewed_by : '';
   var code = '';
   var second = pendingSecond
-    ? '<div style="font-size:11px;color:var(--amber);font-weight:600;margin-top:2px;">Second reviewer required</div>'
+    ? '<div style="font-size:11px;color:var(--amber);font-weight:600;margin-top:2px;">Second reviewer required' +
+      (row.reviewed_by ? ' — first reviewer: ' + escapeHtml(row.reviewed_by) + ' (a different reviewer must confirm)' : '') +
+      '</div>'
     : completeSecond
       ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Second review: ' + escapeHtml(row.second_reviewed_by || 'Recorded') + (row.second_reviewed_at ? ' • ' + escapeHtml(String(row.second_reviewed_at).substring(0, 19).replace('T', ' ')) : '') + '</div>'
       : '';
@@ -17504,7 +17515,7 @@ async function renderScreening(options) {
     tbody = document.getElementById('screening-body');
     if (!tbody) return;
   }
-  tbody.innerHTML = '<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--text3);font-size:13px;">Loading screening queue…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text3);font-size:13px;">Loading screening queue…</td></tr>';
   renderScreeningProviderStatusPanel();
   renderScreeningQueueMeta();
 
@@ -17515,7 +17526,7 @@ async function renderScreening(options) {
 
   if (!SCREENING_QUEUE.rows.length) {
     var empty = document.createElement('tr');
-    empty.innerHTML = '<td colspan="5" style="padding:24px;text-align:center;color:var(--text3);font-size:13px;">' +
+    empty.innerHTML = '<td colspan="7" style="padding:24px;text-align:center;color:var(--text3);font-size:13px;">' +
       escapeHtml(SCREENING_QUEUE.load_error || 'No screening queue items available from the backend.') +
       '</td>';
     tbody.appendChild(empty);
@@ -17538,7 +17549,9 @@ async function renderScreening(options) {
         }
       }
 
-      tr.innerHTML = '<td>' + screeningQueueSubjectCell(row) + '</td>' +
+      tr.innerHTML = '<td>' + screeningQueueReferenceCell(row) + '</td>' +
+        '<td>' + screeningQueueSubjectCell(row) + '</td>' +
+        '<td>' + screeningQueueTypeCell(row) + '</td>' +
         '<td>' + screeningQueueSignalsCell(row) + '</td>' +
         '<td>' + screeningQueueStatusCell(row) + '</td>' +
         '<td>' + screeningQueueScreenedCell(row) + '</td>' +
