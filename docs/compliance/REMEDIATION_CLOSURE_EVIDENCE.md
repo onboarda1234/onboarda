@@ -389,9 +389,50 @@ parser under-scoring). Reference docs:
   RSMP pilot-readiness workstream.
 - **PR-1b (#764)** — declared-PEP runtime alignment with the approved
   Gate 0 v4 model (all declared/officer-confirmed PEP roles score 4;
-  `pep_declaration.pep_role_type` authoritative). Draft, open, base
-  `c17135e`; Gate 0 v4 canonical Markdown SHA-256
+  `pep_declaration.pep_role_type` authoritative). Merged 2026-07-15 at
+  `a823fb6491ea35a1647800853a97dc7a0f328b6f`; Gate 0 v4 canonical Markdown SHA-256
   `33cdcaac5f01ba431776a4b8a300aee4cb6e48f0d585d9c1665c726d655f66f0`.
+
+## rsmp tier 0d pr 768
+
+- **Merge and deployment:** #768 merged 2026-07-15 at
+  `7e9111476d73b1fb937e214ca712261bc88ea91a`. Canonical staging workflow
+  [run 29423727704](https://github.com/onboarda1234/onboarda/actions/runs/29423727704)
+  passed the 7,114-test PostgreSQL-backed suite, Docker validation, PDF tests,
+  exact-SHA image build, ECS rollout, and health gates.
+- **Artifact alignment:** backend `regmind-staging:856` (2/2) and worker
+  `regmind-verification-worker:304` (6/6) both run the merge-SHA image;
+  image tags, `GIT_SHA`, `IMAGE_TAG`, and authenticated `/api/version` values
+  match the merge SHA. Both ALB targets were healthy; liveness, health, and
+  authenticated readiness returned HTTP 200 (`ready=true`).
+- **Runtime/UI alignment:** the Back Office Risk Scoring Model page loads the
+  read-only `/api/config/risk-model` projection from the scorer's validated
+  runtime loader. The page has no risk-model editing controls or client-side
+  score/mutation handlers. Lane B remains separate and pending calibration;
+  runtime floors and the explicit monthly-volume/unsolicited-referral no-floor
+  rules are displayed from the projection.
+- **Authoritative exports:** a safe staging fixture returned ready, read-only
+  risk evidence whose score, tier, five dimensions, D3 weights, EDD route, and
+  approval route matched stored backend outcomes. A declared-PEP fixture
+  exposed factor score 4. Missing and stale synthetic in-memory evidence both
+  failed closed; no synthetic application was created.
+- **API safety:** admin, SCO, CO, and analyst reads returned HTTP 200;
+  unauthenticated and client reads were denied; POST and PATCH were HTTP 405.
+  The exact-SHA CI suite verified malformed projection input returns a
+  controlled non-sensitive HTTP 503 without traceback leakage.
+- **Activation/data safety:** `ENABLE_RSMP_TIER0A_MAPPING_FIDELITY` is absent
+  and evaluates false. The staging risk-config version
+  `risk_config:2026-07-13 07:15:16.941658` and SHA-256
+  `9ffcfe3e4dd5fcd3a2df7aa11506c39631b683eb934019384d59f7fba339d91e`
+  were unchanged. Application count (933), recomputation-stamped count (681),
+  and latest recomputation timestamp (`2026-07-13 07:16:03`) were unchanged;
+  no Tier 0C activation or recomputation occurred.
+- **Operational evidence:** deployment-through-validation CloudWatch review
+  found zero errors, exceptions, tracebacks, unexpected 5xx, startup,
+  projection, export, routing, recomputation, risk-config mutation, provider,
+  or email-send events. Both sampled audit hash chains verified intact.
+- **Next gate:** Tier 0C remains outstanding. This validation is not a
+  production-readiness claim.
 
 ## screening-queue-stream PRs 756-763
 

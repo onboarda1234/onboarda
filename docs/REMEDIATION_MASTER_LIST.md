@@ -24,10 +24,10 @@ things stand") was retired in the 2026-07-15 restructure; see git history.
 
 # Onboarda / RegMind — Audit-Remediation Master List
 
-**Reconciled:** 2026-07-15 against live GitHub · `main` = `c17135e` (merge of #763)
+**Reconciled:** 2026-07-15 against live GitHub · `main` = `7e91114` (merge of #768)
 **Pilot:** all 4 code blockers ✅ closed · remaining pilot work = **RSMP Tier 0C** + the open 🟠 gates below
 **Production:** blocked — Audit-3 verdict REMEDIATE BEFORE PROCEEDING; Phase 14 largely open. Nothing in this file is a production-readiness claim.
-**Open PRs:** [#764](https://github.com/onboarda1234/onboarda/pull/764) (draft — RSMP PR-1b) · [#752](https://github.com/onboarda1234/onboarda/pull/752) (docs — P13-7 status; content incorporated here) · [#737](https://github.com/onboarda1234/onboarda/pull/737) (draft — P12-1 Phase A discovery report)
+**Open PRs:** [#752](https://github.com/onboarda1234/onboarda/pull/752) (docs — P13-7 status; content incorporated here) · [#737](https://github.com/onboarda1234/onboarda/pull/737) (draft — P12-1 Phase A discovery report)
 
 **Legend:** ✅ done/merged · ◐ split item (one half done, one open) · 🟢 PR open · 🔨 in progress · 📋 scoped · ⏸ blocked · ⬜ pending · 🔴 pilot code blocker · 🟠 pilot operational gate
 **E column** = closure evidence in [`compliance/REMEDIATION_CLOSURE_EVIDENCE.md`](compliance/REMEDIATION_CLOSURE_EVIDENCE.md).
@@ -345,8 +345,9 @@ Two gates are decisions, not rows: **Applications-page readiness audit** clear o
 | RSMP-DOCS | Audit/review pack (full audit, founder decision pack, scenario matrix, settings register) | [#751](https://github.com/onboarda1234/onboarda/pull/751) | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
 | RSMP-0A | Tier 0A — guarded parser + mapping fidelity (activation flag OFF) | [#753](https://github.com/onboarda1234/onboarda/pull/753) | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
 | RSMP-0B | Tier 0B — fail-closed routing on unresolved mappings | [#755](https://github.com/onboarda1234/onboarda/pull/755) | ✅ merged + staging-validated at `dd4784b` | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
+| RSMP-0D | Tier 0D — runtime and Back Office risk-model alignment | [#768](https://github.com/onboarda1234/onboarda/pull/768) | ✅ merged + staging-validated at `7e91114`; read-only UI/export evidence aligned; activation OFF | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-tier-0d-pr-768) |
 | RSMP-0C | Tier 0C — activation + recomputation | — | ⬜ **final remaining RSMP pilot-readiness workstream**; no recomputation executed | — |
-| RSMP-PR1B | PR-1b — declared-PEP runtime alignment with approved Gate 0 v4 model | [#764](https://github.com/onboarda1234/onboarda/pull/764) | 🟢 draft open 2026-07-15 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
+| RSMP-PR1B | PR-1b — declared-PEP runtime alignment with approved Gate 0 v4 model | [#764](https://github.com/onboarda1234/onboarda/pull/764) | ✅ merged 2026-07-15 at `a823fb6` | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
 
 ---
 
