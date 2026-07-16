@@ -864,9 +864,9 @@ def test_screening_queue_full_evidence_still_hydrates_monitoring_evidence(db, te
     original_loader = server._load_monitoring_evidence_batch
     calls = []
 
-    def recording_loader(loader_db, app_ids):
+    def recording_loader(loader_db, app_ids, **kwargs):
         calls.append(list(app_ids))
-        return original_loader(loader_db, app_ids)
+        return original_loader(loader_db, app_ids, **kwargs)
 
     monkeypatch.setattr(server, "_load_monitoring_evidence_batch", recording_loader)
 
@@ -1911,3 +1911,172 @@ def test_queue_filter_results_identical_across_evidence_modes(db):
     assert summary["pagination"]["total_rows"] == full["pagination"]["total_rows"]
     # Canonical statuses agree row-by-row across modes.
     assert [r["canonical_status_key"] for r in summary["rows"]] == [r["canonical_status_key"] for r in full["rows"]]
+
+
+def _seed_evidence_volume_app(db, *, ref="ARF-QEVCAP-001", app_id="qevcap-000000001",
+                              alert_id=910001, evidence_count=8):
+    """One application with two subject rows (entity + director) and
+    ``evidence_count`` monitoring evidence rows on a single CA alert."""
+    import json as _json
+
+    subject = "Evidence Volume Director"
+    report = {
+        "provider": "complyadvantage",
+        "screened_at": "2026-07-01T00:00:00Z",
+        "screening_mode": "live",
+        "company_screening": {
+            "provider": "complyadvantage", "source": "complyadvantage",
+            "api_status": "live", "matched": False, "results": [],
+            "sanctions": {"source": "complyadvantage", "api_status": "live",
+                          "matched": False, "results": []},
+        },
+        "director_screenings": [
+            {
+                "director_name": subject, "subject_name": subject,
+                "provider": "complyadvantage", "source": "complyadvantage",
+                "api_status": "live", "screening_mode": "live", "matched": False,
+                "sanctions": {"source": "complyadvantage", "api_status": "live",
+                              "matched": False, "results": []},
+            }
+        ],
+        "ubo_screenings": [], "intermediary_screenings": [],
+        "overall_flags": [], "total_hits": 0,
+    }
+    db.execute("DELETE FROM monitoring_alert_evidence WHERE monitoring_alert_id = ?", (alert_id,))
+    db.execute("DELETE FROM monitoring_alerts WHERE id = ?", (alert_id,))
+    db.execute("DELETE FROM directors WHERE application_id = ?", (app_id,))
+    db.execute("DELETE FROM applications WHERE ref = ?", (ref,))
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data, is_fixture)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (app_id, ref, "testclient001", "Evidence Volume Ltd", "Mauritius",
+         "Technology", "SME", "in_review",
+         _json.dumps({"screening_report": report}), False),
+    )
+    db.execute(
+        "INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?)",
+        (app_id, subject, "Mauritius", "No"),
+    )
+    db.execute(
+        """
+        INSERT INTO monitoring_alerts
+            (id, application_id, client_name, alert_type, severity, detected_by,
+             summary, source_reference, status, provider, case_identifier, discovered_via)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (alert_id, app_id, "Evidence Volume Ltd", "media", "High", "complyadvantage",
+         "volume alert",
+         json.dumps({"provider": "complyadvantage", "case_identifier": f"case-qevcap-{alert_id}",
+                     "alert_identifier": f"alert-qevcap-{alert_id}", "subject_scope": "director"}),
+         "open", "complyadvantage", f"case-qevcap-{alert_id}", "manual"),
+    )
+    db.executemany(
+        """
+        INSERT INTO monitoring_alert_evidence
+            (monitoring_alert_id, application_id, provider, case_identifier, alert_identifier,
+             risk_identifier, evidence_type, matched_subject_name, relationship_to_client,
+             match_category, source_title, source_name, source_url, source_url_available,
+             snippet, evidence_json, raw_provider_reference, evidence_status, evidence_hash, fetched_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        [
+            (alert_id, app_id, "complyadvantage", f"case-qevcap-{alert_id}", f"alert-qevcap-{alert_id}",
+             f"risk-qevcap-{n}", "adverse_media", subject, "Director", "Adverse Media",
+             f"Article {n}", "Provider News", f"https://news.example/{n}", 1,
+             f"snippet {n}", "{}", "{}", "fetched", f"hash-qevcap-{n}",
+             "2026-07-14T00:00:00Z")
+            for n in range(evidence_count)
+        ],
+    )
+    db.commit()
+    return app_id, ref
+
+
+def test_evidence_link_candidates_computed_once_per_item_not_per_row(db, monkeypatch):
+    """Staging regression (p50 21s): every subject row of an application
+    re-derived a link candidate from every raw monitoring evidence item, so
+    parsing cost multiplied by subjects-per-application. Candidates must be
+    computed once per evidence item — in the batch loader — and reused."""
+    import server
+
+    app_id, ref = _seed_evidence_volume_app(db, evidence_count=7)
+    calls = {"count": 0}
+    real = server._monitoring_evidence_to_candidate
+
+    def counting(item):
+        calls["count"] += 1
+        return real(item)
+
+    monkeypatch.setattr(server, "_monitoring_evidence_to_candidate", counting)
+    payload = server._build_screening_queue_payload(
+        db, {"type": "officer", "sub": "admin001"}, show_fixtures=True,
+        limit=50, offset=0, filters={"application_ref": "ARF-QEVCAP-"},
+        include_evidence=True,
+    )
+    assert len(payload["rows"]) == 2  # entity + director rows for the one app
+    assert calls["count"] == 7
+    metrics = payload["metrics"]
+    assert metrics["evidence_items_loaded"] == 7
+    assert metrics["evidence_scan_capped"] is False
+
+
+def test_evidence_per_app_cap_bounds_page_work_and_is_reported(db, monkeypatch):
+    """One noisy application must not take down the evidence-mode endpoint:
+    page hydration processes at most the newest N evidence items per
+    application and says so in metrics. The targeted drawer loader (no cap)
+    still returns the complete set."""
+    import server
+
+    app_id, ref = _seed_evidence_volume_app(db, evidence_count=9)
+    monkeypatch.setattr(server, "_SCREENING_QUEUE_EVIDENCE_PER_APP_CAP", 4)
+    payload = server._build_screening_queue_payload(
+        db, {"type": "officer", "sub": "admin001"}, show_fixtures=True,
+        limit=50, offset=0, filters={"application_ref": "ARF-QEVCAP-"},
+        include_evidence=True,
+    )
+    metrics = payload["metrics"]
+    assert metrics["evidence_per_app_cap"] == 4
+    assert metrics["evidence_items_loaded"] == 4
+    assert metrics["evidence_scan_capped"] is True
+
+    capped = server._load_monitoring_evidence_batch(db, [app_id], per_app_cap=4)[app_id]
+    assert len(capped) == 4
+    assert capped[0]["application_evidence_total"] == 9
+    # Newest evidence wins, returned in insertion order.
+    assert [item["source_title"] for item in capped] == [f"Article {n}" for n in (5, 6, 7, 8)]
+
+    uncapped = server._load_monitoring_evidence_batch(db, [app_id])[app_id]
+    assert len(uncapped) == 9
+    assert [item["source_title"] for item in uncapped] == [f"Article {n}" for n in range(9)]
+
+
+def test_evidence_batch_resolves_null_application_id_via_alert_join(db):
+    """The indexable UNION rewrite must preserve the old COALESCE semantics:
+    evidence rows with no application_id of their own still resolve to the
+    alert's application — with and without the per-application cap."""
+    import server
+
+    app_id, ref = _seed_evidence_volume_app(db, alert_id=910002, evidence_count=2)
+    db.execute(
+        """
+        INSERT INTO monitoring_alert_evidence
+            (monitoring_alert_id, application_id, provider, case_identifier, alert_identifier,
+             evidence_type, matched_subject_name, match_category, source_title,
+             evidence_json, raw_provider_reference, evidence_status, evidence_hash, fetched_at)
+        VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (910002, "complyadvantage", "case-qevcap-910002", "alert-qevcap-910002", "adverse_media",
+         "Evidence Volume Director", "Adverse Media", "Orphan Article",
+         "{}", "{}", "fetched", "hash-qevcap-orphan", "2026-07-14T00:00:00Z"),
+    )
+    db.commit()
+
+    full = server._load_monitoring_evidence_batch(db, [app_id])[app_id]
+    assert "Orphan Article" in {item["source_title"] for item in full}
+    assert all(item["application_id"] == app_id for item in full)
+
+    capped = server._load_monitoring_evidence_batch(db, [app_id], per_app_cap=10)[app_id]
+    assert "Orphan Article" in {item["source_title"] for item in capped}
