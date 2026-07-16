@@ -184,6 +184,29 @@ To rollback: `git checkout v4.1-stable`
 - Tests: pytest, aim for 100% pass rate before any deploy
 - Commits: Descriptive messages with category prefix (fix:, feat:, refactor:, etc.)
 
+## Module Status & Change Control
+
+> **⛔ FROZEN — approval required.** The module below is audited, tested, and
+> closed. Do NOT make intentional behaviour changes to its workflows without
+> explicit approval from Aisha Sudally (asudally@onboarda.com), even if a task
+> seems to imply it. Incidental changes to shared code (`server.py`,
+> `security_hardening.py`, `document_reliance_gate.py`, `arie-backoffice.html`)
+> are allowed only if all guard tests below stay green and workflow output is
+> unchanged.
+
+| Module | Status | Frozen since | Scope of freeze |
+|--------|--------|--------------|-----------------|
+| **Application Review (back office)** | ✅ **PILOT-READY — FROZEN** | 2026-07-16 | The Application Review page workflows: detail load (`GET /api/applications/:id`), memo generate → validate → approve loop, approval gates / Case Command Centre blockers, decision actions (Approve / Reject / RMI / Submit to Compliance / Override / Escalate / Reassign / Export Pack), and all seven detail tabs. |
+
+**Evidence basis (2026-06/07):** full-page audit + browser test (PR #766-era audit, commit `a237008`); memo-workflow hardening (3 defects fixed, static guards added); performance fix `idx_agent_executions_document_id` (PRs #771/#774, validated on staging — index active, planner verified, workflow hashes byte-identical pre/post deploy).
+
+**Enforcement — these guard tests must never regress:**
+- `arie-backend/tests/test_application_review_audit_fixes_static.py`
+- `arie-backend/tests/test_application_detail_perf_index.py`
+- `arie-backend/tests/test_approval_ux_gates_static.py`, `test_pr5_memo_governance.py`, `test_memo_staleness_hard_gate.py`, `test_dual_approval_race.py` (pre-existing)
+
+**Pilot-ready, NOT production-ready.** Production sign-off additionally requires: live-provider runs (no `CLAUDE_MOCK_MODE`), Safari/Firefox smoke, load testing, and surviving real pilot usage. Known accepted items: detail-open median ~0.73s on staging (further optimisation deferred — touches audited logic); legacy SAR v2.11 migration fails harmlessly on staging (SAR is enterprise scope, not pilot).
+
 ## Important Notes
 ## Feature Scope (What Is and Is Not Implemented)
 
