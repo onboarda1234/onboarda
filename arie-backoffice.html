@@ -1490,7 +1490,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         <div class="topbar-more-dropdown">
           <button class="btn btn-outline btn-sm" onclick="rejectApplication()" id="btn-reject" style="font-size:11px;">❌ Reject</button>
           <button class="btn btn-outline btn-sm" onclick="openOverrideModal()" id="btn-override" style="font-size:11px;background:rgba(124,58,237,0.1);border-color:rgba(124,58,237,0.3);color:#7c3aed;">🔄 Override</button>
-          <button class="btn btn-outline btn-sm" onclick="escalateCase()" style="font-size:11px;">⬆️ Escalate</button>
+          <button class="btn btn-outline btn-sm" id="btn-escalate" onclick="escalateCase()" style="font-size:11px;">⬆️ Escalate</button>
           <button class="btn btn-outline btn-sm" id="btn-reassign" onclick="reassignCase()" style="font-size:11px;">👤 Reassign</button>
           <button class="btn btn-outline btn-sm" id="btn-export-pack" onclick="openExportPackModal()" style="font-size:11px;">Export Pack</button>
         </div>
@@ -6597,6 +6597,13 @@ function syncApplicationActionPermissions(app) {
   // failure never wrongly hides a senior officer's controls.
   setDetailActionState('btn-reject', actionState.reject);
   setDetailActionVisibility('btn-override', !rolePermissionsLoaded() || hasPermission('override_ai_risk_score'));
+  // APP-CONF-001: RMI and Escalate submit through the decision endpoint
+  // (admin/sco/co only). Hide them from roles the backend denies so the UI
+  // never advertises an action that will 403. Same fail-open rule as
+  // btn-override: an unloaded matrix must not hide a legitimate officer's
+  // controls — backend + click-time assertPermission still enforce.
+  setDetailActionVisibility('btn-rmi', !rolePermissionsLoaded() || hasPermission('request_more_information'));
+  setDetailActionVisibility('btn-escalate', !rolePermissionsLoaded() || hasPermission('escalate_to_sco'));
   var hintEl = document.getElementById('approval-authority-hint');
   if (hintEl) {
     if (actionState.helper) {
