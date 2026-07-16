@@ -1799,6 +1799,7 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_application_id ON monitoring_alerts(application_id);
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_edd ON monitoring_alerts(linked_edd_case_id);
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_review ON monitoring_alerts(linked_periodic_review_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_alert_evidence_app ON monitoring_alert_evidence(application_id);
     CREATE INDEX IF NOT EXISTS idx_periodic_reviews_application_id ON periodic_reviews(application_id);
     CREATE INDEX IF NOT EXISTS idx_periodic_reviews_linked_alert ON periodic_reviews(linked_monitoring_alert_id);
     CREATE INDEX IF NOT EXISTS idx_periodic_reviews_linked_edd ON periodic_reviews(linked_edd_case_id);
@@ -6305,6 +6306,22 @@ def _run_migrations(db: DBConnection):
     except Exception as e:
         logger.debug(f"agent_executions document_id index may already exist: {e}")
 
+    # Performance: index monitoring_alert_evidence by application_id.
+    # Evidence-mode screening-queue hydration batch-loads evidence for the
+    # applications on the returned page (server._load_monitoring_evidence_batch);
+    # the table only had indexes on monitoring_alert_id and (provider,
+    # case_identifier), so that lookup was a full table scan per request and
+    # degraded without bound as monitoring evidence accumulated (staging
+    # measured p50 21s). CREATE INDEX IF NOT EXISTS is idempotent and
+    # supported on SQLite + Postgres.
+    try:
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_monitoring_alert_evidence_app "
+            "ON monitoring_alert_evidence(application_id)"
+        )
+    except Exception as e:
+        logger.debug(f"monitoring_alert_evidence application_id index may already exist: {e}")
+
     # Check if pre_approval columns exist on applications table
     if not _safe_column_exists(db, "applications", "pre_approval_decision"):
         logger.info("Migration v2.1: Adding pre-approval columns to applications table")
@@ -7610,6 +7627,7 @@ def _run_migrations(db: DBConnection):
         """)
         db.execute("CREATE INDEX IF NOT EXISTS idx_monitoring_alert_evidence_alert ON monitoring_alert_evidence(monitoring_alert_id)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_monitoring_alert_evidence_case ON monitoring_alert_evidence(provider, case_identifier)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_monitoring_alert_evidence_app ON monitoring_alert_evidence(application_id)")
         db.commit()
         logger.info("Migration v2.24d: CA webhook delivery and monitoring evidence tables ensured")
     except Exception as e:

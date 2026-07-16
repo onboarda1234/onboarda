@@ -21895,41 +21895,93 @@ def _attach_screening_review_evidence_context(db, app, context):
     return context
 
 
-def _load_monitoring_evidence_batch(db, application_ids):
+def _load_monitoring_evidence_batch(db, application_ids, *, per_app_cap=None):
     application_ids = [app_id for app_id in dict.fromkeys(application_ids or []) if app_id]
     if not application_ids:
         return {}
     placeholders = ",".join("?" for _ in application_ids)
-    try:
-        rows = db.execute(
-            f"""
-            SELECT e.monitoring_alert_id, COALESCE(e.application_id, a.application_id) AS application_id,
-                   e.provider, e.case_identifier, e.alert_identifier, e.match_identifier,
-                   e.risk_identifier, e.profile_identifier, e.evidence_type,
-                   e.matched_subject_name, e.relationship_to_client, e.match_category,
-                   e.risk_indicator, e.match_confidence, e.source_title, e.source_name,
-                   e.source_url, e.source_url_available, e.source_url_unavailable_reason,
-                   e.publication_date, e.snippet, e.provider_case_url, e.evidence_json,
-                   e.raw_provider_reference, e.evidence_status, e.fetched_at,
-                   a.alert_type, a.severity, a.summary AS alert_summary,
-                   a.source_reference AS alert_source_reference
-              FROM monitoring_alert_evidence e
+    # UNION ALL is the indexable expansion of the old
+    # COALESCE(e.application_id, a.application_id) IN (...) filter: a COALESCE
+    # (or an OR) spanning two joined tables can never use an index, which made
+    # this a full scan of monitoring_alert_evidence on every evidence-mode
+    # queue request. The arms are disjoint on e.application_id IS NULL, so
+    # UNION ALL returns exactly the old row set.
+    select_columns = """
+        SELECT e.id AS evidence_row_id, e.monitoring_alert_id,
+               COALESCE(e.application_id, a.application_id) AS application_id,
+               e.provider, e.case_identifier, e.alert_identifier, e.match_identifier,
+               e.risk_identifier, e.profile_identifier, e.evidence_type,
+               e.matched_subject_name, e.relationship_to_client, e.match_category,
+               e.risk_indicator, e.match_confidence, e.source_title, e.source_name,
+               e.source_url, e.source_url_available, e.source_url_unavailable_reason,
+               e.publication_date, e.snippet, e.provider_case_url, e.evidence_json,
+               e.raw_provider_reference, e.evidence_status, e.fetched_at,
+               a.alert_type, a.severity, a.summary AS alert_summary,
+               a.source_reference AS alert_source_reference
+    """
+    base_query = f"""
+        {select_columns}
+          FROM monitoring_alert_evidence e
+          LEFT JOIN monitoring_alerts a ON a.id = e.monitoring_alert_id
+         WHERE e.application_id IN ({placeholders})
+        UNION ALL
+        {select_columns}
+          FROM monitoring_alert_evidence e
+          JOIN monitoring_alerts a ON a.id = e.monitoring_alert_id
+         WHERE e.application_id IS NULL AND a.application_id IN ({placeholders})
+    """
+    params = tuple(application_ids) * 2
+    if per_app_cap:
+        # Cap in SQL so oversized applications neither ship unbounded JSON
+        # blobs over the wire nor get parsed in Python. Ranking runs over a
+        # slim (id, application_id) projection — never the JSON columns — and
+        # only the surviving rows are joined back for their full payload.
+        # Newest evidence wins; application_evidence_total lets callers report
+        # the truncation honestly. The targeted drawer path passes no cap and
+        # stays complete.
+        query = f"""
+            {select_columns}, ranked.application_evidence_total
+              FROM (
+                SELECT slim.evidence_row_id,
+                       ROW_NUMBER() OVER (PARTITION BY slim.application_id ORDER BY slim.evidence_row_id DESC) AS app_evidence_rank,
+                       COUNT(*) OVER (PARTITION BY slim.application_id) AS application_evidence_total
+                  FROM (
+                    SELECT e.id AS evidence_row_id, e.application_id AS application_id
+                      FROM monitoring_alert_evidence e
+                     WHERE e.application_id IN ({placeholders})
+                    UNION ALL
+                    SELECT e.id AS evidence_row_id, a.application_id AS application_id
+                      FROM monitoring_alert_evidence e
+                      JOIN monitoring_alerts a ON a.id = e.monitoring_alert_id
+                     WHERE e.application_id IS NULL AND a.application_id IN ({placeholders})
+                  ) slim
+              ) ranked
+              JOIN monitoring_alert_evidence e ON e.id = ranked.evidence_row_id
               LEFT JOIN monitoring_alerts a ON a.id = e.monitoring_alert_id
-             WHERE COALESCE(e.application_id, a.application_id) IN ({placeholders})
+             WHERE ranked.app_evidence_rank <= ?
              ORDER BY e.id ASC
-            """,
-            tuple(application_ids),
-        ).fetchall()
+        """
+        params = params + (int(per_app_cap),)
+    else:
+        query = base_query + " ORDER BY evidence_row_id ASC"
+    try:
+        rows = db.execute(query, params).fetchall()
     except Exception:
         return {}
 
     by_app = {app_id: [] for app_id in application_ids}
     for row in rows:
         item = dict(row)
+        item.pop("app_evidence_rank", None)
         item["source_url_available"] = bool(item.get("source_url_available"))
         item["evidence_json"] = safe_json_loads(item.get("evidence_json") or "{}")
         item["raw_provider_reference"] = safe_json_loads(item.get("raw_provider_reference") or "{}")
         item["alert_source_reference_json"] = _decode_monitoring_source_reference(item.get("alert_source_reference"))
+        # Precompute the link candidate once per evidence item. Enrichment
+        # runs per subject row, and every subject row of an application scans
+        # the same items — deriving candidates there multiplied the parsing
+        # cost by the number of subjects per application.
+        item["_link_candidate"] = _monitoring_evidence_to_candidate(item)
         by_app.setdefault(item.get("application_id"), []).append(item)
     return by_app
 
@@ -22055,9 +22107,8 @@ def _screening_evidence_subject_matches(row, candidate, *, require_candidate=Fal
     return bool(row_name and not candidate_name)
 
 
-def _screening_evidence_link_strategy(row, candidate, row_ids, row_categories):
-    provider = _screening_evidence_norm(candidate.get("provider"))
-    row_provider_blob = _screening_evidence_norm(
+def _screening_evidence_row_provider_blob(row):
+    return _screening_evidence_norm(
         " ".join(
             _screening_evidence_text(part)
             for part in [
@@ -22069,6 +22120,12 @@ def _screening_evidence_link_strategy(row, candidate, row_ids, row_categories):
             ]
         )
     )
+
+
+def _screening_evidence_link_strategy(row, candidate, row_ids, row_categories, row_provider_blob=None):
+    provider = _screening_evidence_norm(candidate.get("provider"))
+    if row_provider_blob is None:
+        row_provider_blob = _screening_evidence_row_provider_blob(row)
     if provider and provider not in row_provider_blob and "complyadvantage" not in row_provider_blob:
         return None
 
@@ -22104,12 +22161,13 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
     ]
     row_ids = _screening_row_identifier_sets(row)
     row_categories = _screening_row_categories(row)
+    row_provider_blob = _screening_evidence_row_provider_blob(row)
     linked_provider_evidence = []
     link_notes = []
 
     for raw_item in monitoring_evidence or []:
-        candidate = _monitoring_evidence_to_candidate(raw_item)
-        strategy = _screening_evidence_link_strategy(row, candidate, row_ids, row_categories)
+        candidate = raw_item.get("_link_candidate") or _monitoring_evidence_to_candidate(raw_item)
+        strategy = _screening_evidence_link_strategy(row, candidate, row_ids, row_categories, row_provider_blob)
         if not strategy:
             continue
         item = _normalise_screening_evidence_item(row, candidate, source="ca_1b_monitoring_evidence", link_strategy=strategy)
@@ -23207,6 +23265,16 @@ def _screening_queue_summary_row(row):
 # production-readiness plan).
 _SCREENING_QUEUE_APPLICATION_SCAN_CAP = 200
 
+# Evidence-mode hydration processes each page application's monitoring
+# evidence in Python; without a bound, one application with heavy provider
+# evidence (e.g. sustained webhook traffic) degrades the whole endpoint —
+# staging measured p50 21s once page applications accumulated thousands of
+# evidence rows. The newest N items per application are processed and the
+# truncation is reported in metrics (evidence_scan_capped). The queue only
+# needs evidence for its rollup badges; the targeted review drawer loads
+# evidence uncapped, so officer decisions always see the complete set.
+_SCREENING_QUEUE_EVIDENCE_PER_APP_CAP = 200
+
 
 def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None, offset=0, filters=None, include_evidence=True):
     filters = filters or {}
@@ -23790,7 +23858,16 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
             for row in paginated_rows
             if row.get("application_id")
         })
-        monitoring_evidence_by_app = _load_monitoring_evidence_batch(db, page_app_ids) if page_app_ids else {}
+        monitoring_evidence_by_app = _load_monitoring_evidence_batch(
+            db, page_app_ids, per_app_cap=_SCREENING_QUEUE_EVIDENCE_PER_APP_CAP,
+        ) if page_app_ids else {}
+        metrics["evidence_per_app_cap"] = _SCREENING_QUEUE_EVIDENCE_PER_APP_CAP
+        metrics["evidence_items_loaded"] = sum(len(items) for items in monitoring_evidence_by_app.values())
+        metrics["evidence_scan_capped"] = any(
+            (items[0].get("application_evidence_total") or 0) > _SCREENING_QUEUE_EVIDENCE_PER_APP_CAP
+            for items in monitoring_evidence_by_app.values()
+            if items
+        )
         # Enrich only the returned page, then re-resolve so evidence-driven
         # states (stale/partial evidence) still land exactly as before for
         # every row the caller actually receives.
