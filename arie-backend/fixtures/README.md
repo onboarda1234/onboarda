@@ -13,6 +13,34 @@ and PostgreSQL (production/staging) schemas.
 - generated REGISTER (Markdown table of seeded rows)
 - bypasses the API layer (no screening replay, no notifications, no rule recompute beyond `compute_risk_score`)
 
+## Pilot Canonical Dataset v1
+
+The permanent 38-application pilot catalogue is separate from the legacy
+`SCEN-*` fixtures. Its reviewed source is
+`fixtures/pilot_canonical_dataset_v1.json`; its manifest, validator, guarded
+seeder, and operator CLI are in the matching `pilot_canonical*` modules.
+Nothing is seeded automatically.
+
+From `arie-backend/`:
+
+```bash
+# No DB access or writes
+python -m fixtures.pilot_canonical_cli validate
+python -m fixtures.pilot_canonical_cli list
+
+# Uses the configured DB, exercises one transaction, then rolls back. It also
+# requires the intended Tier 0 runtime contract to already evaluate true; the
+# CLI never changes that flag.
+python -m fixtures.pilot_canonical_cli dry-run
+```
+
+The future apply operation is staging-only and requires
+`ALLOW_PILOT_CANONICAL_SEED=1`, the literal confirmation token
+`APPLY-PILOT-CANONICAL-DATASET-V1`, and the exact founder-reviewed manifest
+SHA-256 via `--reviewed-hash`. See
+`docs/pilot/PILOT_CANONICAL_DATASET.md` for the unexecuted staging plan,
+replacement recommendation, and rollback controls.
+
 ## How to run
 
 From `arie-backend/`:
