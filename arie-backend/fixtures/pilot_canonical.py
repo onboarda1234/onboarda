@@ -18,7 +18,7 @@ MANIFEST_PATH = Path(__file__).with_name("pilot_canonical_dataset_v1.json")
 DATASET_NAME = "Pilot Canonical Dataset"
 DATASET_VERSION = "v1"
 REFERENCE_PREFIX = "RM-PILOT-"
-EXPECTED_SCENARIO_COUNT = 38
+EXPECTED_SCENARIO_COUNT = 41
 
 REQUIRED_COVERAGE = frozenset({
     "low_risk", "professional_services", "trading_company", "simple_domestic",
@@ -34,7 +34,8 @@ REQUIRED_COVERAGE = frozenset({
     "screening_pending", "approval_blocked", "rejected_application",
     "periodic_low", "periodic_medium", "periodic_high", "periodic_completed",
     "periodic_open", "monitoring_alert", "monitoring_false_positive",
-    "monitoring_escalated", "monitoring_cleared",
+    "monitoring_escalated", "monitoring_cleared", "officer_correction",
+    "evidence_export", "ai_supervisor", "end_to_end_happy_path",
 })
 
 
@@ -114,7 +115,7 @@ def validate_manifest(manifest: Optional[Mapping[str, Any]] = None) -> Dict[str,
             errors.append(f"dataset.{key} must be {expected!r}")
     if metadata.get("scenario_count") != EXPECTED_SCENARIO_COUNT:
         errors.append(f"dataset.scenario_count must be {EXPECTED_SCENARIO_COUNT}")
-    if len(rows) != EXPECTED_SCENARIO_COUNT or not 35 <= len(rows) <= 40:
+    if len(rows) != EXPECTED_SCENARIO_COUNT:
         errors.append(f"manifest must contain exactly {EXPECTED_SCENARIO_COUNT} scenarios")
 
     references = [row.get("reference") for row in rows]
@@ -231,6 +232,66 @@ def validate_manifest(manifest: Optional[Mapping[str, Any]] = None) -> Dict[str,
         escalations = by_ref.get(reference, {}).get("expected", {}).get("escalations", [])
         if not any(str(reason).startswith("stale:unmapped_") for reason in escalations):
             errors.append(f"{reference} must preserve a fail-closed unresolved sentinel")
+
+    trust = by_ref.get("RM-PILOT-028", {})
+    trust_document_types = {
+        item.get("type") for item in trust.get("evidence_documents", [])
+    }
+    required_trust_documents = {
+        "trust_deed", "trustee_identification", "settlor_declaration",
+        "beneficiary_register", "trust_relationship_chart",
+    }
+    if not required_trust_documents <= trust_document_types:
+        errors.append("RM-PILOT-028 must include complete trust relationship evidence")
+    if not (trust.get("scenario_evidence") or {}).get("trust_relationship"):
+        errors.append("RM-PILOT-028 must describe the trust relationship")
+
+    sow = by_ref.get("RM-PILOT-029", {})
+    sow_document_types = {
+        item.get("type") for item in sow.get("evidence_documents", [])
+    }
+    required_sow_documents = {
+        "source_of_wealth_declaration", "audited_financial_statements",
+        "bank_statements", "supporting_transaction_evidence",
+    }
+    if not required_sow_documents <= sow_document_types:
+        errors.append("RM-PILOT-029 must include source-of-wealth supporting evidence")
+    if not (sow.get("scenario_evidence") or {}).get("officer_review"):
+        errors.append("RM-PILOT-029 must include a source-of-wealth officer review")
+
+    correction = by_ref.get("RM-PILOT-037", {})
+    correction_steps = (correction.get("correction_workflow") or {}).get("steps") or []
+    if correction.get("expected", {}).get("application_status") != "approved":
+        errors.append("RM-PILOT-037 must finish approved")
+    if correction_steps != [
+        "initial_submission", "officer_correction_request", "applicant_correction",
+        "officer_verification", "final_approval",
+    ]:
+        errors.append("RM-PILOT-037 must contain the canonical correction lifecycle")
+
+    export = by_ref.get("RM-PILOT-039", {}).get("evidence_export") or {}
+    if set(export.get("formats") or []) != {"CSV", "PDF"}:
+        errors.append("RM-PILOT-039 must demonstrate CSV and PDF evidence export")
+    required_export_sections = {
+        "risk_assessment", "screening_summary", "compliance_memo", "audit_trail",
+    }
+    if not required_export_sections <= set(export.get("sections") or []):
+        errors.append(
+            "RM-PILOT-039 must include authoritative risk, screening, memo and audit evidence"
+        )
+
+    supervisor = by_ref.get("RM-PILOT-040", {}).get("supervisor_evidence") or {}
+    for key in ("verdict", "reasoning", "recommendation", "officer_review", "final_disposition"):
+        if not supervisor.get(key):
+            errors.append(f"RM-PILOT-040 supervisor evidence is missing {key}")
+
+    happy = by_ref.get("RM-PILOT-041", {})
+    required_happy_coverage = {
+        "end_to_end_happy_path", "evidence_export", "ai_supervisor",
+        "periodic_completed", "monitoring_false_positive",
+    }
+    if not required_happy_coverage <= set(happy.get("coverage") or []):
+        errors.append("RM-PILOT-041 must cover the complete happy-path lifecycle")
 
     if errors:
         raise PilotDatasetValidationError("; ".join(errors))

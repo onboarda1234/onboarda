@@ -22,6 +22,7 @@ from fixtures.pilot_canonical import (
 
 REQUIRED_CONFIRM_TOKEN = "APPLY-PILOT-CANONICAL-DATASET-V1"
 REQUIRED_ALLOW_VALUE = "1"
+REQUIRED_CLEANUP_CONFIRM_TOKEN = "CLEANUP-PILOT-CANONICAL-DATASET-V1"
 
 
 def _references(value: Optional[str]) -> Optional[List[str]]:
@@ -39,6 +40,26 @@ def _enforce_apply_gates(*, confirm: str, reviewed_hash: str) -> None:
     if confirm != REQUIRED_CONFIRM_TOKEN:
         raise SystemExit(
             f"REFUSED: apply requires --confirm {REQUIRED_CONFIRM_TOKEN!r}"
+        )
+    actual_hash = manifest_sha256()
+    if reviewed_hash != actual_hash:
+        raise SystemExit(
+            "REFUSED: --reviewed-hash does not match the exact manifest bytes "
+            f"(expected {actual_hash})"
+        )
+
+
+def _enforce_cleanup_gates(*, confirm: str, reviewed_hash: str) -> None:
+    environment = (os.environ.get("ENVIRONMENT") or "").strip().lower()
+    if environment != "staging":
+        raise SystemExit(
+            f"REFUSED: cleanup requires ENVIRONMENT=staging (got {environment!r})"
+        )
+    if os.environ.get("ALLOW_PILOT_CANONICAL_CLEANUP") != REQUIRED_ALLOW_VALUE:
+        raise SystemExit("REFUSED: cleanup requires ALLOW_PILOT_CANONICAL_CLEANUP=1")
+    if confirm != REQUIRED_CLEANUP_CONFIRM_TOKEN:
+        raise SystemExit(
+            f"REFUSED: cleanup requires --confirm {REQUIRED_CLEANUP_CONFIRM_TOKEN!r}"
         )
     actual_hash = manifest_sha256()
     if reviewed_hash != actual_hash:
@@ -116,6 +137,36 @@ def cmd_apply(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cleanup(args: argparse.Namespace) -> int:
+    _enforce_cleanup_gates(confirm=args.confirm, reviewed_hash=args.reviewed_hash)
+    from db import get_db
+    from fixtures.cleanup import cleanup_pilot_canonical_dataset
+    from regulated_deletion import FIXTURE_CLEANUP_CONFIRMATION
+
+    db = get_db()
+    try:
+        counts = cleanup_pilot_canonical_dataset(
+            db,
+            actor_id="pilot_canonical_cleanup_cli",
+            confirmation=FIXTURE_CLEANUP_CONFIRMATION,
+            reviewed_hash=args.reviewed_hash,
+        )
+    finally:
+        db.close()
+    print(
+        json.dumps(
+            {
+                "cleaned": True,
+                "manifest_sha256": manifest_sha256(),
+                "deleted_counts": counts,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m fixtures.pilot_canonical_cli",
@@ -134,6 +185,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     apply.add_argument("--confirm", required=True)
     apply.add_argument("--reviewed-hash", required=True)
     apply.set_defaults(func=cmd_apply)
+
+    cleanup = sub.add_parser(
+        "cleanup", help="remove the exact reviewed dataset from staging after separate approval"
+    )
+    cleanup.add_argument("--confirm", required=True)
+    cleanup.add_argument("--reviewed-hash", required=True)
+    cleanup.set_defaults(func=cmd_cleanup)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

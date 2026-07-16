@@ -15,7 +15,7 @@ and PostgreSQL (production/staging) schemas.
 
 ## Pilot Canonical Dataset v1
 
-The permanent 38-application pilot catalogue is separate from the legacy
+The permanent 41-application pilot catalogue is separate from the legacy
 `SCEN-*` fixtures. Its reviewed source is
 `fixtures/pilot_canonical_dataset_v1.json`; its manifest, validator, guarded
 seeder, and operator CLI are in the matching `pilot_canonical*` modules.
@@ -40,6 +40,13 @@ The future apply operation is staging-only and requires
 SHA-256 via `--reviewed-hash`. See
 `docs/pilot/PILOT_CANONICAL_DATASET.md` for the unexecuted staging plan,
 replacement recommendation, and rollback controls.
+
+The separately authorised cleanup operation is also staging-only. It requires
+`ALLOW_PILOT_CANONICAL_CLEANUP=1`, the literal confirmation token
+`CLEANUP-PILOT-CANONICAL-DATASET-V1`, and the exact reviewed manifest hash.
+It uses the sanctioned regulated-deletion context and refuses any mismatched,
+non-fixture, or unexpected `RM-PILOT-*` identity. Nothing invokes cleanup
+automatically.
 
 ## How to run
 

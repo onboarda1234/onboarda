@@ -155,6 +155,10 @@ def _application_payload(
         "workflow_state": workflow,
         "screening_report": screening_report,
         "risk_config_version": risk_config_version,
+        "scenario_evidence": row.get("scenario_evidence") or {},
+        "correction_workflow": row.get("correction_workflow") or {},
+        "evidence_export": row.get("evidence_export") or {},
+        "supervisor_evidence": row.get("supervisor_evidence") or {},
     }
     runtime_dimensions = _bind_runtime_config_version(expected["dimensions"], risk_config_version)
     risk_dimensions = {
@@ -290,11 +294,23 @@ def _document_specs(row: Mapping[str, Any]) -> List[Dict[str, str]]:
         return [{"type": "passport", "verification": "verified", "review": "accepted"}]
     passport_verification = "failed" if idv == "failed" else "verified"
     passport_review = "rejected" if idv == "failed" else "accepted"
-    return [
+    default_specs = [
         {"type": "passport", "verification": passport_verification, "review": passport_review},
         {"type": "certificate_of_incorporation", "verification": "verified", "review": "accepted"},
         {"type": "ownership_evidence", "verification": "verified", "review": "accepted"},
     ]
+    existing_types = {item["type"] for item in default_specs}
+    for evidence in row.get("evidence_documents") or []:
+        document_type = str(evidence.get("type") or "").strip()
+        if not document_type or document_type in existing_types:
+            continue
+        default_specs.append({
+            "type": document_type,
+            "verification": str(evidence.get("verification") or "verified"),
+            "review": str(evidence.get("review") or "accepted"),
+        })
+        existing_types.add(document_type)
+    return default_specs
 
 
 def _upsert_documents(db, audit, row: Mapping[str, Any]) -> List[str]:
@@ -429,6 +445,198 @@ def _upsert_edd(db, audit, row: Mapping[str, Any], alert_id: Optional[int], revi
     return edd_id
 
 
+def _upsert_edd_findings(
+    db, audit, row: Mapping[str, Any], edd_id: Optional[int]
+) -> Optional[int]:
+    evidence = row.get("edd_evidence") or {}
+    if not edd_id or not evidence:
+        return None
+    existing = db.execute(
+        "SELECT id FROM edd_findings WHERE edd_case_id=?", (edd_id,)
+    ).fetchone()
+    values = (
+        evidence.get("findings_summary"),
+        _json(evidence.get("key_concerns") or []),
+        _json(evidence.get("mitigating_evidence") or []),
+        _json(evidence.get("conditions") or []),
+        evidence.get("rationale"),
+        _json(evidence.get("supporting_notes") or []),
+        evidence.get("recommended_outcome"),
+        "fixture_seed",
+        _iso(row, offset=6),
+        "fixture_seed",
+        _iso(row, offset=7),
+    )
+    columns = (
+        "findings_summary,key_concerns,mitigating_evidence,conditions,rationale,"
+        "supporting_notes,recommended_outcome,created_by,created_at,updated_by,updated_at"
+    )
+    if existing:
+        assignments = ",".join(f"{name}=?" for name in columns.split(","))
+        db.execute(
+            f"UPDATE edd_findings SET {assignments} WHERE id=?",
+            (*values, existing["id"]),
+        )
+        finding_id = existing["id"]
+    else:
+        finding_id = _insert_returning_id(
+            db, "edd_findings", f"edd_case_id,{columns}", (edd_id, *values)
+        )
+    audit(
+        action="pilot_canonical_edd_findings",
+        target=f"edd_finding:{finding_id}",
+        detail=f"Converged canonical EDD evidence for {row['reference']}",
+        after_state={"reference": row["reference"], "recommended_outcome": evidence.get("recommended_outcome")},
+    )
+    return finding_id
+
+
+def _upsert_correction_workflow(db, audit, row: Mapping[str, Any]) -> Dict[str, Any]:
+    workflow = row.get("correction_workflow") or {}
+    if not workflow:
+        return {"correction_id": None, "rmi_request_id": None, "rmi_item_id": None}
+
+    app_id = row["application_id"]
+    request_id = f"{app_id}:correction-request"
+    item_id = f"{app_id}:correction-item"
+    correction_source = "pilot_canonical_officer_correction"
+    before_state = workflow["before_state"]
+    after_state = workflow["after_state"]
+    field_scope = str(workflow["field_scope"])
+
+    document = db.execute(
+        "SELECT id FROM documents WHERE application_id=? AND doc_type=? ORDER BY id LIMIT 1",
+        (app_id, workflow.get("supporting_document_type") or "proof_of_address"),
+    ).fetchone()
+    if not document:
+        raise PilotDatasetValidationError(
+            f"{row['reference']}: correction supporting document is missing"
+        )
+
+    request_values = (
+        app_id, "fulfilled", workflow["request_reason"], _iso(row, offset=20),
+        "co001", "Canonical Fixture Officer", _iso(row, offset=3),
+        _iso(row, offset=6), _iso(row, offset=6),
+    )
+    request_columns = (
+        "application_id,status,reason,deadline,created_by,created_by_name,"
+        "created_at,updated_at,fulfilled_at"
+    )
+    if db.execute("SELECT id FROM rmi_requests WHERE id=?", (request_id,)).fetchone():
+        assignments = ",".join(f"{name}=?" for name in request_columns.split(","))
+        db.execute(f"UPDATE rmi_requests SET {assignments} WHERE id=?", (*request_values, request_id))
+    else:
+        db.execute(
+            f"INSERT INTO rmi_requests (id,{request_columns}) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (request_id, *request_values),
+        )
+
+    item_values = (
+        request_id, workflow.get("requested_document_type") or "proof_of_address",
+        workflow["request_label"], workflow["request_description"], "accepted",
+        document["id"], _iso(row, offset=5), _iso(row, offset=6), _iso(row, offset=3),
+    )
+    item_columns = (
+        "request_id,doc_type,label,description,status,document_id,uploaded_at,reviewed_at,created_at"
+    )
+    if db.execute("SELECT id FROM rmi_request_items WHERE id=?", (item_id,)).fetchone():
+        assignments = ",".join(f"{name}=?" for name in item_columns.split(","))
+        db.execute(f"UPDATE rmi_request_items SET {assignments} WHERE id=?", (*item_values, item_id))
+    else:
+        db.execute(
+            f"INSERT INTO rmi_request_items (id,{item_columns}) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (item_id, *item_values),
+        )
+
+    correction_values = (
+        app_id, "application", app_id, "entity", field_scope, "tier_0",
+        workflow["correction_reason"], workflow["evidence_source"],
+        workflow["correction_note"], correction_source, _json(before_state),
+        _json(after_state), _json(workflow["downstream_state"]), "co001",
+        "Canonical Fixture Officer", "co", _iso(row, offset=6),
+    )
+    correction_columns = (
+        "application_id,target_type,target_id,subject_type,field_scope,materiality,"
+        "correction_reason,evidence_source,correction_note,correction_source,before_state,"
+        "after_state,downstream_state,corrected_by,corrected_by_name,corrected_by_role,corrected_at"
+    )
+    existing = db.execute(
+        "SELECT id FROM application_corrections WHERE application_id=? AND correction_source=?",
+        (app_id, correction_source),
+    ).fetchone()
+    if existing:
+        assignments = ",".join(f"{name}=?" for name in correction_columns.split(","))
+        db.execute(
+            f"UPDATE application_corrections SET {assignments} WHERE id=?",
+            (*correction_values, existing["id"]),
+        )
+        correction_id = existing["id"]
+    else:
+        correction_id = _insert_returning_id(
+            db, "application_corrections", correction_columns, correction_values
+        )
+
+    audit(
+        action="pilot_canonical_correction_requested",
+        target=f"application:{app_id}",
+        detail=f"Officer requested correction for {row['reference']}",
+        after_state={"request_id": request_id, "reason": workflow["request_reason"]},
+    )
+    audit(
+        action="pilot_canonical_applicant_correction",
+        target=f"application:{app_id}",
+        detail=f"Applicant supplied correction for {row['reference']}",
+        before_state=before_state,
+        after_state=after_state,
+    )
+    audit(
+        action="pilot_canonical_officer_correction",
+        target=f"application:{app_id}",
+        detail=f"Officer verified correction for {row['reference']}",
+        after_state={"correction_id": correction_id, "final_disposition": "approved"},
+    )
+    return {
+        "correction_id": correction_id,
+        "rmi_request_id": request_id,
+        "rmi_item_id": item_id,
+    }
+
+
+def _upsert_decision_record(db, audit, row: Mapping[str, Any]) -> Optional[str]:
+    evidence = row.get("decision_evidence") or {}
+    if not evidence:
+        return None
+    decision_id = f"{row['application_id']}:decision"
+    values = (
+        row["reference"], evidence.get("decision_type") or "approve",
+        row["expected"]["tier"], float(evidence.get("confidence_score") or 1.0),
+        evidence.get("source") or "manual", evidence.get("actor_user_id") or "co001",
+        evidence.get("actor_role") or "co", _iso(row, offset=8),
+        _json(evidence.get("key_flags") or []), False, None,
+        _json({"dataset": DATASET_NAME, "reasoning": evidence.get("reasoning"), "final_disposition": evidence.get("final_disposition")}),
+    )
+    columns = (
+        "application_ref,decision_type,risk_level,confidence_score,source,actor_user_id,"
+        "actor_role,timestamp,key_flags,override_flag,override_reason,extra_json"
+    )
+    if db.execute("SELECT id FROM decision_records WHERE id=?", (decision_id,)).fetchone():
+        assignments = ",".join(f"{name}=?" for name in columns.split(","))
+        db.execute(f"UPDATE decision_records SET {assignments} WHERE id=?", (*values, decision_id))
+    else:
+        placeholders = ",".join("?" for _ in range(len(values) + 1))
+        db.execute(
+            f"INSERT INTO decision_records (id,{columns}) VALUES ({placeholders})",
+            (decision_id, *values),
+        )
+    audit(
+        action="pilot_canonical_final_disposition",
+        target=f"application:{row['application_id']}",
+        detail=f"Recorded final disposition for {row['reference']}",
+        after_state={"decision_id": decision_id, "decision": evidence.get("final_disposition")},
+    )
+    return decision_id
+
+
 def _upsert_memo(db, audit, row: Mapping[str, Any]) -> Optional[int]:
     state = row["expected"]["memo_status"]
     if state == "none":
@@ -444,11 +652,33 @@ def _upsert_memo(db, audit, row: Mapping[str, Any]) -> Optional[int]:
         "risk": row["expected"],
         "workflow_state": row["workflow_state"],
         "body": row["expected"]["outcome"],
+        "scenario_evidence": row.get("scenario_evidence") or {},
+        "supervisor": row.get("supervisor_evidence") or {},
+        "evidence_export": row.get("evidence_export") or {},
     }
     review_status = "approved" if state == "approved" else "draft"
     validation_status = "pass" if state == "approved" else "pending"
-    values = (row["application_id"], 1, _json(memo), "fixture", review_status, validation_status, "approved" if state == "approved" else "pending", "pass" if state == "approved" else "pending", blocked, row["expected"]["outcome"] if blocked else None, _iso(row, offset=7))
-    columns = "application_id,version,memo_data,ai_recommendation,review_status,validation_status,supervisor_status,rule_engine_status,blocked,block_reason,created_at"
+    supervisor = row.get("supervisor_evidence") or {}
+    supervisor_status = supervisor.get("verdict") or (
+        "approved" if state == "approved" else "pending"
+    )
+    ai_recommendation = supervisor.get("recommendation") or "fixture"
+    approved = state == "approved"
+    values = (
+        row["application_id"], 1, _json(memo), ai_recommendation, review_status,
+        validation_status, supervisor_status, supervisor.get("reasoning"),
+        _json(supervisor.get("contradictions") or []),
+        "pass" if approved else "pending", blocked,
+        row["expected"]["outcome"] if blocked else None,
+        "sco001" if approved else None, _iso(row, offset=8) if approved else None,
+        supervisor.get("officer_review") or (row["expected"]["outcome"] if approved else None),
+        _iso(row, offset=7),
+    )
+    columns = (
+        "application_id,version,memo_data,ai_recommendation,review_status,validation_status,"
+        "supervisor_status,supervisor_summary,supervisor_contradictions,rule_engine_status,"
+        "blocked,block_reason,approved_by,approved_at,approval_reason,created_at"
+    )
     if existing:
         assignments = ",".join(f"{name}=?" for name in columns.split(","))
         db.execute(f"UPDATE compliance_memos SET {assignments} WHERE id=?", (*values, existing["id"]))
@@ -467,7 +697,10 @@ def _seed_one(db, audit, row: Mapping[str, Any], *, risk_config_version: str) ->
     screening_review_id = _upsert_screening_review(db, row)
     review_id = _upsert_periodic_review(db, audit, row, alert_id)
     edd_id = _upsert_edd(db, audit, row, alert_id, review_id)
+    edd_finding_id = _upsert_edd_findings(db, audit, row, edd_id)
+    correction = _upsert_correction_workflow(db, audit, row)
     memo_id = _upsert_memo(db, audit, row)
+    decision_id = _upsert_decision_record(db, audit, row)
     return {
         "reference": row["reference"],
         "application_id": app_id,
@@ -480,7 +713,10 @@ def _seed_one(db, audit, row: Mapping[str, Any], *, risk_config_version: str) ->
         "screening_review_id": screening_review_id,
         "periodic_review_id": review_id,
         "edd_id": edd_id,
+        "edd_finding_id": edd_finding_id,
         "memo_id": memo_id,
+        "decision_id": decision_id,
+        **correction,
         **parties,
     }
 

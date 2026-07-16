@@ -17,6 +17,12 @@ from regulated_deletion import (
     sanctioned_delete_context,
 )
 from fixtures.registry import NEGATIVE_PATH_FIXTURES
+from fixtures.pilot_canonical import (
+    DATASET_NAME,
+    DATASET_VERSION,
+    load_manifest,
+    manifest_sha256,
+)
 
 
 class FixtureCleanupDenied(RuntimeError):
@@ -194,4 +200,186 @@ def cleanup_registered_fixture(
     except Exception:
         db.rollback()
         raise
+    return counts
+
+
+PILOT_CANONICAL_CLEANUP_TABLES = (
+    "rmi_request_items",
+    "rmi_requests",
+    "application_corrections",
+    "edd_findings",
+    "compliance_memos",
+    "edd_cases",
+    "periodic_reviews",
+    "screening_reviews",
+    "monitoring_alerts",
+    "decision_records",
+    "audit_log",
+    "documents",
+    "intermediaries",
+    "ubos",
+    "directors",
+    "applications",
+)
+
+PILOT_CANONICAL_REGULATED_CLEANUP_TABLES = (
+    "rmi_request_items",
+    "rmi_requests",
+    "application_corrections",
+    "edd_findings",
+    "compliance_memos",
+    "edd_cases",
+    "periodic_reviews",
+    "screening_reviews",
+    "monitoring_alerts",
+    "decision_records",
+    "audit_log",
+)
+
+
+def _pilot_identity_matches(row, manifest_row) -> bool:
+    data = row.get("prescreening_data")
+    if not isinstance(data, dict):
+        try:
+            data = json.loads(data or "{}")
+        except (TypeError, ValueError):
+            data = {}
+    expected = {
+        "dataset_name": DATASET_NAME,
+        "dataset_version": DATASET_VERSION,
+        "dataset_hash": manifest_sha256(),
+        "fixture": True,
+        "synthetic": True,
+        "non_production": True,
+        "source": "fixtures.pilot_canonical_seeder",
+        "scenario_reference": manifest_row["reference"],
+        "scenario_slug": manifest_row["slug"],
+    }
+    return all(data.get(key) == value for key, value in expected.items())
+
+
+def cleanup_pilot_canonical_dataset(
+    db,
+    *,
+    actor_id: str,
+    confirmation: str,
+    reviewed_hash: str,
+):
+    """Remove only the exact reviewed Pilot Canonical Dataset from staging.
+
+    The operation refuses production/development, non-fixtures, identity/hash
+    drift and any unexpected record in the reserved namespace. Each root is
+    removed inside the existing sanctioned regulated-deletion context.
+    """
+    environment = (os.environ.get("ENVIRONMENT") or "development").strip().lower()
+    if environment != "staging":
+        raise FixtureCleanupDenied("pilot canonical cleanup is permitted only in staging")
+    if confirmation != FIXTURE_CLEANUP_CONFIRMATION:
+        raise FixtureCleanupDenied("pilot canonical cleanup confirmation is missing or invalid")
+    current_hash = manifest_sha256()
+    if reviewed_hash != current_hash:
+        raise FixtureCleanupDenied("pilot canonical reviewed manifest hash is missing or invalid")
+
+    manifest_rows = {row["reference"]: row for row in load_manifest()["scenarios"]}
+    roots = db.execute(
+        "SELECT id, ref, is_fixture, prescreening_data FROM applications "
+        "WHERE ref LIKE 'RM-PILOT-%' ORDER BY ref"
+    ).fetchall()
+    if not roots:
+        return {table: 0 for table in PILOT_CANONICAL_CLEANUP_TABLES}
+
+    for root in roots:
+        manifest_row = manifest_rows.get(root["ref"])
+        if (
+            not manifest_row
+            or root["id"] != manifest_row["application_id"]
+            or not _truthy(root.get("is_fixture"))
+            or not _pilot_identity_matches(root, manifest_row)
+        ):
+            raise FixtureCleanupDenied(
+                f"reserved pilot identity is missing or mismatched: {root['ref']}"
+            )
+
+    counts = {table: 0 for table in PILOT_CANONICAL_CLEANUP_TABLES}
+
+    def remove(table, where, params):
+        result = db.execute(
+            f"SELECT count(*) AS n FROM {table} WHERE {where}", params
+        ).fetchone()
+        counts[table] += int((result or {}).get("n") or 0)
+        db.execute(f"DELETE FROM {table} WHERE {where}", params)
+
+    try:
+        for root in roots:
+            app_id = root["id"]
+            reference = root["ref"]
+            with fixture_cleanup_context(
+                db,
+                app_id,
+                actor_id=actor_id,
+                confirmation=confirmation,
+                reason=f"Pilot Canonical Dataset cleanup for {reference}",
+                allowed_tables=PILOT_CANONICAL_REGULATED_CLEANUP_TABLES,
+            ):
+                remove(
+                    "rmi_request_items",
+                    "request_id IN (SELECT id FROM rmi_requests WHERE application_id=?)",
+                    (app_id,),
+                )
+                remove("rmi_requests", "application_id=?", (app_id,))
+                remove("application_corrections", "application_id=?", (app_id,))
+                remove(
+                    "edd_findings",
+                    "edd_case_id IN (SELECT id FROM edd_cases WHERE application_id=?)",
+                    (app_id,),
+                )
+                remove("compliance_memos", "application_id=?", (app_id,))
+                remove("edd_cases", "application_id=?", (app_id,))
+                remove("periodic_reviews", "application_id=?", (app_id,))
+                remove("screening_reviews", "application_id=?", (app_id,))
+                remove("monitoring_alerts", "application_id=?", (app_id,))
+                remove(
+                    "decision_records",
+                    "id=? AND application_ref=?",
+                    (f"{app_id}:decision", reference),
+                )
+                remove(
+                    "audit_log",
+                    "user_id='fixture_seed' AND action LIKE 'fixture.pilot_canonical_%' "
+                    "AND detail LIKE ?",
+                    (f"%{reference}%",),
+                )
+                if reference == roots[-1]["ref"]:
+                    remove(
+                        "audit_log",
+                        "user_id='fixture_seed' AND action='fixture.pilot_canonical_apply_complete' "
+                        "AND target='dataset:pilot-canonical-v1' AND detail LIKE ?",
+                        (
+                            f"Applied % canonical scenarios at manifest {current_hash}",
+                        ),
+                    )
+                for table in ("documents", "intermediaries", "ubos", "directors"):
+                    remove(table, "application_id=?", (app_id,))
+                remove(
+                    "applications",
+                    "id=? AND ref=? AND is_fixture=?",
+                    (app_id, reference, True),
+                )
+
+        residue = db.execute(
+            "SELECT count(*) AS n FROM applications WHERE ref LIKE 'RM-PILOT-%'"
+        ).fetchone()
+        if int((residue or {}).get("n") or 0):
+            raise FixtureCleanupDenied("pilot canonical cleanup left application residue")
+        audit_residue = db.execute(
+            "SELECT count(*) AS n FROM audit_log "
+            "WHERE user_id='fixture_seed' AND action LIKE 'fixture.pilot_canonical_%'"
+        ).fetchone()
+        if int((audit_residue or {}).get("n") or 0):
+            raise FixtureCleanupDenied("pilot canonical cleanup left audit residue")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
     return counts
