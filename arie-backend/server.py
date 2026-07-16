@@ -23277,6 +23277,12 @@ _SCREENING_QUEUE_EVIDENCE_PER_APP_CAP = 200
 
 
 def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None, offset=0, filters=None, include_evidence=True):
+    # Stage timings ship in metrics.timings_ms so a slow measurement is
+    # attributable from the response alone: high build numbers point at a
+    # builder stage, a low total_build with a slow wall clock points outside
+    # the builder (event-loop wait or network transfer).
+    _perf_started = time.perf_counter()
+    _perf_marks = {}
     filters = filters or {}
     query = """
         SELECT id, ref, client_id, company_name, prescreening_data, created_at, is_fixture
@@ -23304,10 +23310,12 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
     query += f" ORDER BY created_at DESC LIMIT {_SCREENING_QUEUE_APPLICATION_SCAN_CAP}"
 
     apps = [dict(r) for r in db.execute(query, params).fetchall()]
+    _perf_marks["application_scan"] = time.perf_counter()
     app_ids = [app["id"] for app in apps]
     app_ref_by_id = {app["id"]: app.get("ref") for app in apps}
     parties_by_app = get_application_parties_batch(db, app_ids) if app_ids else {}
     reviews_by_app = _load_screening_reviews_for_truth_batch(db, app_ref_by_id) if app_ids else {}
+    _perf_marks["batch_lookups"] = time.perf_counter()
     monitoring_alerts_by_app = _load_application_monitoring_alerts_batch(db, app_ids) if app_ids else {}
     # Monitoring evidence is loaded after pagination, only for the returned
     # page's applications (see below) — never for the whole inventory.
@@ -23836,6 +23844,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         for row in rows
         if row.get("application_id") and row.get("review_required")
     })
+    _perf_marks["row_build"] = time.perf_counter()
     filtered_rows = _filter_screening_queue_rows(rows, filters)
     metrics["subject_rows"] = len(rows)
     metrics["filtered_subject_rows"] = len(filtered_rows)
@@ -23852,6 +23861,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
     else:
         page_limit = max(1, int(limit))
         paginated_rows = filtered_rows[offset:offset + page_limit]
+    _perf_marks["filter_paginate"] = time.perf_counter()
     if include_evidence and paginated_rows:
         page_app_ids = sorted({
             row.get("application_id")
@@ -23861,6 +23871,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         monitoring_evidence_by_app = _load_monitoring_evidence_batch(
             db, page_app_ids, per_app_cap=_SCREENING_QUEUE_EVIDENCE_PER_APP_CAP,
         ) if page_app_ids else {}
+        _perf_marks["evidence_load"] = time.perf_counter()
         metrics["evidence_per_app_cap"] = _SCREENING_QUEUE_EVIDENCE_PER_APP_CAP
         metrics["evidence_items_loaded"] = sum(len(items) for items in monitoring_evidence_by_app.values())
         metrics["evidence_scan_capped"] = any(
@@ -23880,10 +23891,18 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
             )
             for row in paginated_rows
         ]
+        _perf_marks["evidence_enrich"] = time.perf_counter()
     response_rows = paginated_rows if include_evidence else [
         _screening_queue_summary_row(row)
         for row in paginated_rows
     ]
+    timings_ms = {}
+    _prev = _perf_started
+    for stage, mark in _perf_marks.items():
+        timings_ms[stage] = round((mark - _prev) * 1000, 1)
+        _prev = mark
+    timings_ms["total_build"] = round((time.perf_counter() - _perf_started) * 1000, 1)
+    metrics["timings_ms"] = timings_ms
     return {
         "metrics": metrics,
         "rows": response_rows,

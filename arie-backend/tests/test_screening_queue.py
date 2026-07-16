@@ -2053,6 +2053,29 @@ def test_evidence_per_app_cap_bounds_page_work_and_is_reported(db, monkeypatch):
     assert [item["source_title"] for item in uncapped] == [f"Article {n}" for n in range(9)]
 
 
+def test_queue_metrics_report_stage_timings(db):
+    """Perf triage instrumentation: the payload must attribute build time to
+    stages so a slow staging measurement is diagnosable from the response
+    alone (builder stage vs event-loop wait vs network transfer)."""
+    import server
+
+    _seed_evidence_volume_app(db, alert_id=910003, evidence_count=3)
+    user = {"type": "officer", "sub": "admin001"}
+    common = dict(show_fixtures=True, limit=50, offset=0, filters={"application_ref": "ARF-QEVCAP-"})
+
+    full = server._build_screening_queue_payload(db, user, include_evidence=True, **common)
+    timings = full["metrics"]["timings_ms"]
+    for stage in ("application_scan", "batch_lookups", "row_build",
+                  "filter_paginate", "evidence_load", "evidence_enrich", "total_build"):
+        assert isinstance(timings.get(stage), float), stage
+    assert timings["total_build"] >= 0
+
+    summary = server._build_screening_queue_payload(db, user, include_evidence=False, **common)
+    summary_timings = summary["metrics"]["timings_ms"]
+    assert "evidence_load" not in summary_timings
+    assert isinstance(summary_timings.get("total_build"), float)
+
+
 def test_evidence_batch_resolves_null_application_id_via_alert_join(db):
     """The indexable UNION rewrite must preserve the old COALESCE semantics:
     evidence rows with no application_id of their own still resolve to the
