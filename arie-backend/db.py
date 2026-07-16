@@ -6286,24 +6286,65 @@ def _backfill_pr20_memo_blocked(db) -> int:
     return backfilled
 
 
-def _run_migrations(db: DBConnection):
-    """Run incremental schema migrations for existing databases."""
-    _ensure_country_risk_governance(db)
+def _ensure_agent_executions_document_index(db: DBConnection) -> bool:
+    """Create and COMMIT idx_agent_executions_document_id, then verify it.
 
-    # Performance: index agent_executions by document_id.
-    # The application-detail document-reliance gate resolves the latest
-    # verify_document execution per document
-    # (document_reliance_gate._latest_agent_execution). agent_executions ships
-    # with no indexes, so that lookup was a full table scan for every document
-    # on every application-detail open — the dominant cost when opening a case.
-    # CREATE INDEX IF NOT EXISTS is idempotent and supported on SQLite + Postgres.
+    Performance: the application-detail document-reliance gate resolves the
+    latest verify_document execution per document
+    (document_reliance_gate._latest_agent_execution). agent_executions ships
+    with no indexes, so that lookup was a full table scan for every document
+    on every application-detail open — the dominant cost when opening a case.
+
+    This must commit in its own transaction: a later migration step that fails
+    and rolls back (e.g. v2.11 risk-level CHECK constraints against off-canon
+    legacy rows) would otherwise silently discard the index — which is exactly
+    what happened on staging. The verify step logs at ERROR so an absent index
+    can never again hide at debug level. Returns True when the index is
+    confirmed present.
+    """
     try:
         db.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_executions_document_id "
             "ON agent_executions(document_id)"
         )
+        db.commit()
     except Exception as e:
-        logger.debug(f"agent_executions document_id index may already exist: {e}")
+        logger.error("Failed to create idx_agent_executions_document_id: %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    present = False
+    try:
+        if db.is_postgres:
+            row = db.execute(
+                "SELECT to_regclass('public.idx_agent_executions_document_id') AS idx"
+            ).fetchone()
+            present = bool(row and row.get("idx"))
+        else:
+            row = db.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' "
+                "AND name='idx_agent_executions_document_id'"
+            ).fetchone()
+            present = bool(row)
+    except Exception as e:
+        logger.error("Could not verify idx_agent_executions_document_id: %s", e)
+    if not present:
+        logger.error(
+            "PERF INDEX MISSING: idx_agent_executions_document_id is absent after "
+            "migrations — application-detail opens will full-scan agent_executions."
+        )
+    return present
+
+
+def _run_migrations(db: DBConnection):
+    """Run incremental schema migrations for existing databases."""
+    _ensure_country_risk_governance(db)
+
+    # Committed + verified independently so later failing migration steps
+    # cannot roll it back (see helper docstring).
+    _ensure_agent_executions_document_index(db)
 
     # Check if pre_approval columns exist on applications table
     if not _safe_column_exists(db, "applications", "pre_approval_decision"):
