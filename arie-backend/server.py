@@ -16360,9 +16360,12 @@ ROLE_PERMISSION_MATRIX = [
     {"id": "approve_low_medium", "label": "Approve applications (Low/Medium)", "roles": ["admin", "sco", "co"]},
     {"id": "approve_high_very_high", "label": "Approve applications (High/Very High)", "roles": ["admin", "sco"]},
     {"id": "reject_applications", "label": "Reject applications", "roles": ["admin", "sco", "co"]},
-    {"id": "request_more_information", "label": "Request more information", "roles": ["admin", "sco", "co", "analyst"]},
+    # APP-CONF-001: both actions submit through ApplicationDecisionHandler, which
+    # enforces roles=["admin", "sco", "co"]. The matrix must never advertise them
+    # to roles the decision endpoint denies.
+    {"id": "request_more_information", "label": "Request more information", "roles": ["admin", "sco", "co"]},
     {"id": "assign_reassign_cases", "label": "Assign / reassign cases", "roles": ["admin", "sco"]},
-    {"id": "escalate_to_sco", "label": "Escalate to Senior CO", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "escalate_to_sco", "label": "Escalate to Senior CO", "roles": ["admin", "sco", "co"]},
     {"id": "view_compliance_memo", "label": "View compliance memo", "roles": ["admin", "sco", "co", "analyst"]},
     {"id": "override_ai_risk_score", "label": "Override AI risk score", "roles": ["admin", "sco"]},
     {"id": "edd_review_signoff", "label": "EDD review & sign-off", "roles": ["admin", "sco"]},
