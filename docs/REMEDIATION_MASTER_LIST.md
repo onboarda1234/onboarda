@@ -136,10 +136,10 @@ Two gates are decisions, not rows: **Applications-page readiness audit** clear o
 | — | Audit Phase 3: hydrate evidence for the returned page only | — | #761 | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#screening-queue-stream-prs-756-763) |
 | — | Audit Phase 4: fixture governance, QA disposition fixtures, 7-column layout | — | #763 | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#screening-queue-stream-prs-756-763) |
 | — | Phase 4b/4c/4d: sanctioned seeder deletes, PG booleans, FK-complete seeding, de-flake | — | #766 #769 #770 | ✅ merged · Phase 4 validated PASS 2026-07-15 | — |
-| — | Phase 5 disposition/RBAC/leakage validation (four-eyes E2E, analyst 403, 539-row sweep) | — | — | ✅ PASS 2026-07-15 except Section M latency (below) | — |
+| — | Phase 5 disposition/RBAC/leakage validation (four-eyes E2E, analyst 403, 539-row sweep) | — | — | ✅ PASS — Section M closed 2026-07-16 (below) | — |
 | — | Section M latency: evidence cap + candidate hoist + `application_id` index (21.1s → 5.2s) | — | #773 | ✅ merged + staging-validated · correctness PASS | — |
 | — | Section M latency: stage-timing attribution (`metrics.timings_ms`) → transfer-dominated | — | #778 | ✅ merged · attribution complete 2026-07-16 | — |
-| — | Section M latency: gzip responses (4.7MB raw → ~15x compressed transfer) | — | #781 | ✅ merged 2026-07-16 · staging close-out validation pending | — |
+| — | Section M latency: gzip responses (4.7MB raw → ~15x compressed transfer) | — | #781 | ✅ merged + close-out PASS 2026-07-16 — evidence p50/p95 1.096s/1.202s (was 21.1s/33.6s) | — |
 
 ### Screening Review page & Agent 3 — simplification work plan (SRP, added 2026-07-16)
 
