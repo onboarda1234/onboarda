@@ -10,20 +10,24 @@ Provides:
     - Risk aggregation weights and ranks
     - Reusable risk recomputation helper (EX-09)
 """
+import ast
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from risk_controlled_values import (
     COUNTRY_EXACT_ALIASES,
     ControlledResolution,
     REGISTRY_VERSION,
+    controlled_value_hash,
     mapping_fidelity_enabled,
     normalize_controlled_value,
     reconcile_mapping_staleness,
     resolve_controlled_score,
     resolve_tier0a_country_alias,
     structured_mapping_evidence,
+    unresolved_mapping_sentinel,
 )
 
 logger = logging.getLogger("arie")
@@ -85,6 +89,195 @@ DELIVERY_SCORE_1_KEYWORDS = ("face-to-face", "in-person", "in person")
 DELIVERY_SCORE_2_KEYWORDS = ("video",)
 DELIVERY_REMOTE_KEYWORDS = ("non-face", "remote")
 DELIVERY_SCORE_4_KEYWORDS = ("anonymous", "unverified")
+
+
+def _service_selection_values(value):
+    """Return every selected service from supported portal/API/legacy shapes.
+
+    This is structure parsing only: it does not fuzzy-match or assign scores.
+    The plural service field has historically been persisted as an array, a
+    JSON/Python-list string, a delimited string, or a nested canonical object.
+    """
+    if value in (None, "", [], {}, ()):  # Existing validation permits blanks.
+        return [], "empty"
+    if isinstance(value, dict):
+        for key in (
+            "primary_services", "services_required", "servicesRequired",
+            "selected", "values",
+        ):
+            if key in value:
+                selected, shape = _service_selection_values(value.get(key))
+                return selected, f"object.{key}:{shape}"
+        return [json.dumps(value, sort_keys=True, default=str)], "unsupported_object"
+    if isinstance(value, (list, tuple, set)):
+        sequence = sorted(value, key=str) if isinstance(value, set) else list(value)
+        output = []
+        for item in sequence:
+            nested, _ = _service_selection_values(item)
+            output.extend(nested)
+        return output, type(value).__name__
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return [], "blank_string"
+        if text[:1] in "[({":
+            for parser, label in ((json.loads, "json"), (ast.literal_eval, "literal")):
+                try:
+                    parsed = parser(text)
+                except (TypeError, ValueError, SyntaxError):
+                    continue
+                if isinstance(parsed, (list, tuple, set, dict)):
+                    selected, shape = _service_selection_values(parsed)
+                    return selected, f"{label}_{shape}"
+        if re.search(r"[;|]", text):
+            return [part.strip() for part in re.split(r"[;|]", text) if part.strip()], "delimited_string"
+        if "," in text:
+            return [part.strip() for part in text.split(",") if part.strip()], "comma_delimited_string"
+        return [value], "scalar_string"
+    return [str(value)], type(value).__name__
+
+
+def _service_selection_source(data):
+    candidates = (
+        ("_service_selections", data.get("_service_selections")),
+        ("services_required", data.get("services_required")),
+        ("servicesRequired", data.get("servicesRequired")),
+    )
+    for source, payload in candidates:
+        selected, shape = _service_selection_values(payload)
+        if selected:
+            return selected, source, shape, True
+
+    business = data.get("business")
+    if isinstance(business, dict):
+        services = business.get("services")
+        selected, shape = _service_selection_values(services)
+        if selected:
+            return selected, "business.services.primary_services", shape, True
+
+    for source in ("primary_service", "service_required"):
+        selected, shape = _service_selection_values(data.get(source))
+        if selected:
+            return selected, source, shape, False
+    return [], "missing", "empty", False
+
+
+def _service_label_resolution(raw_value, cross_border):
+    normalized = normalize_controlled_value(raw_value)
+    if all(keyword in normalized for keyword in SERVICE_DOMESTIC_REQUIRED_KEYWORDS):
+        return 1, "mapped", "domestic_and_single_keywords", normalized
+    if any(keyword in normalized for keyword in SERVICE_SCORE_2_KEYWORDS):
+        return 2, "mapped", "score_2_keyword", normalized
+    if any(keyword in normalized for keyword in SERVICE_SCORE_3_KEYWORDS):
+        return 3, "mapped", "score_3_keyword", normalized
+    # Preserve the existing score contract while making the unmatched label
+    # explicit. In a multi-select controlled collection this status becomes a
+    # fail-closed sentinel; it is never silently presented as a resolved label.
+    if cross_border:
+        return 3, "unmatched", "cross_border_context_fallback", normalized
+    return 2, "unmatched", "legacy_default_score_2", normalized
+
+
+def _legacy_primary_service_risk(data):
+    """Return the exact pre-hotfix D3.1 result for zero/one selection."""
+    score = 2
+    value = (data.get("primary_service") or data.get("service_required") or "").lower()
+    if all(keyword in value for keyword in SERVICE_DOMESTIC_REQUIRED_KEYWORDS):
+        score = 1
+    elif any(keyword in value for keyword in SERVICE_SCORE_2_KEYWORDS):
+        score = 2
+    elif any(keyword in value for keyword in SERVICE_SCORE_3_KEYWORDS) or data.get("cross_border"):
+        score = 3
+    elif data.get("cross_border"):
+        score = 3
+    return score
+
+
+def resolve_selected_service_risk(data, config=None):
+    """Resolve D3.1 once for submission, replay, and recomputation.
+
+    The final factor is the maximum effective score across every selection.
+    Unmatched values retain the pre-hotfix numeric fallback for score
+    continuity but make a multi-select result fail closed through a hashed
+    mapping sentinel and structured evidence.
+    """
+    raw_values, source, payload_shape, controlled_collection = _service_selection_source(data)
+    selected_raw = [str(value) for value in raw_values if str(value or "").strip()]
+    strict_unmatched = controlled_collection and len(selected_raw) > 1
+    try:
+        from observability import get_request_id
+        request_id = get_request_id() or data.get("request_id") or ""
+    except Exception:
+        request_id = data.get("request_id") or ""
+    application_id = data.get("application_id") or data.get("id") or ""
+    config_version = (
+        (config or {}).get("_config_version")
+        or (
+            f"risk_config:{(config or {}).get('updated_at')}"
+            if (config or {}).get("updated_at")
+            else ""
+        )
+        or data.get("_risk_config_version")
+        or REGISTRY_VERSION
+    )
+    individual = []
+    sentinels = []
+    unique_normalized = []
+    for raw_value in selected_raw:
+        score, status, rule, normalized = _service_label_resolution(
+            raw_value, bool(data.get("cross_border"))
+        )
+        if normalized not in unique_normalized:
+            unique_normalized.append(normalized)
+        resolution_status = "unresolved" if strict_unmatched and status == "unmatched" else status
+        digest = controlled_value_hash("service", normalized)
+        sentinel = ""
+        if resolution_status == "unresolved":
+            sentinel = unresolved_mapping_sentinel("service", normalized)
+            if sentinel not in sentinels:
+                sentinels.append(sentinel)
+        individual.append({
+            "family": "service",
+            "raw_value": raw_value,
+            "normalized_value": normalized,
+            "hash": digest,
+            "application_id": str(application_id),
+            "request_id": str(request_id),
+            "config_version": str(config_version),
+            "score": score,
+            "resolution_status": resolution_status,
+            "runtime_rule": rule,
+            "sentinel": sentinel,
+        })
+
+    selected_max_score = max(
+        (item["score"] for item in individual),
+        default=_legacy_primary_service_risk(data),
+    )
+    # The approved correction is deliberately plural-only. A few legacy rows
+    # carry a one-item service array plus a different historical primary alias;
+    # retaining that exact primary-service result prevents a single-service
+    # policy change while every true multi-select record uses the maximum.
+    multi_service = len(selected_raw) > 1
+    final_score = selected_max_score if multi_service else _legacy_primary_service_risk(data)
+    return {
+        "selection_source": source,
+        "payload_shape": payload_shape,
+        "controlled_collection": controlled_collection,
+        "raw_services": selected_raw,
+        "normalized_services": [item["normalized_value"] for item in individual],
+        "unique_normalized_services": unique_normalized,
+        "individual_resolutions": individual,
+        "selected_max_score": selected_max_score,
+        "final_max_score": final_score,
+        "maximum_enforced": multi_service,
+        "single_service_compatibility": not multi_service,
+        "selection_count": len(selected_raw),
+        "unique_selection_count": len(unique_normalized),
+        "order_independent": True,
+        "resolution_status": "unresolved" if sentinels else "resolved",
+        "sentinels": sentinels,
+    }
 
 CONTROLLED_PRESCREENING_CORRECTION_SOURCE = "application_overview_prescreening_correction_mode"
 CONTROLLED_PRESCREENING_CORRECTION_OVERLAY_MAP = {
@@ -1390,17 +1583,14 @@ def compute_risk_score(app_data, config_override=None):
         d3_w = [0.40, 0.35, 0.25]
 
     # D3: Product / Service Risk
-    # D3.1 Primary service
-    d3_svc = 2  # default
-    svc_val = (data.get("primary_service") or data.get("service_required") or "").lower()
-    if all(keyword in svc_val for keyword in SERVICE_DOMESTIC_REQUIRED_KEYWORDS):
-        d3_svc = 1
-    elif any(keyword in svc_val for keyword in SERVICE_SCORE_2_KEYWORDS):
-        d3_svc = 2
-    elif any(keyword in svc_val for keyword in SERVICE_SCORE_3_KEYWORDS) or data.get("cross_border"):
-        d3_svc = 3
-    elif data.get("cross_border"):
-        d3_svc = 3
+    # D3.1 Service risk. Flag OFF preserves the exact legacy primary-service
+    # path; flag ON enforces the founder-approved maximum across all selections.
+    service_selection_evidence = None
+    if mapping_fidelity_enabled():
+        service_selection_evidence = resolve_selected_service_risk(data, config=config)
+        d3_svc = int(service_selection_evidence["final_max_score"])
+    else:
+        d3_svc = _legacy_primary_service_risk(data)
 
     # D3.2 Monthly volume — ordered checks to avoid substring false matches
     d3_vol = 2
@@ -1717,6 +1907,8 @@ def compute_risk_score(app_data, config_override=None):
             data.get("_existing_risk_escalations"),
             mapping_evidence,
         )
+        for sentinel in (service_selection_evidence or {}).get("sentinels", []):
+            _append_unique(escalations, sentinel)
     requires_compliance_approval = len(escalations) > 0
 
     elevation_reason_text = "; ".join(elevation_reasons) if elevation_reasons else ""
@@ -1730,6 +1922,7 @@ def compute_risk_score(app_data, config_override=None):
     }
     if mapping_fidelity_enabled():
         risk_dimensions["controlled_mapping_evidence"] = mapping_evidence
+        risk_dimensions["service_selection_evidence"] = service_selection_evidence
 
     return {
         "score": composite,
@@ -1741,6 +1934,7 @@ def compute_risk_score(app_data, config_override=None):
         "lane": RISK_LANE_MAP.get(level, "Standard Review"),
         "escalations": escalations,
         "controlled_mapping_evidence": mapping_evidence,
+        "service_selection_evidence": service_selection_evidence,
         "elevation_reason_text": elevation_reason_text,
         "requires_compliance_approval": requires_compliance_approval,
         "declared_pep_present": bool(pep_scores),

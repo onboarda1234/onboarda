@@ -301,6 +301,7 @@ def test_every_hidden_rule_and_adjacent_policy_is_documented(temp_db):
         "sector_keyword_high_floor",
         "opaque_ownership_high_floor",
         "declared_pep_high_floor",
+        "multi_service_max_risk",
         "monthly_volume_score_4_review",
         "unsolicited_referral_no_floor",
         "country_score_3_high_floor",

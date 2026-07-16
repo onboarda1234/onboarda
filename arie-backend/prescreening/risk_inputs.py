@@ -42,6 +42,23 @@ def _derive_amount_currency(currencies):
     return ""
 
 
+def _raw_service_selection_payload(raw_prescreening, primary_services):
+    candidates = [
+        raw_prescreening.get("services_required"),
+        raw_prescreening.get("servicesRequired"),
+    ]
+    business = raw_prescreening.get("business")
+    if isinstance(business, dict):
+        services = business.get("services")
+        if isinstance(services, dict):
+            candidates.append(services.get("primary_services"))
+    candidates.append(primary_services)
+    for value in candidates:
+        if value not in (None, "", [], {}, ()):
+            return value
+    return []
+
+
 def _current_vs_corrected_flags(raw_prescreening, normalized_prescreening):
     corrections = []
     if raw_prescreening.get("countries_of_operation") and normalized_prescreening.get("operating_countries"):
@@ -89,6 +106,7 @@ def build_prescreening_risk_input(
         existing_risk_escalations = []
 
     primary_services = business.get("services", {}).get("primary_services", []) if isinstance(business, dict) else []
+    service_selections = _raw_service_selection_payload(raw_prescreening, primary_services)
     primary_service = first_non_empty(
         normalized.get("primary_service"),
         normalized.get("service_required"),
@@ -117,6 +135,10 @@ def build_prescreening_risk_input(
         "primary_service": primary_service,
         "service_required": primary_service,
         "services_required": primary_services,
+        # Preserve the complete source payload for the flag-guarded
+        # multi-service resolver. The legacy primary-service fields remain
+        # untouched so flag-OFF behavior is byte-for-byte equivalent.
+        "_service_selections": service_selections,
         "source_of_wealth": first_non_empty(
             normalized.get("source_of_wealth"),
             wealth.get("source_of_wealth", {}).get("summary") if isinstance(wealth, dict) else "",
@@ -142,6 +164,7 @@ def build_prescreening_risk_input(
         "operating_countries": scorer_input.get("operating_countries"),
         "target_markets": scorer_input.get("target_markets"),
         "primary_service": scorer_input.get("primary_service"),
+        "services_required": scorer_input.get("services_required"),
         "source_of_wealth": scorer_input.get("source_of_wealth"),
         "source_of_funds": scorer_input.get("source_of_funds"),
         "monthly_volume": scorer_input.get("monthly_volume"),
