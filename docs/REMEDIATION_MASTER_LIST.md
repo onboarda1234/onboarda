@@ -155,7 +155,7 @@ are out of scope for every SRP item.
 |----|-------|:--:|:--:|----|:--:|
 | SRP-0 | Verify stale-snapshot vs live-normalizer split (ARF-2026-920016; fresh-screen contrast; distinct-profile count of the 298 hits) — read-only | — | — | ✅ 2026-07-16 — stale/partial snapshot confirmed (profile ids present; names/scores/match-types/media absent) · positive-hit fresh contrast inconclusive (fixture screen = 0 hits) | — |
 | SRP-1 | ComplyAdvantage clarification email: match-score scale, stable profile id, hit-volume tuning, RPT-5 adverse-media persistence, data residency | — | — | 🔨 sent 2026-07-16 · awaiting CA reply | — |
-| SRP-2 | Stale-report refresh pathway for pre-enrichment stored screening snapshots (governed re-normalize/re-screen) | — | — | 📋 unblocked by SRP-0 — awaiting fleet-count sizing + founder go | — |
+| SRP-2 | Stale-report refresh pathway for pre-enrichment stored screening snapshots (governed re-screen) | — | — | 📋 sized by SRP-0: 132 non-fixture hit-bearing candidates (255 no-hit reports excluded) — design proposed, awaiting founder go | — |
 | SRP-3 | Review-page triage IA: summary strip, dedup by provider profile, risk-ranked cards (sanctions → PEP → adverse media → other), side-by-side disambiguation, progressive disclosure | — | — | ⬜ gated on SRP-0 · score display additionally on SRP-1 | — |
 | SRP-4 | Agent 3 → triage narrative ("review these N first, here's why"), advisory-only, never mutates dispositions | — | — | ⬜ after SRP-3 | — |
 | SRP-5 | Provider-side noise reduction for entity searches — validate against **Mesh** docs (Manus cited legacy API); sanctions/PEP-1 recall must not decrease | — | — | ⏸ blocked on SRP-1 answers · deliberately last | — |
