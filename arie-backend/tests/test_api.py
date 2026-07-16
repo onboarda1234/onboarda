@@ -100,6 +100,38 @@ class TestHealthAPI:
         resp = http_requests.get(f"{api_server}/api/health", timeout=3)
         assert "application/json" in resp.headers.get("Content-Type", "")
 
+    def test_json_responses_are_gzipped_for_gzip_clients(self, api_server):
+        """PR #778 attribution: evidence-mode screening-queue payloads reach
+        ~4.7MB raw and spent 15s+ in pure network transfer on staging. JSON
+        responses above Tornado's 1KB floor must be gzip-compressed when the
+        client advertises support (tiny responses like /api/health legitimately
+        stay identity-encoded below the floor)."""
+        health = http_requests.get(
+            f"{api_server}/api/health",
+            headers={"Accept-Encoding": "gzip"},
+            timeout=3,
+        )
+        # Middleware active: Tornado stamps Vary even below the size floor.
+        assert "Accept-Encoding" in health.headers.get("Vary", "")
+
+        # Seed enough queue rows to clear Tornado's 1KB compression floor.
+        from db import get_db
+        from tests.test_screening_queue import _seed_queue_perf_apps
+        conn = get_db()
+        _seed_queue_perf_apps(conn, 10)
+        conn.close()
+
+        from auth import create_token
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/screening/queue?limit=50&include_evidence=1",
+            headers={"Authorization": f"Bearer {token}", "Accept-Encoding": "gzip"},
+            timeout=10,
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("Content-Encoding") == "gzip"
+        assert "rows" in resp.json()  # transparently decompressed
+
     def test_public_health_does_not_leak_internal_inventory(self, api_server):
         """Unauthenticated health must not expose DB type or provider config."""
         resp = http_requests.get(f"{api_server}/api/health", timeout=3)

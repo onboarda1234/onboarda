@@ -41246,6 +41246,13 @@ def make_app():
         cookie_secret=SECRET_KEY,
         max_body_size=20 * 1024 * 1024,  # 20MB max request body
         default_handler_class=HardenedNotFoundHandler,
+        # Gzip JSON responses for clients that send Accept-Encoding: gzip.
+        # PR #778 attribution: evidence-mode screening-queue payloads reach
+        # ~4.7MB raw and measured 15s+ of pure network transfer on staging;
+        # the repetitive JSON compresses ~15x. Tornado only compresses
+        # whitelisted text/JSON content types, so PDF/binary downloads are
+        # unaffected.
+        compress_response=True,
     )
 
 
