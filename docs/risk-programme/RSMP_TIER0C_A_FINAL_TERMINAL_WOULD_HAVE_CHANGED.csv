@@ -1,0 +1,17 @@
+application_key,status,fixture,old_weighted_score,new_weighted_score,old_final_score,new_final_score,old_tier,new_tier,factor_deltas,unresolved_families,classification
+a6f93b1476cc82ea,approved,false,23.0,21.0,23.0,21.0,LOW,LOW,"{""ownership"":{""new"":1.0,""old"":2.0}}","complexity,introduction,monthly_volume,sector",TERMINAL_READ_ONLY
+0002c0769466df76,rejected,false,18.7,16.7,18.7,16.7,LOW,LOW,"{""monthly_volume"":{""new"":1.0,""old"":2.0}}","complexity,introduction,sector",TERMINAL_READ_ONLY
+32f58c0c14fa05d3,rejected,false,18.7,16.7,18.7,16.7,LOW,LOW,"{""monthly_volume"":{""new"":1.0,""old"":2.0}}","complexity,introduction,sector",TERMINAL_READ_ONLY
+f49b078b0dba0891,rejected,true,16.7,20.0,16.7,20.0,LOW,LOW,"{""monthly_volume"":{""new"":2.0,""old"":3.0},""service"":{""new"":3.0,""old"":1.0}}",sector,TERMINAL_READ_ONLY
+ebb3cda4f3f69bff,approved,false,18.7,16.7,18.7,16.7,LOW,LOW,"{""monthly_volume"":{""new"":1.0,""old"":2.0}}","complexity,introduction,sector",TERMINAL_READ_ONLY
+d3a4273cf26c035a,rejected,false,18.7,16.7,18.7,16.7,LOW,LOW,"{""monthly_volume"":{""new"":1.0,""old"":2.0}}","complexity,introduction,sector",TERMINAL_READ_ONLY
+5e6092521dabd3f3,approved,false,23.0,21.0,23.0,21.0,LOW,LOW,"{""ownership"":{""new"":1.0,""old"":2.0}}","complexity,introduction,monthly_volume,sector",TERMINAL_READ_ONLY
+ae4b03000c54640f,approved,true,50.9,56.3,55.0,56.3,HIGH,HIGH,"{""complexity"":{""new"":4.0,""old"":3.0},""introduction"":{""new"":3.0,""old"":1.0}}",,TERMINAL_READ_ONLY
+c209bea88edccad3,approved,false,18.7,16.7,18.7,16.7,LOW,LOW,"{""monthly_volume"":{""new"":1.0,""old"":2.0}}","complexity,introduction,sector",TERMINAL_READ_ONLY
+2d6fabfd24f1b2c9,rejected,false,18.7,16.7,18.7,16.7,LOW,LOW,"{""monthly_volume"":{""new"":1.0,""old"":2.0}}","complexity,introduction,sector",TERMINAL_READ_ONLY
+ca5efa53bdbe1cdd,approved,false,18.7,16.7,18.7,16.7,LOW,LOW,"{""monthly_volume"":{""new"":1.0,""old"":2.0}}","complexity,introduction,sector",TERMINAL_READ_ONLY
+e0bf5734c568de26,approved,false,18.7,16.7,18.7,16.7,LOW,LOW,"{""monthly_volume"":{""new"":1.0,""old"":2.0}}","complexity,introduction,sector",TERMINAL_READ_ONLY
+9748363c264c46f5,approved,false,18.7,16.7,18.7,16.7,LOW,LOW,"{""monthly_volume"":{""new"":1.0,""old"":2.0}}","complexity,introduction,sector",TERMINAL_READ_ONLY
+de9e179217263230,rejected,false,18.7,16.7,18.7,16.7,LOW,LOW,"{""monthly_volume"":{""new"":1.0,""old"":2.0}}","complexity,introduction,sector",TERMINAL_READ_ONLY
+a63fb2517ba6caf8,approved,false,18.7,16.7,18.7,16.7,LOW,LOW,"{""monthly_volume"":{""new"":1.0,""old"":2.0}}","complexity,introduction,sector",TERMINAL_READ_ONLY
+72535b11025f02c9,rejected,false,18.7,16.7,18.7,16.7,LOW,LOW,"{""monthly_volume"":{""new"":1.0,""old"":2.0}}","complexity,introduction,sector",TERMINAL_READ_ONLY
