@@ -14327,20 +14327,32 @@ function renderInlineScreeningDispositionPanel(app, row, subjectType, subjectNam
   var escalateSelected = disposition === 'escalated';
   var followUpSelected = disposition === 'follow_up_required';
   var subjectDomKey = screeningReviewSubjectDomKey(app.ref, subjectType, subjectName);
-  var buttonBase = 'padding:8px 12px;border-radius:999px;border:1px solid var(--border1);background:#fff;font-size:12px;font-weight:600;cursor:pointer;';
-  var buttonActive = 'background:rgba(43,47,143,0.08);border-color:var(--brand);color:var(--brand);';
+  // SRP-3 Phase B: navy button hierarchy — primary clear, outline confirm,
+  // Escalate / Request More Information under a "More ▾" menu. Labels, state
+  // handlers, validation, and endpoint behavior are unchanged.
+  var primaryBase = 'padding:8px 14px;border-radius:8px;border:1px solid var(--brand);background:var(--brand);color:#fff;font-size:12px;font-weight:600;cursor:pointer;';
+  var outlineBase = 'padding:8px 14px;border-radius:8px;border:1px solid var(--border2);background:#fff;color:var(--text1);font-size:12px;font-weight:600;cursor:pointer;';
+  var selectedRing = 'box-shadow:0 0 0 3px rgba(43,47,143,0.25);';
+  var outlineSelected = 'border-color:var(--brand);color:var(--brand);background:rgba(43,47,143,0.08);';
+  var menuItemBase = 'display:block;width:100%;text-align:left;background:none;border:none;padding:8px 10px;border-radius:6px;font-size:12px;color:var(--text1);cursor:pointer;';
   var clearDisabled = !canClearScreeningDisposition();
   var explanation = pendingSecondReview
     ? 'A first officer has already recorded a sensitive false-positive clearance. A distinct second reviewer must confirm it here.'
     : 'This screening item still requires officer review.';
   var html = '<div style="margin-top:12px;padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);">';
   html += '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;"><strong>' + escapeHtml(explanation) + '</strong></div>';
-  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">';
-  html += '<button type="button" title="Removes this hit as an approval blocker if no other blockers remain." style="' + buttonBase + (clearSelected ? buttonActive : '') + (clearDisabled ? 'opacity:0.6;cursor:not-allowed;' : '') + '" ' + (clearDisabled ? 'disabled ' : '') + 'onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'cleared\')">Clear as False Positive</button>';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center;">';
+  html += '<button type="button" title="Removes this hit as an approval blocker if no other blockers remain." style="' + primaryBase + (clearSelected ? selectedRing : '') + (clearDisabled ? 'opacity:0.6;cursor:not-allowed;' : '') + '" ' + (clearDisabled ? 'disabled ' : '') + 'onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'cleared\')">Clear as False Positive</button>';
   if (!pendingSecondReview) {
-    html += '<button type="button" title="Keeps approval blocked and may require escalation or EDD." style="' + buttonBase + (matchSelected ? buttonActive : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'match\')">Confirm True Match</button>';
-    html += '<button type="button" title="Routes this case for senior compliance review or EDD where configured." style="' + buttonBase + (escalateSelected ? buttonActive : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'escalated\')">Escalate</button>';
-    html += '<button type="button" title="Keeps this result under review while missing information is requested." style="' + buttonBase + (followUpSelected ? buttonActive : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'follow_up_required\')">Request More Information</button>';
+    html += '<button type="button" title="Keeps approval blocked and may require escalation or EDD." style="' + outlineBase + (matchSelected ? outlineSelected : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'match\')">Confirm True Match</button>';
+    html += '<details style="position:relative;display:inline-block;" onkeydown="if(event.key===\'Escape\'){this.removeAttribute(\'open\');}">';
+    html += '<summary style="' + outlineBase + ((escalateSelected || followUpSelected) ? outlineSelected : '') + 'list-style:none;user-select:none;display:inline-flex;align-items:center;gap:4px;">More ▾</summary>';
+    html += '<div style="position:absolute;top:calc(100% + 4px);left:0;z-index:40;min-width:225px;background:#fff;border:1px solid var(--border2);border-radius:8px;box-shadow:0 6px 20px rgba(26,26,46,0.15);padding:5px;">';
+    html += '<button type="button" title="Routes this case for senior compliance review or EDD where configured." style="' + menuItemBase + (escalateSelected ? 'color:var(--brand);font-weight:700;' : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'escalated\')">Escalate</button>';
+    html += '<button type="button" title="Keeps this result under review while missing information is requested." style="' + menuItemBase + (followUpSelected ? 'color:var(--brand);font-weight:700;' : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'follow_up_required\')">Request More Information</button>';
+    html += '</div></details>';
+    if (escalateSelected) html += '<span class="badge pending">Selected: Escalate</span>';
+    if (followUpSelected) html += '<span class="badge pending">Selected: Request More Information</span>';
   }
   html += '</div>';
   // Progressive disclosure: only reveal the evidence/rationale/save form once an
@@ -15411,7 +15423,10 @@ function screeningQueueEvidenceReadinessPanel(row) {
   if (isLoadingFullEvidence) {
     evidenceCards = '<div data-screening-evidence-loading="true" style="font-size:12px;color:var(--text3);line-height:1.5;margin-top:8px;padding:10px;border:1px dashed var(--border1);border-radius:8px;background:#fff;">Loading detailed provider evidence...</div>';
   } else if (items.length) {
-    evidenceCards = items.map(screeningQueueEvidenceItemCard).join('');
+    // SRP-3 Phase B: when the server-computed triage block is present, render
+    // the bucketed, ranked hit sections (with collapsed weak tail). Rows
+    // without triage (legacy/simulated shapes) keep the flat honest cards.
+    evidenceCards = screeningTriageRankedHitSections(row) || items.map(screeningQueueEvidenceItemCard).join('');
   } else if (evidenceDetailError) {
     evidenceCards = '<div data-screening-evidence-error="true" style="font-size:12px;color:#991b1b;line-height:1.5;margin-top:8px;padding:10px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;">Detailed provider evidence could not be loaded. Summary evidence remains available.</div>';
   } else {
@@ -15822,6 +15837,10 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow, { suppressChip: screeningReviewDisplayLabel(reviewRow) === String(primaryEntityLabel || '') }));
 
   var body = '';
+  // SRP-3 Phase B: conditional honesty banner + server-computed triage strip
+  // lead the workspace (render-if-present; healthy reports show no banner).
+  body += screeningReviewHonestyBanner(reviewRow, screeningSummary);
+  body += screeningTriageStrip(reviewRow);
   body += screeningDecisionSummaryPanel({
     heading: app.company + (companyHits.adverse_media_hits > 0 ? ' - possible adverse media match' : (companyHits.sanctions_hits > 0 ? ' - possible sanctions/watchlist match' : ' - entity screening')),
     subjectName: app.company,
@@ -15961,6 +15980,10 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow, { suppressChip: screeningReviewDisplayLabel(reviewRow) === String(primaryPersonLabel || '') }));
 
   var body = '';
+  // SRP-3 Phase B: conditional honesty banner + server-computed triage strip
+  // lead the workspace (render-if-present; healthy reports show no banner).
+  body += screeningReviewHonestyBanner(reviewRow, screeningSummary);
+  body += screeningTriageStrip(reviewRow);
   var personProviderResultsForSummary = [].concat((screening && screening.results) || []).concat((reviewRow && reviewRow.provider_evidence) || []);
   var personIndicators = screeningTriageCategoryLabels(personProviderResultsForSummary, facts);
   if (personDeclaredPep && personIndicators.indexOf('Declared PEP') === -1) personIndicators.unshift('Declared PEP');
@@ -16498,10 +16521,11 @@ function renderAgent3ScreeningInterpretationPanel(app) {
   var toggleLabel = collapsed ? 'Expand Agent 3' : 'Collapse Agent 3';
   var advisoryCopy = 'This is an advisory screening interpretation, not an approval decision.';
   var html = '';
-  html += '<div class="card" id="agent3-screening-interpretation-panel" style="margin-bottom:16px;border-left:4px solid #0f766e;background:rgba(15,118,110,0.035);">';
+  html += '<div class="card" id="agent3-screening-interpretation-panel" style="margin-bottom:16px;border-left:4px solid #7c3aed;background:rgba(124,58,237,0.035);">';
   html += '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">';
   html += '<div><div class="card-title">Agent 3 Screening Interpretation</div>';
-  html += '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Generate an AI-assisted interpretation from stored screening results. This does not re-run screening or change the officer decision.</div></div>';
+  html += '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Generate an AI-assisted interpretation from stored screening results. This does not re-run screening or change the officer decision.</div>';
+  html += '<div style="font-size:11px;font-weight:800;letter-spacing:0.02em;color:#7c3aed;margin-top:4px;">Advisory — decisions are made by officers.</div></div>';
   html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto;">';
   html += '<button class="btn btn-secondary btn-sm" id="agent3-toggle-screening-interpretation-btn" onclick="toggleAgent3ScreeningInterpretation(event)">' + escapeHtml(toggleLabel) + '</button>';
   html += '<button class="btn btn-primary btn-sm" id="agent3-generate-screening-interpretation-btn" onclick="generateAgent3ScreeningInterpretation(event)"' + disabled + '>' + escapeHtml(buttonLabel) + '</button>';
@@ -16660,6 +16684,393 @@ async function generateAgent3ScreeningInterpretation(event) {
     AGENT3_SCREENING_INTERPRETATION_BUSY = false;
     renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+// SRP-3 Phase B — screening review triage redesign (presentation only).
+// Renders the server-computed triage block (row.triage, rts-1.0) as bucketed,
+// ranked hit sections with a collapsed weak tail. Aggregate counts come ONLY
+// from row.triage — the browser never re-derives them. Ranking orders matches
+// for review; it never hides them and never affects risk scores or approvals.
+
+var SCREENING_TRIAGE_RTS_CAPTION = 'RegMind triage ranking (rts-1.0) orders matches for review — it never hides them and never affects risk scores or approvals.';
+
+var SCREENING_TRIAGE_BUCKET_META = [
+  { key: 'sanctions', label: 'Sanctions & warnings', color: '#991b1b' },
+  { key: 'pep', label: 'Politically exposed persons', color: '#92400e' },
+  { key: 'adverse_media', label: 'Adverse media', color: 'var(--text1)' },
+  { key: 'watchlist', label: 'Watchlist', color: 'var(--text1)' },
+  { key: 'other', label: 'Other provider matches', color: 'var(--text1)' }
+];
+
+function screeningTriageBucketKeyForCategory(category) {
+  // Mirrors the server-side bucket mapping (_screening_queue_row_triage) for
+  // DISPLAY grouping only; all counts shown come from row.triage.
+  var key = String(category || '').trim().toLowerCase().replace(/_/g, ' ');
+  if (key === 'sanctions') return 'sanctions';
+  if (key === 'pep') return 'pep';
+  if (key === 'adverse media') return 'adverse_media';
+  if (key === 'watchlist') return 'watchlist';
+  return 'other';
+}
+
+function screeningTriageScoreBand(score, weakThreshold) {
+  // Bands from the server-persisted rts score; the weak boundary is the
+  // server-supplied threshold, never a client constant. Unscored legacy hits
+  // are labelled "unscored" — never called weak, never guessed.
+  if (typeof score !== 'number' || isNaN(score)) return { key: 'unscored', label: 'unscored', color: 'var(--text3)' };
+  var threshold = typeof weakThreshold === 'number' && !isNaN(weakThreshold) ? weakThreshold : null;
+  if (score >= 85) return { key: 'strong', label: 'Strong', color: '#b91c1c' };
+  if (score >= 70) return { key: 'moderate', label: 'Moderate', color: '#92400e' };
+  if (threshold !== null && score < threshold) return { key: 'weak', label: 'Weak', color: 'var(--text3)' };
+  return { key: 'ranked', label: '', color: 'var(--text2)' };
+}
+
+function screeningTriageScoreBlock(item, weakThreshold) {
+  item = item || {};
+  var band = screeningTriageScoreBand(item.triage_score, weakThreshold);
+  var scoreText = band.key === 'unscored' ? '—' : String(item.triage_score);
+  return '<div style="flex:0 0 58px;text-align:center;" title="RegMind triage score — orders matches for review. Not a provider confidence and never a percentage.">' +
+    '<div style="font-family:ui-monospace,Menlo,monospace;font-size:18px;font-weight:700;line-height:1;color:' + band.color + ';">' + escapeHtml(scoreText) + '</div>' +
+    (band.label || band.key === 'unscored' ? '<div style="font-size:9px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:' + band.color + ';margin-top:3px;">' + escapeHtml(band.key === 'unscored' ? 'unscored' : band.label) + '</div>' : '') +
+    '<div style="font-size:8.5px;color:var(--text3);margin-top:2px;">RegMind triage</div>' +
+  '</div>';
+}
+
+function screeningReviewReportIsBlindPreEnrichment(row) {
+  // Pre-enrichment "blind" stored report: provider hits exist but the stored
+  // evidence carries no human-readable names or article evidence (screened
+  // before the enriched normalizer vintage). Honest banner — no invented data.
+  if (!row) return false;
+  var items = ((row.screening_evidence || {}).items) || [];
+  if (!items.length) return false;
+  return items.every(function(item) {
+    item = item || {};
+    var name = item.matched_name || item.name || '';
+    if (name && !isUuidLike(name)) return false;
+    return !item.source_title && !item.snippet && !item.source_url;
+  });
+}
+
+function screeningReviewHonestyBanner(row, screeningSummary) {
+  // Conditional honesty banner — rendered ONLY when the stored report state
+  // warrants it (identifier conflict / pre-enrichment blind report / degraded
+  // sources). Healthy reports render no banner.
+  var report = (screeningSummary && screeningSummary.report) || {};
+  var base = 'margin:0 18px 14px;padding:12px 15px;border:1px solid #f59e0b;border-radius:9px;background:#fffbeb;color:#92400e;font-size:12.5px;line-height:1.55;';
+  if (report.customer_identifier_conflict === true) {
+    return '<div data-screening-honesty-banner="identifier_conflict" style="' + base + '">' +
+      '<strong>Re-screen blocked.</strong> The screening provider already holds a record for this subject. This is not evidence of zero hits. An updated re-screen path is in progress.' +
+    '</div>';
+  }
+  if (screeningReviewReportIsBlindPreEnrichment(row)) {
+    return '<div data-screening-honesty-banner="pre_enrichment" style="' + base + '">' +
+      '<strong>This screening predates enriched provider data.</strong> Hit names and evidence are unavailable until a controlled re-screen is run. This is a data-vintage limitation, not a provider result.' +
+    '</div>';
+  }
+  var degraded = Array.isArray(report.degraded_sources) ? report.degraded_sources.filter(Boolean) : [];
+  if (degraded.length) {
+    return '<div data-screening-honesty-banner="degraded" style="' + base + '">' +
+      '<strong>Screening sources reported degraded results.</strong> ' + escapeHtml(degraded.join(', ').replace(/_/g, ' ')) + '. Stored provider data is shown unmodified; absence of hits from a degraded source is not a verified clear.' +
+    '</div>';
+  }
+  return '';
+}
+
+function screeningTriageStrip(row) {
+  // Four stat tiles fed ONLY from the server-computed row.triage block.
+  var triage = row && row.triage;
+  if (!triage || !triage.buckets) return '';
+  var buckets = triage.buckets || {};
+  var threshold = triage.weak_threshold != null ? String(triage.weak_threshold) : '—';
+  function tile(count, label, sub, accent, dim) {
+    var n = Number(count || 0);
+    return '<div style="padding:10px 13px;border:1px solid var(--border1);border-radius:10px;background:#fff;border-top:3px solid ' + accent + ';">' +
+      '<div style="font-family:ui-monospace,Menlo,monospace;font-size:22px;font-weight:700;line-height:1.1;color:' + (dim || !n ? 'var(--text3)' : 'var(--text1)') + ';">' + escapeHtml(String(n)) + '</div>' +
+      '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-top:2px;">' + escapeHtml(label) + '</div>' +
+      '<div style="font-size:10.5px;color:var(--text3);margin-top:3px;">' + escapeHtml(sub) + '</div>' +
+    '</div>';
+  }
+  var html = '<div data-screening-triage-strip="true" style="margin:0 18px 14px;">';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;">';
+  html += tile(buckets.sanctions, 'Sanctions & warnings', 'Screened against sanction lists', '#dc2626');
+  html += tile(buckets.pep, 'PEP matches', Number(buckets.pep || 0) > 0 ? 'Review first' : 'Politically exposed persons', '#d97706');
+  html += tile(buckets.adverse_media, 'Adverse media', 'Provider media matches', 'var(--brand)');
+  html += tile(triage.weak_count, 'Weak name-only matches', 'Below triage threshold ' + threshold, 'var(--border2)', true);
+  html += '</div>';
+  if (Number(triage.unscored_count || 0) > 0) {
+    html += '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(String(triage.unscored_count)) + ' match(es) predate the triage score and are labelled “unscored” — they are listed for review, never hidden.</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function screeningTriageHitDisplayName(item) {
+  item = item || {};
+  var name = item.matched_name || item.name || '';
+  if (name && !isUuidLike(name)) return name;
+  if (item.source_title) return item.source_title;
+  return 'Unnamed provider match';
+}
+
+function screeningTriageHitChips(item) {
+  // Max TWO chips per hit: risk type + strongest (first, server-ordered)
+  // triage match reason.
+  item = item || {};
+  var chips = [];
+  if (item.category) {
+    var bucket = screeningTriageBucketKeyForCategory(item.category);
+    chips.push(screeningTagBadge(item.category, bucket === 'sanctions' || bucket === 'pep' ? 'high' : 'pending'));
+  }
+  var reasons = Array.isArray(item.triage_score_reasons) ? item.triage_score_reasons.filter(Boolean) : [];
+  if (reasons.length) chips.push(screeningTagBadge(reasons[0], 'draft'));
+  return chips.slice(0, 2).join('');
+}
+
+function screeningTriageHitEvidenceBody(item) {
+  // Render-if-present: every row appears only when the stored provider data
+  // carries the field — nothing is invented for absent data.
+  item = item || {};
+  var html = '';
+  var facts = [
+    ['Matched name', item.matched_name || item.name],
+    ['Screening subject', item.subject_name ? item.subject_name + (item.relationship_to_application ? ' — ' + item.relationship_to_application : '') : ''],
+    ['Date of birth', item.date_of_birth || item.dob || item.year_of_birth],
+    ['Country / nationality', item.country || item.nationality],
+    ['Listed role', item.position || item.listed_role],
+    ['Severity', item.severity]
+  ].filter(function(rowPair) { return evidenceDisplayValue(rowPair[1]); });
+  if (facts.length) {
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;font-size:11.5px;color:var(--text2);">' + facts.map(function(rowPair) {
+      return '<div><span style="color:var(--text3);">' + escapeHtml(rowPair[0]) + ':</span> <strong>' + escapeHtml(evidenceDisplayValue(rowPair[1])) + '</strong></div>';
+    }).join('') + '</div>';
+  }
+  if (item.source_title || item.snippet || item.source_url || item.source_name || item.publication_date) {
+    html += '<div style="border:1px solid var(--border1);border-radius:8px;padding:9px 13px;background:#fff;">' +
+      (item.source_title ? '<div style="font-weight:600;font-size:12.5px;color:var(--text1);word-break:break-word;">' + escapeHtml(item.source_title) + '</div>' : '') +
+      (item.source_name || item.publication_date ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml([item.source_name, item.publication_date].filter(Boolean).join(' · ')) + '</div>' : '') +
+      (item.snippet ? '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:5px;">' + escapeHtml(item.snippet) + '</div>' : '') +
+      (item.source_url
+        ? '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(item.source_url) + '" target="_blank" rel="noopener">Open source</a></div>'
+        : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(item.source_url_unavailable_message || SCREENING_SOURCE_UNAVAILABLE_MESSAGE) + '</div>') +
+    '</div>';
+  }
+  var reasons = Array.isArray(item.triage_score_reasons) ? item.triage_score_reasons.filter(Boolean) : [];
+  if (reasons.length) {
+    html += '<div style="border:1px solid var(--border1);border-radius:8px;padding:9px 13px;background:var(--surface2);">' +
+      '<div style="font-size:10.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--text3);">Why it ranks here</div>' +
+      '<ul style="margin:6px 0 0;padding-left:18px;font-size:11.5px;color:var(--text2);line-height:1.6;">' + reasons.map(function(reason) {
+        return '<li>' + escapeHtml(reason) + '</li>';
+      }).join('') + '</ul>' +
+    '</div>';
+  }
+  return html;
+}
+
+function screeningTriageHitTechnicalDetails(item) {
+  item = item || {};
+  var rows = [
+    ['Provider profile ID', item.provider_profile_id || item.provider_profile_identifier],
+    ['Provider alert ID', item.provider_alert_id || item.provider_alert_identifier],
+    ['Provider case ID', item.provider_case_id || item.provider_case_identifier],
+    ['Provider risk ID', item.provider_risk_id || item.provider_risk_identifier],
+    ['Surfaced by pass', item.surfaced_by_pass],
+    ['Provider raw score', item.match_score],
+    ['Triage score version', item.triage_score_version]
+  ].filter(function(rowPair) { return evidenceDisplayValue(rowPair[1]); });
+  // "Open in ComplyAdvantage" renders ONLY when the stored hit carries a
+  // non-empty provider_case_url — provider URLs are never constructed here.
+  var caseUrl = String(item.provider_case_url || '').trim();
+  if (!rows.length && !caseUrl) return '';
+  var body = rows.map(function(rowPair) {
+    return '<div style="font-size:11px;color:var(--text2);"><span style="color:var(--text3);">' + escapeHtml(rowPair[0]) + ':</span> <span style="font-family:ui-monospace,Menlo,monospace;word-break:break-all;">' + escapeHtml(evidenceDisplayValue(rowPair[1])) + '</span></div>';
+  }).join('');
+  if (caseUrl) {
+    body += '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(caseUrl) + '" target="_blank" rel="noopener">Open in ComplyAdvantage ↗</a></div>';
+  }
+  return '<details data-screening-hit-technical-details="true" style="border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+    '<summary style="cursor:pointer;padding:7px 12px;font-size:11.5px;font-weight:700;color:var(--text3);list-style:none;">Technical details</summary>' +
+    '<div style="padding:4px 12px 10px;display:grid;gap:4px;">' + body + '</div>' +
+  '</details>';
+}
+
+function screeningClearanceNeedsSecondReviewer(row) {
+  // Same sensitivity rule the disposition modal uses for its four-eyes panel.
+  row = row || {};
+  return !!(row.requires_four_eyes ||
+    row.review_four_eyes_status === 'pending_second_review' ||
+    row.subject_type === 'director' ||
+    row.subject_type === 'ubo' ||
+    row.watchlist_status === 'match' ||
+    row.pep_declared_status === 'declared' ||
+    row.pep_screening_status === 'match' ||
+    (row.total_hits || 0) > 0);
+}
+
+function screeningTriageHitAction(applicationRef, subjectType, subjectName, disposition) {
+  // Per-hit actions route into the existing inline disposition flow — same
+  // state, validation, endpoint, and four-eyes behavior; presentation only.
+  setInlineScreeningDispositionChoice(applicationRef, subjectType, subjectName, disposition);
+  var target = document.getElementById('screening-inline-save-' + screeningReviewSubjectDomKey(applicationRef, subjectType, subjectName));
+  if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function screeningTriageHitActions(row) {
+  if (!row) return '';
+  if (!row.review_required || row.review_actionable === false) {
+    if (row.review_disposition) {
+      return '<div style="border-top:1px solid var(--border1);padding-top:10px;font-size:11.5px;color:var(--text2);">Review recorded: <strong>' + escapeHtml(screeningReviewDisplayLabel(row) || String(row.review_disposition).replace(/_/g, ' ')) + '</strong>. Changes are governed through the audit trail.</div>';
+    }
+    return '';
+  }
+  if (!canDispositionScreeningDisposition()) {
+    return '<div style="border-top:1px solid var(--border1);padding-top:10px;font-size:11.5px;color:#92400e;">You do not have permission to disposition screening results.</div>';
+  }
+  var appRef = row.application_ref || (currentApp && currentApp.ref) || '';
+  var args = '\'' + escapeHtml(appRef) + '\',\'' + escapeHtml(row.subject_type || '') + '\',\'' + escapeHtml(row.subject_name || '') + '\'';
+  var pendingSecondReview = row.review_four_eyes_status === 'pending_second_review';
+  var clearBlocked = !canClearScreeningDisposition();
+  var menuItemStyle = 'display:block;width:100%;text-align:left;background:none;border:none;padding:8px 10px;border-radius:6px;font-size:12px;color:var(--text1);cursor:pointer;';
+  var html = '<div data-screening-hit-actions="true" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--border1);padding-top:10px;">';
+  html += '<button type="button" class="btn btn-primary btn-sm" ' +
+    (clearBlocked
+      ? 'disabled title="Clear as False Positive requires Onboarding Officer, SCO, or Admin role." '
+      : 'title="Opens the clearance form below — validation, rationale, and audit rules are unchanged." ') +
+    'onclick="screeningTriageHitAction(' + args + ',\'cleared\')">Clear as false positive</button>';
+  if (!pendingSecondReview) {
+    html += '<button type="button" class="btn btn-outline btn-sm" title="Keeps approval blocked and may require escalation or EDD." onclick="screeningTriageHitAction(' + args + ',\'match\')">Confirm true match</button>';
+    html += '<details data-screening-hit-more-menu="true" style="position:relative;display:inline-block;" onkeydown="if(event.key===\'Escape\'){this.removeAttribute(\'open\');}">' +
+      '<summary class="btn btn-outline btn-sm" style="list-style:none;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:4px;">More ▾</summary>' +
+      '<div style="position:absolute;top:calc(100% + 4px);left:0;z-index:40;min-width:225px;background:#fff;border:1px solid var(--border2);border-radius:8px;box-shadow:0 6px 20px rgba(26,26,46,0.15);padding:5px;">' +
+        '<button type="button" style="' + menuItemStyle + '" title="Routes this case for senior compliance review or EDD where configured." onclick="screeningTriageHitAction(' + args + ',\'escalated\')">Escalate</button>' +
+        '<button type="button" style="' + menuItemStyle + '" title="Keeps this result under review while missing information is requested." onclick="screeningTriageHitAction(' + args + ',\'follow_up_required\')">Request more information</button>' +
+      '</div>' +
+    '</details>';
+  }
+  if (screeningClearanceNeedsSecondReviewer(row)) {
+    html += '<span style="font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:3px 9px;">' + escapeHtml(pendingSecondReview ? 'First review recorded — awaiting second reviewer' : 'Clearing this match as a false positive requires a second reviewer') + '</span>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function screeningTriageHitToggled(el) {
+  // Accordion: one expanded hit at a time within a bucket section.
+  if (!el || !el.open || !el.parentElement || !el.parentElement.querySelectorAll) return;
+  var siblings = el.parentElement.querySelectorAll('details[data-screening-triage-hit]');
+  for (var i = 0; i < siblings.length; i++) {
+    if (siblings[i] !== el && siblings[i].open) siblings[i].open = false;
+  }
+}
+
+function screeningTriageHitCard(row, item, itemIndex, weakThreshold) {
+  item = item || {};
+  var name = screeningTriageHitDisplayName(item);
+  var subLine = item.subject_name ? 'Matched against: ' + item.subject_name + (item.relationship_to_application ? ' — ' + item.relationship_to_application : '') : '';
+  return '<details data-screening-triage-hit="true" ontoggle="screeningTriageHitToggled(this)" style="border:1px solid var(--border1);border-top:none;background:#fff;">' +
+    '<summary style="list-style:none;display:flex;align-items:center;gap:13px;padding:10px 14px;cursor:pointer;">' +
+      screeningTriageScoreBlock(item, weakThreshold) +
+      '<div style="min-width:0;flex:1;">' +
+        '<div style="font-weight:650;font-size:13px;color:var(--text1);word-break:break-word;">' + escapeHtml(name) + '</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;">' + screeningTriageHitChips(item) + '</div>' +
+        (subLine ? '<div style="font-size:11px;color:var(--text3);margin-top:3px;">' + escapeHtml(subLine) + '</div>' : '') +
+      '</div>' +
+      '<span style="font-size:11px;color:var(--text3);white-space:nowrap;">Details ▾</span>' +
+    '</summary>' +
+    '<div style="border-top:1px solid var(--border1);padding:12px 14px;display:grid;gap:12px;">' +
+      screeningTriageHitEvidenceBody(item) +
+      screeningTriageHitTechnicalDetails(item) +
+      screeningTriageHitActions(row) +
+    '</div>' +
+  '</details>';
+}
+
+function screeningTriageWeakTailSection(row, weakEntries, triage) {
+  // Weak tail — ONE collapsed line; every match inside remains reviewable
+  // and actionable. Count and threshold are the server-computed values.
+  triage = triage || {};
+  var weakCount = triage.weak_count != null ? Number(triage.weak_count) : weakEntries.length;
+  var threshold = triage.weak_threshold != null ? String(triage.weak_threshold) : '—';
+  var tailLine = String(weakCount) + ' weak name-only matches — below triage threshold ' + threshold + ' · no identity corroboration · each remains reviewable';
+  return '<details data-screening-triage-weak-tail="true" style="margin-top:16px;border:1px solid var(--border1);border-radius:10px;background:#fff;">' +
+    '<summary style="list-style:none;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:11px 14px;cursor:pointer;">' +
+      '<span style="font-size:12px;color:var(--text2);"><strong style="color:var(--text1);">' + escapeHtml(tailLine) + '</strong></span>' +
+      '<span style="margin-left:auto;font-size:11px;color:var(--text3);">Expand ▾</span>' +
+    '</summary>' +
+    '<div>' + weakEntries.map(function(entry) {
+      return screeningTriageHitCard(row, entry.item, entry.index, triage.weak_threshold);
+    }).join('') + '</div>' +
+  '</details>';
+}
+
+function screeningTriageRankedHitSections(row) {
+  // Bucketed, ranked hit list: Sanctions → PEP → Adverse media → Watchlist,
+  // triage_score descending within each bucket; unscored hits sort last and
+  // are labelled "unscored". Renders only when the server-computed triage
+  // block exists — legacy/simulated shapes keep the existing honest renderer.
+  row = row || {};
+  var triage = row.triage;
+  var items = ((row.screening_evidence || {}).items) || [];
+  if (!triage || !triage.buckets || !items.length) return '';
+  var buckets = triage.buckets || {};
+  var weakThreshold = triage.weak_threshold;
+  var hasThreshold = typeof weakThreshold === 'number' && !isNaN(weakThreshold);
+  var grouped = { sanctions: [], pep: [], adverse_media: [], watchlist: [], other: [] };
+  var weakEntries = [];
+  items.forEach(function(item, index) {
+    if (!item || typeof item !== 'object') return;
+    var entry = { item: item, index: index };
+    if (hasThreshold && typeof item.triage_score === 'number' && item.triage_score < weakThreshold) {
+      weakEntries.push(entry);
+      return;
+    }
+    grouped[screeningTriageBucketKeyForCategory(item.category)].push(entry);
+  });
+  var sortRanked = function(a, b) {
+    var sa = typeof a.item.triage_score === 'number' ? a.item.triage_score : null;
+    var sb = typeof b.item.triage_score === 'number' ? b.item.triage_score : null;
+    if (sa === null && sb === null) return a.index - b.index;
+    if (sa === null) return 1;
+    if (sb === null) return -1;
+    return sb - sa || a.index - b.index;
+  };
+  weakEntries.sort(sortRanked);
+  var html = '<div data-screening-triage-buckets="true" style="display:grid;gap:16px;margin-top:10px;">';
+  SCREENING_TRIAGE_BUCKET_META.forEach(function(meta) {
+    var entries = grouped[meta.key];
+    entries.sort(sortRanked);
+    var serverCount = buckets[meta.key] != null ? Number(buckets[meta.key]) : 0;
+    if (meta.key !== 'sanctions' && !serverCount && !entries.length) return;
+    var headerNote = serverCount === 1 ? '1 match' : String(serverCount) + ' matches';
+    if (entries.length > 1) headerNote += ' · ranked';
+    html += '<section data-screening-triage-bucket="' + escapeHtml(meta.key) + '">' +
+      '<div style="display:flex;align-items:baseline;gap:10px;padding:0 2px 6px;border-bottom:2px solid var(--border2);">' +
+        '<div style="font-size:12px;font-weight:800;letter-spacing:0.03em;text-transform:uppercase;color:' + meta.color + ';">' + escapeHtml(meta.label) + '</div>' +
+        '<span style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:var(--text3);">' + escapeHtml(headerNote) + '</span>' +
+      '</div>';
+    if (!entries.length) {
+      var emptyCopy;
+      if (serverCount > 0) {
+        emptyCopy = 'All matches for this section are below the triage threshold — each remains reviewable in the weak tail below.';
+      } else if (meta.key === 'sanctions' && !Number(buckets.watchlist || 0)) {
+        emptyCopy = 'No sanctions or watchlist matches — every subject was screened against sanction lists.';
+      } else {
+        emptyCopy = 'No sanctions matches — this subject was screened against sanction lists.';
+      }
+      html += '<div style="padding:11px 14px;font-size:12px;color:var(--text2);border:1px solid var(--border1);border-top:none;border-radius:0 0 10px 10px;background:#fff;">' + escapeHtml(emptyCopy) + '</div>';
+    } else {
+      entries.forEach(function(entry) {
+        html += screeningTriageHitCard(row, entry.item, entry.index, weakThreshold);
+      });
+    }
+    html += '</section>';
+  });
+  html += '</div>';
+  if (weakEntries.length || Number(triage.weak_count || 0) > 0) {
+    html += screeningTriageWeakTailSection(row, weakEntries, triage);
+  }
+  html += '<div data-screening-triage-caption="true" style="margin-top:12px;font-size:11px;color:var(--text3);max-width:84ch;line-height:1.55;">' + escapeHtml(SCREENING_TRIAGE_RTS_CAPTION) + ' Unscored legacy matches are labelled “unscored”. Provider raw values are preserved unmodified for audit.</div>';
+  return html;
 }
 
 function renderScreeningReviewPanel(app, focus) {
