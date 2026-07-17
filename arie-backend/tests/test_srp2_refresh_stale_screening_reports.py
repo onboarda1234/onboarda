@@ -280,6 +280,26 @@ def test_archive_table_is_regulated():
         assert_regulated_delete_allowed("screening_report_archive")
 
 
+def test_force_refresh_bypasses_recent_archive_guard(db):
+    """Codex batch-1 retry need: after a failed batch the apps are recently
+    archived; --force-refresh must re-admit them, without weakening the
+    adjudication guard."""
+    from refresh_stale_screening_reports import archive_current_report
+
+    _wipe(db)
+    _seed_app(db, "ARF-SRP2T-060", "srp2t000000000060", _blind_report())
+    app = {"id": "srp2t000000000060", "ref": "ARF-SRP2T-060"}
+    archive_current_report(db, app, _blind_report())
+    db.commit()
+
+    normal, skipped = select_candidates(db, refs=["ARF-SRP2T-060"], limit=5)
+    assert normal == []
+    assert any("already refreshed" in s0.get("skip_reason", "") for s0 in skipped)
+
+    forced, _ = select_candidates(db, refs=["ARF-SRP2T-060"], limit=5, force_refresh=True)
+    assert {c["ref"] for c in forced} == {"ARF-SRP2T-060"}
+
+
 def test_batch_limit_is_capped(db):
     _wipe(db)
     for n in range(3):

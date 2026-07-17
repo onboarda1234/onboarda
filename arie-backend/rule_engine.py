@@ -2214,6 +2214,52 @@ def _screening_floor_edd_trigger_flags(signal):
     return ["material_screening_concern"]
 
 
+_RISK_LEVEL_HOLD_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "VERY_HIGH": 3}
+
+
+def _screening_report_is_non_terminal(report):
+    """Fail-closed detector for reports that are not usable risk evidence.
+
+    A screening run that errored, timed out, was degraded (e.g. provider
+    customer-identifier conflict), or still carries unresolved subjects says
+    nothing about the subject's risk — and especially does not say "zero
+    hits". SRP-2 batch 1 proved the failure mode: a conflict-errored re-screen
+    stored a 0-hit non-terminal report and the subsequent recompute dropped a
+    HIGH application to LOW.
+    """
+    if not isinstance(report, dict) or not report:
+        return False
+    if report.get("degraded_sources"):
+        return True
+    if report.get("any_non_terminal_subject"):
+        return True
+    # Only an EXPLICIT "unknown" mode counts (the conflict-failure shape).
+    # Reports that simply lack screening_mode (legacy/simulated/test shapes)
+    # are judged by the explicit degradation signals above alone.
+    return str(report.get("screening_mode") or "").strip().lower() == "unknown"
+
+
+def _non_terminal_screening_blocks_lowering(prescreening, old_score, old_level, new_score, new_level):
+    """True when a recompute would LOWER risk on non-terminal screening evidence.
+
+    Raises are always allowed (holding a raise would itself be fail-open);
+    only reductions are blocked until a terminal screening exists.
+    """
+    report = prescreening.get("screening_report") if isinstance(prescreening, dict) else None
+    if not _screening_report_is_non_terminal(report):
+        return False
+    if old_score is None:
+        return False
+    try:
+        score_drops = float(new_score) < float(old_score)
+    except (TypeError, ValueError):
+        score_drops = False
+    old_rank = _RISK_LEVEL_HOLD_RANK.get(str(old_level or "").upper())
+    new_rank = _RISK_LEVEL_HOLD_RANK.get(str(new_level or "").upper())
+    level_drops = old_rank is not None and new_rank is not None and new_rank < old_rank
+    return score_drops or level_drops
+
+
 def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routing_policy=True):
     """Recompute risk score for a single application and persist the result.
 
@@ -2315,6 +2361,33 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         result["edd_routing_route"] = routing_floor.get("route")
         result["edd_routing_triggers"] = list(routing_floor.get("triggers") or [])
         result["screening_disposition_floor"] = screening_floor
+        # Fail-closed hold (SRP-2 batch-1 finding): never LOWER risk off a
+        # non-terminal/degraded screening report. The recompute result is
+        # discarded, the stored risk stands, and the hold is audited. Raises
+        # still go through.
+        if _non_terminal_screening_blocks_lowering(prescreening, old_score, old_level, new_score, new_level):
+            result["recomputed"] = False
+            result["held_non_terminal_screening"] = True
+            logger.warning(
+                "recompute_risk: held app_id=%s — screening report non-terminal/degraded; "
+                "refusing to lower risk %s/%s -> computed %s/%s",
+                app_id, old_score, old_level, new_score, new_level,
+            )
+            if log_audit_fn and user:
+                log_audit_fn(
+                    user,
+                    "Risk Recompute Held",
+                    app.get("ref") or app_id,
+                    (
+                        f"Fail-closed: screening report is non-terminal/degraded; risk held at "
+                        f"{old_score} {old_level} (recompute produced {new_score} {new_level}; "
+                        f"trigger: {reason}). A terminal screening is required before risk can decrease."
+                    ),
+                    db=db,
+                    commit=False,
+                )
+            return result
+
         result["recomputed"] = True
         result["changed"] = (old_score != new_score or old_level != new_level)
 
