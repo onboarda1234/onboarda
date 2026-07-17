@@ -612,7 +612,7 @@ def _upsert_decision_record(db, audit, row: Mapping[str, Any]) -> Optional[str]:
         row["expected"]["tier"], float(evidence.get("confidence_score") or 1.0),
         evidence.get("source") or "manual", evidence.get("actor_user_id") or "co001",
         evidence.get("actor_role") or "co", _iso(row, offset=8),
-        _json(evidence.get("key_flags") or []), False, None,
+        _json(evidence.get("key_flags") or []), 0, None,
         _json({"dataset": DATASET_NAME, "reasoning": evidence.get("reasoning"), "final_disposition": evidence.get("final_disposition")}),
     )
     columns = (
