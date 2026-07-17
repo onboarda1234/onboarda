@@ -24,10 +24,10 @@ things stand") was retired in the 2026-07-15 restructure; see git history.
 
 # Onboarda / RegMind — Audit-Remediation Master List
 
-**Reconciled:** 2026-07-16 (scoped: Phase 5 screening-queue stream brought current + SRP work plan added) · `main` = `d3f1bc9a` (merge of #781) · full-register reconcile in flight in [#780](https://github.com/onboarda1234/onboarda/pull/780)
-**Pilot:** all 4 code blockers ✅ closed · remaining pilot work = **RSMP Tier 0C** + the open 🟠 gates below
+**Reconciled:** 2026-07-17 against live GitHub · `main` = `97ae6f8` · scope of this reconcile: row union of the Applications-module confirmation-audit stream with the Phase 5 screening rows merged through #783/#786; full-register reconcile remains in [#780](https://github.com/onboarda1234/onboarda/pull/780)
+**Pilot:** all 4 code blockers ✅ closed · remaining pilot work = **RSMP Tier 0C** + the open 🟠 gates below · Applications module: unconditional **PILOT-READY** (confirmation audit, 2026-07-16)
 **Production:** blocked — Audit-3 verdict REMEDIATE BEFORE PROCEEDING; Phase 14 largely open. Nothing in this file is a production-readiness claim.
-**Open PRs:** [#780](https://github.com/onboarda1234/onboarda/pull/780) (docs — full register reconcile; supersedes drafts #777/#767/#752) · [#779](https://github.com/onboarda1234/onboarda/pull/779) (draft — RSMP Tier 0C-A evidence pack, verdict NOT READY) · [#782](https://github.com/onboarda1234/onboarda/pull/782) (analyst RMI/Escalate RBAC alignment) · [#737](https://github.com/onboarda1234/onboarda/pull/737) (draft — P12-1 Phase A discovery report)
+**Open PRs:** [#785](https://github.com/onboarda1234/onboarda/pull/785) (Applications tab-preserving refresh + register row union) · [#780](https://github.com/onboarda1234/onboarda/pull/780) (docs — full register reconcile; supersedes drafts #777/#767/#752) · [#779](https://github.com/onboarda1234/onboarda/pull/779) (draft — RSMP Tier 0C-A evidence pack, verdict NOT READY) · [#737](https://github.com/onboarda1234/onboarda/pull/737) (draft — P12-1 Phase A discovery report)
 
 **Legend:** ✅ done/merged · ◐ split item (one half done, one open) · 🟢 PR open · 🔨 in progress · 📋 scoped · ⏸ blocked · ⬜ pending · 🔴 pilot code blocker · 🟠 pilot operational gate
 **E column** = closure evidence in [`compliance/REMEDIATION_CLOSURE_EVIDENCE.md`](compliance/REMEDIATION_CLOSURE_EVIDENCE.md).
@@ -54,7 +54,7 @@ things stand") was retired in the 2026-07-15 restructure; see git history.
 | Staging-SHA alignment gate — ops half | Phase 7 | 🟠 open |
 | item 36 — persisted negative-path fixtures | Phase 13 | ✅ closed 2026-07-12 |
 
-Two gates are decisions, not rows: **Applications-page readiness audit** clear of P0/P1 (re-run verdict: READY FOR PILOT WITH CONTROLS) · **PII-encryption deferral** recorded as a signed risk-acceptance (item 21 is a production item; deferred for pilot with compensating controls). P13-1 may alternatively be formally accepted with compensating controls.
+Two gates are decisions, not rows: **Applications-page readiness audit** — 2026-07-16 confirmation audit verdict, upgraded same day after APP-CONF-001/002 closures: unconditional **PILOT-READY** (P1 closed via #782, revalidated in 3 engines; synthetic-record sweep clean) · **PII-encryption deferral** recorded as a signed risk-acceptance (item 21 is a production item; deferred for pilot with compensating controls). P13-1 may alternatively be formally accepted with compensating controls.
 
 ---
 
@@ -186,7 +186,7 @@ are out of scope for every SRP item.
 | PERIODIC-BASELINE-METHOD-HYGIENE-1 | Clean 405 on POST-only baseline route (REGMIND-P2-001, SW-1) | P2 | [#700](https://github.com/onboarda1234/onboarda/pull/700) | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#wave-a-prs-700-703) |
 | PR-RISK-SECTOR-CALIBRATION-1 | Recalibrate sector risk + "unknown ≠ high" defaults (= **DCI-009**) — coordinate with RSMP | P2 | — | 📋 scoped | — |
 
-### Applications-page readiness audit (Codex; re-run verdict: READY FOR PILOT WITH CONTROLS / NOT PRODUCTION READY)
+### Applications-page readiness audit (Codex; final post-closure verdict: PILOT-READY / NOT PRODUCTION READY)
 
 | ID | Title | Sev | GitHub | Status | E |
 |----|-------|:--:|:--:|----|:--:|
@@ -199,6 +199,25 @@ are out of scope for every SRP item.
 | APP-AUD-gov-dup-1 | Duplicate audit rows from two accepted governance requests (idempotency) | Low | — | ⬜ pending | — |
 | APP-AUD-005 | `/api/applications` ignores `search=` (UI uses `q=`) — document or alias | Low | — | ⬜ pending | — |
 | APP-A11Y-SORT-HEADERS-1 | Keyboard-accessible sortable headers (CodeRabbit on #727) | P3 | — | ⬜ pending | — |
+
+### Applications-module confirmation audit 2026-07-16 (Codex, against `464972a`; final post-closure verdict: PILOT-READY / NOT PRODUCTION READY)
+
+> Pre-audit remediation recorded here too (register was reconciled 2026-07-15
+> before this stream landed). Application Review module is FROZEN per
+> `CLAUDE.md` Module Status & Change Control — every code row below that is
+> not ✅ requires explicit founder approval before implementation.
+
+| ID | Title | Sev | GitHub | Status | E |
+|----|-------|:--:|:--:|----|:--:|
+| APP-REV-MEMO-HARDENING-1 | Memo workflow hardening — mutations via `boApiCall` (no false success), authoritative detail refresh, signoff disabled-state + static guards | P1 | `a237008` (direct to main) | ✅ merged + browser-validated | — |
+| APP-PERF-DETAIL-INDEX-1 | Detail-open perf — `idx_agent_executions_document_id`, committed independently of later failing migrations + ERROR-level verify | P2 | [#771](https://github.com/onboarda1234/onboarda/pull/771)→[#774](https://github.com/onboarda1234/onboarda/pull/774) | ✅ merged + staging-validated 2026-07-16 (index active, planner verified) | — |
+| APP-CONF-001 | Analyst RMI/Escalate UI/authz mismatch — matrix + UI aligned to decision-endpoint authority; contract tests pin all three surfaces | P1 | [#782](https://github.com/onboarda1234/onboarda/pull/782) | ✅ merged + revalidated 2026-07-16 (33/33 Chromium/Firefox/WebKit; analyst API 403) | — |
+| APP-CONF-002 | Retained synthetic records visible in normal staging list | P2 | — | ✅ closed 2026-07-16 — all 3 records fixture-marked (approved); full normal-list sweep clean (247 rows, 0 synthetic visible) | — |
+| APP-CONF-003 | Role-harness cross-client probe not actually cross-client — *(cross-ref: = P9-13 open half "cross-client seed fix" — not counted)* | P2 | — | ⬜ see P9-13 | — |
+| APP-CONF-004 | Largest-case detail-open p95 2.105s > 2s prod target — round-2 detail optimisations (dedupe gate recompute, batch name resolution, single monitoring load) + p95 monitor; frozen-scope approval required | P2 | — | 📋 scoped | — |
+| APP-CONF-005 | Firefox unreachable-code warning + report-only CSP console diagnostics not production-clean (CSP enforcement relates to item 22) | P2 | — | ⬜ pending | — |
+| APP-CONF-006 | Applications freeze policy absent from `CLAUDE.md` | P2 | [#776](https://github.com/onboarda1234/onboarda/pull/776) | ✅ closed 2026-07-16 (Module Status & Change Control section) | — |
+| APP-PROD-LIVE-RUN-1 | Live-provider e2e run for Applications workflows — live Sumsub IDV + document verification without `CLAUDE_MOCK_MODE`, or formal scope sign-off (CA / OpenCorporates halves tracked at P9-3 / P9-14) | prod | — | ⬜ | — |
 
 ## Phase 8 — Monitoring alerts page (M-series)
 
@@ -447,17 +466,19 @@ are out of scope for every SRP item.
 ## Roll-up — computed by counting rows, 2026-07-16
 
 Counting rule: every row in Phases 0–14 + the Re-audit/RSMP tables counts once.
-The 2 cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 13 CA
-row) and the Optional Modernization tables are excluded. ◐ = items with one
-named half done and one open (staging-SHA gate, P12-4, P13-7, P9-13, DCI-104).
+The 3 cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 7
+APP-CONF-003, Phase 13 CA row) and the Optional Modernization tables are
+excluded. ◐ = items with one named half done and one open (SRP-1, SRP-2,
+staging-SHA gate, P12-4, P13-7, P9-13, DCI-104). Note: parallel register PRs (`#780` and
+merged `#783`) recount their own streams; on merge, recount the union.
 
 | Status | Count |
 |--------|:--:|
-| ✅ done/merged | 90 |
-| ◐ split — one half open | 6 |
+| ✅ done/merged | 98 |
+| ◐ split — one half open | 7 |
 | 🟢 PR open | 0 |
-| 🔨 in progress | 3 |
-| 📋 scoped | 19 |
+| 🔨 in progress | 2 |
+| 📋 scoped | 20 |
 | ⏸ blocked | 5 |
 | ⬜ pending | 36 |
-| **Total tracked items** | **159** |
+| **Total tracked items** | **168** |
