@@ -392,6 +392,12 @@ are out of scope for every SRP item.
 | RSMP-0C | Tier 0C — activation + recomputation | — | ⬜ **final remaining RSMP pilot-readiness workstream**; no recomputation executed | — |
 | RSMP-PR1B | PR-1b — declared-PEP runtime alignment with approved Gate 0 v4 model | [#764](https://github.com/onboarda1234/onboarda/pull/764) | ✅ merged 2026-07-15 at `a823fb6` | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
 
+Operational note (2026-07-17): the controlled staging reset removed 944
+founder-confirmed synthetic applications and aligned Manufacturing to 2 and D3
+to 40/35/25. The canonical dataset remains unseeded because its PostgreSQL
+dry-run exposed a type mismatch; RSMP remains OFF. See the
+[staging reset closure record](pilot/STAGING_RESET_CLOSURE_2026-07-17.md).
+
 ---
 
 ## Optional / Post-Production Modernization (NOT required for pilot or first production cut; excluded from roll-up)
