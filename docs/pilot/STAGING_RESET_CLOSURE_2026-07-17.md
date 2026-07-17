@@ -100,9 +100,17 @@ the reviewed manifest hash, with `RM-PILOT-004` base/total 7.0,
 base/total 42.1. It performed zero database writes. These runtime results do not
 override the failed persistence dry-run.
 
-The seeder must be corrected and the complete 41-scenario dry-run rerun before
-any canonical apply authorization. Do not work around the type mismatch
-operationally and do not seed the current manifest yet.
+A narrow compatibility fix in draft PR #789 changes only the seeder bind for
+`decision_records.override_flag` from Python Boolean `False` to integer `0`;
+the PostgreSQL schema and runtime decision handling are unchanged. PostgreSQL
+regression coverage exercises `RM-PILOT-037`, the complete 41-scenario
+transactional dry run, repeated rollback/zero-residue behavior, manifest hash
+`fee7436a6bf6ead1cc9a8090ceaa3de7071a9b745e43f2c69a445cf74efdf9c9`,
+and 41/41 runtime alignment.
+
+The compatibility fix has not been merged or deployed, and the AWS staging
+41-scenario dry run has not been rerun. Canonical seeding remains separately
+controlled, unauthorized and unexecuted.
 
 ## Safety evidence
 
@@ -131,9 +139,9 @@ not run, RSMP is OFF, and production was not accessed.
 - The protected `audit_log` verifier passes for all chained entries, but the
   repository reports an existing incomplete chain-coverage population of
   legacy/unchained rows. The fully chained `supervisor_audit_log` verifies.
-- The live PostgreSQL canonical dry-run type mismatch described above blocks
-  canonical seeding. Static manifest validation and all 41 runtime score
-  comparisons passed, but the expected per-scenario persistence result cannot
-  be claimed until the seeder is fixed and the full dry run passes.
+- The live PostgreSQL dry-run mismatch has a narrow fix under review in draft
+  PR #789. Static validation and 41/41 runtime comparisons pass, but AWS
+  staging persistence remains unverified until that PR is merged/deployed and
+  the separately authorized dry run succeeds.
 - Application-dependent UI export validation is intentionally deferred because
   the database is empty and canonical seeding is not authorized.
