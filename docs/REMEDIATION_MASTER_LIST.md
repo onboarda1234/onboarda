@@ -140,6 +140,8 @@ Two gates are decisions, not rows: **Applications-page readiness audit** — 202
 | — | Section M latency: evidence cap + candidate hoist + `application_id` index (21.1s → 5.2s) | — | #773 | ✅ merged + staging-validated · correctness PASS | — |
 | — | Section M latency: stage-timing attribution (`metrics.timings_ms`) → transfer-dominated | — | #778 | ✅ merged · attribution complete 2026-07-16 | — |
 | — | Section M latency: gzip responses (4.7MB raw → ~15x compressed transfer) | — | #781 | ✅ merged + close-out PASS 2026-07-16 — evidence p50/p95 1.096s/1.202s (was 21.1s/33.6s) | — |
+| — | Phase 6 closeout: module card, ops runbook, CLAUDE.md change-control entry, rts-1.0 methodology | — | — | 🟢 PR open 2026-07-18 — queue verdict VALIDATED/CHANGE-CONTROLLED; end-to-end workflow verdict stays gated on SRP-3 | — |
+| — | Ops tickets (Phase 6): CloudWatch p95 alarm on /api/screening/queue · PG-backed test lane for seed/ops tooling | — | — | ⬜ recorded — not yet created | — |
 
 ### Screening Review page & Agent 3 — simplification work plan (SRP, added 2026-07-16)
 
@@ -476,9 +478,9 @@ merged `#783`) recount their own streams; on merge, recount the union.
 |--------|:--:|
 | ✅ done/merged | 98 |
 | ◐ split — one half open | 7 |
-| 🟢 PR open | 0 |
+| 🟢 PR open | 1 |
 | 🔨 in progress | 2 |
 | 📋 scoped | 20 |
 | ⏸ blocked | 5 |
-| ⬜ pending | 36 |
-| **Total tracked items** | **168** |
+| ⬜ pending | 37 |
+| **Total tracked items** | **170** |
