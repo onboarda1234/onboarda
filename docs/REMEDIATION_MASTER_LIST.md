@@ -383,6 +383,12 @@ are out of scope for every SRP item.
 | DCI-104 | P12-5 / #716 | 3 v2.47 CHECK constraints absent on staging + 54 unindexed FKs | [#739](https://github.com/onboarda1234/onboarda/pull/739) | ◐ constraints ✅ executed on staging 2026-07-11 · 54 FK indexes ⬜ | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-5-dci-006-prs-716-and-739) |
 | R2-PROC-1 | (new, LOW) | Staging QA/validation must not write raw SQL into regulated tables — route probe writes through the app or a marked fixture path | — | ⬜ pending | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-5-dci-006-prs-716-and-739) |
 
+### Canonical staging dataset
+
+| ID | Title | GitHub | Status | Evidence |
+|----|-------|:--:|----|:--:|
+| PILOT-DATA-001 | Canonical memo and lifecycle demo completion | Draft PR | 🔨 deterministic memo contract, fixture notification suppression, Monitoring/Periodic fixture visibility; AI Supervisor explicitly excluded; post-deploy UI revalidation still required | [Guide](pilot/PILOT_CANONICAL_DATASET.md) |
+
 ### RSMP — Risk Scoring Model Pack (DCI-108/109 response)
 
 | ID | Title | GitHub | Status | E |

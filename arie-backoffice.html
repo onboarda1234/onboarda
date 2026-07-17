@@ -3903,17 +3903,20 @@ function fixtureRecordInfo(record) {
   record = record || {};
   var projection = record.projection || {};
   var raw = record.raw || {};
-  var flagCandidates = [
-    record.isFixture, record.is_fixture, record.fixture, record.is_test_record,
-    projection.isFixture, projection.is_fixture,
-    raw.isFixture, raw.is_fixture, raw.fixture
-  ];
-  if (flagCandidates.some(fixtureTruthy)) return { isFixture: true, label: 'Test / Smoke' };
   var refValues = [
     record.id, record.applicationId, record.application_id, record.ref, record.application_ref,
     record.reviewReference, record.review_reference, projection.application_id, projection.application_ref,
     raw.application_id, raw.application_ref, raw.id
   ].filter(Boolean).map(String);
+  var flagCandidates = [
+    record.isFixture, record.is_fixture, record.fixture, record.is_test_record,
+    projection.isFixture, projection.is_fixture,
+    raw.isFixture, raw.is_fixture, raw.fixture
+  ];
+  if (flagCandidates.some(fixtureTruthy)) {
+    var isPilotCanonical = refValues.some(function(value) { return /^RM-PILOT-\d{3}$/i.test(value); });
+    return { isFixture: true, label: isPilotCanonical ? 'Pilot Canonical / Synthetic' : 'Test / Smoke' };
+  }
   if (refValues.some(function(value) { return TEST_SMOKE_REF_PATTERNS.some(function(pattern) { return pattern.test(value); }); })) {
     return { isFixture: true, label: 'Test / Smoke' };
   }
@@ -4636,6 +4639,7 @@ function normalizeMonitoringAlert(raw) {
   var type = normalizeAlertType(raw || {});
   var statusKey = normalizeAlertStatus(raw.status || 'open');
   var severityKey = normalizeAlertSeverity(raw.severity || 'medium');
+  var fixtureInfo = typeof fixtureRecordInfo === 'function' ? fixtureRecordInfo(raw) : { isFixture: false, label: '' };
   return {
     raw: raw || {},
     id: raw.id,
@@ -4665,6 +4669,8 @@ function normalizeMonitoringAlert(raw) {
     officer_action: raw.officer_action || null,
     officer_notes: raw.officer_notes || null,
     sla: raw.sla || null,
+    isFixture: fixtureInfo.isFixture,
+    fixtureLabel: fixtureInfo.label,
     scenario_code: fixtureScenarioCodeFromRef(raw.source_reference || '')
   };
 }
@@ -4743,6 +4749,7 @@ function normalizePeriodicReview(raw) {
     isDueDateMissing: projection.is_due_date_missing === true || raw.is_due_date_missing === true,
     dueState: projection.due_state || raw.due_state || '',
     lastActivityAt: lastActivity,
+    priority: projection.priority || raw.priority || '',
     notificationSummary: notificationSummary,
     clientNotificationStatus: notificationSummary.client_notification_status || projection.client_notification_status || raw.client_notification_status || 'not_sent',
     clientNotificationStatusLabel: notificationSummary.client_notification_status_label || projection.client_notification_status_label || raw.client_notification_status_label || 'Not sent',
@@ -4818,6 +4825,7 @@ async function onPeriodicReviewStatusFilterChange(value) {
 
 function periodicReviewNotificationTone(status) {
   var key = String(status || '').toLowerCase();
+  if (key === 'suppressed') return 'draft';
   if (key === 'failed') return 'rejected';
   if (key === 'reminder_due' || key === 'overdue_notified') return 'pending';
   if (key === 'sent') return 'approved';
@@ -4828,7 +4836,8 @@ function periodicReviewNotificationCell(review) {
   var status = review.clientNotificationStatus || 'not_sent';
   var label = review.clientNotificationStatusLabel || 'Not sent';
   var tone = periodicReviewNotificationTone(status);
-  var reminderText = review.reminderCount ? ('Reminders: ' + String(review.reminderCount)) : 'No reminders';
+  var suppressed = String(status).toLowerCase() === 'suppressed';
+  var reminderText = suppressed ? 'Synthetic delivery disabled' : (review.reminderCount ? ('Reminders: ' + String(review.reminderCount)) : 'No reminders');
   var nextText = review.nextReminderDueAt ? ('Next: ' + reviewQueueDateLabel(review.nextReminderDueAt)) : '';
   var officerAlert = String(review.officerAlertStatus || '').toLowerCase() === 'active'
     ? '<div style="font-size:11px;color:var(--amber);margin-top:3px;">Officer alert active</div>'
@@ -9153,9 +9162,10 @@ function explainabilityNeedsAttention(app, screeningSummary) {
   var memoMeta = app && app.latestMemoMeta ? app.latestMemoMeta : {};
   var validation = String(memoData.validation_status || memoMeta.validation_status || '').toLowerCase();
   var supervisor = String((memoData.supervisor && memoData.supervisor.verdict) || memoMeta.supervisor_status || '').toUpperCase();
-  if (app && (app.memoIsStale || app.memoRequiresRegeneration || app.supervisorRequiresRerun)) return true;
+  var supervisorExcluded = memoAiSupervisorExcludedFromPilot(memoData);
+  if (app && (app.memoIsStale || app.memoRequiresRegeneration || (app.supervisorRequiresRerun && !supervisorExcluded))) return true;
   if (validation && ['pass', 'approved'].indexOf(validation) < 0) return true;
-  if (supervisor && ['CONSISTENT'].indexOf(supervisor) < 0) return true;
+  if (!supervisorExcluded && supervisor && ['CONSISTENT'].indexOf(supervisor) < 0) return true;
   if (app && !hasAuthoritativeRisk(app)) return true;
   return !!(screeningSummary && screeningSummary.screening_freshness && screeningSummary.screening_freshness.status === 'parse_error');
 }
@@ -21929,6 +21939,7 @@ function renderPeriodicReviewWorkspaceNotifications(reviewDetail) {
   var reminderCount = Number(summary.reminder_count || reviewDetail.reminder_count || 0);
   var officerAlert = String(summary.officer_alert_status || reviewDetail.officer_alert_status || '').toLowerCase();
   var tone = periodicReviewNotificationTone(rawStatus);
+  var suppressed = String(rawStatus).toLowerCase() === 'suppressed';
   return '<div style="display:grid;gap:12px;">' +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
       lifecycleDetailBadge(status, tone === 'rejected' ? 'red' : (tone === 'pending' ? 'amber' : (tone === 'approved' ? 'green' : 'slate'))) +
@@ -21942,9 +21953,11 @@ function renderPeriodicReviewWorkspaceNotifications(reviewDetail) {
       lifecycleDetailMeta('Next reminder due', lifecycleFormatDate(summary.next_reminder_due_at || reviewDetail.next_reminder_due_at || '')) +
       lifecycleDetailMeta('Channel', summary.notification_channel || reviewDetail.notification_channel || 'portal') +
     '</div>' +
-    (summary.last_notification_error || reviewDetail.last_notification_error
+    (suppressed
+      ? '<div style="font-size:12px;color:var(--text2);line-height:1.6;">Delivery is intentionally suppressed for this synthetic fixture. No notification attempt is made.</div>'
+      : (summary.last_notification_error || reviewDetail.last_notification_error
       ? '<div style="font-size:12px;color:var(--red);line-height:1.6;">Last notification error: ' + escapeHtml(summary.last_notification_error || reviewDetail.last_notification_error) + '</div>'
-      : '<div style="font-size:12px;color:var(--text2);line-height:1.6;">Client notifications use the portal notification center and configured transactional email where enabled.</div>') +
+      : '<div style="font-size:12px;color:var(--text2);line-height:1.6;">Client notifications use the portal notification center and configured transactional email where enabled.</div>')) +
   '</div>';
 }
 
@@ -23015,6 +23028,7 @@ function renderPrcReviewDetailSection(detail) {
   var host = document.getElementById('prc-review-detail-section');
   if (!host) return;
   var fixturePayload = parseFixturePayload(detail && detail.trigger_reason, 'FIX_REVIEW_JSON:') || {};
+  var fixtureBadge = fixtureRecordBadgeHtml(detail || {});
   var statusInfo = reviewStatusFromRaw(detail || {});
   var state = statusInfo.raw || detail.state || detail.status || '—';
   var outcome = detail.outcome || fixturePayload.outcome || detail.decision;
@@ -23119,6 +23133,7 @@ function renderPrcReviewDetailSection(detail) {
     : '<span style="color:var(--text3);font-size:11px;">Not escalated.</span>';
 
   host.innerHTML =
+    (fixtureBadge ? '<div data-periodic-review-fixture-identity="true" style="margin-top:16px;">' + fixtureBadge + '</div>' : '') +
     '<div class="detail-section" style="margin-top:16px;">' +
       '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Review state &amp; outcome (authoritative)</div>' +
       '<div class="detail-row"><span class="label">State</span><span class="value"><span class="badge ' + stateBadgeClass + '" style="font-size:11px;">' + escapeHtml(String(uiState)) + '</span></span></div>' +
@@ -24114,10 +24129,14 @@ function renderMonitoringAlertDetailView() {
   var raw = alert.raw || {};
   if (title) title.textContent = alert.type + ' — ' + (alert.client || 'Unmapped client');
   if (subtitle) subtitle.textContent = 'Alert #' + alert.id + ' · ' + alert.status + ' · ' + alert.severity;
+  var fixtureBadge = fixtureRecordBadgeHtml(alert);
+  var fixtureBanner = fixtureBadge
+    ? '<div data-monitoring-fixture-identity="true" style="margin-bottom:10px;">' + fixtureBadge + '</div>'
+    : '';
   var statusBadge = '<span class="badge ' + monitoringStatusBadgeClass(alert.statusKey) + '">' + escapeHtml(alert.status) + '</span>';
   var severityBadge = '<span class="badge ' + monitoringSeverityBadgeClass(alert.severityKey) + '">' + escapeHtml(alert.severity) + '</span>';
   if (alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh') {
-    body.innerHTML =
+    body.innerHTML = fixtureBanner +
       renderMonitoringDocumentExpiryCard(alert, statusBadge, severityBadge) +
       renderMonitoringDecisionSection(alert) +
       renderMonitoringOverdueEscalationSummary(alert) +
@@ -24126,7 +24145,7 @@ function renderMonitoringAlertDetailView() {
     updateMonitoringDecisionNoteHint();
     return;
   }
-  body.innerHTML =
+  body.innerHTML = fixtureBanner +
     monitoringDetailCard('Header / Summary', monitoringInfoGrid([
       ['Client name', monitoringTextValue(alert.client, 'Unmapped client')],
       ['Application reference', monitoringTextValue(alert.applicationRef || alert.applicationId, 'Not available')],
@@ -24568,13 +24587,15 @@ function renderMonitoringAlerts() {
     tr.onclick = function() { openMonitoringAlertDetail(alert.id); };
     var clientTitle = alert.clientTitle ? ' title="' + escapeHtml(alert.clientTitle) + '"' : '';
     var owner = alert.owner || 'Unassigned';
+    var fixtureBadge = typeof fixtureRecordBadgeHtml === 'function' ? fixtureRecordBadgeHtml(alert) : '';
     var ageDue = monitoringAlertAgeDueLabel(alert);
     var slaChip = renderMonitoringSlaChip(alert.sla);
     var slaCell = slaChip
       ? (slaChip + '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(ageDue) + '</div>')
       : escapeHtml(ageDue);
     tr.innerHTML = '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(alert.date) + '</td>' +
-      '<td' + clientTitle + '>' + escapeHtml(alert.client || 'Unmapped client') + '</td>' +
+      '<td' + clientTitle + '><div>' + escapeHtml(alert.client || 'Unmapped client') + '</div>' +
+      (alert.applicationRef ? '<div style="font-size:11px;color:var(--text3);">' + escapeHtml(alert.applicationRef) + '</div>' : '') + fixtureBadge + '</td>' +
       '<td style="font-size:12px;">' + escapeHtml(alert.type) + '</td>' +
       '<td><span class="badge ' + severityColor + '" style="font-size:11px;">' + escapeHtml(alert.severity) + '</span></td>' +
       '<td style="font-size:12px;">' + escapeHtml(owner) + '</td>' +
@@ -24652,13 +24673,15 @@ function renderPeriodicReviews() {
     var riskClass = review.risk.toLowerCase().replace(' ','-');
     var owner = review.assignedOfficerName || review.assignedOfficerId || 'Unassigned';
     var fixtureBadge = typeof fixtureRecordBadgeHtml === 'function' ? fixtureRecordBadgeHtml(review) : '';
+    var priorityLabel = review.priority ? String(review.priority).replace(/_/g, ' ').replace(/\b\w/g, function(ch) { return ch.toUpperCase(); }) : 'Not set';
     tr.onclick = function() { openMonitoringReviewLifecycle(review.ref, review.id); };
     tr.innerHTML = '<td><div>' + escapeHtml(review.client) + '</div>' +
       '<div style="font-size:11px;color:var(--text3);">' + escapeHtml(review.ref || review.reviewReference || '') + '</div>' + fixtureBadge + '</td>' +
       '<td><span class="badge ' + riskClass + '" style="font-size:11px;">' + escapeHtml(review.risk) + '</span></td>' +
       '<td style="font-size:12px;">' + escapeHtml(reviewQueueDateLabel(review.nextDue)) + '</td>' +
       '<td><span class="badge ' + statusBadge + '" style="font-size:11px;">' + escapeHtml(queueLabel) + '</span>' +
-      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(reviewQueueTriggerSummary(review)) + '</div></td>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(reviewQueueTriggerSummary(review)) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Priority: ' + escapeHtml(priorityLabel) + '</div></td>' +
       '<td style="font-size:12px;">' + escapeHtml(owner) + '</td>' +
       '<td style="font-size:12px;">' + periodicReviewNotificationCell(review) + '</td>' +
       '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(reviewQueueDateLabel(review.lastActivityAt)) + '</td>' +
@@ -26008,6 +26031,17 @@ function memoCanonicalBlockers(memoData) {
   return blockers;
 }
 
+function memoAiSupervisorExcludedFromPilot(memoData) {
+  memoData = memoData || {};
+  var metadata = (memoData && memoData.metadata) || {};
+  var applicationRef = String(memoData.application_ref || metadata.application_ref || '').trim();
+  return String(metadata.ai_supervisor_scope || '').toLowerCase() === 'excluded_from_controlled_pilot' &&
+    memoData.synthetic === true &&
+    memoData.non_production === true &&
+    String(memoData.dataset || '') === 'Pilot Canonical Dataset' &&
+    /^RM-PILOT-\d{3}$/i.test(applicationRef);
+}
+
 function memoSupervisorBlock(memoData, memoMeta) {
   var metadata = (memoData && memoData.metadata) || {};
   return (memoData && memoData.supervisor) || metadata.supervisor || (memoMeta && memoMeta.supervisor) || {};
@@ -26146,16 +26180,19 @@ function getApplicationApprovalBlockers(app) {
     var memoReview = String(memoData.review_status || memoMeta.review_status || '').toLowerCase();
     var memoValidation = String(memoData.validation_status || memoMeta.validation_status || '').toLowerCase();
     var memoSupervisor = String((memoData.supervisor && memoData.supervisor.verdict) || memoMeta.supervisor_status || '').toUpperCase();
+    var memoSupervisorExcluded = memoAiSupervisorExcludedFromPilot(memoData);
     if (memoReview !== 'approved') blockers.push('Compliance memo has not been approved.');
     if (memoValidation === 'pass_with_fixes' && !memoApprovalReasonRecorded(memoData, memoMeta)) {
       blockers.push('Compliance memo has PASS WITH FIXES without a documented senior approval reason.');
     } else if (memoValidation && memoValidation !== 'pass' && memoValidation !== 'pass_with_fixes') {
       blockers.push('Compliance memo validation status is ' + memoValidation.replace(/_/g, ' ') + '.');
     }
-    if (memoSupervisor === 'CONSISTENT_WITH_WARNINGS' && !memoApprovalReasonRecorded(memoData, memoMeta)) {
-      blockers.push('Compliance memo supervisor warnings need a documented senior approval reason.');
-    } else if (memoSupervisor && memoSupervisor !== 'CONSISTENT' && memoSupervisor !== 'CONSISTENT_WITH_WARNINGS') {
-      blockers.push('Compliance memo supervisor status is ' + memoSupervisor.replace(/_/g, ' ') + '.');
+    if (!memoSupervisorExcluded) {
+      if (memoSupervisor === 'CONSISTENT_WITH_WARNINGS' && !memoApprovalReasonRecorded(memoData, memoMeta)) {
+        blockers.push('Compliance memo supervisor warnings need a documented senior approval reason.');
+      } else if (memoSupervisor && memoSupervisor !== 'CONSISTENT' && memoSupervisor !== 'CONSISTENT_WITH_WARNINGS') {
+        blockers.push('Compliance memo supervisor status is ' + memoSupervisor.replace(/_/g, ' ') + '.');
+      }
     }
     if (memoData.metadata && memoData.metadata.blocked) {
       blockers.push('Compliance memo is blocked: ' + (memoData.metadata.block_reason || 'blocking memo controls failed.'));
@@ -26717,6 +26754,7 @@ function getCaseCommandBlockers(app) {
   var memoReview = String((memoData && memoData.review_status) || memoMeta.review_status || '').toLowerCase();
   var memoSupervisor = memoSupervisorBlock(memoData, memoMeta);
   var supervisorVerdict = String(memoSupervisor.verdict || memoMeta.supervisor_status || '').toUpperCase();
+  var supervisorExcluded = memoAiSupervisorExcludedFromPilot(memoData);
   var lifecycleItems = caseCommandOpenLifecycleItems(app);
   var periodicReviewItems = caseCommandPeriodicReviewItems(app);
   var eddItems = caseCommandEDDItems(app);
@@ -26977,48 +27015,50 @@ function getCaseCommandBlockers(app) {
         );
       }
 
-      if (app.supervisorRequiresRerun) {
-        addBlocker(
-          'supervisor-rerun',
-          'Supervisor Review',
-          'Compliance supervisor analysis must be rerun.',
-          'Recent case changes require the supervisor workflow to be rerun before approval can continue.',
-          'Run supervisor',
-          'supervisor',
-          'detail-tab-supervisor',
-          true,
-          55,
-          '',
-          'supervisor.run'
-        );
-      } else if (!supervisorVerdict) {
-        addBlocker(
-          'supervisor-missing',
-          'Supervisor Review',
-          'Compliance supervisor review has not been completed.',
-          'Run the compliance supervisor before relying on the memo for final approval.',
-          'Run supervisor',
-          'supervisor',
-          'detail-tab-supervisor',
-          true,
-          55,
-          '',
-          'supervisor.run'
-        );
-      } else if (supervisorVerdict !== 'CONSISTENT' && supervisorVerdict !== 'CONSISTENT_WITH_WARNINGS') {
-        addBlocker(
-          'supervisor-failed',
-          'Supervisor Review',
-          'Compliance supervisor review needs attention.',
-          'Current supervisor status: ' + supervisorVerdict.replace(/_/g, ' ') + '. Resolve the supervisor findings before approval.',
-          'Run supervisor',
-          'supervisor',
-          'detail-tab-supervisor',
-          true,
-          55,
-          '',
-          'supervisor.run'
-        );
+      if (!supervisorExcluded) {
+        if (app.supervisorRequiresRerun) {
+          addBlocker(
+            'supervisor-rerun',
+            'Supervisor Review',
+            'Compliance supervisor analysis must be rerun.',
+            'Recent case changes require the supervisor workflow to be rerun before approval can continue.',
+            'Run supervisor',
+            'supervisor',
+            'detail-tab-supervisor',
+            true,
+            55,
+            '',
+            'supervisor.run'
+          );
+        } else if (!supervisorVerdict) {
+          addBlocker(
+            'supervisor-missing',
+            'Supervisor Review',
+            'Compliance supervisor review has not been completed.',
+            'Run the compliance supervisor before relying on the memo for final approval.',
+            'Run supervisor',
+            'supervisor',
+            'detail-tab-supervisor',
+            true,
+            55,
+            '',
+            'supervisor.run'
+          );
+        } else if (supervisorVerdict !== 'CONSISTENT' && supervisorVerdict !== 'CONSISTENT_WITH_WARNINGS') {
+          addBlocker(
+            'supervisor-failed',
+            'Supervisor Review',
+            'Compliance supervisor review needs attention.',
+            'Current supervisor status: ' + supervisorVerdict.replace(/_/g, ' ') + '. Resolve the supervisor findings before approval.',
+            'Run supervisor',
+            'supervisor',
+            'detail-tab-supervisor',
+            true,
+            55,
+            '',
+            'supervisor.run'
+          );
+        }
       }
     }
   }
@@ -32461,6 +32501,7 @@ function memoGovernanceStatus(app, validationResult) {
   var validation = String(result.validation_status || memoData.validation_status || memoMeta.validation_status || 'pending').toLowerCase();
   var review = String(result.review_status || memoData.review_status || memoMeta.review_status || '').toLowerCase();
   var supervisor = String((memoData.supervisor && memoData.supervisor.verdict) || memoMeta.supervisor_status || '').toUpperCase();
+  var supervisorExcluded = memoAiSupervisorExcludedFromPilot(memoData);
   if (app.memoIsStale || app.memoRequiresRegeneration) {
     return { status:'NEEDS REGENERATION', ready:false, primary:app.memoStaleReason || 'Application data changed after this memo was generated.', next:'Regenerate memo' };
   }
@@ -32469,6 +32510,12 @@ function memoGovernanceStatus(app, validationResult) {
   }
   if (validation === 'fail') {
     return { status:'BLOCKED', ready:false, primary:'Memo validation failed.', next:'Resolve validation issues and re-validate' };
+  }
+  if (supervisorExcluded) {
+    if (review === 'approved') {
+      return { status:'APPROVED', ready:true, primary:'Memo approval is recorded. AI Supervisor is excluded from this controlled pilot.', next:'Continue application decision workflow' };
+    }
+    return { status:'AI SUPERVISOR EXCLUDED', ready:false, primary:'AI Supervisor is excluded from the controlled pilot; retained synthetic evidence is not an active workflow result.', next:'Use only approved controlled-pilot workflows' };
   }
   if (!supervisor || supervisor === 'PENDING') {
     return { status:'NEEDS SUPERVISOR CHECK', ready:false, primary:'Supervisor review has not been completed.', next:'Run supervisor check' };
@@ -32752,15 +32799,22 @@ function renderMemoSections(data) {
   });
 
   // ── SUPERVISOR VERDICT PANEL ──
+  var supervisorAdvisoryBadgeHtml = '<span class="ai-advisory-badge">🤖 System-Generated — Advisory Only</span>';
   var sv = data.supervisor;
-  if (sv && sv.verdict) {
+  var supervisorExcluded = memoAiSupervisorExcludedFromPilot(data);
+  if (supervisorExcluded) {
+    html += '<div data-ai-supervisor-pilot-scope="excluded" style="border:1px solid #94a3b8;border-radius:8px;padding:14px 16px;margin-top:16px;background:#f8fafc;">';
+    html += '<div style="font-size:13px;font-weight:800;color:#334155;">AI Supervisor excluded from controlled pilot</div>';
+    html += '<div style="font-size:11px;color:#475569;line-height:1.55;margin-top:5px;">Any stored synthetic supervisor evidence is retained for future development and testing. It is not a validated active workflow result and no supervisor action is enabled for this pilot.</div>';
+    html += '</div>';
+  } else if (sv && sv.verdict) {
     var svColor = sv.verdict === 'CONSISTENT' ? '#16a34a' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? '#d97706' : '#dc2626';
     var svBg = sv.verdict === 'CONSISTENT' ? '#f0fdf4' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? '#fffbeb' : '#fef2f2';
     var svVerdictLabel = String(sv.verdict || '').replace(/_/g, ' ');
     html += '<div style="border:2px solid ' + svColor + ';border-radius:8px;padding:16px;margin-top:16px;background:' + svBg + ';">';
     html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">';
     html += '<span style="font-size:13px;font-weight:700;color:' + svColor + ';">SUPERVISOR VERDICT</span>';
-    html += '<span class="ai-advisory-badge">🤖 System-Generated — Advisory Only</span>';
+    html += supervisorAdvisoryBadgeHtml;
     html += '<span style="background:' + svColor + ';color:#fff;padding:2px 10px;border-radius:4px;font-size:11px;font-weight:700;">' + escapeHtml(svVerdictLabel) + '</span>';
     html += '<span style="font-size:11px;color:var(--text3);margin-left:auto;">Confidence: ' + Math.round((sv.supervisor_confidence || 0) * 100) + '%</span>';
     html += '</div>';

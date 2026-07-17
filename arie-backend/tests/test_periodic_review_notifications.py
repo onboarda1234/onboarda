@@ -56,10 +56,13 @@ def prs6_db():
     conn.execute(
         """
         INSERT INTO applications
-            (id, ref, client_id, company_name, country, sector, status, risk_level, risk_score, created_at, updated_at)
+            (id, ref, client_id, company_name, country, sector, status, risk_level,
+             risk_score, is_fixture, created_at, updated_at)
         VALUES
-            ('app-owned', 'ARF-PRS6-OWNED', 'client001', 'Owned Co Ltd', 'Mauritius', 'Fintech', 'approved', 'HIGH', 78, datetime('now'), datetime('now')),
-            ('app-no-client', 'ARF-PRS6-NOCLIENT', NULL, 'No Client Co Ltd', 'Mauritius', 'Fintech', 'approved', 'LOW', 10, datetime('now'), datetime('now'))
+            ('app-owned', 'ARF-PRS6-OWNED', 'client001', 'Owned Co Ltd', 'Mauritius', 'Fintech', 'approved', 'HIGH', 78, 0, datetime('now'), datetime('now')),
+            ('app-no-client', 'ARF-PRS6-NOCLIENT', NULL, 'No Client Co Ltd', 'Mauritius', 'Fintech', 'approved', 'LOW', 10, 0, datetime('now'), datetime('now')),
+            ('app-fixture', 'RM-PILOT-008', 'client001', 'Canonical Fixture Co Ltd', 'Mauritius', 'Fintech', 'approved', 'MEDIUM', 48, 1, datetime('now'), datetime('now')),
+            ('app-marker-only', 'RM-PILOT-009', 'client001', 'Marker Only Co Ltd', 'Mauritius', 'Fintech', 'approved', 'MEDIUM', 48, 0, datetime('now'), datetime('now'))
         """
     )
     conn.commit()
@@ -89,14 +92,18 @@ def _create_review(
     notification_status="not_sent",
     initial_sent_at=None,
     reminder_count=0,
+    trigger_type=None,
+    trigger_reason=None,
+    trigger_source=None,
 ):
     conn.execute(
         """
         INSERT INTO periodic_reviews
             (application_id, client_name, risk_level, status, due_date, baseline_status,
              client_attestation_status, client_notification_status, initial_notification_sent_at,
-             reminder_count, notification_channel, created_at)
-        VALUES (?, 'Owned Co Ltd', 'HIGH', ?, ?, 'not_applicable', ?, ?, ?, ?, 'portal', datetime('now'))
+             reminder_count, notification_channel, trigger_type, trigger_reason, trigger_source,
+             created_at)
+        VALUES (?, 'Owned Co Ltd', 'HIGH', ?, ?, 'not_applicable', ?, ?, ?, ?, 'portal', ?, ?, ?, datetime('now'))
         """,
         (
             app_id,
@@ -106,6 +113,9 @@ def _create_review(
             notification_status,
             initial_sent_at,
             reminder_count,
+            trigger_type,
+            trigger_reason,
+            trigger_source,
         ),
     )
     conn.commit()
@@ -124,6 +134,13 @@ def _notification_count(conn, review_ref=None):
             (f"%{review_ref}%",),
         ).fetchone()["c"]
     return conn.execute("SELECT COUNT(*) AS c FROM client_notifications").fetchone()["c"]
+
+
+def _review_snapshot(conn, review_id):
+    row = conn.execute(
+        "SELECT * FROM periodic_reviews WHERE id=?", (review_id,)
+    ).fetchone()
+    return dict(row)
 
 
 def test_postgres_column_discovery_does_not_probe_sqlite_pragma():
@@ -180,6 +197,168 @@ def test_initial_client_notification_is_generated_and_audited(prs6_db):
     actions = [action for action, _detail in _audit_actions(prs6_db)]
     assert "periodic_review_client_notification_sent" in actions
     assert "periodic_review_notification_status_updated" in actions
+
+
+def test_fixture_notification_is_suppressed_without_dispatch_or_writes(
+    prs6_db, caplog
+):
+    review = _create_review(
+        prs6_db,
+        app_id="app-fixture",
+        trigger_type="pilot_canonical_fixture",
+        trigger_reason="RM-PILOT-008:PERIODIC",
+        trigger_source="pilot_canonical_dataset",
+    )
+    prs6_db.execute(
+        "UPDATE periodic_reviews SET client_notification_status='failed', "
+        "last_notification_error='No client linked', reminder_count=2, "
+        "last_reminder_sent_at='2026-05-01T00:00:00+00:00', "
+        "next_reminder_due_at='2026-05-08T00:00:00+00:00' WHERE id=?",
+        (review["id"],),
+    )
+    prs6_db.commit()
+    review = prs6_db.execute(
+        "SELECT * FROM periodic_reviews WHERE id=?", (review["id"],)
+    ).fetchone()
+    before = _review_snapshot(prs6_db, review["id"])
+    audit_before = _audit_actions(prs6_db)
+    sender_calls = []
+
+    def sender_spy(email, subject, message):
+        sender_calls.append((email, subject, message))
+        return True
+
+    with caplog.at_level("INFO", logger="periodic_review_notifications"):
+        result = process_periodic_review_notification(
+            prs6_db,
+            review,
+            channel="both",
+            email_sender=sender_spy,
+            actor=_actor(),
+        )
+    prs6_db.commit()
+
+    assert result["sent_events"] == []
+    assert result["errors"] == []
+    assert result["officer_alert_event"] is None
+    assert result["client_action_required"] == "attestation_required"
+    assert result["notification_suppressed"] is True
+    assert result["notification_suppression_reason"] == "fixture_application"
+    evidence = result["notification_suppression_evidence"]
+    assert evidence == {
+        "suppressed": True,
+        "reason": "fixture_application",
+        "policy": "fixture_applications_do_not_receive_periodic_review_notifications",
+        "application_id": "app-fixture",
+        "application_ref": "RM-PILOT-008",
+        "periodic_review_id": review["id"],
+        "canonical_review_marker_match": True,
+        "trigger_type": "pilot_canonical_fixture",
+        "trigger_source": "pilot_canonical_dataset",
+    }
+    assert result["notification"]["client_notification_status"] == "suppressed"
+    assert result["notification"]["client_notification_status_label"] == "Suppressed — synthetic fixture"
+    assert result["notification"]["last_notification_error"] is None
+    assert result["notification"]["last_reminder_sent_at"] is None
+    assert result["notification"]["next_reminder_due_at"] is None
+    assert result["notification"]["reminder_count"] == 0
+    assert result["next_reminder_due_at"] is None
+    assert result["notification"]["notification_suppressed"] is True
+    assert (
+        result["notification"]["notification_suppression_reason"]
+        == "fixture_application"
+    )
+    assert result["notification"]["notification_suppression_evidence"] == evidence
+    assert sender_calls == []
+    assert _notification_count(prs6_db) == 0
+    assert _audit_actions(prs6_db) == audit_before
+    assert _review_snapshot(prs6_db, review["id"]) == before
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "periodic_review_notifications"
+        and record.getMessage().startswith(
+            "periodic-review-notification-suppressed "
+        )
+    ]
+    assert len(messages) == 1
+    logged = json.loads(messages[0].split(" ", 1)[1])
+    assert logged == evidence
+
+
+def test_fixture_suppression_is_repeatable_and_reported_by_sweep(prs6_db):
+    review = _create_review(prs6_db, app_id="app-fixture")
+    before = _review_snapshot(prs6_db, review["id"])
+    audit_before = _audit_actions(prs6_db)
+    sender_calls = []
+
+    def sender_spy(*args):
+        sender_calls.append(args)
+        return True
+
+    first = process_periodic_review_notification(
+        prs6_db,
+        review,
+        channel="both",
+        email_sender=sender_spy,
+        actor=_actor(),
+    )
+    refreshed = prs6_db.execute(
+        "SELECT * FROM periodic_reviews WHERE id=?", (review["id"],)
+    ).fetchone()
+    second = process_periodic_review_notification(
+        prs6_db,
+        refreshed,
+        channel="both",
+        email_sender=sender_spy,
+        actor=_actor(),
+    )
+    sweep = run_periodic_review_notification_sweep(
+        prs6_db,
+        review_ids=[review["id"]],
+        channel="both",
+        email_sender=sender_spy,
+        actor=_actor(),
+    )
+    prs6_db.commit()
+
+    assert first["notification_suppressed"] is True
+    assert second["notification_suppressed"] is True
+    assert first["notification_suppression_evidence"] == second[
+        "notification_suppression_evidence"
+    ]
+    assert first["notification_suppression_evidence"][
+        "canonical_review_marker_match"
+    ] is False
+    assert sweep["processed"] == 1
+    assert sweep["suppressed_count"] == 1
+    assert sweep["sent_count"] == 0
+    assert sweep["failed_count"] == 0
+    assert sweep["officer_alert_count"] == 0
+    assert sweep["results"][0]["notification_suppressed"] is True
+    assert sender_calls == []
+    assert _notification_count(prs6_db) == 0
+    assert _audit_actions(prs6_db) == audit_before
+    assert _review_snapshot(prs6_db, review["id"]) == before
+
+
+def test_canonical_marker_does_not_suppress_nonfixture_notification(prs6_db):
+    review = _create_review(
+        prs6_db,
+        app_id="app-marker-only",
+        trigger_type="pilot_canonical_fixture",
+        trigger_reason="RM-PILOT-009:PERIODIC",
+        trigger_source="pilot_canonical_dataset",
+    )
+    result = process_periodic_review_notification(
+        prs6_db, review, channel="portal", actor=_actor()
+    )
+    prs6_db.commit()
+
+    assert result["sent_events"] == ["periodic_review_required"]
+    assert "notification_suppressed" not in result
+    assert _notification_count(prs6_db, f"PR-{review['id']}") == 1
 
 
 def test_initial_notification_is_not_duplicated(prs6_db):

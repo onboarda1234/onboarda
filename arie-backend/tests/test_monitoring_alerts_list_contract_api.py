@@ -314,6 +314,9 @@ def test_fixture_opt_in_is_authorized_and_read_only(monitoring_list_server):
     assert 9407 not in {item["id"] for item in default["alerts"]}
     assert 9407 in {item["id"] for item in admin_fixtures["alerts"]}
     assert admin_fixtures["show_fixtures"] is True
+    fixture_alert = next(item for item in admin_fixtures["alerts"] if item["id"] == 9407)
+    assert bool(fixture_alert["is_fixture"]) is True
+    assert fixture_alert["application_ref"] == "ARF-2026-900099"
     assert 9407 not in {item["id"] for item in co_fixtures["alerts"]}
     assert co_fixtures["show_fixtures"] is False
 

@@ -28834,7 +28834,8 @@ class MonitoringAlertCreateHandler(BaseHandler):
                        u.full_name AS owner_name,
                        u.email AS owner_email,
                        app.ref AS application_ref,
-                       app.company_name AS application_company_name
+                       app.company_name AS application_company_name,
+                       app.is_fixture AS is_fixture
                   FROM monitoring_alerts ma
              LEFT JOIN users u ON ma.reviewed_by = u.id
              LEFT JOIN applications app ON ma.application_id = app.id
@@ -34099,7 +34100,8 @@ def _monitoring_alert_get(db, alert_id):
                u.full_name AS owner_name,
                u.email AS owner_email,
                app.ref AS application_ref,
-               app.company_name AS application_company_name
+               app.company_name AS application_company_name,
+               app.is_fixture AS is_fixture
           FROM monitoring_alerts ma
      LEFT JOIN users u ON ma.reviewed_by = u.id
      LEFT JOIN applications app ON ma.application_id = app.id
@@ -37026,6 +37028,7 @@ def _serialize_periodic_review_row(db, review_row, *, projection=None, lite=Fals
     result["linked_edd_case_id"] = projection.get("linked_edd_case_id", result.get("linked_edd_case_id"))
     result["linked_monitoring_alert_id"] = projection.get("linked_monitoring_alert_id", result.get("linked_monitoring_alert_id"))
     result["application_ref"] = projection.get("application_ref")
+    result["is_fixture"] = bool(projection.get("is_fixture"))
     result["status_label"] = projection.get("status_label")
     result["queue_status"] = projection.get("queue_status")
     result["queue_status_label"] = projection.get("queue_status_label")
