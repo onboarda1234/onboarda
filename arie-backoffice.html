@@ -11595,7 +11595,9 @@ async function submitIdvResolution() {
       confirmation: confirmation
     });
     closeModal('modal-idv-resolution');
-    await refreshCurrentAppDetail();
+    // IDV resolution lives in the KYC Documents tab — refresh must return the
+    // officer there, same as submitBoDocUpload (not the default Overview reset).
+    await refreshCurrentKycDocumentsDetail();
     loadActivityLog(currentApp);
     showToast('IDV resolution recorded.');
   } catch(e) {
@@ -28370,7 +28372,9 @@ async function submitOfficerCorrection() {
     setOfficerCorrectionError('');
     await boApiCall('POST', '/applications/' + currentApp.id + '/corrections', payload);
     closeModal('modal-officer-correction');
-    await refreshCurrentAppDetail();
+    // Corrections launch from Overview (correction mode) AND from party cards
+    // in the KYC Documents tab — keep the officer on whichever tab is active.
+    await refreshCurrentAppDetailPreservingTab();
     loadActivityLog(currentApp);
     showToast('Correction saved. RegMind updated the risk, Enhanced Review requirements, memo status, and approval blockers where required.');
   } catch (err) {
