@@ -94,3 +94,23 @@ def test_officer_signoff_checkbox_revalidates_approve_button():
     assert (
         'id="memo-officer-signoff" onchange="refreshMemoApprovalReasonState()"' in html
     )
+
+
+# ── Tab-preserving refresh for KYC-tab actions ────────────────────────────────
+# Bug report 2026-07-16: resolving an IDV exception in the KYC Documents tab
+# bounced the officer back to Overview, because the success path used the
+# tab-resetting refreshCurrentAppDetail(). Same defect class as the memo
+# mutations above; these pin the KYC-tab actions to tab-aware refreshes.
+
+def test_idv_resolution_returns_officer_to_kyc_documents_tab():
+    html = _read("arie-backoffice.html")
+    body = _func_body(html, "async function submitIdvResolution(")
+    assert "await refreshCurrentKycDocumentsDetail();" in body
+    assert "await refreshCurrentAppDetail();" not in body
+
+
+def test_officer_correction_preserves_active_tab():
+    html = _read("arie-backoffice.html")
+    body = _func_body(html, "async function submitOfficerCorrection(")
+    assert "await refreshCurrentAppDetailPreservingTab();" in body
+    assert "await refreshCurrentAppDetail();" not in body
