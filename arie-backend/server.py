@@ -21138,6 +21138,9 @@ def _screening_provider_evidence(results):
                 or result.get("provider_alert_identifier")
                 or result.get("provider_profile_identifier")
             ) else None),
+            "triage_score": result.get("triage_score") if isinstance(result.get("triage_score"), (int, float)) else None,
+            "triage_score_version": result.get("triage_score_version"),
+            "triage_score_reasons": result.get("triage_score_reasons") or [],
             "subject_scope": _first_non_empty(
                 result.get("subject_scope"),
                 source_ref.get("subject_scope"),
@@ -21661,6 +21664,13 @@ def _normalise_screening_evidence_item(row, evidence, *, source, link_strategy=N
         "review_history_summary": _screening_review_summary(row),
         "evidence_source": source,
         "link_strategy": link_strategy or source,
+        "triage_score": evidence.get("triage_score") if isinstance(evidence.get("triage_score"), (int, float)) else None,
+        "triage_score_version": _screening_evidence_text(evidence.get("triage_score_version")),
+        "triage_score_reasons": [
+            _screening_evidence_text(reason)
+            for reason in (evidence.get("triage_score_reasons") or [])
+            if _screening_evidence_text(reason)
+        ],
     }
     item["evidence_status"] = _screening_evidence_item_status(item)
     item["evidence_quality"] = _screening_evidence_canonical_quality(item["evidence_status"])
@@ -23278,6 +23288,62 @@ _SCREENING_QUEUE_APPLICATION_SCAN_CAP = 200
 # evidence uncapped, so officer decisions always see the complete set.
 _SCREENING_QUEUE_EVIDENCE_PER_APP_CAP = 200
 
+# RegMind triage score weak-tail threshold (rts-1.0 calibration — pending
+# review against the first enriched staging sample). Applies ONLY to hits
+# that carry a stored triage score; unscored hits (screened before rts-1.0)
+# are reported separately as unscored, never silently bucketed as weak.
+_TRIAGE_WEAK_THRESHOLD = 40
+
+_TRIAGE_BUCKET_BY_CATEGORY = {
+    "sanctions": "sanctions",
+    "pep": "pep",
+    "adverse media": "adverse_media",
+    "adverse_media": "adverse_media",
+    "watchlist": "watchlist",
+}
+
+
+def _screening_queue_row_triage(row):
+    """Server-computed triage summary for one subject row (SRP-3 Phase A).
+
+    Aggregation only — counts and ranking over already-normalised evidence
+    items. Buckets always sum to the item total (invariant-tested); hits
+    without a stored rts score sort last and are counted as unscored rather
+    than guessed.
+    """
+    items = ((row.get("screening_evidence") or {}).get("items")) or []
+    buckets = {"sanctions": 0, "pep": 0, "adverse_media": 0, "watchlist": 0, "other": 0}
+    scored, weak, unscored = [], 0, 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        category_key = _TRIAGE_BUCKET_BY_CATEGORY.get(
+            str(item.get("category") or "").strip().lower(), "other"
+        )
+        buckets[category_key] += 1
+        score = item.get("triage_score")
+        if isinstance(score, (int, float)):
+            if score < _TRIAGE_WEAK_THRESHOLD:
+                weak += 1
+            scored.append({
+                "name": item.get("matched_name") or item.get("name") or "",
+                "score": score,
+                "category": category_key,
+                "reasons": (item.get("triage_score_reasons") or [])[:3],
+            })
+        else:
+            unscored += 1
+    scored.sort(key=lambda entry: (-entry["score"], entry["name"]))
+    return {
+        "version": "rts-1.0",
+        "total": sum(buckets.values()),
+        "buckets": buckets,
+        "weak_count": weak,
+        "unscored_count": unscored,
+        "weak_threshold": _TRIAGE_WEAK_THRESHOLD,
+        "top_hits": scored[:5],
+    }
+
 
 def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None, offset=0, filters=None, include_evidence=True):
     # Stage timings ship in metrics.timings_ms so a slow measurement is
@@ -23894,6 +23960,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
             )
             for row in paginated_rows
         ]
+        for row in paginated_rows:
+            row["triage"] = _screening_queue_row_triage(row)
         _perf_marks["evidence_enrich"] = time.perf_counter()
     response_rows = paginated_rows if include_evidence else [
         _screening_queue_summary_row(row)

@@ -249,6 +249,92 @@ def compute_ca_screening_hash(merged_matches: list[MergedMatch]) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:32]
 
 
+TRIAGE_SCORE_VERSION = "rts-1.0"
+_TRIAGE_EXACT_NAME_TOKENS = {"name_exact", "exact_match", "aka_exact"}
+
+
+def compute_triage_score(match: MergedMatch, rollups: dict) -> dict:
+    """Deterministic RegMind triage score (v1) for one provider hit.
+
+    ORDERING AND BANDING ONLY. This score ranks hits for officer attention;
+    it never suppresses a hit, never feeds risk scoring, approval gates,
+    memo content, or any automated clearance. It is computed purely from
+    provider facts, so the same hit always scores the same, and the formula
+    is versioned (TRIAGE_SCORE_VERSION) so historical scores stay
+    interpretable when weights are recalibrated.
+
+    v1 weights (calibration pending the first enriched staging sample):
+      category base (strongest wins): sanctions 40 · PEP class 1-2 30 ·
+      other PEP 22 · watchlist 18 · adverse media 15 · uncategorized 5;
+      +6 when more than one category applies;
+      name strength: provider exact-match token +35, else strict/both pass
+      +15, relaxed-only pass +6;
+      +8 when article evidence is attached; +6 when the provider marks the
+      profile a relative/close associate.
+    """
+    score = 0
+    reasons = []
+    categories = 0
+
+    pep_classes = extract_pep_classes(match) or []
+    has_watchlist = any(
+        isinstance(indicator, CAWatchlistIndicator)
+        and not _indicator_key(indicator).startswith("r_sanctions_exposure")
+        for indicator in _all_indicators(match.risk)
+    )
+
+    category_points = []
+    if rollups.get("has_sanctions_hit"):
+        category_points.append((40, "sanctions list match"))
+    if rollups.get("has_pep_hit"):
+        if any(cls in ("PEP_CLASS_1", "PEP_CLASS_2") for cls in pep_classes):
+            category_points.append((30, "PEP class 1-2"))
+        else:
+            category_points.append((22, "PEP"))
+    if has_watchlist:
+        category_points.append((18, "watchlist entry"))
+    if rollups.get("has_adverse_media_hit"):
+        category_points.append((15, "adverse media"))
+    categories = len(category_points)
+    if category_points:
+        base_points, base_reason = max(category_points, key=lambda item: item[0])
+        score += base_points
+        reasons.append(base_reason)
+        if categories >= 2:
+            score += 6
+            reasons.append("multiple risk categories")
+    else:
+        score += 5
+        reasons.append("uncategorized provider match")
+
+    match_types = {
+        str(token).strip().lower()
+        for token in _profile_list(match.profile, "provider_match_types")
+    }
+    if match_types & _TRIAGE_EXACT_NAME_TOKENS:
+        score += 35
+        reasons.append("exact name match")
+    elif match.surfaced_by_pass in ("strict", "both"):
+        score += 15
+        reasons.append("matched under strict search")
+    elif match.surfaced_by_pass == "relaxed":
+        score += 6
+        reasons.append("relaxed-search match only")
+
+    if _profile_media_evidence(match.profile):
+        score += 8
+        reasons.append("article evidence attached")
+    if rollups.get("is_rca"):
+        score += 6
+        reasons.append("relative/close associate")
+
+    return {
+        "score": max(1, min(100, score)),
+        "version": TRIAGE_SCORE_VERSION,
+        "reasons": reasons,
+    }
+
+
 def extract_pep_classes(match: MergedMatch) -> list[str] | None:
     classes = []
     for indicator in _all_indicators(match.risk):
@@ -440,6 +526,10 @@ def _legacy_screening_result_from_match(match: MergedMatch, rollups: dict) -> di
         "pep_classes": extract_pep_classes(match),
         "indicators": indicators,
     }
+    triage = compute_triage_score(match, rollups)
+    result["triage_score"] = triage["score"]
+    result["triage_score_version"] = triage["version"]
+    result["triage_score_reasons"] = triage["reasons"]
     if provider_match_score_raw is not None:
         result["provider_match_score_raw"] = provider_match_score_raw
     if provider_match_types:
@@ -1044,6 +1134,7 @@ def _provider_match(match, include_surfaced_by_pass):
         "relationships": _relationships(match.profile),
         "indicators": [_indicator_payload(i) for i in _all_indicators(match.risk)],
     }
+    data["triage"] = compute_triage_score(match, data["rollups"])
     if provider_match_score_raw is not None:
         data["provider_match_score_raw"] = provider_match_score_raw
     if provider_match_types:

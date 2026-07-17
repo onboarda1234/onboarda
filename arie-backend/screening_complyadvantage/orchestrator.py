@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import json
 import logging
+import re
 import time
 from urllib.parse import urlparse
 
@@ -654,7 +655,86 @@ def _adapt_profile_subject(value, fallback_name=None, *, company):
         return None
     subject = dict(value)
     subject["names"] = _adapt_profile_names(subject.get("names"), fallback_name, company=company)
+    if not company:
+        # SRP-3 Phase A: normalise the matched person's date of birth into the
+        # CADateOfBirth shape. Raw Mesh payloads carry DOB in several forms
+        # (ISO string, {year,...} dict, bare year, dates_of_birth list); an
+        # unnormalised string previously failed CAProfile validation and
+        # silently dropped the WHOLE profile. Unparseable values are omitted,
+        # never guessed — the triage score treats absent DOB as "no
+        # corroboration", not as a conflict.
+        dob = _normalise_profile_date_of_birth(
+            subject.get("date_of_birth"),
+            subject.get("dates_of_birth"),
+            subject.get("birth_date"),
+            subject.get("dob"),
+            subject.get("year_of_birth"),
+        )
+        subject.pop("dates_of_birth", None)
+        subject.pop("birth_date", None)
+        subject.pop("dob", None)
+        subject.pop("year_of_birth", None)
+        if dob is not None:
+            subject["date_of_birth"] = dob
+        else:
+            subject.pop("date_of_birth", None)
+        countries = subject.get("countries")
+        if isinstance(countries, str) and countries.strip():
+            subject["countries"] = [countries.strip()]
     return subject
+
+
+def _normalise_profile_date_of_birth(*candidates):
+    """Best-effort DOB normalisation to {year, month, day, date}. None on failure."""
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            for entry in candidate:
+                normalised = _normalise_profile_date_of_birth(entry)
+                if normalised is not None:
+                    return normalised
+            continue
+        if isinstance(candidate, dict):
+            year = candidate.get("year")
+            try:
+                year = int(year) if year is not None else None
+            except (TypeError, ValueError):
+                year = None
+            if year and 1000 <= year <= 9999:
+                out = {"year": year}
+                for key in ("month", "day"):
+                    try:
+                        part = int(candidate.get(key)) if candidate.get(key) is not None else None
+                    except (TypeError, ValueError):
+                        part = None
+                    if part:
+                        out[key] = part
+                if isinstance(candidate.get("date"), str) and candidate["date"].strip():
+                    out["date"] = candidate["date"].strip()
+                return out
+            continue
+        if isinstance(candidate, bool):
+            continue
+        if isinstance(candidate, int):
+            if 1000 <= candidate <= 9999:
+                return {"year": candidate}
+            continue
+        if isinstance(candidate, str):
+            text = candidate.strip()
+            if not text:
+                continue
+            match = re.match(r"^(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?", text)
+            if match:
+                out = {"year": int(match.group(1))}
+                if match.group(2):
+                    out["month"] = int(match.group(2))
+                if match.group(3):
+                    out["day"] = int(match.group(3))
+                if match.group(2) and match.group(3):
+                    out["date"] = f"{match.group(1)}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
+                return out
+            if re.match(r"^\d{4}$", text):
+                return {"year": int(text)}
+    return None
 
 
 def _adapt_profile_names(value, fallback_name=None, *, company):
