@@ -24,10 +24,10 @@ things stand") was retired in the 2026-07-15 restructure; see git history.
 
 # Onboarda / RegMind — Audit-Remediation Master List
 
-**Reconciled:** 2026-07-15 against live GitHub · `main` = `7e91114` (merge of #768)
+**Reconciled:** 2026-07-16 (scoped: Phase 5 screening-queue stream brought current + SRP work plan added) · `main` = `d3f1bc9a` (merge of #781) · full-register reconcile in flight in [#780](https://github.com/onboarda1234/onboarda/pull/780)
 **Pilot:** all 4 code blockers ✅ closed · remaining pilot work = **RSMP Tier 0C** + the open 🟠 gates below
 **Production:** blocked — Audit-3 verdict REMEDIATE BEFORE PROCEEDING; Phase 14 largely open. Nothing in this file is a production-readiness claim.
-**Open PRs:** [#752](https://github.com/onboarda1234/onboarda/pull/752) (docs — P13-7 status; content incorporated here) · [#737](https://github.com/onboarda1234/onboarda/pull/737) (draft — P12-1 Phase A discovery report)
+**Open PRs:** [#780](https://github.com/onboarda1234/onboarda/pull/780) (docs — full register reconcile; supersedes drafts #777/#767/#752) · [#779](https://github.com/onboarda1234/onboarda/pull/779) (draft — RSMP Tier 0C-A evidence pack, verdict NOT READY) · [#782](https://github.com/onboarda1234/onboarda/pull/782) (analyst RMI/Escalate RBAC alignment) · [#737](https://github.com/onboarda1234/onboarda/pull/737) (draft — P12-1 Phase A discovery report)
 
 **Legend:** ✅ done/merged · ◐ split item (one half done, one open) · 🟢 PR open · 🔨 in progress · 📋 scoped · ⏸ blocked · ⬜ pending · 🔴 pilot code blocker · 🟠 pilot operational gate
 **E column** = closure evidence in [`compliance/REMEDIATION_CLOSURE_EVIDENCE.md`](compliance/REMEDIATION_CLOSURE_EVIDENCE.md).
@@ -135,6 +135,30 @@ Two gates are decisions, not rows: **Applications-page readiness audit** clear o
 | — | Audit Phase 2: stable subject-key joins for screening entries | — | #760 | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#screening-queue-stream-prs-756-763) |
 | — | Audit Phase 3: hydrate evidence for the returned page only | — | #761 | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#screening-queue-stream-prs-756-763) |
 | — | Audit Phase 4: fixture governance, QA disposition fixtures, 7-column layout | — | #763 | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#screening-queue-stream-prs-756-763) |
+| — | Phase 4b/4c/4d: sanctioned seeder deletes, PG booleans, FK-complete seeding, de-flake | — | #766 #769 #770 | ✅ merged · Phase 4 validated PASS 2026-07-15 | — |
+| — | Phase 5 disposition/RBAC/leakage validation (four-eyes E2E, analyst 403, 539-row sweep) | — | — | ✅ PASS — Section M closed 2026-07-16 (below) | — |
+| — | Section M latency: evidence cap + candidate hoist + `application_id` index (21.1s → 5.2s) | — | #773 | ✅ merged + staging-validated · correctness PASS | — |
+| — | Section M latency: stage-timing attribution (`metrics.timings_ms`) → transfer-dominated | — | #778 | ✅ merged · attribution complete 2026-07-16 | — |
+| — | Section M latency: gzip responses (4.7MB raw → ~15x compressed transfer) | — | #781 | ✅ merged + close-out PASS 2026-07-16 — evidence p50/p95 1.096s/1.202s (was 21.1s/33.6s) | — |
+
+### Screening Review page & Agent 3 — simplification work plan (SRP, added 2026-07-16)
+
+Source: Manus blueprint (ARF-2026-920016, 298 untriageable hits) — reviewed against code
+2026-07-16. Manus's root cause ("normalizer discards triage data") verified INACCURATE:
+the current normalizer retains matched name, stable profile id, risk types and media
+evidence; observed blindness = pre-enrichment stored snapshots + match-score display
+deliberately suppressed pending the CA scale answer. Execution gated per phase by founder
+approval; fail-closed clearance, four-eyes, provenance separation and adjudication schema
+are out of scope for every SRP item.
+
+| ID | Title | Sev | GitHub | Status | E |
+|----|-------|:--:|:--:|----|:--:|
+| SRP-0 | Verify stale-snapshot vs live-normalizer split (ARF-2026-920016; fresh-screen contrast; distinct-profile count of the 298 hits) — read-only | — | — | ✅ 2026-07-16 — stale/partial snapshot confirmed (profile ids present; names/scores/match-types/media absent) · positive-hit fresh contrast inconclusive (fixture screen = 0 hits) | — |
+| SRP-1 | ComplyAdvantage clarification email: match-score scale, stable profile id, hit-volume tuning, RPT-5 adverse-media persistence, data residency | — | — | 🔨 sent 2026-07-16 · awaiting CA reply | — |
+| SRP-2 | Stale-report refresh pathway for pre-enrichment stored screening snapshots (governed re-screen) | — | — | 📋 sized by SRP-0: 132 non-fixture hit-bearing candidates (255 no-hit reports excluded) — design proposed, awaiting founder go | — |
+| SRP-3 | Review-page triage IA: summary strip, dedup by provider profile, risk-ranked cards (sanctions → PEP → adverse media → other), side-by-side disambiguation, progressive disclosure | — | — | ⬜ gated on SRP-0 · score display additionally on SRP-1 | — |
+| SRP-4 | Agent 3 → triage narrative ("review these N first, here's why"), advisory-only, never mutates dispositions | — | — | ⬜ after SRP-3 | — |
+| SRP-5 | Provider-side noise reduction for entity searches — validate against **Mesh** docs (Manus cited legacy API); sanctions/PEP-1 recall must not decrease | — | — | ⏸ blocked on SRP-1 answers · deliberately last | — |
 
 ## Phase 6 — Post-#661 staging follow-ups
 
@@ -418,7 +442,7 @@ Two gates are decisions, not rows: **Applications-page readiness audit** clear o
 
 ---
 
-## Roll-up — computed by counting rows, 2026-07-15
+## Roll-up — computed by counting rows, 2026-07-16
 
 Counting rule: every row in Phases 0–14 + the Re-audit/RSMP tables counts once.
 The 2 cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 13 CA
@@ -427,11 +451,11 @@ named half done and one open (staging-SHA gate, P12-4, P13-7, P9-13, DCI-104).
 
 | Status | Count |
 |--------|:--:|
-| ✅ done/merged | 83 |
+| ✅ done/merged | 88 |
 | ◐ split — one half open | 5 |
 | 🟢 PR open | 1 |
-| 🔨 in progress | 2 |
+| 🔨 in progress | 3 |
 | 📋 scoped | 19 |
-| ⏸ blocked | 4 |
-| ⬜ pending | 32 |
-| **Total tracked items** | **146** |
+| ⏸ blocked | 5 |
+| ⬜ pending | 36 |
+| **Total tracked items** | **157** |
