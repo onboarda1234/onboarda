@@ -94,6 +94,12 @@ PostgreSQL rejected the value with `DatatypeMismatch`; the transaction rolled
 back. Post-checks confirm zero applications, zero `RM-PILOT-*` records and zero
 application-scoped residue.
 
+The supplemental read-only runtime probe confirms 41/41 model comparisons and
+the reviewed manifest hash, with `RM-PILOT-004` base/total 7.0,
+`RM-PILOT-008` D3 3.25 and base/total 42.1, and `RM-PILOT-009` D3 3.25 and
+base/total 42.1. It performed zero database writes. These runtime results do not
+override the failed persistence dry-run.
+
 The seeder must be corrected and the complete 41-scenario dry-run rerun before
 any canonical apply authorization. Do not work around the type mismatch
 operationally and do not seed the current manifest yet.
