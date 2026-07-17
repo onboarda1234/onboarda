@@ -173,6 +173,24 @@ class TestDobNormalisation:
         assert _normalise_profile_date_of_birth("unknown") is None
         assert _normalise_profile_date_of_birth(None, "", []) is None
 
+    def test_malformed_values_rejected_never_salvaged(self):
+        """Codex review finding (PR #790 merge gate): prefix-matching leaked
+        guessed years out of garbage. Strings must fully match a supported
+        form; out-of-range and impossible calendar values are rejected."""
+        assert _normalise_profile_date_of_birth("1961-xx") is None
+        assert _normalise_profile_date_of_birth("1961-99-99") is None
+        assert _normalise_profile_date_of_birth("1961-13") is None
+        assert _normalise_profile_date_of_birth("1961-00-01") is None
+        assert _normalise_profile_date_of_birth("1961-02-30") is None
+        assert _normalise_profile_date_of_birth("1961extra") is None
+        # Valid forms still parse, including single-digit parts.
+        assert _normalise_profile_date_of_birth("1961-3-4") == {
+            "year": 1961, "month": 3, "day": 4, "date": "1961-03-04",
+        }
+        # Structured dict: explicit year kept, invalid parts dropped (not guessed).
+        assert _normalise_profile_date_of_birth({"year": 1961, "month": 99, "day": 99}) == {"year": 1961}
+        assert _normalise_profile_date_of_birth({"year": 1961, "month": 2, "day": 30}) == {"year": 1961, "month": 2}
+
     def test_person_subject_normalised(self):
         subject = _adapt_profile_subject(
             {"names": {"values": [{"name": "G Murphy"}]}, "date_of_birth": "1961-03-04"},

@@ -700,14 +700,16 @@ def _normalise_profile_date_of_birth(*candidates):
             except (TypeError, ValueError):
                 year = None
             if year and 1000 <= year <= 9999:
+                # Structured fields: the year is explicit provider data. Month/
+                # day parts are kept ONLY when they are valid calendar values;
+                # out-of-range parts are dropped, never passed through.
                 out = {"year": year}
-                for key in ("month", "day"):
-                    try:
-                        part = int(candidate.get(key)) if candidate.get(key) is not None else None
-                    except (TypeError, ValueError):
-                        part = None
-                    if part:
-                        out[key] = part
+                month = _int_in_range(candidate.get("month"), 1, 12)
+                day = _int_in_range(candidate.get("day"), 1, 31)
+                if month:
+                    out["month"] = month
+                if month and day and _valid_calendar_date(year, month, day):
+                    out["day"] = day
                 if isinstance(candidate.get("date"), str) and candidate["date"].strip():
                     out["date"] = candidate["date"].strip()
                 return out
@@ -719,22 +721,51 @@ def _normalise_profile_date_of_birth(*candidates):
                 return {"year": candidate}
             continue
         if isinstance(candidate, str):
+            # Strings must FULLY match a supported form — a malformed value
+            # like "1961-xx" or "1961-99-99" is rejected outright, never
+            # partially salvaged into a guessed year (Codex review finding,
+            # PR #790 merge gate).
             text = candidate.strip()
             if not text:
                 continue
-            match = re.match(r"^(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?", text)
-            if match:
-                out = {"year": int(match.group(1))}
-                if match.group(2):
-                    out["month"] = int(match.group(2))
+            match = re.fullmatch(r"(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?", text)
+            if not match:
+                continue
+            year = int(match.group(1))
+            if not 1000 <= year <= 9999:
+                continue
+            out = {"year": year}
+            if match.group(2):
+                month = _int_in_range(match.group(2), 1, 12)
+                if month is None:
+                    continue  # e.g. 1961-99: whole value is malformed
+                out["month"] = month
                 if match.group(3):
-                    out["day"] = int(match.group(3))
-                if match.group(2) and match.group(3):
-                    out["date"] = f"{match.group(1)}-{int(match.group(2)):02d}-{int(match.group(3)):02d}"
-                return out
-            if re.match(r"^\d{4}$", text):
-                return {"year": int(text)}
+                    day = _int_in_range(match.group(3), 1, 31)
+                    if day is None or not _valid_calendar_date(year, month, day):
+                        continue  # e.g. 1961-02-30
+                    out["day"] = day
+                    out["date"] = f"{year}-{month:02d}-{day:02d}"
+            return out
     return None
+
+
+def _int_in_range(value, low, high):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if low <= number <= high else None
+
+
+def _valid_calendar_date(year, month, day):
+    from datetime import date
+
+    try:
+        date(year, month, day)
+    except ValueError:
+        return False
+    return True
 
 
 def _adapt_profile_names(value, fallback_name=None, *, company):
