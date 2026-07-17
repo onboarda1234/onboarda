@@ -24,10 +24,10 @@ things stand") was retired in the 2026-07-15 restructure; see git history.
 
 # Onboarda / RegMind — Audit-Remediation Master List
 
-**Reconciled:** 2026-07-16 against live GitHub · `main` = `96644c1` (merge of #782) · scope of this reconcile: Applications-module confirmation-audit stream (Phase 7) + header; parallel register PRs #780/#783 reconcile other streams — row union applies on merge
+**Reconciled:** 2026-07-17 against live GitHub · `main` = `97ae6f8` · scope of this reconcile: row union of the Applications-module confirmation-audit stream with the Phase 5 screening rows merged through #783/#786; full-register reconcile remains in [#780](https://github.com/onboarda1234/onboarda/pull/780)
 **Pilot:** all 4 code blockers ✅ closed · remaining pilot work = **RSMP Tier 0C** + the open 🟠 gates below · Applications module: unconditional **PILOT-READY** (confirmation audit, 2026-07-16)
 **Production:** blocked — Audit-3 verdict REMEDIATE BEFORE PROCEEDING; Phase 14 largely open. Nothing in this file is a production-readiness claim.
-**Open PRs:** [#784](https://github.com/onboarda1234/onboarda/pull/784) (draft — pilot canonical dataset) · [#783](https://github.com/onboarda1234/onboarda/pull/783) (docs — SRP plan + Phase 5 stream) · [#780](https://github.com/onboarda1234/onboarda/pull/780) (docs — register reconcile through Tier 0C-A) · [#779](https://github.com/onboarda1234/onboarda/pull/779) (draft — RSMP 0C-A evidence) · [#777](https://github.com/onboarda1234/onboarda/pull/777) (draft — superseded by #780) · [#737](https://github.com/onboarda1234/onboarda/pull/737) (draft — P12-1 Phase A discovery report) · #752 closed unmerged (content incorporated)
+**Open PRs:** [#785](https://github.com/onboarda1234/onboarda/pull/785) (Applications tab-preserving refresh + register row union) · [#780](https://github.com/onboarda1234/onboarda/pull/780) (docs — full register reconcile; supersedes drafts #777/#767/#752) · [#779](https://github.com/onboarda1234/onboarda/pull/779) (draft — RSMP Tier 0C-A evidence pack, verdict NOT READY) · [#737](https://github.com/onboarda1234/onboarda/pull/737) (draft — P12-1 Phase A discovery report)
 
 **Legend:** ✅ done/merged · ◐ split item (one half done, one open) · 🟢 PR open · 🔨 in progress · 📋 scoped · ⏸ blocked · ⬜ pending · 🔴 pilot code blocker · 🟠 pilot operational gate
 **E column** = closure evidence in [`compliance/REMEDIATION_CLOSURE_EVIDENCE.md`](compliance/REMEDIATION_CLOSURE_EVIDENCE.md).
@@ -135,6 +135,30 @@ Two gates are decisions, not rows: **Applications-page readiness audit** — 202
 | — | Audit Phase 2: stable subject-key joins for screening entries | — | #760 | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#screening-queue-stream-prs-756-763) |
 | — | Audit Phase 3: hydrate evidence for the returned page only | — | #761 | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#screening-queue-stream-prs-756-763) |
 | — | Audit Phase 4: fixture governance, QA disposition fixtures, 7-column layout | — | #763 | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#screening-queue-stream-prs-756-763) |
+| — | Phase 4b/4c/4d: sanctioned seeder deletes, PG booleans, FK-complete seeding, de-flake | — | #766 #769 #770 | ✅ merged · Phase 4 validated PASS 2026-07-15 | — |
+| — | Phase 5 disposition/RBAC/leakage validation (four-eyes E2E, analyst 403, 539-row sweep) | — | — | ✅ PASS — Section M closed 2026-07-16 (below) | — |
+| — | Section M latency: evidence cap + candidate hoist + `application_id` index (21.1s → 5.2s) | — | #773 | ✅ merged + staging-validated · correctness PASS | — |
+| — | Section M latency: stage-timing attribution (`metrics.timings_ms`) → transfer-dominated | — | #778 | ✅ merged · attribution complete 2026-07-16 | — |
+| — | Section M latency: gzip responses (4.7MB raw → ~15x compressed transfer) | — | #781 | ✅ merged + close-out PASS 2026-07-16 — evidence p50/p95 1.096s/1.202s (was 21.1s/33.6s) | — |
+
+### Screening Review page & Agent 3 — simplification work plan (SRP, added 2026-07-16)
+
+Source: Manus blueprint (ARF-2026-920016, 298 untriageable hits) — reviewed against code
+2026-07-16. Manus's root cause ("normalizer discards triage data") verified INACCURATE:
+the current normalizer retains matched name, stable profile id, risk types and media
+evidence; observed blindness = pre-enrichment stored snapshots + match-score display
+deliberately suppressed pending the CA scale answer. Execution gated per phase by founder
+approval; fail-closed clearance, four-eyes, provenance separation and adjudication schema
+are out of scope for every SRP item.
+
+| ID | Title | Sev | GitHub | Status | E |
+|----|-------|:--:|:--:|----|:--:|
+| SRP-0 | Verify stale-snapshot vs live-normalizer split (ARF-2026-920016; fresh-screen contrast; distinct-profile count of the 298 hits) — read-only | — | — | ✅ 2026-07-16 — stale/partial snapshot confirmed (profile ids present; names/scores/match-types/media absent) · positive-hit fresh contrast inconclusive (fixture screen = 0 hits) | — |
+| SRP-1 | ComplyAdvantage clarifications: match-score scale, stable profile id, hit-volume tuning, RPT-5 adverse-media persistence, data residency | — | — | ◐ partial: media/match-type API paths answered 2026-07-16; dashboard recon 2026-07-17 settled score display, triage UX, URLs, EU hosting · open: score scale, API-level entity key, fuzziness levers, region per Order Form | — |
+| SRP-2 | Stale-report refresh pathway for pre-enrichment stored screening snapshots (governed re-screen; archive-first, adjudication guard, regulated archive table) | — | #786 | ◐ code ✅ merged 2026-07-17 · staged rollout open: dry-run, then batch 1 incl. ARF-2026-920016, then fleet | — |
+| SRP-3 | Review-page triage IA: summary strip, score-ranked hits with factor bands (profile-UUID dedup ruled out — Mesh recon 2026-07-17: profiles are minted per case, not stable entity keys), risk-type buckets, side-by-side disambiguation, progressive disclosure | — | — | ⬜ gated on SRP-2 batch 1 (enriched data + API-vs-dashboard score cross-check) | — |
+| SRP-4 | Agent 3 → triage narrative ("review these N first, here's why"), advisory-only, never mutates dispositions | — | — | ⬜ after SRP-3 | — |
+| SRP-5 | Provider-side noise reduction for entity searches — validate against **Mesh** docs (Manus cited legacy API); sanctions/PEP-1 recall must not decrease | — | — | ⏸ blocked on SRP-1 answers · deliberately last | — |
 
 ## Phase 6 — Post-#661 staging follow-ups
 
@@ -160,7 +184,7 @@ Two gates are decisions, not rows: **Applications-page readiness audit** — 202
 | PERIODIC-BASELINE-METHOD-HYGIENE-1 | Clean 405 on POST-only baseline route (REGMIND-P2-001, SW-1) | P2 | [#700](https://github.com/onboarda1234/onboarda/pull/700) | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#wave-a-prs-700-703) |
 | PR-RISK-SECTOR-CALIBRATION-1 | Recalibrate sector risk + "unknown ≠ high" defaults (= **DCI-009**) — coordinate with RSMP | P2 | — | 📋 scoped | — |
 
-### Applications-page readiness audit (Codex; re-run verdict: READY FOR PILOT WITH CONTROLS / NOT PRODUCTION READY)
+### Applications-page readiness audit (Codex; final post-closure verdict: PILOT-READY / NOT PRODUCTION READY)
 
 | ID | Title | Sev | GitHub | Status | E |
 |----|-------|:--:|:--:|----|:--:|
@@ -174,7 +198,7 @@ Two gates are decisions, not rows: **Applications-page readiness audit** — 202
 | APP-AUD-005 | `/api/applications` ignores `search=` (UI uses `q=`) — document or alias | Low | — | ⬜ pending | — |
 | APP-A11Y-SORT-HEADERS-1 | Keyboard-accessible sortable headers (CodeRabbit on #727) | P3 | — | ⬜ pending | — |
 
-### Applications-module confirmation audit 2026-07-16 (Codex, against `464972a`; verdict after closures: PILOT-READY WITH CONTROLS / NOT PRODUCTION READY)
+### Applications-module confirmation audit 2026-07-16 (Codex, against `464972a`; final post-closure verdict: PILOT-READY / NOT PRODUCTION READY)
 
 > Pre-audit remediation recorded here too (register was reconciled 2026-07-15
 > before this stream landed). Application Review module is FROZEN per
@@ -442,17 +466,17 @@ Two gates are decisions, not rows: **Applications-page readiness audit** — 202
 Counting rule: every row in Phases 0–14 + the Re-audit/RSMP tables counts once.
 The 3 cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 7
 APP-CONF-003, Phase 13 CA row) and the Optional Modernization tables are
-excluded. ◐ = items with one named half done and one open (staging-SHA gate,
-P12-4, P13-7, P9-13, DCI-104). Note: parallel register PRs
-#780/#783 recount their own streams; on merge, recount the union.
+excluded. ◐ = items with one named half done and one open (SRP-1, SRP-2,
+staging-SHA gate, P12-4, P13-7, P9-13, DCI-104). Note: parallel register PRs (`#780` and
+merged `#783`) recount their own streams; on merge, recount the union.
 
 | Status | Count |
 |--------|:--:|
-| ✅ done/merged | 88 |
-| ◐ split — one half open | 5 |
-| 🟢 PR open | 1 |
+| ✅ done/merged | 96 |
+| ◐ split — one half open | 7 |
+| 🟢 PR open | 0 |
 | 🔨 in progress | 2 |
 | 📋 scoped | 20 |
-| ⏸ blocked | 4 |
-| ⬜ pending | 34 |
-| **Total tracked items** | **154** |
+| ⏸ blocked | 5 |
+| ⬜ pending | 36 |
+| **Total tracked items** | **166** |
