@@ -9162,7 +9162,8 @@ function explainabilityNeedsAttention(app, screeningSummary) {
   var memoMeta = app && app.latestMemoMeta ? app.latestMemoMeta : {};
   var validation = String(memoData.validation_status || memoMeta.validation_status || '').toLowerCase();
   var supervisor = String((memoData.supervisor && memoData.supervisor.verdict) || memoMeta.supervisor_status || '').toUpperCase();
-  var supervisorExcluded = memoAiSupervisorExcludedFromPilot(memoData);
+  var supervisorExcluded = typeof memoAiSupervisorExcludedFromPilot === 'function' &&
+    memoAiSupervisorExcludedFromPilot(memoData);
   if (app && (app.memoIsStale || app.memoRequiresRegeneration || (app.supervisorRequiresRerun && !supervisorExcluded))) return true;
   if (validation && ['pass', 'approved'].indexOf(validation) < 0) return true;
   if (!supervisorExcluded && supervisor && ['CONSISTENT'].indexOf(supervisor) < 0) return true;
@@ -26180,7 +26181,8 @@ function getApplicationApprovalBlockers(app) {
     var memoReview = String(memoData.review_status || memoMeta.review_status || '').toLowerCase();
     var memoValidation = String(memoData.validation_status || memoMeta.validation_status || '').toLowerCase();
     var memoSupervisor = String((memoData.supervisor && memoData.supervisor.verdict) || memoMeta.supervisor_status || '').toUpperCase();
-    var memoSupervisorExcluded = memoAiSupervisorExcludedFromPilot(memoData);
+    var memoSupervisorExcluded = typeof memoAiSupervisorExcludedFromPilot === 'function' &&
+      memoAiSupervisorExcludedFromPilot(memoData);
     if (memoReview !== 'approved') blockers.push('Compliance memo has not been approved.');
     if (memoValidation === 'pass_with_fixes' && !memoApprovalReasonRecorded(memoData, memoMeta)) {
       blockers.push('Compliance memo has PASS WITH FIXES without a documented senior approval reason.');
@@ -26754,7 +26756,8 @@ function getCaseCommandBlockers(app) {
   var memoReview = String((memoData && memoData.review_status) || memoMeta.review_status || '').toLowerCase();
   var memoSupervisor = memoSupervisorBlock(memoData, memoMeta);
   var supervisorVerdict = String(memoSupervisor.verdict || memoMeta.supervisor_status || '').toUpperCase();
-  var supervisorExcluded = memoAiSupervisorExcludedFromPilot(memoData);
+  var supervisorExcluded = typeof memoAiSupervisorExcludedFromPilot === 'function' &&
+    memoAiSupervisorExcludedFromPilot(memoData);
   var lifecycleItems = caseCommandOpenLifecycleItems(app);
   var periodicReviewItems = caseCommandPeriodicReviewItems(app);
   var eddItems = caseCommandEDDItems(app);
@@ -32501,7 +32504,8 @@ function memoGovernanceStatus(app, validationResult) {
   var validation = String(result.validation_status || memoData.validation_status || memoMeta.validation_status || 'pending').toLowerCase();
   var review = String(result.review_status || memoData.review_status || memoMeta.review_status || '').toLowerCase();
   var supervisor = String((memoData.supervisor && memoData.supervisor.verdict) || memoMeta.supervisor_status || '').toUpperCase();
-  var supervisorExcluded = memoAiSupervisorExcludedFromPilot(memoData);
+  var supervisorExcluded = typeof memoAiSupervisorExcludedFromPilot === 'function' &&
+    memoAiSupervisorExcludedFromPilot(memoData);
   if (app.memoIsStale || app.memoRequiresRegeneration) {
     return { status:'NEEDS REGENERATION', ready:false, primary:app.memoStaleReason || 'Application data changed after this memo was generated.', next:'Regenerate memo' };
   }
@@ -32801,7 +32805,8 @@ function renderMemoSections(data) {
   // ── SUPERVISOR VERDICT PANEL ──
   var supervisorAdvisoryBadgeHtml = '<span class="ai-advisory-badge">🤖 System-Generated — Advisory Only</span>';
   var sv = data.supervisor;
-  var supervisorExcluded = memoAiSupervisorExcludedFromPilot(data);
+  var supervisorExcluded = typeof memoAiSupervisorExcludedFromPilot === 'function' &&
+    memoAiSupervisorExcludedFromPilot(data);
   if (supervisorExcluded) {
     html += '<div data-ai-supervisor-pilot-scope="excluded" style="border:1px solid #94a3b8;border-radius:8px;padding:14px 16px;margin-top:16px;background:#f8fafc;">';
     html += '<div style="font-size:13px;font-weight:800;color:#334155;">AI Supervisor excluded from controlled pilot</div>';
