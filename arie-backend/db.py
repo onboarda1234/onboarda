@@ -1216,6 +1216,22 @@ def _get_postgres_schema() -> str:
         UNIQUE(application_id, subject_type, subject_name)
     );
 
+    -- SRP-2: superseded screening-report snapshots. A governed re-screen
+    -- archives the outgoing report here before replacement — screening
+    -- evidence is regulated and is never destroyed by a refresh.
+    CREATE TABLE IF NOT EXISTS screening_report_archive (
+        id SERIAL PRIMARY KEY,
+        application_id TEXT NOT NULL,
+        application_ref TEXT,
+        archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        archived_by TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        report_hash TEXT NOT NULL,
+        report_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_screening_report_archive_app
+        ON screening_report_archive(application_id);
+
     -- Audit Trail
     CREATE TABLE IF NOT EXISTS audit_log (
         id SERIAL PRIMARY KEY,
@@ -2640,6 +2656,22 @@ def _get_sqlite_schema() -> str:
         updated_at TEXT DEFAULT (datetime('now')),
         UNIQUE(application_id, subject_type, subject_name)
     );
+
+    -- SRP-2: superseded screening-report snapshots. A governed re-screen
+    -- archives the outgoing report here before replacement — screening
+    -- evidence is regulated and is never destroyed by a refresh.
+    CREATE TABLE IF NOT EXISTS screening_report_archive (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT NOT NULL,
+        application_ref TEXT,
+        archived_at TEXT DEFAULT (datetime('now')),
+        archived_by TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        report_hash TEXT NOT NULL,
+        report_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_screening_report_archive_app
+        ON screening_report_archive(application_id);
 
     -- Audit Trail
     CREATE TABLE IF NOT EXISTS audit_log (
@@ -6362,6 +6394,31 @@ def _run_migrations(db: DBConnection):
         )
     except Exception as e:
         logger.debug(f"monitoring_alert_evidence application_id index may already exist: {e}")
+
+    # SRP-2: archive table for superseded screening reports (long-lived DBs).
+    # The DBConnection wrapper rewrites AUTOINCREMENT -> SERIAL on PostgreSQL,
+    # so one dialect-neutral DDL serves both. Idempotent.
+    try:
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS screening_report_archive (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                application_id TEXT NOT NULL,
+                application_ref TEXT,
+                archived_at TEXT DEFAULT (datetime('now')),
+                archived_by TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                report_hash TEXT NOT NULL,
+                report_json TEXT NOT NULL
+            )
+            """
+        )
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_screening_report_archive_app "
+            "ON screening_report_archive(application_id)"
+        )
+    except Exception as e:
+        logger.debug(f"screening_report_archive may already exist: {e}")
 
     # Check if pre_approval columns exist on applications table
     if not _safe_column_exists(db, "applications", "pre_approval_decision"):

@@ -73,6 +73,7 @@ REGULATED_TABLES = frozenset({
     "screening_provider_comparisons",
     "screening_monitoring_subscriptions",
     "screening_reports_normalized",
+    "screening_report_archive",
     "screening_reviews",
     "screening_state_integrity_backfill_log",
     "sumsub_applicant_mappings",
