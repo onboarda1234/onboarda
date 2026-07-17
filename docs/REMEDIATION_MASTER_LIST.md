@@ -155,8 +155,10 @@ are out of scope for every SRP item.
 |----|-------|:--:|:--:|----|:--:|
 | SRP-0 | Verify stale-snapshot vs live-normalizer split (ARF-2026-920016; fresh-screen contrast; distinct-profile count of the 298 hits) — read-only | — | — | ✅ 2026-07-16 — stale/partial snapshot confirmed (profile ids present; names/scores/match-types/media absent) · positive-hit fresh contrast inconclusive (fixture screen = 0 hits) | — |
 | SRP-1 | ComplyAdvantage clarifications: match-score scale, stable profile id, hit-volume tuning, RPT-5 adverse-media persistence, data residency | — | — | ◐ partial: media/match-type API paths answered 2026-07-16; dashboard recon 2026-07-17 settled score display, triage UX, URLs, EU hosting · open: score scale, API-level entity key, fuzziness levers, region per Order Form | — |
-| SRP-2 | Stale-report refresh pathway for pre-enrichment stored screening snapshots (governed re-screen; archive-first, adjudication guard, regulated archive table) | — | #786 | ◐ code ✅ merged 2026-07-17 · staged rollout open: dry-run, then batch 1 incl. ARF-2026-920016, then fleet | — |
-| SRP-3 | Review-page triage IA: summary strip, score-ranked hits with factor bands (profile-UUID dedup ruled out — Mesh recon 2026-07-17: profiles are minted per case, not stable entity keys), risk-type buckets, side-by-side disambiguation, progressive disclosure | — | — | ⬜ gated on SRP-2 batch 1 (enriched data + API-vs-dashboard score cross-check) | — |
+| SRP-2 | Stale-report refresh pathway (governed re-screen; archive-first, adjudication guard, regulated archive table) | — | #786 | ✅ closed 2026-07-17 — harness merged + batch 1 validated all governance rails (10/10 archives, chained audits, adjudication guard, clean stop); fleet execution overtaken by events (legacy test apps deleted) | — |
+| SRP-2a / RESCREEN-1 | Re-screen of an already-screened subject errors Mesh customer-creation (external identifier already assigned) — batch-1 finding; hits every future officer/periodic re-screen | P1 | — | ◐ distinct fail-closed classification shipped (customer_identifier_conflict degraded source); existing-customer re-screen wiring ⏸ pending Mesh endpoint confirmation (docs blocked from this env; Codex/CA to confirm) | — |
+| SRP-2b / RISK-FC-1 | Risk recompute lowered HIGH→LOW off a non-terminal/degraded screening report (TESCO 55→12.3) — fail-open | P1 | — | ✅ fixed 2026-07-17 — recompute_risk holds prior risk when a non-terminal report would lower it; raises still allowed; audited | — |
+| SRP-3 | Review-page triage IA: summary strip, score-ranked hits with factor bands (profile-UUID dedup ruled out — Mesh recon 2026-07-17: profiles are minted per case, not stable entity keys), risk-type buckets, side-by-side disambiguation, progressive disclosure | — | — | ⬜ enriched dataset now via ONE fresh staging app with a well-known matching name (first-time screen avoids RESCREEN-1); API-vs-dashboard score cross-check rides along | — |
 | SRP-4 | Agent 3 → triage narrative ("review these N first, here's why"), advisory-only, never mutates dispositions | — | — | ⬜ after SRP-3 | — |
 | SRP-5 | Provider-side noise reduction for entity searches — validate against **Mesh** docs (Manus cited legacy API); sanctions/PEP-1 recall must not decrease | — | — | ⏸ blocked on SRP-1 answers · deliberately last | — |
 
@@ -472,11 +474,11 @@ merged `#783`) recount their own streams; on merge, recount the union.
 
 | Status | Count |
 |--------|:--:|
-| ✅ done/merged | 96 |
+| ✅ done/merged | 98 |
 | ◐ split — one half open | 7 |
 | 🟢 PR open | 0 |
 | 🔨 in progress | 2 |
 | 📋 scoped | 20 |
 | ⏸ blocked | 5 |
 | ⬜ pending | 36 |
-| **Total tracked items** | **166** |
+| **Total tracked items** | **168** |

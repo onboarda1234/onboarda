@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+import json
 import logging
 import time
 from urllib.parse import urlparse
@@ -81,6 +82,7 @@ class _PassResult:
     monitoring_enabled: bool
     timed_out: bool = False
     errored: bool = False
+    identifier_conflict: bool = False
 
 
 class ComplyAdvantageScreeningOrchestrator:
@@ -147,6 +149,8 @@ class ComplyAdvantageScreeningOrchestrator:
             _mark_report_pending_after_timeout(report, strict=strict, relaxed=relaxed)
         if strict.errored or relaxed.errored:
             _mark_report_errored(report, strict=strict, relaxed=relaxed)
+        if strict.identifier_conflict or relaxed.identifier_conflict:
+            _mark_report_customer_conflict(report)
         self._seed_subscription_if_needed(strict, application_context, db)
         return report
 
@@ -219,6 +223,7 @@ class ComplyAdvantageScreeningOrchestrator:
                 initial.monitoring_enabled,
                 timed_out=polled.timed_out,
                 errored=polled.errored,
+                identifier_conflict=polled.errored and _customer_identifier_conflict(polled.raw),
             )
         alerts, deep_risks = _fetch_alerts_and_deep_risks(self.client, polled.raw)
         return _PassResult(workflow, alerts, deep_risks, initial.customer_input, customer_response, initial.monitoring_enabled)
@@ -513,6 +518,48 @@ def _workflow_errored(workflow):
         if detail is not None and _status_value(detail.status) == "ERRORED":
             return True
     return False
+
+
+CUSTOMER_CONFLICT_DEGRADED_SOURCE = "complyadvantage_customer_identifier_conflict"
+CUSTOMER_CONFLICT_FLAG = (
+    "Re-screen blocked: ComplyAdvantage already holds a customer for this subject's external "
+    "identifier and rejected duplicate creation. This is not evidence of zero hits; the "
+    "existing-customer re-screen path (RESCREEN-1) is required before this screening can complete."
+)
+
+
+def _customer_identifier_conflict(raw):
+    """Detect the Mesh customer-creation identifier conflict from raw workflow JSON.
+
+    SRP-2 batch 1: re-screening an already-screened subject errors the
+    customer-creation step because the deterministic external identifier is
+    already assigned to an existing Mesh customer. The step's error payload
+    shape is not modelled, so detection is tolerant text matching over the
+    raw customer-creation step detail.
+    """
+    if not isinstance(raw, dict):
+        return False
+    detail = (raw.get("step_details") or {}).get("customer-creation")
+    if not isinstance(detail, dict):
+        return False
+    try:
+        text = json.dumps(detail, default=str).lower()
+    except Exception:
+        return False
+    if "external identifier" in text or "external_identifier" in text:
+        return "already" in text or "duplicate" in text or "exists" in text or "assigned" in text
+    return "already assigned" in text or "already exists" in text
+
+
+def _mark_report_customer_conflict(report):
+    """Stamp the distinct, honest conflict classification onto the report."""
+    sources = report.setdefault("degraded_sources", [])
+    if CUSTOMER_CONFLICT_DEGRADED_SOURCE not in sources:
+        sources.append(CUSTOMER_CONFLICT_DEGRADED_SOURCE)
+    flags = report.setdefault("overall_flags", [])
+    if CUSTOMER_CONFLICT_FLAG not in flags:
+        flags.append(CUSTOMER_CONFLICT_FLAG)
+    report["customer_identifier_conflict"] = True
 
 
 def _workflow_complete(workflow):

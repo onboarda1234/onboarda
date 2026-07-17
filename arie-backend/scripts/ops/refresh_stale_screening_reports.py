@@ -179,7 +179,7 @@ def archive_current_report(db, app, report, *, reason=ARCHIVE_REASON):
     return digest
 
 
-def select_candidates(db, *, refs=None, limit):
+def select_candidates(db, *, refs=None, limit, force_refresh=False):
     """Select refresh candidates: non-fixture, hit-bearing, blind reports."""
     from fixture_filter import fixture_app_exclude_clause
     from prescreening.normalize import safe_json_loads
@@ -219,7 +219,7 @@ def select_candidates(db, *, refs=None, limit):
             entry["skip_reason"] = block
             skipped.append(entry)
             continue
-        if recently_archived(db, app["id"]):
+        if not force_refresh and recently_archived(db, app["id"]):
             entry["skip_reason"] = (
                 f"already refreshed by this tool within {RECENT_ARCHIVE_SKIP_DAYS} days"
             )
@@ -257,8 +257,9 @@ def refresh_stale_screening_reports(
     execute=False,
     limit=DEFAULT_BATCH_LIMIT,
     refs=None,
+    force_refresh=False,
     pace_seconds=3.0,
-    base_url="http://127.0.0.1:10000",
+    base_url=None,
     actor_id="admin001",
     actor_name="SRP-2 Stale Report Refresh",
     rescreen_fn=None,
@@ -268,8 +269,10 @@ def refresh_stale_screening_reports(
     _forbid_production()
     from prescreening.normalize import safe_json_loads
 
+    if base_url is None:
+        base_url = f"http://127.0.0.1:{os.environ.get('PORT', '10000')}"
     limit = max(1, min(int(limit), MAX_BATCH_LIMIT))
-    candidates, skipped = select_candidates(db, refs=refs, limit=limit)
+    candidates, skipped = select_candidates(db, refs=refs, limit=limit, force_refresh=force_refresh)
     summary = {
         "mode": "execute" if execute else "dry_run",
         "batch_limit": limit,
@@ -371,8 +374,11 @@ def main():
     parser.add_argument("--refs", default="",
                         help="Comma-separated application refs to target explicitly "
                              "(bypasses auto-selection; adjudication guard still applies).")
+    parser.add_argument("--force-refresh", action="store_true",
+                        help="Bypass the recently-archived re-run guard (e.g. to retry a failed batch).")
     parser.add_argument("--pace-seconds", type=float, default=3.0)
-    parser.add_argument("--base-url", default="http://127.0.0.1:10000")
+    parser.add_argument("--base-url", default=None,
+                        help="Backend base URL; defaults to http://127.0.0.1:$PORT (PORT env, else 10000).")
     parser.add_argument("--actor-id", default="admin001")
     args = parser.parse_args()
 
@@ -390,6 +396,7 @@ def main():
             execute=args.execute,
             limit=args.limit,
             refs=[r.strip() for r in args.refs.split(",") if r.strip()] or None,
+            force_refresh=args.force_refresh,
             pace_seconds=args.pace_seconds,
             base_url=args.base_url,
             actor_id=args.actor_id,
