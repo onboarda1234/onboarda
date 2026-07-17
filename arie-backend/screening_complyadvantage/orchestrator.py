@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import json
 import logging
+import re
 import time
 from urllib.parse import urlparse
 
@@ -654,7 +655,117 @@ def _adapt_profile_subject(value, fallback_name=None, *, company):
         return None
     subject = dict(value)
     subject["names"] = _adapt_profile_names(subject.get("names"), fallback_name, company=company)
+    if not company:
+        # SRP-3 Phase A: normalise the matched person's date of birth into the
+        # CADateOfBirth shape. Raw Mesh payloads carry DOB in several forms
+        # (ISO string, {year,...} dict, bare year, dates_of_birth list); an
+        # unnormalised string previously failed CAProfile validation and
+        # silently dropped the WHOLE profile. Unparseable values are omitted,
+        # never guessed — the triage score treats absent DOB as "no
+        # corroboration", not as a conflict.
+        dob = _normalise_profile_date_of_birth(
+            subject.get("date_of_birth"),
+            subject.get("dates_of_birth"),
+            subject.get("birth_date"),
+            subject.get("dob"),
+            subject.get("year_of_birth"),
+        )
+        subject.pop("dates_of_birth", None)
+        subject.pop("birth_date", None)
+        subject.pop("dob", None)
+        subject.pop("year_of_birth", None)
+        if dob is not None:
+            subject["date_of_birth"] = dob
+        else:
+            subject.pop("date_of_birth", None)
+        countries = subject.get("countries")
+        if isinstance(countries, str) and countries.strip():
+            subject["countries"] = [countries.strip()]
     return subject
+
+
+def _normalise_profile_date_of_birth(*candidates):
+    """Best-effort DOB normalisation to {year, month, day, date}. None on failure."""
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            for entry in candidate:
+                normalised = _normalise_profile_date_of_birth(entry)
+                if normalised is not None:
+                    return normalised
+            continue
+        if isinstance(candidate, dict):
+            year = candidate.get("year")
+            try:
+                year = int(year) if year is not None else None
+            except (TypeError, ValueError):
+                year = None
+            if year and 1000 <= year <= 9999:
+                # Structured fields: the year is explicit provider data. Month/
+                # day parts are kept ONLY when they are valid calendar values;
+                # out-of-range parts are dropped, never passed through.
+                out = {"year": year}
+                month = _int_in_range(candidate.get("month"), 1, 12)
+                day = _int_in_range(candidate.get("day"), 1, 31)
+                if month:
+                    out["month"] = month
+                if month and day and _valid_calendar_date(year, month, day):
+                    out["day"] = day
+                if isinstance(candidate.get("date"), str) and candidate["date"].strip():
+                    out["date"] = candidate["date"].strip()
+                return out
+            continue
+        if isinstance(candidate, bool):
+            continue
+        if isinstance(candidate, int):
+            if 1000 <= candidate <= 9999:
+                return {"year": candidate}
+            continue
+        if isinstance(candidate, str):
+            # Strings must FULLY match a supported form — a malformed value
+            # like "1961-xx" or "1961-99-99" is rejected outright, never
+            # partially salvaged into a guessed year (Codex review finding,
+            # PR #790 merge gate).
+            text = candidate.strip()
+            if not text:
+                continue
+            match = re.fullmatch(r"(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?", text)
+            if not match:
+                continue
+            year = int(match.group(1))
+            if not 1000 <= year <= 9999:
+                continue
+            out = {"year": year}
+            if match.group(2):
+                month = _int_in_range(match.group(2), 1, 12)
+                if month is None:
+                    continue  # e.g. 1961-99: whole value is malformed
+                out["month"] = month
+                if match.group(3):
+                    day = _int_in_range(match.group(3), 1, 31)
+                    if day is None or not _valid_calendar_date(year, month, day):
+                        continue  # e.g. 1961-02-30
+                    out["day"] = day
+                    out["date"] = f"{year}-{month:02d}-{day:02d}"
+            return out
+    return None
+
+
+def _int_in_range(value, low, high):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if low <= number <= high else None
+
+
+def _valid_calendar_date(year, month, day):
+    from datetime import date
+
+    try:
+        date(year, month, day)
+    except ValueError:
+        return False
+    return True
 
 
 def _adapt_profile_names(value, fallback_name=None, *, company):
