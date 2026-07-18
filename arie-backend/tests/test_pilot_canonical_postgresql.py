@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import suppress
 from types import SimpleNamespace
@@ -212,3 +213,75 @@ def test_complete_postgres_dry_run_is_repeatable_and_zero_residue(
         "aligned": True,
         "manifest_sha256": EXPECTED_MANIFEST_SHA256,
     }
+
+
+def test_canonical_memo_and_periodic_ui_contracts_persist_on_postgres(
+    canonical_postgres,
+):
+    runtime = canonical_postgres
+    references = [
+        "RM-PILOT-001",
+        "RM-PILOT-005",
+        "RM-PILOT-006",
+        "RM-PILOT-008",
+        "RM-PILOT-014",
+        "RM-PILOT-017",
+        "RM-PILOT-039",
+        "RM-PILOT-040",
+        "RM-PILOT-041",
+    ]
+    runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=False,
+        references=references,
+    )
+
+    connection = runtime.db.get_db()
+    try:
+        memos = connection.execute(
+            "SELECT a.ref,a.risk_score,a.risk_level,a.risk_config_version,cm.memo_data "
+            "FROM compliance_memos cm JOIN applications a ON a.id=cm.application_id "
+            "WHERE a.ref IN (?,?,?,?,?,?,?) ORDER BY a.ref",
+            (
+                "RM-PILOT-001", "RM-PILOT-006", "RM-PILOT-017",
+                "RM-PILOT-039", "RM-PILOT-040", "RM-PILOT-041",
+                "RM-PILOT-005",
+            ),
+        ).fetchall()
+        assert len(memos) == 7
+        for row in memos:
+            memo = row["memo_data"]
+            if isinstance(memo, str):
+                memo = json.loads(memo)
+            assert len(memo["sections"]) >= 11
+            assert memo["metadata"]["risk_score"] == row["risk_score"]
+            assert memo["metadata"]["risk_rating"] == row["risk_level"]
+            assert memo["metadata"]["risk_config_version"] == row["risk_config_version"]
+            assert memo["metadata"]["ai_supervisor_scope"] == "excluded_from_controlled_pilot"
+
+        reviews = connection.execute(
+            "SELECT a.ref,pr.last_review_date,pr.next_review_date,pr.due_date,pr.priority "
+            "FROM periodic_reviews pr JOIN applications a ON a.id=pr.application_id "
+            "WHERE a.ref IN (?,?,?,?) ORDER BY a.ref",
+            ("RM-PILOT-005", "RM-PILOT-008", "RM-PILOT-014", "RM-PILOT-041"),
+        ).fetchall()
+        assert [row["ref"] for row in reviews] == [
+            "RM-PILOT-005", "RM-PILOT-008", "RM-PILOT-014", "RM-PILOT-041"
+        ]
+        assert [row["priority"] for row in reviews] == ["low", "normal", "high", "low"]
+        assert all(row["last_review_date"] for row in reviews)
+        assert all(row["next_review_date"] == row["due_date"] for row in reviews)
+
+        suppression_audits = connection.execute(
+            "SELECT COUNT(*) AS n FROM audit_log "
+            "WHERE action='fixture.pilot_canonical_notification_suppressed'"
+        ).fetchone()["n"]
+        assert suppression_audits == 4
+    finally:
+        connection.close()
+
+    before = _public_table_counts(runtime.db)
+    runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=False,
+        references=references,
+    )
+    assert _public_table_counts(runtime.db) == before

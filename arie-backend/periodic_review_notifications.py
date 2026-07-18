@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -11,6 +12,7 @@ CLIENT_STATUS_SENT = "sent"
 CLIENT_STATUS_FAILED = "failed"
 CLIENT_STATUS_REMINDER_DUE = "reminder_due"
 CLIENT_STATUS_OVERDUE_NOTIFIED = "overdue_notified"
+CLIENT_STATUS_SUPPRESSED = "suppressed"
 
 OFFICER_ALERT_ACTIVE = "active"
 OFFICER_ALERT_CLEARED = "cleared"
@@ -32,6 +34,14 @@ AUDIT_CLIENT_REMINDER_SENT = "periodic_review_client_reminder_sent"
 AUDIT_OVERDUE_NOTIFICATION_SENT = "periodic_review_overdue_notification_sent"
 AUDIT_OFFICER_ALERT_CREATED = "periodic_review_officer_alert_created"
 AUDIT_STATUS_UPDATED = "periodic_review_notification_status_updated"
+
+FIXTURE_NOTIFICATION_SUPPRESSION_REASON = "fixture_application"
+CANONICAL_FIXTURE_REVIEW_TRIGGER_TYPE = "pilot_canonical_fixture"
+CANONICAL_FIXTURE_REVIEW_TRIGGER_SOURCE = "pilot_canonical_dataset"
+CANONICAL_FIXTURE_REFERENCE_PREFIX = "RM-PILOT-"
+
+
+logger = logging.getLogger(__name__)
 
 
 def _row_get(row, key: str, default=None):
@@ -58,6 +68,14 @@ def _row_dict(row) -> Dict[str, Any]:
         return dict(row)
     except Exception:
         return {}
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _table_columns(db, table: str) -> set:
@@ -361,9 +379,11 @@ def notification_projection_from_review(
     *,
     document_summary: Optional[Dict[str, Any]] = None,
     now: Optional[Any] = None,
+    suppression: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     review = _row_dict(review_row)
     document_summary = document_summary or {}
+    suppression = dict(suppression or {})
     current = _now_utc(now)
     state = _notification_state(review)
     action_state = _client_action_state(review, document_summary)
@@ -373,7 +393,8 @@ def notification_projection_from_review(
         effective_status = state["client_notification_status"] or CLIENT_STATUS_NOT_SENT
     elif effective_status not in {CLIENT_STATUS_FAILED, CLIENT_STATUS_OVERDUE_NOTIFIED} and next_due and current >= next_due:
         effective_status = CLIENT_STATUS_REMINDER_DUE
-    return {
+    workflow_suppressed = _is_terminal_review(review) or not action_state
+    projection = {
         **state,
         "client_notification_status": effective_status,
         "client_notification_status_label": {
@@ -385,16 +406,33 @@ def notification_projection_from_review(
         }.get(effective_status, "Not sent"),
         "client_action_required": action_state,
         "client_action_required_label": _client_action_label(action_state),
-        "notification_suppressed": _is_terminal_review(review) or not action_state,
+        "notification_suppressed": workflow_suppressed or bool(suppression),
         "is_client_action_overdue": bool(action_state and _is_overdue(review, current)),
         "document_notification_summary": document_summary,
     }
+    if suppression:
+        # A fixture may retain historical failed-delivery fields from before
+        # the guard existed.  Keep the database untouched, but do not present
+        # that obsolete attempt as the current synthetic-fixture state.
+        projection.update({
+            "client_notification_status": CLIENT_STATUS_SUPPRESSED,
+            "client_notification_status_label": "Suppressed — synthetic fixture",
+            "initial_notification_sent_at": None,
+            "last_reminder_sent_at": None,
+            "reminder_count": 0,
+            "last_notification_error": None,
+            "next_reminder_due_at": None,
+            "notification_suppression_reason": suppression.get("reason"),
+            "notification_suppression_evidence": suppression,
+        })
+    return projection
 
 
 def _load_application_context(db, review: Dict[str, Any]) -> Dict[str, Any]:
     row = db.execute(
         """
-        SELECT a.id, a.ref, a.company_name, a.client_id, c.email AS client_email, c.company_name AS client_company_name
+        SELECT a.id, a.ref, a.company_name, a.client_id, a.is_fixture,
+               c.email AS client_email, c.company_name AS client_company_name
         FROM applications a
         LEFT JOIN clients c ON c.id = a.client_id
         WHERE a.id = ?
@@ -402,6 +440,46 @@ def _load_application_context(db, review: Dict[str, Any]) -> Dict[str, Any]:
         (_row_get(review, "application_id"),),
     ).fetchone()
     return _row_dict(row)
+
+
+def _canonical_fixture_review_marker_matches(
+    review: Dict[str, Any], app: Dict[str, Any]
+) -> bool:
+    application_ref = str(app.get("ref") or "").strip()
+    if not application_ref.startswith(CANONICAL_FIXTURE_REFERENCE_PREFIX):
+        return False
+    reference_number = application_ref[len(CANONICAL_FIXTURE_REFERENCE_PREFIX):]
+    if len(reference_number) != 3 or not reference_number.isdigit():
+        return False
+    return (
+        str(_row_get(review, "trigger_type") or "").strip()
+        == CANONICAL_FIXTURE_REVIEW_TRIGGER_TYPE
+        and str(_row_get(review, "trigger_source") or "").strip()
+        == CANONICAL_FIXTURE_REVIEW_TRIGGER_SOURCE
+        and str(_row_get(review, "trigger_reason") or "").strip()
+        == f"{application_ref}:PERIODIC"
+    )
+
+
+def fixture_notification_suppression(
+    review: Dict[str, Any], app: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Return non-sensitive evidence when fixture delivery must be suppressed."""
+    if not _truthy(app.get("is_fixture")):
+        return None
+    return {
+        "suppressed": True,
+        "reason": FIXTURE_NOTIFICATION_SUPPRESSION_REASON,
+        "policy": "fixture_applications_do_not_receive_periodic_review_notifications",
+        "application_id": app.get("id") or _row_get(review, "application_id"),
+        "application_ref": app.get("ref"),
+        "periodic_review_id": _row_get(review, "id"),
+        "canonical_review_marker_match": _canonical_fixture_review_marker_matches(
+            review, app
+        ),
+        "trigger_type": _row_get(review, "trigger_type"),
+        "trigger_source": _row_get(review, "trigger_source"),
+    }
 
 
 def _portal_link(application_id: str) -> Optional[str]:
@@ -762,6 +840,36 @@ def process_periodic_review_notification(
     sent_events: List[str] = []
     errors: List[str] = []
 
+    suppression = fixture_notification_suppression(review, app)
+    if suppression:
+        # This guard intentionally precedes every dispatch, review-state update,
+        # officer-alert update and audit path. Fixture sweeps are observable in
+        # logs and the returned projection, but remain database-write-free.
+        logger.info(
+            "periodic-review-notification-suppressed %s",
+            _json(suppression),
+        )
+        return {
+            "review_id": _row_get(review, "id"),
+            "application_id": app.get("id") or _row_get(review, "application_id"),
+            "client_id": app.get("client_id"),
+            "client_action_required": action_state,
+            "client_action_required_label": _client_action_label(action_state),
+            "sent_events": sent_events,
+            "errors": errors,
+            "officer_alert_event": None,
+            "notification_suppressed": True,
+            "notification_suppression_reason": suppression["reason"],
+            "notification_suppression_evidence": suppression,
+            "notification": notification_projection_from_review(
+                review,
+                document_summary=document_summary,
+                now=now_dt,
+                suppression=suppression,
+            ),
+            "next_reminder_due_at": None,
+        }
+
     if _is_terminal_review(review) or not action_state:
         next_due = None
         if _row_get(review, "next_reminder_due_at"):
@@ -1050,5 +1158,8 @@ def run_periodic_review_notification_sweep(
         "sent_count": sum(len(item.get("sent_events") or []) for item in results),
         "failed_count": sum(1 for item in results if item.get("errors")),
         "officer_alert_count": sum(1 for item in results if item.get("officer_alert_event") == OFFICER_ALERT_ACTIVE),
+        "suppressed_count": sum(
+            1 for item in results if item.get("notification_suppressed") is True
+        ),
         "results": results,
     }

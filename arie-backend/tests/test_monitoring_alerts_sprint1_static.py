@@ -119,6 +119,23 @@ def test_monitoring_alerts_render_uses_keys_and_has_truthful_empty_states():
     assert "openMonitoringAlertDetail(alert.id)" in render
 
 
+def test_monitoring_alerts_surface_authoritative_fixture_identity():
+    html = _html()
+    normalizer = _function_region(html, "normalizeMonitoringAlert", "reviewStatusFromRaw")
+    render = _function_region(html, "renderMonitoringAlerts", "renderMonitoringAlertsPagination")
+    detail = _function_region(html, "renderMonitoringAlertDetailView", "openMonitoringAlertDetail")
+    server = SERVER_PY.read_text()
+
+    assert "fixtureRecordInfo(raw)" in normalizer
+    assert "isFixture: fixtureInfo.isFixture" in normalizer
+    assert "fixtureLabel: fixtureInfo.label" in normalizer
+    assert "fixtureRecordBadgeHtml(alert)" in render
+    assert "alert.applicationRef" in render
+    assert "fixtureRecordBadgeHtml(alert)" in detail
+    assert 'data-monitoring-fixture-identity="true"' in detail
+    assert server.count("app.is_fixture AS is_fixture") >= 2
+
+
 def test_monitoring_alerts_list_uses_paginated_server_filters():
     html = _html()
     view = _view_region(html, "view-monitoring", "view-lifecycle")

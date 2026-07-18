@@ -16,7 +16,10 @@ from periodic_review_attestation import (
     task_primary_action_label,
     task_status_label,
 )
-from periodic_review_notifications import notification_projection_from_review
+from periodic_review_notifications import (
+    fixture_notification_suppression,
+    notification_projection_from_review,
+)
 
 ACTIVE_REVIEW_STATES = (
     "pending",
@@ -436,7 +439,8 @@ def build_review_projection(
     application = application_row
     if application is None and app_id:
         app_row = db.execute(
-            "SELECT id, ref, company_name, risk_level, final_risk_level FROM applications WHERE id = ?",
+            "SELECT id, ref, company_name, risk_level, final_risk_level, is_fixture "
+            "FROM applications WHERE id = ?",
             (app_id,),
         ).fetchone()
         application = dict(app_row) if app_row is not None else None
@@ -481,9 +485,13 @@ def build_review_projection(
     attestation = attestation_snapshot_from_review(review)
     attestation_status = str(attestation.get("status") or ATTESTATION_STATUS_NOT_STARTED)
     document_request_status = _periodic_review_document_request_status(db, review_id)
+    notification_suppression = fixture_notification_suppression(
+        review, application or {}
+    )
     notification_summary = notification_projection_from_review(
         review,
         document_summary=document_request_status,
+        suppression=notification_suppression,
     )
     findings_present = any(
         str(_row_get(review, field) or "").strip()
@@ -505,6 +513,7 @@ def build_review_projection(
         "review_reference": f"PR-{review_id}" if review_id is not None else "",
         "application_id": app_id,
         "application_ref": _row_get(application, "ref") or app_id,
+        "is_fixture": bool(_row_get(application, "is_fixture")),
         "client_name": _row_get(application, "company_name") or _row_get(review, "client_name") or "",
         "status": raw_status,
         "operational_status": operational_status["status_key"],
@@ -569,6 +578,8 @@ def build_review_projection(
         "client_action_required": notification_summary["client_action_required"],
         "client_action_required_label": notification_summary["client_action_required_label"],
         "notification_suppressed": notification_summary["notification_suppressed"],
+        "notification_suppression_reason": notification_summary.get("notification_suppression_reason"),
+        "notification_suppression_evidence": notification_summary.get("notification_suppression_evidence"),
         "is_client_action_overdue": notification_summary["is_client_action_overdue"],
         "notification_summary": notification_summary,
         "created_at": _row_get(review, "created_at"),
@@ -641,7 +652,7 @@ def list_review_projections(
         "applications",
         id_column="id",
         ids=app_ids,
-        columns="id, ref, company_name, risk_level, final_risk_level",
+        columns="id, ref, company_name, risk_level, final_risk_level, is_fixture",
     )
     officers_by_id = _prefetch_rows_by_id(
         db,

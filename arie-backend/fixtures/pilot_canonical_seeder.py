@@ -407,15 +407,35 @@ def _upsert_periodic_review(db, audit, row: Mapping[str, Any], alert_id: Optiona
     marker = f"{row['reference']}:PERIODIC"
     status = "completed" if state == "completed" else "in_progress"
     expected = row["expected"]
+    review_anchor = (DETERMINISTIC_EPOCH + timedelta(minutes=int(row["number"]) * 10)).date()
+    if state == "completed":
+        last_review_date = review_anchor.isoformat()
+        next_review_date = (review_anchor + timedelta(days=365)).isoformat()
+    else:
+        last_review_date = (review_anchor - timedelta(days=365)).isoformat()
+        next_review_date = (review_anchor + timedelta(days=365)).isoformat()
+    priority = {
+        "LOW": "low",
+        "MEDIUM": "normal",
+        "HIGH": "high",
+        "VERY_HIGH": "urgent",
+    }[expected["tier"]]
     existing = db.execute("SELECT id FROM periodic_reviews WHERE trigger_reason=?", (marker,)).fetchone()
     values = (
-        row["application_id"], row["company_name"], expected["tier"], "pilot_canonical_fixture",
+        row["application_id"], row["company_name"], expected["tier"], last_review_date,
+        next_review_date, "pilot_canonical_fixture",
         marker, "pilot_canonical_dataset", alert_id, expected["base_tier"], expected["tier"],
-        f"{DATASET_NAME} deterministic {state} review", status, _iso(row, offset=5),
-        _iso(row, offset=7) if state == "completed" else None, "co001", expected["outcome"],
+        f"{DATASET_NAME} deterministic {state} review", status, next_review_date,
+        _iso(row, offset=5), _iso(row, offset=7) if state == "completed" else None,
+        "co001", priority, expected["outcome"],
         expected["outcome"], DATASET_VERSION, 12, "canonical_dataset_fixture", _iso(row, offset=5),
     )
-    columns = "application_id,client_name,risk_level,trigger_type,trigger_reason,trigger_source,linked_monitoring_alert_id,previous_risk_level,new_risk_level,review_memo,status,started_at,completed_at,assigned_officer,decision,decision_reason,policy_version,frequency_months,calculation_basis,created_at"
+    columns = (
+        "application_id,client_name,risk_level,last_review_date,next_review_date,trigger_type,"
+        "trigger_reason,trigger_source,linked_monitoring_alert_id,previous_risk_level,"
+        "new_risk_level,review_memo,status,due_date,started_at,completed_at,assigned_officer,"
+        "priority,decision,decision_reason,policy_version,frequency_months,calculation_basis,created_at"
+    )
     if existing:
         assignments = ",".join(f"{name}=?" for name in columns.split(","))
         db.execute(f"UPDATE periodic_reviews SET {assignments} WHERE id=?", (*values, existing["id"]))
@@ -423,6 +443,16 @@ def _upsert_periodic_review(db, audit, row: Mapping[str, Any], alert_id: Optiona
     else:
         review_id = _insert_returning_id(db, "periodic_reviews", columns, values)
     audit(action="pilot_canonical_periodic_review", target=f"periodic_review:{review_id}", detail=f"Converged canonical periodic review for {row['reference']}", after_state={"state": state})
+    audit(
+        action="pilot_canonical_notification_suppressed",
+        target=f"periodic_review:{review_id}",
+        detail=f"Recorded synthetic notification suppression for {row['reference']}",
+        after_state={
+            "notification_suppressed": True,
+            "notification_suppression_reason": "fixture_application",
+            "enforcement_key": "applications.is_fixture",
+        },
+    )
     return review_id
 
 
@@ -637,25 +667,294 @@ def _upsert_decision_record(db, audit, row: Mapping[str, Any]) -> Optional[str]:
     return decision_id
 
 
-def _upsert_memo(db, audit, row: Mapping[str, Any]) -> Optional[int]:
+def _canonical_memo_decision(row: Mapping[str, Any]) -> str:
+    expected = row["expected"]
+    decision_evidence = row.get("decision_evidence") or {}
+    final_disposition = str(
+        decision_evidence.get("final_disposition") or ""
+    ).strip().lower()
+    if final_disposition:
+        return {
+            "approved": "APPROVE",
+            "approved_with_conditions": "APPROVE_WITH_CONDITIONS",
+            "approved_with_enhanced_monitoring": "APPROVE_WITH_ENHANCED_MONITORING",
+            "rejected": "REJECT",
+            "review": "REVIEW",
+        }.get(final_disposition, "REVIEW")
+    if expected["application_status"] == "rejected":
+        return "REJECT"
+    if expected["approval_route"] == "blocked" or expected["memo_status"] == "blocked":
+        return "REVIEW"
+    if str(row["workflow_state"].get("monitoring") or "").lower() in {
+        "open", "escalated"
+    }:
+        return "REVIEW"
+    if expected["application_status"] == "approved":
+        return "APPROVE"
+    return "REVIEW"
+
+
+def _canonical_dimension_rating(value: Any) -> str:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return "MEDIUM"
+    if score < 1.5:
+        return "LOW"
+    if score < 2.5:
+        return "MEDIUM"
+    if score < 3.5:
+        return "HIGH"
+    return "VERY_HIGH"
+
+
+def _canonical_memo_payload(
+    row: Mapping[str, Any], *, risk_config_version: str
+) -> Dict[str, Any]:
+    """Build deterministic fixture evidence for the existing memo renderer.
+
+    The payload narrates only reviewed manifest inputs and stored expected
+    outcomes.  It does not invoke the production memo builder or create a new
+    compliance conclusion.
+    """
+
+    inputs = row["risk_inputs"]
+    expected = row["expected"]
+    workflow = row["workflow_state"]
+    dimensions = expected["dimensions"]
+    decision = _canonical_memo_decision(row)
+    decision_evidence = row.get("decision_evidence") or {}
+    decision_source = (
+        "explicit stored officer decision evidence"
+        if decision_evidence
+        else "stored canonical application and workflow state"
+    )
+    blocked = expected["memo_status"] == "blocked"
+    escalations = list(expected.get("escalations") or [])
+    supervisor_evidence = dict(row.get("supervisor_evidence") or {})
+    supervisor = {
+        **supervisor_evidence,
+        "pilot_scope": "excluded_from_controlled_pilot",
+        "evidence_retained": bool(supervisor_evidence),
+    }
+
+    screening_results = inputs.get("screening_results") or {}
+    screening_summary = ", ".join(
+        f"{name}: {(value or {}).get('status', 'not recorded')}"
+        for name, value in sorted(screening_results.items())
+    ) or f"workflow state: {workflow['screening']}"
+    ubo_names = [
+        str(person.get("full_name") or "").strip()
+        for person in inputs.get("ubos") or []
+        if str(person.get("full_name") or "").strip()
+    ]
+    ownership_evidence = (
+        f"Ownership structure: {inputs.get('ownership_structure') or 'not recorded'}. "
+        + (
+            "Recorded UBOs: " + ", ".join(ubo_names) + "."
+            if ubo_names
+            else "No fully identified UBO is recorded for this scenario."
+        )
+    )
+    pep_roles = sorted({
+        str((person.get("pep_declaration") or {}).get("pep_role_type") or "").strip()
+        for person in list(inputs.get("directors") or []) + list(inputs.get("ubos") or [])
+        if person.get("is_pep")
+    } - {""})
+
+    risk_sub_sections = {}
+    for key, dimension_key, title in (
+        ("jurisdiction_risk", "d1", "Jurisdiction Risk"),
+        ("ownership_risk", "d2", "Ownership Risk"),
+        ("transaction_risk", "d3", "Transaction Risk"),
+        ("business_risk", "d4", "Business Risk"),
+        ("financial_crime_risk", "d5", "Financial Crime Risk"),
+    ):
+        value = dimensions.get(dimension_key)
+        risk_sub_sections[key] = {
+            "title": title,
+            "rating": _canonical_dimension_rating(value),
+            "content": f"Stored runtime dimension {dimension_key.upper()} = {value}.",
+        }
+
+    red_flags = escalations[:]
+    for family, state in sorted(workflow.items()):
+        if state in {"failed", "missing", "pending", "open", "escalated"}:
+            red_flags.append(f"{family.replace('_', ' ').title()}: {state}")
+    if not red_flags:
+        red_flags = ["No unresolved escalation is recorded in the canonical evidence."]
+    mitigants = []
+    if workflow["screening"] in {"clear", "cleared", "false_positive"}:
+        mitigants.append(f"Stored synthetic screening disposition: {workflow['screening']}.")
+    if workflow["documents"] == "complete":
+        mitigants.append("Required canonical document evidence is recorded as complete.")
+    if workflow["idv"] == "passed":
+        mitigants.append("Canonical identity-verification evidence is recorded as passed.")
+    if not mitigants:
+        mitigants = ["No mitigating control is asserted beyond the stored workflow evidence."]
+
+    sections = {
+        "executive_summary": {
+            "title": "Executive Summary",
+            "content": (
+                f"{row['company_name']} is the synthetic {row['purpose']} scenario. "
+                f"Authoritative stored risk is {expected['score']:.1f} ({expected['tier']}); "
+                f"the recorded workflow outcome is: {expected['outcome']}."
+            ),
+        },
+        "client_overview": {
+            "title": "Client Overview",
+            "content": (
+                f"Entity type: {inputs.get('entity_type') or 'not recorded'}. "
+                f"Sector: {inputs.get('sector') or 'not recorded'}. "
+                f"Incorporation country: {inputs.get('country') or 'missing'}. "
+                f"Monthly volume: {inputs.get('monthly_volume') or 'not recorded'}."
+            ),
+        },
+        "ownership_and_control": {
+            "title": "Ownership and Control",
+            "content": ownership_evidence,
+            "structure_complexity": inputs.get("ownership_structure") or "Not recorded",
+            "control_statement": "Synthetic canonical evidence; no live ownership conclusion.",
+        },
+        "risk_assessment": {
+            "title": "Risk Assessment",
+            "content": (
+                f"Stored weighted score {expected['score']:.1f}, base tier {expected['base_tier']}, "
+                f"final tier {expected['tier']}, lane {expected['lane']}, and approval route "
+                f"{expected['approval_route']}."
+            ),
+            "sub_sections": risk_sub_sections,
+        },
+        "screening_results": {
+            "title": "Screening Results",
+            "content": f"Synthetic screening evidence — {screening_summary}.",
+            "approval_blocked_reasons": [expected["outcome"]] if blocked else [],
+        },
+        "document_verification": {
+            "title": "Document Verification",
+            "content": (
+                f"Canonical document state: {workflow['documents']}; "
+                f"identity-verification state: {workflow['idv']}."
+            ),
+        },
+        "ai_explainability": {
+            "title": "Deterministic Risk Evidence",
+            "content": (
+                "This fixture memo is assembled deterministically from reviewed manifest and "
+                "stored runtime evidence. AI Supervisor is excluded from the controlled pilot."
+            ),
+            "risk_increasing_factors": escalations,
+            "risk_decreasing_factors": mitigants,
+        },
+        "red_flags_and_mitigants": {
+            "title": "Red Flags and Mitigants",
+            "red_flags": red_flags,
+            "mitigants": mitigants,
+            "approval_blockers": [expected["outcome"]] if blocked else [],
+        },
+        "compliance_decision": {
+            "title": "Compliance Decision",
+            "decision": decision,
+            "content": (
+                f"Canonical fixture disposition: {decision}. Stored route: "
+                f"{expected['approval_route']}. Stored outcome: {expected['outcome']}. "
+                f"Decision source: {decision_source}. "
+                "This is synthetic demonstration evidence and does not replace officer judgment."
+            ),
+        },
+        "ongoing_monitoring": {
+            "title": "Ongoing Monitoring",
+            "content": (
+                f"Monitoring state: {workflow['monitoring']}; periodic-review state: "
+                f"{workflow['periodic_review']}. No provider refresh is performed by the seeder."
+            ),
+        },
+        "audit_and_governance": {
+            "title": "Audit and Governance",
+            "content": (
+                f"Pilot Canonical Dataset {DATASET_VERSION}; manifest {manifest_sha256()}; "
+                f"risk configuration {risk_config_version}; deterministic memo version 1. "
+                "Synthetic, non-production fixture evidence."
+            ),
+        },
+    }
+    if expected["edd_required"]:
+        sections["enhanced_review_edd"] = {
+            "title": "Enhanced Due Diligence",
+            "content": (
+                f"EDD is recorded as required for this canonical scenario. Stored lane: "
+                f"{expected['lane']}; stored outcome: {expected['outcome']}."
+            ),
+        }
+
+    risk_calculated_at = _iso(row, offset=2)
+    memo_generated_at = _iso(row, offset=7)
+    return {
+        "reference": f"{row['reference']}:MEMO",
+        "application_ref": row["reference"],
+        "application_id": row["application_id"],
+        "dataset": DATASET_NAME,
+        "dataset_version": DATASET_VERSION,
+        "manifest_sha256": manifest_sha256(),
+        "synthetic": True,
+        "non_production": True,
+        "risk": expected,
+        "workflow_state": workflow,
+        "body": expected["outcome"],
+        "scenario_evidence": row.get("scenario_evidence") or {},
+        "supervisor": supervisor,
+        "supervisor_evidence": supervisor_evidence,
+        "evidence_export": row.get("evidence_export") or {},
+        "memo_generated": memo_generated_at,
+        "sections": sections,
+        "metadata": {
+            "application_ref": row["reference"],
+            "authoritative": True,
+            "has_authoritative_risk": True,
+            "risk_rating": expected["tier"],
+            "risk_score": expected["score"],
+            "display_risk_rating": expected["tier"],
+            "display_risk_score": expected["score"],
+            "aggregated_risk": expected["tier"],
+            "original_risk_level": expected["base_tier"],
+            "canonical_risk": {
+                "available": True,
+                "level": expected["tier"],
+                "score": expected["score"],
+                "source": "applications.risk_score",
+                "calculated_at": risk_calculated_at,
+                "risk_config_version": risk_config_version,
+            },
+            "risk_calculated_at": risk_calculated_at,
+            "risk_config_version": risk_config_version,
+            "approval_recommendation": decision,
+            "approval_route": expected["approval_route"],
+            "edd_required": expected["edd_required"],
+            "lane": expected["lane"],
+            "escalations": escalations,
+            "blocked": blocked,
+            "block_reason": expected["outcome"] if blocked else None,
+            "primary_blockers": [expected["outcome"]] if blocked else [],
+            "memo_source": "pilot_canonical_fixture",
+            "ai_source": "deterministic",
+            "ai_supervisor_scope": "excluded_from_controlled_pilot",
+            "memo_generated_at": memo_generated_at,
+            "memo_version": 1,
+        },
+    }
+
+
+def _upsert_memo(
+    db, audit, row: Mapping[str, Any], *, risk_config_version: str
+) -> Optional[int]:
     state = row["expected"]["memo_status"]
     if state == "none":
         return None
     reference = f"{row['reference']}:MEMO"
     existing = db.execute("SELECT id FROM compliance_memos WHERE application_id=? AND memo_data LIKE ?", (row["application_id"], f"%{reference}%")).fetchone()
     blocked = state == "blocked"
-    memo = {
-        "reference": reference,
-        "dataset": DATASET_NAME,
-        "synthetic": True,
-        "non_production": True,
-        "risk": row["expected"],
-        "workflow_state": row["workflow_state"],
-        "body": row["expected"]["outcome"],
-        "scenario_evidence": row.get("scenario_evidence") or {},
-        "supervisor": row.get("supervisor_evidence") or {},
-        "evidence_export": row.get("evidence_export") or {},
-    }
+    memo = _canonical_memo_payload(row, risk_config_version=risk_config_version)
     review_status = "approved" if state == "approved" else "draft"
     validation_status = "pass" if state == "approved" else "pending"
     supervisor = row.get("supervisor_evidence") or {}
@@ -699,7 +998,9 @@ def _seed_one(db, audit, row: Mapping[str, Any], *, risk_config_version: str) ->
     edd_id = _upsert_edd(db, audit, row, alert_id, review_id)
     edd_finding_id = _upsert_edd_findings(db, audit, row, edd_id)
     correction = _upsert_correction_workflow(db, audit, row)
-    memo_id = _upsert_memo(db, audit, row)
+    memo_id = _upsert_memo(
+        db, audit, row, risk_config_version=risk_config_version
+    )
     decision_id = _upsert_decision_record(db, audit, row)
     return {
         "reference": row["reference"],

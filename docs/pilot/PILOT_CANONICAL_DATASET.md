@@ -1,6 +1,6 @@
 # Pilot Canonical Dataset v1
 
-Status: **Founder review required — not seeded**
+Status: **Seeded on AWS staging — demo-completion changes remain draft-only**
 
 Dataset: **Pilot Canonical Dataset**
 
@@ -9,7 +9,7 @@ Version: **v1**
 Manifest SHA-256: `fee7436a6bf6ead1cc9a8090ceaa3de7071a9b745e43f2c69a445cf74efdf9c9`
 Permanent application namespace: `RM-PILOT-001` through `RM-PILOT-041`
 
-This is a deterministic, synthetic, non-production fixture dataset for staging demonstrations and regression validation. It does not remediate or delete historical synthetic data. This change does not activate RSMP, recompute an existing application, alter Gate 0, change a score or workflow policy, run a provider, or seed staging.
+This is a deterministic, synthetic, non-production fixture dataset for staging demonstrations and regression validation. All 41 permanent records are present on AWS staging. The demo-completion PR does not reseed staging, activate RSMP, recompute an application, alter Gate 0, change a score or workflow policy, or run a provider. AI Supervisor is excluded from the controlled pilot; retained synthetic evidence is for future development and testing only.
 
 ## Dataset summary
 
@@ -71,8 +71,8 @@ Expected scores were generated from `rule_engine.compute_risk_score` using the r
 | `RM-PILOT-037` | Officer correction workflow | 12.0 | LOW | Fast Lane / direct low-medium | Request, applicant correction, officer verification, audit history and final approval | Application overview, officer corrections, audit timeline, memo |
 | `RM-PILOT-038` | Rejected application | 7.0 | LOW | Fast Lane / rejected | Rejected with retained rationale | Application overview, audit timeline |
 | `RM-PILOT-039` | Authoritative evidence export | 43.3 | MEDIUM | Standard Review / direct low-medium | Backend-authoritative PDF/CSV pack with risk, screening, memo and audit evidence | Evidence export, risk breakdown, screening, memo, audit timeline |
-| `RM-PILOT-040` | AI Supervisor review and officer disposition | 43.3 | MEDIUM | Standard Review / direct low-medium | Meaningful supervisor verdict, reasoning, recommendation, officer review and final disposition | Memo, AI Supervisor, approval route, audit timeline |
-| `RM-PILOT-041` | End-to-End Happy Path | 12.0 | LOW | Fast Lane / direct low-medium | Complete onboarding-to-monitoring lifecycle with no unresolved controls | All primary onboarding, review, export and monitoring screens |
+| `RM-PILOT-040` | Retained AI Supervisor evidence — excluded from controlled pilot | 43.3 | MEDIUM | Standard Review / direct low-medium | Stored future-development evidence; not presented as a validated active workflow | Memo scope notice, approval route, audit timeline |
+| `RM-PILOT-041` | End-to-End Happy Path | 12.0 | LOW | Fast Lane / direct low-medium | Complete onboarding-to-monitoring lifecycle with no unresolved controls | Primary onboarding, memo, approval, export, periodic-review and monitoring screens |
 
 The score/tier fields above are model outputs, while the workflow/approval fields also reflect documentary, screening, and officer controls. A Low score therefore does not override a failed IDV, missing document, unresolved mapping, or pending-screening block.
 
@@ -81,7 +81,7 @@ The score/tier fields above are model outputs, while the workflow/approval field
 | Workflow family | Canonical coverage | References |
 |---|---|---|
 | Low risk | Domestic professional services, cloud services, trading, simple ownership, low volume, officer correction, end-to-end happy path | 001–005, 037, 041 |
-| Medium risk | International trading, investment management, family office, cross-border payments, corporate shareholders, multiple services, higher volume, e-money, evidence export, AI Supervisor | 006–013, 039–040 |
+| Medium risk | International trading, investment management, family office, cross-border payments, corporate shareholders, multiple services, higher volume, e-money and evidence export; 040 retains out-of-scope Supervisor test evidence | 006–013, 039–040 |
 | High risk | Private Banking, five declared-PEP roles, cash intensive, precious metals, elevated jurisdiction, opaque ownership, sanctions, adverse media, combined risk | 014–026 |
 | EDD | High-risk floors plus complex ownership, trust, source of wealth, manual officer escalation | 014–030 |
 | Negative paths | Failed IDV, missing documents, unknown sector/entity/country, screening pending, rejection | 031–036, 038 |
@@ -91,8 +91,8 @@ The score/tier fields above are model outputs, while the workflow/approval field
 | Fail-closed mapping | Exact hashed sentinels and blocked routes for unresolved controlled values | 033–035 |
 | Officer correction | Fulfilled information request, applicant correction, correction record, audit history and final approval | 037 |
 | Evidence export | Backend-authoritative PDF/CSV evidence package | 039 and 041 |
-| AI Supervisor | Verdict, reasoning, recommendation, officer review and disposition | 040 and 041 |
-| End-to-end demo | Onboarding, KYC, screening, risk, memo, supervisor, approval, export, periodic review and monitoring | 041 |
+| AI Supervisor | **Excluded from controlled pilot.** Stored synthetic evidence is retained for future development/testing and is not demonstrated as an active validated workflow. | 040 and 041 |
+| End-to-end demo | Onboarding, KYC, screening, risk, memo, approval, export, periodic review and monitoring | 041 |
 
 ## Recommended demo sequence
 
@@ -102,7 +102,7 @@ The approximately 30-minute founder-approved walkthrough is maintained in `PILOT
 2. **Compliance controls (8–10 minutes):** 012 → 030 → 031 → 033 → 036 → 038.
 3. **Ongoing monitoring (8 minutes):** 004 → 005 → 008 → 014 → 024 → 025.
 4. **Ownership and EDD (8 minutes):** 010 → 023 → 027 → 028 → 029.
-5. **Primary sales walkthrough:** start with 041, then use 006, 015, 024, 037, 039 and 040 for contrasting controls.
+5. **Primary sales walkthrough:** start with 041, then use 006, 015, 024, 037 and 039 for contrasting controls. Use 040 only to explain the explicit AI Supervisor scope boundary.
 6. **Full regression run:** process all 41 permanent references in numeric order.
 
 The primary screenshot set is application overview, risk breakdown, ownership, PEP evidence, EDD pipeline, compliance memo, approval blockers, monitoring queue/detail, and periodic-review workspace.
@@ -123,7 +123,7 @@ Create the canonical records under the reserved `RM-PILOT-*` namespace, leave al
 
 Recommendation: approve Option C for the initial rollout. After the canonical dataset has been validated, decide separately whether to archive the old population (Option A) or execute a marker-scoped sanctioned cleanup (Option B). Do not combine historical cleanup with the first canonical seed.
 
-## Staging execution plan — not executed by this PR
+## Future staging reseed/revalidation plan — not executed by this PR
 
 Estimated operator window: **60–90 minutes**, excluding founder review.
 
@@ -176,14 +176,8 @@ python -m fixtures.pilot_canonical_cli dry-run
 | Model activation confusion | Dataset preflight never toggles the flag; activation is a separate governed operation |
 | Misleading negative cases | Score/tier evidence is preserved, while failed-IDV/document/screening/mapping controls independently block approval |
 
-## Founder decision requested
+## Controlled-use boundary
 
-Approve or reject:
+The 41-scenario manifest and permanent `RM-PILOT-*` namespace remain unchanged. Memo fixtures now satisfy the existing renderer contract; notification delivery is suppressed for synthetic fixtures; Monitoring and Periodic Review retain explicit fixture labels. Any reseed, cleanup, deployment, RSMP activation or Tier 0C operation requires separate authorisation.
 
-1. the 41 scenarios and their exact expected outputs;
-2. the permanent `RM-PILOT-*` namespace;
-3. Option C (parallel namespace) as the initial replacement strategy;
-4. the staged dry-run and evidence-review sequence; and
-5. a separate later authorisation before the canonical cleanup command or any historical archive/cleanup.
-
-This dataset is ready for founder review, not for staging execution. No pilot-readiness or production-readiness claim is made.
+AI Supervisor is not enabled or validated for this pilot. No AI Supervisor, pilot-readiness or production-readiness claim is made.

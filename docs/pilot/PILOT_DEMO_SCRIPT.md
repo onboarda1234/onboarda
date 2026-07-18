@@ -1,6 +1,6 @@
-# Pilot Canonical Dataset v1 — 30-Minute Demo Script
+# Pilot Canonical Dataset v1 — Controlled Demo Script
 
-Status: **Founder review required — not seeded**
+Status: **41 synthetic fixtures seeded on AWS staging; demo-completion PR remains draft-only**
 
 This walkthrough uses only deterministic, synthetic, non-production `RM-PILOT-*` records. It does not activate RSMP, call a provider, recompute an existing application, or change staging data. The application references remain permanent across every approved seed.
 
@@ -15,7 +15,7 @@ This walkthrough uses only deterministic, synthetic, non-production `RM-PILOT-*`
 1. Show the completed onboarding submission and verified KYC documents.
 2. Show the cleared synthetic screening disposition.
 3. Open the authoritative risk breakdown: score **12.0**, tier **LOW**, Fast Lane, with no floor or unresolved sentinel.
-4. Open the approved compliance memo and the AI Supervisor **CONSISTENT** verdict, reasoning and officer acceptance.
+4. Open the approved deterministic compliance memo. Point out that AI Supervisor is excluded from the controlled pilot and its retained synthetic evidence is not an active validated workflow.
 5. Show the final approval record.
 6. Generate the authorised evidence pack and point out the PDF risk/screening/memo sections and CSV audit trail.
 7. Finish with the completed periodic review and dismissed monitoring false positive.
@@ -53,24 +53,26 @@ This walkthrough uses only deterministic, synthetic, non-production `RM-PILOT-*`
 - Show the CSV audit trail and file hashes in the package manifest.
 - Confirm score, tier, screening disposition and memo agree with stored backend evidence.
 
-## 7. AI Supervisor — RM-PILOT-040 (3 minutes)
+## 7. AI Supervisor scope boundary — RM-PILOT-040 (1 minute)
 
-- Show the **CONSISTENT_WITH_WARNINGS** verdict.
-- Read the short reasoning and `APPROVE_WITH_ENHANCED_MONITORING` recommendation.
-- Show the officer review, recorded condition and final disposition.
-- Emphasise that the AI is advisory and the officer disposition is retained separately.
+- Show the explicit **Excluded from controlled pilot** notice on the deterministic memo.
+- Explain that synthetic Supervisor evidence is retained only for future development and testing.
+- Do not present a seeded verdict or recommendation as an active, validated or pilot-ready workflow.
+- Do not run or enable the Supervisor feature.
 
-## 8. Periodic review — RM-PILOT-008 and 014 (2 minutes)
+## 8. Periodic review — RM-PILOT-005, 008, 014 and 041 (3 minutes)
 
+- Show the completed Low-risk reviews on RM-PILOT-005 and RM-PILOT-041.
 - Show the open Medium-risk family-office review on RM-PILOT-008.
 - Contrast it with the open High-risk Private Banking review on RM-PILOT-014.
-- Confirm the current risk tier and review state remain consistent.
+- Confirm dates, priority, fixture labels and intentionally suppressed synthetic notifications.
 
-## 9. Monitoring — RM-PILOT-004 and 025 (2 minutes)
+## 9. Monitoring — RM-PILOT-004, 024, 025 and 041 (3 minutes)
 
 - Show the dismissed false positive on RM-PILOT-004.
+- Show the sanctions-monitoring escalation on RM-PILOT-024.
 - Contrast it with the open material adverse-media alert and officer-review requirement on RM-PILOT-025.
-- Close by confirming that monitoring clearance and escalation are distinct, auditable outcomes.
+- Close with RM-PILOT-041's dismissed false positive and confirm that every alert is clearly synthetic; do not trigger provider refresh.
 
 ## Optional compliance appendix
 

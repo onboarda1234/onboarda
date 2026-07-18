@@ -38,6 +38,19 @@ from fixtures.pilot_canonical_seeder import (
 
 BACKEND = Path(__file__).resolve().parents[1]
 ROOT = BACKEND.parent
+MANDATORY_MEMO_SECTIONS = {
+    "executive_summary",
+    "client_overview",
+    "ownership_and_control",
+    "risk_assessment",
+    "screening_results",
+    "document_verification",
+    "ai_explainability",
+    "red_flags_and_mitigants",
+    "compliance_decision",
+    "ongoing_monitoring",
+    "audit_and_governance",
+}
 
 
 @contextmanager
@@ -132,8 +145,9 @@ def test_founder_document_pins_hash_and_every_permanent_reference():
     assert manifest_sha256() in document
     for number in range(1, 42):
         assert f"RM-PILOT-{number:03d}" in document
-    assert "not seeded" in document.lower()
-    assert "No pilot-readiness or production-readiness claim" in document
+    assert "41 permanent records are present on AWS staging" in document
+    assert "AI Supervisor is not enabled or validated for this pilot" in document
+    assert "No AI Supervisor, pilot-readiness or production-readiness claim" in document
 
 
 def test_every_required_workflow_is_represented():
@@ -252,6 +266,148 @@ def test_apply_is_idempotent_and_preserves_authoritative_evidence(temp_db, monke
             assert {
                 item["config_version"] for item in evidence["controlled_mapping_evidence"]
             } == {stored["risk_config_version"]}
+    finally:
+        _cleanup(temp_db)
+
+
+def test_seeded_memos_satisfy_renderer_contract_and_preserve_authoritative_risk(
+    temp_db, monkeypatch
+):
+    from server import _memo_risk_snapshot_mismatch
+
+    _cleanup(temp_db)
+    try:
+        with _tier0_contract_enabled(monkeypatch):
+            seed_pilot_canonical_dataset(dry_run=False)
+
+        connection = sqlite3.connect(temp_db)
+        connection.row_factory = sqlite3.Row
+        applications = {
+            row["ref"]: row
+            for row in connection.execute(
+                "SELECT * FROM applications WHERE ref LIKE 'RM-PILOT-%' ORDER BY ref"
+            ).fetchall()
+        }
+        memo_rows = connection.execute(
+            "SELECT cm.*,a.ref,a.risk_score,a.risk_level,a.risk_config_version "
+            "FROM compliance_memos cm JOIN applications a ON a.id=cm.application_id "
+            "WHERE a.ref LIKE 'RM-PILOT-%' ORDER BY a.ref"
+        ).fetchall()
+        assert len(memo_rows) == 38
+        before = {}
+        manifest = {row["reference"]: row for row in load_manifest()["scenarios"]}
+        for stored in memo_rows:
+            data = json.loads(stored["memo_data"])
+            before[stored["ref"]] = stored["memo_data"]
+            assert MANDATORY_MEMO_SECTIONS <= set(data["sections"])
+            assert data["metadata"]["risk_score"] == stored["risk_score"]
+            assert data["metadata"]["risk_rating"] == stored["risk_level"]
+            assert data["metadata"]["risk_config_version"] == stored["risk_config_version"]
+            assert data["metadata"]["authoritative"] is True
+            assert data["metadata"]["ai_supervisor_scope"] == "excluded_from_controlled_pilot"
+            assert data["manifest_sha256"] == manifest_sha256()
+            assert _memo_risk_snapshot_mismatch(
+                applications[stored["ref"]], stored
+            ) is None
+            retained = manifest[stored["ref"]].get("supervisor_evidence") or {}
+            for key, value in retained.items():
+                assert data["supervisor"][key] == value
+                assert data["supervisor_evidence"][key] == value
+
+        connection.close()
+        with _tier0_contract_enabled(monkeypatch):
+            seed_pilot_canonical_dataset(dry_run=False)
+        connection = sqlite3.connect(temp_db)
+        after = {
+            row[0]: row[1]
+            for row in connection.execute(
+                "SELECT a.ref,cm.memo_data FROM compliance_memos cm "
+                "JOIN applications a ON a.id=cm.application_id "
+                "WHERE a.ref LIKE 'RM-PILOT-%' ORDER BY a.ref"
+            ).fetchall()
+        }
+        connection.close()
+        assert after == before
+    finally:
+        _cleanup(temp_db)
+
+
+def test_seeded_memo_decisions_are_supported_by_stored_scenario_evidence(
+    temp_db, monkeypatch
+):
+    _cleanup(temp_db)
+    try:
+        with _tier0_contract_enabled(monkeypatch):
+            seed_pilot_canonical_dataset(dry_run=False)
+        connection = sqlite3.connect(temp_db)
+        decisions = {}
+        for ref, raw_memo in connection.execute(
+            "SELECT a.ref,cm.memo_data FROM compliance_memos cm "
+            "JOIN applications a ON a.id=cm.application_id "
+            "WHERE a.ref IN ('RM-PILOT-001','RM-PILOT-017','RM-PILOT-024',"
+            "'RM-PILOT-025','RM-PILOT-038','RM-PILOT-040')"
+        ).fetchall():
+            memo = json.loads(raw_memo)
+            decisions[ref] = memo["sections"]["compliance_decision"]
+        connection.close()
+
+        assert decisions["RM-PILOT-001"]["decision"] == "APPROVE"
+        assert decisions["RM-PILOT-017"]["decision"] == "REVIEW"
+        assert decisions["RM-PILOT-024"]["decision"] == "REVIEW"
+        assert decisions["RM-PILOT-025"]["decision"] == "REVIEW"
+        assert decisions["RM-PILOT-038"]["decision"] == "REJECT"
+        assert (
+            decisions["RM-PILOT-040"]["decision"]
+            == "APPROVE_WITH_ENHANCED_MONITORING"
+        )
+        assert "explicit stored officer decision evidence" in decisions[
+            "RM-PILOT-040"
+        ]["content"]
+    finally:
+        _cleanup(temp_db)
+
+
+def test_periodic_review_fixtures_have_dates_priority_and_auditable_suppression(
+    temp_db, monkeypatch
+):
+    _cleanup(temp_db)
+    try:
+        with _tier0_contract_enabled(monkeypatch):
+            seed_pilot_canonical_dataset(dry_run=False)
+        connection = sqlite3.connect(temp_db)
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            "SELECT a.ref,pr.status,pr.last_review_date,pr.next_review_date,pr.due_date,pr.priority "
+            "FROM periodic_reviews pr JOIN applications a ON a.id=pr.application_id "
+            "WHERE a.ref LIKE 'RM-PILOT-%' ORDER BY a.ref"
+        ).fetchall()
+        assert [row["ref"] for row in rows] == [
+            "RM-PILOT-005", "RM-PILOT-008", "RM-PILOT-014", "RM-PILOT-041"
+        ]
+        expected_priority = {
+            "RM-PILOT-005": "low",
+            "RM-PILOT-008": "normal",
+            "RM-PILOT-014": "high",
+            "RM-PILOT-041": "low",
+        }
+        for row in rows:
+            assert row["last_review_date"]
+            assert row["next_review_date"]
+            assert row["due_date"] == row["next_review_date"]
+            assert row["priority"] == expected_priority[row["ref"]]
+        audit_rows = connection.execute(
+            "SELECT after_state FROM audit_log "
+            "WHERE action='fixture.pilot_canonical_notification_suppressed'"
+        ).fetchall()
+        assert len(audit_rows) == 4
+        for audit_row in audit_rows:
+            evidence = json.loads(audit_row["after_state"])
+            assert evidence == {
+                "enforcement_key": "applications.is_fixture",
+                "notification_suppressed": True,
+                "notification_suppression_reason": "fixture_application",
+            }
+        connection.close()
     finally:
         _cleanup(temp_db)
 
@@ -476,7 +632,12 @@ def test_evidence_export_scenario_generates_authoritative_pdf_and_csv(
             audit_csv = next(name for name in names if name.endswith("07_audit_trail.csv"))
             assert archive.read(risk_pdf).startswith(b"%PDF")
             assert archive.read(screening_pdf).startswith(b"%PDF")
-            assert archive.read(memo_pdf).startswith(b"%PDF")
+            memo_bytes = archive.read(memo_pdf)
+            assert memo_bytes.startswith(b"%PDF")
+            assert b"Executive Summary" in memo_bytes
+            assert b"Risk Assessment" in memo_bytes
+            assert b"Compliance Decision" in memo_bytes
+            assert b"Audit And Governance" in memo_bytes
             assert b"fixture.pilot_canonical" in archive.read(audit_csv)
         assert metadata["file_count"] >= 7
         assert not metadata["document_retrieval_failures"]
