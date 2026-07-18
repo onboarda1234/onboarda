@@ -16539,7 +16539,7 @@ function agent3TriageNarrativeHtml(narrative) {
       html += '<li style="font-size:12.5px;color:var(--text2);line-height:1.5;margin-bottom:6px;">';
       html += '<span style="font-weight:700;color:var(--text1);">' + escapeHtml(hit.subject_name || 'Unknown subject') + '</span>';
       html += ' <span style="color:var(--text3);">— matched</span> <span style="font-weight:600;">' + escapeHtml(hit.matched_name || 'Stored hit') + '</span> ';
-      html += '<span style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:0.04em;padding:1px 8px;border-radius:12px;border:1px solid ' + chipColor + ';color:' + chipColor + ';white-space:nowrap;" title="RegMind triage score — orders matches for review. A ranking, not a provider score and never a percentage.">' + escapeHtml(chipLabel) + ' · RegMind triage</span>';
+      html += '<span style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:0.04em;padding:1px 8px;border-radius:12px;border:1px solid ' + chipColor + ';color:' + chipColor + ';white-space:nowrap;" title="RegMind triage score — a ranking that orders matches for review. Not a provider score.">' + escapeHtml(chipLabel) + ' · RegMind triage</span>';
       if (reasons.length) {
         html += '<div style="font-size:11.5px;color:var(--text3);margin-top:2px;">' + escapeHtml(reasons.join('; ')) + '</div>';
       }
@@ -16780,7 +16780,7 @@ function screeningTriageScoreBlock(item, weakThreshold) {
   item = item || {};
   var band = screeningTriageScoreBand(item.triage_score, weakThreshold);
   var scoreText = band.key === 'unscored' ? '—' : String(item.triage_score);
-  return '<div style="flex:0 0 58px;text-align:center;" title="RegMind triage score — orders matches for review. Not a provider confidence and never a percentage.">' +
+  return '<div style="flex:0 0 58px;text-align:center;" title="RegMind triage score — a ranking that orders matches for review. Not a provider score.">' +
     '<div style="font-family:ui-monospace,Menlo,monospace;font-size:18px;font-weight:700;line-height:1;color:' + band.color + ';">' + escapeHtml(scoreText) + '</div>' +
     (band.label || band.key === 'unscored' ? '<div style="font-size:9px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:' + band.color + ';margin-top:3px;">' + escapeHtml(band.key === 'unscored' ? 'unscored' : band.label) + '</div>' : '') +
     '<div style="font-size:8.5px;color:var(--text3);margin-top:2px;">RegMind triage</div>' +

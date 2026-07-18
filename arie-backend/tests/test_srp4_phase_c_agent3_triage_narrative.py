@@ -406,6 +406,25 @@ def _function_region(html, name, next_name):
     return html[start:end]
 
 
+def _strip_js_comments(source):
+    """Drop // line comments so vocabulary pins only see executable code and
+    string literals — i.e. what can actually reach an officer's screen."""
+    return "\n".join(
+        line.split("//", 1)[0] if "//" in line and "://" not in line else line
+        for line in source.splitlines()
+    )
+
+
+def _assert_no_banned_probability_vocabulary(region_source):
+    """PR #797 review finding: officer-facing copy (including tooltips) must
+    never frame the triage score as a percentage/confidence/probability —
+    not even to deny it. Comments may explain the rule; rendered strings
+    may not use the words."""
+    code = _strip_js_comments(region_source).lower()
+    for banned in ("%", "percent", "confidence", "probability"):
+        assert banned not in code, f"banned vocabulary {banned!r} in rendered helper code"
+
+
 class TestBackofficeTriageNarrativeStatic:
     def test_narrative_block_exists_and_is_gated(self):
         html = _html()
@@ -436,6 +455,7 @@ class TestBackofficeTriageNarrativeStatic:
         assert "band === 'moderate'" in helper
         assert "RegMind triage" in helper
         assert "%" not in helper
+        _assert_no_banned_probability_vocabulary(helper)
         # Every dynamic value flows through escapeHtml.
         assert "escapeHtml(String(narrative.headline))" in helper
         assert "escapeHtml(hit.subject_name || 'Unknown subject')" in helper
@@ -447,6 +467,15 @@ class TestBackofficeTriageNarrativeStatic:
         # Weak-tail and unscored copy render server counts.
         assert "and are grouped in the weak tail." in helper
         assert "review them individually." in helper
+
+    def test_phase_b_score_block_tooltip_has_no_banned_vocabulary(self):
+        # The Phase B score-block tooltip was reworded alongside the Phase C
+        # finding — keep both helpers clean.
+        html = _html()
+        block = _function_region(
+            html, "screeningTriageScoreBlock", "screeningReviewReportIsBlindPreEnrichment"
+        )
+        _assert_no_banned_probability_vocabulary(block)
 
     def test_narrative_helper_makes_no_api_calls(self):
         html = _html()
