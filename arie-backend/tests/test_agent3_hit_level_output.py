@@ -240,7 +240,8 @@ def test_status_aligned_with_panel_low_confidence_threshold():
     # non-risk hit there must be likely_false_positive (not needs_review).
     status, reason = server._agent3_hit_status_and_reason("watchlist", 60)
     assert status == server.AGENT3_HIT_STATUS_LIKELY_FP
-    assert "60%" in reason
+    assert "Provider match score 60" in reason
+    assert "%" not in reason
     # Exactly at the threshold -> needs review.
     assert server._agent3_hit_status_and_reason("watchlist", 70)[0] == server.AGENT3_HIT_STATUS_NEEDS_REVIEW
 
