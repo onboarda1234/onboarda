@@ -277,6 +277,58 @@ def test_officer_correction_field_specific_controls_are_configured():
     assert _run_node(_officer_runtime_js(html, scenario))["ok"] is True
 
 
+def test_party_residence_and_appointment_fields_are_correctable():
+    """Option (a) approved 2026-07-17: the party card displays country of
+    residence, residential address and (directors) date of appointment, so the
+    correction form must offer them. Backend whitelist/columns already existed;
+    this pins the UI side."""
+    html = _read_backoffice()
+    scenario = textwrap.dedent(
+        """
+        function cfg(target, field, current) {
+          return officerCorrectionValueControlConfig(target, field, current || '');
+        }
+        var directorFields = officerCorrectionFieldOptions('director').map(function(o) { return o.value; });
+        var uboFields = officerCorrectionFieldOptions('ubo').map(function(o) { return o.value; });
+        ['country_of_residence', 'residential_address', 'date_of_appointment'].forEach(function(field) {
+          assert(directorFields.includes(field), 'director must offer ' + field);
+        });
+        assert(uboFields.includes('country_of_residence'), 'ubo must offer country_of_residence');
+        assert(uboFields.includes('residential_address'), 'ubo must offer residential_address');
+        assert(!uboFields.includes('date_of_appointment'), 'ubo must NOT offer date_of_appointment');
+        assert(cfg('director', 'country_of_residence', 'Mauritius').type === 'select', 'country of residence must use country select');
+        assert(cfg('director', 'country_of_residence', 'Mauritius').options.includes('United Kingdom'), 'country of residence options must come from portal country list');
+        assert(cfg('director', 'date_of_appointment', '').type === 'date', 'date of appointment must use date input');
+        assert(cfg('director', 'residential_address', '').type === 'text', 'residential address must use free text');
+        console.log(JSON.stringify({ ok: true }));
+        """
+    )
+    assert _run_node(_officer_runtime_js(html, scenario))["ok"] is True
+
+
+def test_party_card_correction_modal_locks_to_clicked_person():
+    """Party-card entry must not re-ask what the officer already answered by
+    clicking the card: the target/person/subject dropdowns are hidden behind a
+    locked context chip. The generic Overview launcher keeps the full form
+    (openOfficerCorrectionModal clears the lock)."""
+    html = _read_backoffice()
+    assert 'id="officer-correction-context"' in html
+    assert 'id="officer-correction-context-name"' in html
+    assert 'id="officer-correction-context-role"' in html
+    assert 'id="officer-correction-target-group"' in html
+    assert "Locked to this person" in html
+    assert "function applyOfficerCorrectionLockedContext(" in html
+    # openPartyCorrectionModal must set the lock; the generic opener must clear it.
+    party_fn = html.split("function openPartyCorrectionModal(", 1)[1].split("function applyOfficerCorrectionLockedContext(", 1)[0]
+    assert "window._officerCorrectionLockedParty = {" in party_fn
+    assert "applyOfficerCorrectionLockedContext();" in party_fn
+    generic_fn = html.split("function openOfficerCorrectionModal(", 1)[1].split("function renderOfficerCorrectionWarning(", 1)[0]
+    assert "window._officerCorrectionLockedParty = null;" in generic_fn
+    # Re-renders must re-apply the lock so a dropdown change can never unhide.
+    update_fn = html.split("function updateOfficerCorrectionForm(", 1)[1].split("function openOfficerCorrectionModal(", 1)[0]
+    assert "applyOfficerCorrectionLockedContext();" in update_fn
+
+
 def test_officer_correction_static_guards():
     html = _read_backoffice()
     assert "parseJson(" not in html, "back-office must not reference undefined parseJson"

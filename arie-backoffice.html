@@ -3583,7 +3583,14 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="modal-header"><h3>Record Correction</h3><button class="modal-close" onclick="closeModal('modal-officer-correction')">&times;</button></div>
     <div class="modal-body">
       <div id="officer-correction-error" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;border:1px solid #dc2626;background:#fef2f2;color:#991b1b;font-size:12px;"></div>
-      <div class="form-group">
+      <div id="officer-correction-context" style="display:none;align-items:center;gap:10px;margin-bottom:16px;padding:12px 14px;border:1px solid #c7d2fe;background:#eef2ff;border-radius:10px;">
+        <div>
+          <div id="officer-correction-context-name" style="font-size:14px;font-weight:700;color:var(--text1);"></div>
+          <div id="officer-correction-context-role" style="font-size:12px;color:var(--text2);"></div>
+        </div>
+        <div style="margin-left:auto;font-size:11px;font-weight:600;color:#4f46e5;">🔒 Locked to this person</div>
+      </div>
+      <div class="form-group" id="officer-correction-target-group">
         <div class="form-label">What do you need to correct?</div>
         <select class="form-select" id="officer-correction-target" onchange="updateOfficerCorrectionForm()">
           <option value="company">Company details</option>
@@ -11630,6 +11637,41 @@ function openPartyCorrectionModal(partyType, partyId) {
     subject.value = partyId;
     updateOfficerCorrectionCurrentValue();
     renderOfficerCorrectionValueControl();
+  }
+  // Lock the modal to the clicked party: the officer already chose WHO by
+  // clicking the card, so the target/person/subject dropdowns are hidden and
+  // replaced with a context chip. Values stay set in the (hidden) controls so
+  // the submit payload is unchanged. The generic Overview launcher keeps the
+  // full dropdowns (openOfficerCorrectionModal clears the lock).
+  var party = (officerCorrectionSubjects(partyType) || []).find(function(item) {
+    return String(partyRecordId(item)) === String(partyId);
+  }) || {};
+  window._officerCorrectionLockedParty = {
+    name: party.name || party.full_name || party.entity_name || 'Selected party',
+    role: partyType === 'ubo' ? 'UBO' : partyType === 'intermediary' ? 'Intermediary Shareholder' : 'Director'
+  };
+  applyOfficerCorrectionLockedContext();
+}
+
+function applyOfficerCorrectionLockedContext() {
+  var locked = window._officerCorrectionLockedParty;
+  var chip = document.getElementById('officer-correction-context');
+  var targetGroup = document.getElementById('officer-correction-target-group');
+  var personTargetGroup = document.getElementById('officer-correction-person-target-group');
+  var subjectGroup = document.getElementById('officer-correction-subject-group');
+  if (!chip) return;
+  if (locked) {
+    var nameEl = document.getElementById('officer-correction-context-name');
+    var roleEl = document.getElementById('officer-correction-context-role');
+    if (nameEl) nameEl.textContent = locked.name;
+    if (roleEl) roleEl.textContent = locked.role + ' · Correcting this person’s details';
+    chip.style.display = 'flex';
+    if (targetGroup) targetGroup.style.display = 'none';
+    if (personTargetGroup) personTargetGroup.style.display = 'none';
+    if (subjectGroup) subjectGroup.style.display = 'none';
+  } else {
+    chip.style.display = 'none';
+    if (targetGroup) targetGroup.style.display = 'block';
   }
 }
 
@@ -28270,12 +28312,17 @@ function officerCorrectionFieldOptions(targetType) {
       { value: 'full_name', label: 'Full name' },
       { value: 'nationality', label: 'Nationality' },
       { value: 'date_of_birth', label: 'Date of birth' },
+      { value: 'country_of_residence', label: 'Country of residence' },
+      { value: 'residential_address', label: 'Residential address' },
+      { value: 'date_of_appointment', label: 'Date of appointment' },
       { value: 'is_pep', label: 'Client-declared PEP status' }
     ],
     ubo: [
       { value: 'full_name', label: 'Full name' },
       { value: 'nationality', label: 'Nationality' },
       { value: 'date_of_birth', label: 'Date of birth' },
+      { value: 'country_of_residence', label: 'Country of residence' },
+      { value: 'residential_address', label: 'Residential address' },
       { value: 'ownership_pct', label: 'Ownership percentage' },
       { value: 'is_pep', label: 'Client-declared PEP status' }
     ],
@@ -28381,7 +28428,7 @@ function officerCorrectionValueControlConfig(targetType, fieldName, currentValue
   if (targetType === 'pep_status' || fieldName === 'verified_pep' || fieldName === 'pep_status') {
     return { type: 'pep_status' };
   }
-  if (fieldName === 'country' || fieldName === 'country_of_incorporation' || fieldName === 'jurisdiction' || fieldName === 'nationality') {
+  if (fieldName === 'country' || fieldName === 'country_of_incorporation' || fieldName === 'jurisdiction' || fieldName === 'nationality' || fieldName === 'country_of_residence') {
     return { type: 'select', placeholder: 'Select jurisdiction / country...', options: officerCorrectionCountryOptions(currentValue) };
   }
   if (fieldName === 'sector') {
@@ -28402,7 +28449,7 @@ function officerCorrectionValueControlConfig(targetType, fieldName, currentValue
   if (fieldName === 'ownership_pct') {
     return { type: 'number', min: 0, max: 100, step: '0.01', placeholder: 'Enter ownership percentage' };
   }
-  if (fieldName === 'date_of_birth') {
+  if (fieldName === 'date_of_birth' || fieldName === 'date_of_appointment') {
     return { type: 'date' };
   }
   if (fieldName === 'source_of_funds') {
@@ -28660,6 +28707,7 @@ function updateOfficerCorrectionForm() {
   }).join('');
   updateOfficerCorrectionCurrentValue();
   renderOfficerCorrectionValueControl();
+  applyOfficerCorrectionLockedContext();
 }
 
 function openOfficerCorrectionModal() {
@@ -28667,6 +28715,7 @@ function openOfficerCorrectionModal() {
     showToast('Open an application first.', 'warn');
     return;
   }
+  window._officerCorrectionLockedParty = null;
   setOfficerCorrectionError('');
   var target = document.getElementById('officer-correction-target');
   var personTarget = document.getElementById('officer-correction-person-target');

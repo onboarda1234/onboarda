@@ -6113,6 +6113,11 @@ OFFICER_CORRECTION_TIER2_FIELDS = frozenset({
     "last_name",
     "nationality",
     "date_of_birth",
+    # Person-country attribute: same treatment as nationality (fail-closed —
+    # correcting it recomputes risk and stales the memo). residential_address
+    # and date_of_appointment stay tier3 by omission: they feed neither the
+    # risk engine nor the memo.
+    "country_of_residence",
     "entity_name",
 })
 OFFICER_CORRECTION_RISK_RELEVANT_FIELDS = frozenset({
@@ -6131,6 +6136,7 @@ OFFICER_CORRECTION_RISK_RELEVANT_FIELDS = frozenset({
     "monthly_volume",
     "entity_type",
     "nationality",
+    "country_of_residence",
 })
 OFFICER_CORRECTION_MEMO_VISIBLE_FIELDS = frozenset(
     set(OFFICER_CORRECTION_TIER1_FIELDS)
@@ -6142,6 +6148,7 @@ OFFICER_CORRECTION_MEMO_VISIBLE_FIELDS = frozenset(
         "trading_name",
         "full_name",
         "nationality",
+        "country_of_residence",
         "date_of_birth",
         "entity_name",
     }
@@ -6362,6 +6369,7 @@ CONTROLLED_CORRECTION_OPTION_SETS = {
     "country": PORTAL_COUNTRY_OPTIONS,
     "jurisdiction": PORTAL_COUNTRY_OPTIONS,
     "nationality": PORTAL_COUNTRY_OPTIONS,
+    "country_of_residence": PORTAL_COUNTRY_OPTIONS,
     "sector": PORTAL_SECTOR_OPTIONS,
     "entity_type": PORTAL_ENTITY_TYPE_OPTIONS,
     "ownership_structure": PORTAL_OWNERSHIP_STRUCTURE_OPTIONS,
@@ -6396,7 +6404,7 @@ def _canonical_option_lookup(options):
 
 def _canonicalize_controlled_option(field_path, value):
     field_key = str(field_path or "").strip()
-    option_field = "country" if field_key in {"country_of_incorporation", "country", "jurisdiction", "nationality"} else field_key
+    option_field = "country" if field_key in {"country_of_incorporation", "country", "jurisdiction", "nationality", "country_of_residence"} else field_key
     if field_key == "is_pep":
         if isinstance(value, bool):
             return "Yes" if value else "No"
