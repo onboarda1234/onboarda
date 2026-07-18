@@ -845,7 +845,10 @@ def test_backoffice_agent3_provider_evidence_helpers_render_expected_copy():
             assertIncludes('relaxed', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'relaxed'}), 'Relaxed pass');
             assertIncludes('both', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'both'}), 'Strict + relaxed');
             assertIncludes('unavailable', agent3ProviderEvidenceCellHtml({match_score:null}), 'Provider score unavailable');
-            assertIncludes('numeric', agent3ProviderEvidenceCellHtml({match_score:88}), '88%');
+            const numericCell = agent3ProviderEvidenceCellHtml({match_score:88});
+            assertIncludes('numeric', numericCell, '>88<');
+            assertExcludes('numeric percent suffix', numericCell, '88%');
+            assertIncludes('numeric caption', numericCell, 'Match score supplied by provider.');
             const evidence = agent3HitEvidenceDetailsHtml({
               evidence_url:'https://news.example/article',
               evidence_title:'Article title',

@@ -97,6 +97,18 @@ _PROVIDER_DEFAULTS = {
     "production": "sumsub",
 }
 
+# SRP-2a Phase D: existing-customer re-screen via the Mesh rescreen workflow.
+# OFF by default in ALL environments; requires "monitor on demand" on the CA
+# account. When off, re-screens keep today's create-and-screen + conflict
+# classification behaviour byte-identical.
+_CA_RESCREEN_DEFAULTS = {
+    "development": False,
+    "testing": False,
+    "demo": False,
+    "staging": False,
+    "production": False,
+}
+
 
 def is_abstraction_enabled() -> bool:
     """
@@ -115,6 +127,25 @@ def is_abstraction_enabled() -> bool:
     from environment import canonicalize_environment
     env = canonicalize_environment(os.environ.get("ENVIRONMENT") or os.environ.get("ENV"))
     return _ABSTRACTION_DEFAULTS.get(env, False)
+
+
+def is_ca_rescreen_enabled() -> bool:
+    """
+    Check if the SRP-2a existing-customer re-screen pathway is enabled.
+
+    Resolution order:
+    1. ENABLE_CA_RESCREEN environment variable
+    2. Default for current environment (always False)
+
+    Returns False in all environments unless explicitly overridden.
+    """
+    env_val = os.environ.get("ENABLE_CA_RESCREEN")
+    if env_val is not None:
+        return env_val.lower() in ("true", "1", "yes", "on")
+    # Canonicalized (audit H8 / PR-13) so alias values hit the right defaults.
+    from environment import canonicalize_environment
+    env = canonicalize_environment(os.environ.get("ENVIRONMENT") or os.environ.get("ENV"))
+    return _CA_RESCREEN_DEFAULTS.get(env, False)
 
 
 def get_active_provider_name() -> str:

@@ -32,13 +32,13 @@ class ComplyAdvantageClient:
         self.retry_backoff_seconds = retry_backoff_seconds
         self.sleep_fn = sleep_fn or time.sleep
 
-    def get(self, path, params=None, *, timeout=None):
-        return self.request("GET", path, params=params, timeout=timeout)
+    def get(self, path, params=None, *, timeout=None, headers=None):
+        return self.request("GET", path, params=params, timeout=timeout, headers=headers)
 
-    def post(self, path, json_body=None, *, timeout=None):
-        return self.request("POST", path, json_body=json_body, timeout=timeout)
+    def post(self, path, json_body=None, *, params=None, timeout=None, headers=None):
+        return self.request("POST", path, params=params, json_body=json_body, timeout=timeout, headers=headers)
 
-    def request(self, method, path, *, params=None, json_body=None, timeout=None):
+    def request(self, method, path, *, params=None, json_body=None, timeout=None, headers=None):
         method = method.upper()
         token = self.token_client.get_token()
         response = self._send_with_retries(
@@ -49,6 +49,7 @@ class ComplyAdvantageClient:
             json_body=json_body,
             timeout=timeout,
             attempt=1,
+            headers=headers,
         )
         if response.status_code != 401:
             return self._map_response(response, path)
@@ -63,12 +64,13 @@ class ComplyAdvantageClient:
             json_body=json_body,
             timeout=timeout,
             attempt=2,
+            headers=headers,
         )
         if retry_response.status_code == 401:
             raise CAAuthenticationFailed("ComplyAdvantage authentication failed after refresh")
         return self._map_response(retry_response, path)
 
-    def _send_with_retries(self, method, path, token, *, params, json_body, timeout, attempt):
+    def _send_with_retries(self, method, path, token, *, params, json_body, timeout, attempt, headers=None):
         response = self._send(
             method,
             path,
@@ -77,6 +79,7 @@ class ComplyAdvantageClient:
             json_body=json_body,
             timeout=timeout,
             attempt=attempt,
+            headers=headers,
         )
         # GET fetches are idempotent and safe to retry once on transient
         # provider/rate-limit errors. POST create-and-screen is not retried here
@@ -102,19 +105,25 @@ class ComplyAdvantageClient:
             json_body=json_body,
             timeout=timeout,
             attempt=attempt + 1,
+            headers=headers,
         )
 
-    def _send(self, method, path, token, *, params, json_body, timeout, attempt):
+    def _send(self, method, path, token, *, params, json_body, timeout, attempt, headers=None):
         url = self._url(path)
         log_path = self._log_path(path)
         started = time.monotonic()
+        # SRP-2a: callers may add per-request headers (e.g. the rescreen
+        # idempotency key). The Authorization header is set LAST so extra
+        # headers can never override authentication.
+        request_headers = dict(headers or {})
+        request_headers["Authorization"] = f"Bearer {token}"
         try:
             response = self.session.request(
                 method,
                 url,
                 params=params,
                 json=json_body,
-                headers={"Authorization": f"Bearer {token}"},
+                headers=request_headers,
                 timeout=timeout or self.timeout,
             )
         except requests.exceptions.Timeout as exc:
