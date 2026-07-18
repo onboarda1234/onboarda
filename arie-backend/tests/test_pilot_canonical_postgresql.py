@@ -142,6 +142,79 @@ def _canonical_application_count(db_module) -> int:
         connection.close()
 
 
+def _canonical_document_snapshot(db_module):
+    connection = db_module.get_db()
+    try:
+        return [
+            (row["id"], row["doc_type"])
+            for row in connection.execute(
+                "SELECT d.id,d.doc_type FROM documents d "
+                "JOIN applications a ON a.id=d.application_id "
+                "WHERE a.ref LIKE ? ORDER BY d.id",
+                ("RM-PILOT-%",),
+            ).fetchall()
+        ]
+    finally:
+        connection.close()
+
+
+def _canonical_document_row_version_snapshot(db_module):
+    connection = db_module.get_db()
+    try:
+        return [
+            (row["id"], row["doc_type"], row["xmin"])
+            for row in connection.execute(
+                "SELECT d.id,d.doc_type,d.xmin::text AS xmin FROM documents d "
+                "JOIN applications a ON a.id=d.application_id "
+                "WHERE a.ref LIKE ? ORDER BY d.id",
+                ("RM-PILOT-%",),
+            ).fetchall()
+        ]
+    finally:
+        connection.close()
+
+
+def _canonical_application_risk_snapshot(db_module):
+    connection = db_module.get_db()
+    try:
+        return [
+            (
+                row["id"], row["ref"], row["risk_score"], row["risk_level"],
+                row["status"], row["onboarding_lane"],
+                row["risk_config_version"], row["risk_dimensions"],
+                row["risk_escalations"],
+            )
+            for row in connection.execute(
+                "SELECT a.id,a.ref,a.risk_score,a.risk_level,a.status,"
+                "a.onboarding_lane,a.risk_config_version,"
+                "a.risk_dimensions::text AS risk_dimensions,"
+                "a.risk_escalations::text AS risk_escalations "
+                "FROM applications a WHERE a.ref LIKE ? ORDER BY a.ref",
+                ("RM-PILOT-%",),
+            ).fetchall()
+        ]
+    finally:
+        connection.close()
+
+
+def _canonical_correction_request_snapshot(db_module):
+    connection = db_module.get_db()
+    try:
+        return [
+            (row["id"], row["doc_type"], row["document_id"])
+            for row in connection.execute(
+                "SELECT i.id,i.doc_type,i.document_id "
+                "FROM rmi_request_items i "
+                "JOIN rmi_requests r ON r.id=i.request_id "
+                "JOIN applications a ON a.id=r.application_id "
+                "WHERE a.ref LIKE ? ORDER BY i.id",
+                ("RM-PILOT-%",),
+            ).fetchall()
+        ]
+    finally:
+        connection.close()
+
+
 def test_rm_pilot_037_persists_integer_override_flag(canonical_postgres):
     runtime = canonical_postgres
     first_decision_scenario = next(
@@ -213,6 +286,54 @@ def test_complete_postgres_dry_run_is_repeatable_and_zero_residue(
         "aligned": True,
         "manifest_sha256": EXPECTED_MANIFEST_SHA256,
     }
+
+
+def test_canonical_document_types_are_canonical_and_startup_stable(
+    canonical_postgres,
+):
+    runtime = canonical_postgres
+
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+    first_documents = _canonical_document_snapshot(runtime.db)
+    first_applications = _canonical_application_risk_snapshot(runtime.db)
+    first_requests = _canonical_correction_request_snapshot(runtime.db)
+
+    assert len(first_documents) == 131
+    assert all(
+        doc_type not in {"certificate_of_incorporation", "proof_of_address"}
+        for _, doc_type in first_documents
+    )
+    assert sum(doc_type == "cert_inc" for _, doc_type in first_documents) == 40
+    assert sum(doc_type == "poa" for _, doc_type in first_documents) == 1
+    assert any(
+        document_id == "pcdv100000000037x04" and doc_type == "poa"
+        for document_id, doc_type in first_documents
+    )
+    assert first_requests == [
+        ("pcdv100000000037:correction-item", "poa", "pcdv100000000037x04")
+    ]
+
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+    second_documents = _canonical_document_snapshot(runtime.db)
+    assert second_documents == first_documents
+    assert _canonical_application_risk_snapshot(runtime.db) == first_applications
+    assert _canonical_correction_request_snapshot(runtime.db) == first_requests
+    second_document_versions = _canonical_document_row_version_snapshot(runtime.db)
+
+    # This is the same normalization invoked during backend startup. A
+    # canonical seed must leave it with no legacy values to rewrite, including
+    # no PostgreSQL row-version changes.
+    connection = runtime.db.get_db()
+    try:
+        runtime.db.normalize_legacy_doc_types(connection)
+    finally:
+        connection.close()
+
+    assert _canonical_document_snapshot(runtime.db) == first_documents
+    assert _canonical_document_row_version_snapshot(runtime.db) == second_document_versions
+    assert _canonical_application_risk_snapshot(runtime.db) == first_applications
+    assert _canonical_correction_request_snapshot(runtime.db) == first_requests
+    assert runtime.canonical.manifest_sha256() == EXPECTED_MANIFEST_SHA256
 
 
 def test_canonical_memo_and_periodic_ui_contracts_persist_on_postgres(

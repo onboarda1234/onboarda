@@ -37,6 +37,20 @@ logger = logging.getLogger(__name__)
 DETERMINISTIC_EPOCH = datetime(2026, 7, 1, tzinfo=timezone.utc)
 IDENTITY_SOURCE = "fixtures.pilot_canonical_seeder"
 
+# Keep fixture persistence on the same canonical document-type contract used
+# by backend startup normalization.  The manifest may retain human-facing
+# legacy labels for scenario evidence, but persisted ``documents.doc_type``
+# and linked document-request rows must never reintroduce those aliases.
+CANONICAL_DOCUMENT_TYPE_ALIASES = {
+    "certificate_of_incorporation": "cert_inc",
+    "proof_of_address": "poa",
+}
+
+
+def _canonical_document_type(value: Any) -> str:
+    raw = str(value or "").strip()
+    return CANONICAL_DOCUMENT_TYPE_ALIASES.get(raw.casefold(), raw)
+
 
 class PilotDatasetReferenceCollision(RuntimeError):
     """Reserved canonical identity is occupied by an unrelated record."""
@@ -296,12 +310,12 @@ def _document_specs(row: Mapping[str, Any]) -> List[Dict[str, str]]:
     passport_review = "rejected" if idv == "failed" else "accepted"
     default_specs = [
         {"type": "passport", "verification": passport_verification, "review": passport_review},
-        {"type": "certificate_of_incorporation", "verification": "verified", "review": "accepted"},
+        {"type": "cert_inc", "verification": "verified", "review": "accepted"},
         {"type": "ownership_evidence", "verification": "verified", "review": "accepted"},
     ]
     existing_types = {item["type"] for item in default_specs}
     for evidence in row.get("evidence_documents") or []:
-        document_type = str(evidence.get("type") or "").strip()
+        document_type = _canonical_document_type(evidence.get("type"))
         if not document_type or document_type in existing_types:
             continue
         default_specs.append({
@@ -536,7 +550,12 @@ def _upsert_correction_workflow(db, audit, row: Mapping[str, Any]) -> Dict[str, 
 
     document = db.execute(
         "SELECT id FROM documents WHERE application_id=? AND doc_type=? ORDER BY id LIMIT 1",
-        (app_id, workflow.get("supporting_document_type") or "proof_of_address"),
+        (
+            app_id,
+            _canonical_document_type(
+                workflow.get("supporting_document_type") or "poa"
+            ),
+        ),
     ).fetchone()
     if not document:
         raise PilotDatasetValidationError(
@@ -562,7 +581,10 @@ def _upsert_correction_workflow(db, audit, row: Mapping[str, Any]) -> Dict[str, 
         )
 
     item_values = (
-        request_id, workflow.get("requested_document_type") or "proof_of_address",
+        request_id,
+        _canonical_document_type(
+            workflow.get("requested_document_type") or "poa"
+        ),
         workflow["request_label"], workflow["request_description"], "accepted",
         document["id"], _iso(row, offset=5), _iso(row, offset=6), _iso(row, offset=3),
     )
