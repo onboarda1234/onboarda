@@ -185,6 +185,31 @@ process.stdout.write(JSON.stringify({{excludedHtml, normalHtml}}));
     assert "SHOULD_NOT_RENDER" in result["normalHtml"]
 
 
+def test_memo_renderer_normalizes_legacy_wrapped_detail_projection():
+    html = _html()
+    helper = _region(html, "function normalizeMemoPayload", "var PRESCREEN_CORRECTION_ALLOWED_FIELDS")
+    script = f"""
+{helper}
+const direct = {{sections:{{executive_summary:{{content:'ok'}}}}, metadata:{{}}}};
+const wrapped = {{id:572, memo_data:direct, review_status:'approved'}};
+const normalizedDirect = normalizeMemoPayload(direct);
+const normalizedWrapped = normalizeMemoPayload(wrapped);
+process.stdout.write(JSON.stringify({{
+  directSame: normalizedDirect === direct,
+  wrappedSections: Object.keys(normalizedWrapped.sections),
+  wrappedStatus: normalizedWrapped.review_status,
+  missing: normalizeMemoPayload(null)
+}}));
+"""
+    result = _run_node(script)
+    assert result == {
+        "directSame": True,
+        "wrappedSections": ["executive_summary"],
+        "wrappedStatus": "approved",
+        "missing": None,
+    }
+
+
 def test_supervisor_scope_guard_is_confined_to_canonical_ui_projection():
     html = _html()
     application_blockers = _region(

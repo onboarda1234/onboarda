@@ -10999,7 +10999,11 @@ async function fetchApplicationDetail(ref) {
     officerCorrectionDisplayValues: detail.officer_correction_display_values || {},
     officerCorrectionDisplayMetadata: detail.officer_correction_display_metadata || {},
     latestMemoMeta: detail.latest_memo || null,
-    latestMemo: detail.latest_memo_data || null,
+    // Canonical fixture/API responses expose the memo payload directly, but
+    // older detail projections may wrap it as {memo_data: {...}}. Normalize
+    // both shapes at this boundary so the renderer never mistakes a stored
+    // memo for an absent memo.
+    latestMemo: normalizeMemoPayload(detail.latest_memo_data),
     memoIsStale: detail.memo_is_stale || false,
     memoStaleReason: detail.memo_stale_reason || '',
     memoStaleTrigger: detail.memo_stale_trigger || '',
@@ -11011,6 +11015,20 @@ async function fetchApplicationDetail(ref) {
     last_document_upload: detail.last_document_upload || '',
     screening_updated_at: detail.screening_updated_at || ''
   };
+}
+
+function normalizeMemoPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  if (payload.sections && typeof payload.sections === 'object') return payload;
+  var nested = payload.memo_data;
+  if (nested && typeof nested === 'object' && nested.sections && typeof nested.sections === 'object') {
+    var normalized = Object.assign({}, nested);
+    Object.keys(payload).forEach(function(key) {
+      if (key !== 'memo_data' && normalized[key] == null) normalized[key] = payload[key];
+    });
+    return normalized;
+  }
+  return payload;
 }
 
 var PRESCREEN_CORRECTION_ALLOWED_FIELDS = {
