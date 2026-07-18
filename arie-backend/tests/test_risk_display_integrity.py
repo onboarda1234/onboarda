@@ -112,12 +112,11 @@ class TestBackofficeRiskSourceOfTruth:
         end = html.index("\nfunction setMemoDownloadState", start)
         risk_card = html[start:end]
 
-        assert "Authoritative score" in risk_card
-        assert "Authoritative tier" in risk_card
+        assert "Overall risk" in risk_card
         assert "Approval route" in risk_card
-        assert "riskScoreTile" in risk_card
-        assert "Risk computed at" in risk_card
-        assert "Configuration version" in risk_card
+        assert "Evidence at a glance" in risk_card
+        assert "risk-executive-dashboard" in risk_card
+        assert "Configuration:" in risk_card
         assert "Latest recomputed score" not in risk_card
         assert "Weighted average" not in risk_card
         assert "Formula:" not in risk_card
