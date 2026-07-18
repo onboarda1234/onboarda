@@ -24791,6 +24791,35 @@ def _agent3_numeric(value):
     return round(parsed, 1)
 
 
+def _agent3_triage_score(value):
+    """Guarded passthrough for the stored RegMind triage score (SRP-4 Phase C).
+
+    Deliberately NOT _agent3_numeric: that helper rescales provider match
+    scores <= 1 onto a 0-100 scale, which would corrupt a legitimate stored
+    rts score of 1. The rts score is persisted by the normalizer as an int
+    1-100 — accept real numbers only, never coerce, rescale, or guess.
+    Hits without a stored score stay None and are reported as "unscored".
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _agent3_triage_reasons(value):
+    """Stored triage_score_reasons passthrough: non-empty strings only, verbatim, capped at 6."""
+    reasons = []
+    for item in _agent3_list(value):
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if not text:
+            continue
+        reasons.append(text)
+        if len(reasons) >= 6:
+            break
+    return reasons
+
+
 def _agent3_first_non_empty(*values):
     for value in values:
         if value is None:
@@ -25410,6 +25439,13 @@ def _agent3_collect_hits(screening_report, app):
             ))
             match_score_raw = hit.get("match_score") if "match_score" in hit else hit.get("score")
         match_score = _agent3_numeric(match_score_raw)
+        # SRP-4 Phase C: pass through the stored rts triage fields when the
+        # provider hit carries them (Phase A persistence). Hits screened
+        # before rts-1.0 carry no score and stay None — reported as
+        # "unscored", never guessed or bucketed weak.
+        triage_score = _agent3_triage_score(hit.get("triage_score")) if isinstance(hit, dict) else None
+        triage_score_version = _agent3_text(hit.get("triage_score_version")) if isinstance(hit, dict) else ""
+        triage_score_reasons = _agent3_triage_reasons(hit.get("triage_score_reasons")) if isinstance(hit, dict) else []
         hits.append({
             "subject_type": subject_type,
             "subject_name": subject_name or "Unknown subject",
@@ -25417,6 +25453,9 @@ def _agent3_collect_hits(screening_report, app):
             "categories": categories or ["other"],
             "match_score": match_score,
             "match_score_raw": match_score_raw,
+            "triage_score": triage_score,
+            "triage_score_version": triage_score_version,
+            "triage_score_reasons": triage_score_reasons,
             "surfaced_by_pass": surfaced_by_pass,
             "list_name": _agent3_text(list_name),
             "provider_ref": _agent3_text(provider_ref),
@@ -25530,30 +25569,30 @@ def _agent3_hit_status_and_reason(primary_type, score, surfaced_by_pass=""):
         if pass_label:
             return (
                 AGENT3_HIT_STATUS_NEEDS_REVIEW,
-                "No numeric confidence score recorded, but the stored provider "
+                "No numeric provider match score recorded, but the stored provider "
                 f"result was surfaced by {pass_label}; officer review required.",
             )
         return (
             AGENT3_HIT_STATUS_UNAVAILABLE,
-            "No confidence score recorded in the stored provider result; "
+            "No provider match score recorded in the stored provider result; "
             "officer review required to disambiguate.",
         )
     if primary_type == "sanctions" and score >= _AGENT3_HIT_HIGH_CONFIDENCE_SANCTIONS:
         return (
             AGENT3_HIT_STATUS_HIGH_CONFIDENCE,
-            f"High-confidence sanctions match ({score}%); officer identity "
-            "verification required before disposition.",
+            f"Sanctions match with provider match score {score} (scale unconfirmed "
+            "by provider); officer identity verification required before disposition.",
         )
     if score < _AGENT3_HIT_LOW_CONFIDENCE and primary_type not in _AGENT3_HIT_RISK_TYPES:
         return (
             AGENT3_HIT_STATUS_LIKELY_FP,
-            f"Low match confidence ({score}%) on {type_label}; likely a false "
-            "positive. Officer should confirm identifiers before clearing.",
+            f"Provider match score {score} (scale unconfirmed) on {type_label}; "
+            "likely a false positive. Officer should confirm identifiers before clearing.",
         )
     return (
         AGENT3_HIT_STATUS_NEEDS_REVIEW,
-        f"Match confidence {score}% on {type_label}; identity disambiguation "
-        "required before disposition.",
+        f"Provider match score {score} (scale unconfirmed) on {type_label}; "
+        "identity disambiguation required before disposition.",
     )
 
 
@@ -25582,6 +25621,9 @@ def _agent3_build_hit_rows(hits, provider):
             "categories": categories,
             "type": primary,
             "match_score": score,
+            "triage_score": _agent3_triage_score(hit.get("triage_score")),
+            "triage_score_version": hit.get("triage_score_version") or "",
+            "triage_score_reasons": _agent3_triage_reasons(hit.get("triage_score_reasons")),
             "surfaced_by_pass": surfaced_by_pass,
             "suggested_status": status,
             "reason": reason,
@@ -25597,12 +25639,145 @@ def _agent3_build_hit_rows(hits, provider):
                 "surfaced_by_pass": surfaced_by_pass,
                 "raw_category_type": hit.get("raw_category_type") or primary,
                 "match_score_raw": hit.get("match_score_raw"),
+                "triage_score_version": hit.get("triage_score_version") or "",
                 "screening_mode": hit.get("screening_mode") or "",
                 "screened_at": hit.get("screened_at") or "",
                 "pending_degraded_reason": hit.get("pending_degraded_reason") or "",
             },
         })
     return rows
+
+
+# SRP-4 Phase C — advisory triage narrative band boundaries. These MUST stay
+# in sync with the Phase B UI bands in arie-backoffice.html
+# (screeningTriageScoreBand): score >= 85 renders "Strong", >= 70 renders
+# "Moderate", threshold..69 renders the bare number with no band word, and
+# scores below _TRIAGE_WEAK_THRESHOLD form the weak tail. The rts score is a
+# RANKING for review ordering only — never a percentage, provider confidence,
+# or probability, and it never feeds risk scoring, gates, memos, or
+# suggested_status/disposition classification.
+_AGENT3_TRIAGE_STRONG = 85
+_AGENT3_TRIAGE_MODERATE = 70
+
+# The narrative lists at most this many priority hits (all are still counted).
+_AGENT3_TRIAGE_NARRATIVE_LISTED_CAP = 5
+
+
+def _agent3_triage_band(score):
+    """Band word for a scored hit: "strong" / "moderate" / "" (numeric only)."""
+    if score >= _AGENT3_TRIAGE_STRONG:
+        return "strong"
+    if score >= _AGENT3_TRIAGE_MODERATE:
+        return "moderate"
+    return ""
+
+
+def _agent3_triage_narrative(hits):
+    """Deterministic, advisory-only "where to start" narrative (SRP-4 Phase C).
+
+    Pure function over already-collected hit dicts — no provider calls, no
+    mutation, no effect on suggested_status, dispositions, risk scoring,
+    gates, or memos. Returns None when no hit carries a stored rts triage
+    score (legacy/pre-rts reports keep today's behaviour); the UI renders the
+    block only when present. Unscored hits are reported as unscored — never
+    guessed or bucketed weak.
+    """
+    scored = []
+    unscored_count = 0
+    for hit in hits or []:
+        score = _agent3_triage_score(hit.get("triage_score")) if isinstance(hit, dict) else None
+        if score is None:
+            unscored_count += 1
+        else:
+            scored.append((score, hit))
+    if not scored:
+        return None
+
+    threshold = _TRIAGE_WEAK_THRESHOLD
+    priority = [entry for entry in scored if entry[0] >= threshold]
+    weak_tail_count = len(scored) - len(priority)
+    # Descending by score; Python's sort is stable, so ties keep input order.
+    priority.sort(key=lambda entry: -entry[0])
+    priority_count = len(priority)
+    listed = priority[:_AGENT3_TRIAGE_NARRATIVE_LISTED_CAP]
+
+    # Version from the highest-ranked scored hit (priority head, else the
+    # highest-scored weak hit), falling back to the rts-1.0 baseline.
+    ranked_all = sorted(scored, key=lambda entry: -entry[0])
+    version = _agent3_text(ranked_all[0][1].get("triage_score_version"), "rts-1.0")
+
+    priority_hits = []
+    sentences = []
+    for position, (score, hit) in enumerate(listed, start=1):
+        band = _agent3_triage_band(score)
+        subject_name = _agent3_text(hit.get("subject_name"), "Unknown subject")
+        matched_name = _agent3_text(hit.get("matched_name"), "Stored hit")
+        reasons = _agent3_triage_reasons(hit.get("triage_score_reasons"))[:2]
+        priority_hits.append({
+            "subject_name": subject_name,
+            "matched_name": matched_name,
+            "score": score,
+            "band": band,
+            "categories": list(hit.get("categories") or []),
+            "reasons": reasons,
+            "surfaced_by_pass": hit.get("surfaced_by_pass") or "",
+        })
+        band_prefix = f"{band}, " if band else ""
+        sentence = (
+            f"{position}. {subject_name} — matched '{matched_name}' "
+            f"({band_prefix}triage {score})"
+        )
+        if reasons:
+            # Lowercase the leading letter for mid-sentence flow, but keep
+            # leading acronyms (e.g. "PEP class 1-2 match") verbatim.
+            reason_text = "; ".join(
+                reason[:1].lower() + reason[1:]
+                if len(reason) < 2 or reason[1].islower()
+                else reason
+                for reason in reasons
+            )
+            sentence += f": {reason_text}."
+        else:
+            sentence += "."
+        sentences.append(sentence)
+
+    if priority_count == 1:
+        headline = "Review this 1 hit first, ranked by RegMind triage."
+    elif priority_count:
+        headline = f"Review these {priority_count} hits first, ranked by RegMind triage."
+    else:
+        headline = (
+            f"No scored hits rank at or above the weak threshold ({threshold}); "
+            "review the weak tail individually."
+        )
+
+    narrative_parts = list(sentences)
+    if priority_count > len(listed):
+        narrative_parts.append(
+            f"Only the top {len(listed)} are listed here; all {priority_count} "
+            "priority hits are counted."
+        )
+    if weak_tail_count:
+        narrative_parts.append(
+            f"The remaining {weak_tail_count} hit(s) rank below the weak "
+            f"threshold ({threshold}) and are grouped in the weak tail."
+        )
+    if unscored_count:
+        narrative_parts.append(
+            f"{unscored_count} hit(s) were screened before triage scoring "
+            "existed and are unscored — review them individually."
+        )
+
+    return {
+        "version": version,
+        "weak_threshold": threshold,
+        "priority_count": priority_count,
+        "weak_tail_count": weak_tail_count,
+        "unscored_count": unscored_count,
+        "headline": headline,
+        "priority_hits": priority_hits,
+        "narrative": " ".join(narrative_parts),
+    }
 
 
 def _agent3_build_screening_interpretation(app, prescreening, screening_reviews, declared_pep_subjects=None):
@@ -25714,7 +25889,7 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
             )
     elif low_confidence_hit_count == len(hits) and hits and not (risk_sanctions_count or risk_pep_count or risk_adverse_media_count):
         false_positive_assessment = (
-            "False positive likely based on stored low-confidence matches. "
+            "False positive likely based on stored low provider match scores. "
             "Officer should confirm against names, dates, nationality, and identifiers before closing."
         )
     else:
@@ -25810,6 +25985,11 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
         key = row.get("suggested_status") or AGENT3_HIT_STATUS_UNAVAILABLE
         hit_row_status_counts[key] = hit_row_status_counts.get(key, 0) + 1
 
+    # SRP-4 Phase C: advisory triage narrative — present only when at least
+    # one stored hit carries an rts score, so legacy/pre-rts interpretations
+    # keep exactly today's payload shape.
+    triage_narrative = _agent3_triage_narrative(hits)
+
     generated_at = datetime.now(timezone.utc).isoformat()
     interpretation = {
         "agent_name": "Agent 3 Screening Interpretation",
@@ -25848,6 +26028,10 @@ def _agent3_build_screening_interpretation(app, prescreening, screening_reviews,
             "unresolved_screening_reviews": unresolved_review_count,
         },
     }
+    if triage_narrative is not None:
+        # Set before the output_hash is computed so the narrative participates
+        # in the hash; absent for legacy data (key omitted, shape unchanged).
+        interpretation["triage_narrative"] = triage_narrative
     hash_payload = dict(interpretation)
     hash_payload.pop("generated_at", None)
     interpretation["output_hash"] = _agent3_json_hash(hash_payload)
