@@ -12,6 +12,8 @@ Covers:
     8. Outer defence-in-depth handler catches unexpected errors
 """
 import json
+
+from fixture_safe_refs import fixture_safe_suffix
 import os
 import sqlite3
 import logging
@@ -45,7 +47,7 @@ def _setup_test_app(db, client_id="testuser"):
     """Insert a test application with one director. Returns app_id."""
     import uuid
     app_id = f"test_{uuid.uuid4().hex[:8]}"
-    ref = f"ARF-2026-{uuid.uuid4().hex[:6]}"
+    ref = f"ARF-2026-{fixture_safe_suffix(6)}"
     db.execute("""
         INSERT INTO applications (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)

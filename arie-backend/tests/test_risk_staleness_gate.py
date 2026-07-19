@@ -19,6 +19,8 @@ tests monkeypatch it for deterministic, DB-neutral behaviour (identical on
 SQLite/PG).
 """
 import os
+
+from fixture_safe_refs import fixture_safe_suffix
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -141,7 +143,7 @@ class TestQuarantineStamping:
                    VALUES (?, ?, ?, ?, 'Mauritius', 'Technology', 'SME',
                            'kyc_submitted', 'LOW', 'LOW', 20,
                            NULL, '{}', datetime('now'), datetime('now'))""",
-                (app_id, f"QRT-{ref_sfx}-{uuid.uuid4().hex[:6]}", f"{app_id}_c",
+                (app_id, f"QRT-{ref_sfx}-{fixture_safe_suffix(6)}", f"{app_id}_c",
                  f"Quarantine {ref_sfx} Ltd"),
             )
         db.commit()
