@@ -14,9 +14,16 @@ from datetime import datetime, timedelta, timezone
 
 # Add parent directory to path so we can import server modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# tests/ itself, so shared test helpers (fixture_safe_refs) import everywhere.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 os.environ["ENVIRONMENT"] = "testing"
 os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only"
+# Tornado AsyncHTTPTestCase default timeout is 5s, which loaded CI runners can
+# exceed while the handler still succeeds (deploy run 29673660015: HTTP 200 in
+# 5,646ms → test "failed"). 15s keeps genuine hangs detectable without letting
+# runner load fail healthy handlers. Overridable via the same env var.
+os.environ.setdefault("ASYNC_TEST_TIMEOUT", "15")
 # Most legacy AML adapter tests for Sumsub exercise the old mechanics.  Sprint
 # 1 keeps runtime defaulting to IDV-only unless entitlement is explicitly
 # proven, so the test harness opts in while dedicated entitlement tests opt out.
@@ -366,7 +373,9 @@ def sample_application(db, client_token, request):
     import uuid
     user = decode_token(client_token)
 
-    uid = uuid.uuid4().hex[:8]
+    from fixture_safe_refs import fixture_safe_suffix
+
+    uid = fixture_safe_suffix(8)
     app_id = f"testapp_{uid}"
     ref = f"ARF-2026-{uid}"
     db.execute("""

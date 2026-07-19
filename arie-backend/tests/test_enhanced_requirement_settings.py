@@ -6,6 +6,8 @@ import tempfile
 import threading
 import time
 import uuid
+
+from fixture_safe_refs import fixture_safe_suffix
 from pathlib import Path
 
 import requests
@@ -429,7 +431,7 @@ def test_admin_setting_edit_affects_new_applications_only_and_is_audited(enhance
         """,
         (
             existing_app_id,
-            "ARF-SET-" + uuid.uuid4().hex[:8],
+            "ARF-SET-" + fixture_safe_suffix(8),
             "Settings Existing Ltd",
             "United Kingdom",
             "Technology",
@@ -489,7 +491,7 @@ def test_admin_setting_edit_affects_new_applications_only_and_is_audited(enhance
         """,
         (
             new_app_id,
-            "ARF-SET-" + uuid.uuid4().hex[:8],
+            "ARF-SET-" + fixture_safe_suffix(8),
             "Settings New Ltd",
             "United Kingdom",
             "Technology",

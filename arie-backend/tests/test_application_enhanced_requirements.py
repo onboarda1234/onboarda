@@ -7,6 +7,8 @@ import threading
 import time
 import uuid
 
+from fixture_safe_refs import fixture_safe_suffix
+
 import pytest
 import requests
 import tornado.httpserver
@@ -130,7 +132,7 @@ def _insert_application(
     onboarding_lane=None,
 ):
     app_id = "app_" + uuid.uuid4().hex[:10]
-    ref = "ARF-2026-" + uuid.uuid4().hex[:8]
+    ref = "ARF-2026-" + fixture_safe_suffix(8)
     db.execute(
         """
         INSERT INTO applications

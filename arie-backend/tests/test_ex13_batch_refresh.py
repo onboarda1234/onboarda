@@ -16,6 +16,8 @@ import sqlite3
 import threading
 import time
 import uuid
+
+from fixture_safe_refs import fixture_safe_suffix
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,7 +49,7 @@ def _seed_applications(db_conn, count=5):
     """
     app_ids = []
     for i in range(count):
-        uid = uuid.uuid4().hex[:8]
+        uid = fixture_safe_suffix(8)
         app_id = f"ex13_app_{uid}"
         ref = f"EX13-{uid}"
         db_conn.execute(

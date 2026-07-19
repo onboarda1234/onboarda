@@ -11,6 +11,8 @@ import socket
 import threading
 import time
 import uuid
+
+from fixture_safe_refs import fixture_safe_suffix
 from datetime import datetime, timedelta, timezone
 import pytest
 
@@ -3498,7 +3500,7 @@ class TestMemoSupervisorAuditSchema:
         from tests.conftest import make_base_memo
 
         app_id = f"app_supervisor_schema_{uuid.uuid4().hex[:8]}"
-        app_ref = f"ARF-SUP-SCHEMA-{uuid.uuid4().hex[:6]}"
+        app_ref = f"ARF-SUP-SCHEMA-{fixture_safe_suffix(6)}"
         memo_data = make_base_memo({
             "metadata": {
                 "risk_rating": "LOW",
