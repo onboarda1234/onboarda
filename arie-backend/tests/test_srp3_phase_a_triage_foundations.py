@@ -99,7 +99,7 @@ class TestTriageScorer:
         first = compute_triage_score(match, rollups)
         second = compute_triage_score(match, rollups)
         assert first == second
-        assert first["version"] == TRIAGE_SCORE_VERSION == "rts-1.0"
+        assert first["version"] == TRIAGE_SCORE_VERSION == "rts-1.1"
         assert first["reasons"]
         assert 1 <= first["score"] <= 100
 
@@ -234,7 +234,7 @@ class TestServerRowTriage:
             {"category": "Something Else", "matched_name": "E", "triage_score": 12},
         ]
         triage = server._screening_queue_row_triage(self._row(items))
-        assert triage["version"] == "rts-1.0"
+        assert triage["version"] == TRIAGE_SCORE_VERSION == "rts-1.1"
         assert triage["total"] == 5
         assert sum(triage["buckets"].values()) == triage["total"]
         assert triage["buckets"] == {"sanctions": 1, "pep": 1, "adverse_media": 1, "watchlist": 1, "other": 1}

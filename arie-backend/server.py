@@ -22324,7 +22324,19 @@ def _entity_sanctions_record(company_screening):
     no-match answer. When ``sanctions`` is absent but the top-level company
     screening record carries a real provider answer (``api_status`` /
     ``matched`` / ``results``), fall back to that record so the terminal state
-    is read correctly. When ``sanctions`` is present it is returned unchanged.
+    is read correctly. When ``sanctions`` is present it is returned unchanged
+    unless the parent block is explicitly non-terminal (below).
+
+    Fail-closed override (ARF-QAFIX-001, live Mesh staging run): stored
+    reports from errored workflows mark the PARENT company block non-terminal
+    (``screening_state: "pending_provider"``, ``api_status: "pending"``,
+    ``pending_reason: "workflow_errored"``) while the ``sanctions`` sub-record
+    still carries a leftover ``api_status: "live"`` with zero results. Reading
+    the sub-record alone rendered that errored screen as "Clear — provider
+    screening completed with no hits". When the parent block carries an
+    explicit non-terminal state, the sub-record inherits it so the entity
+    queue row cannot mistake an incomplete screen for a terminal clear
+    answer.
     """
     company = company_screening or {}
     sanctions = company.get("sanctions")
@@ -22332,6 +22344,19 @@ def _entity_sanctions_record(company_screening):
         company.get("api_status") or company.get("matched") or company.get("results")
     ):
         return company
+    parent_state = str(company.get("screening_state") or "").strip().lower()
+    if (
+        isinstance(sanctions, dict)
+        and sanctions
+        and parent_state
+        and parent_state not in ("completed_clear", "completed_match")
+    ):
+        merged = dict(sanctions)
+        merged["api_status"] = company.get("api_status") or "pending"
+        merged["screening_state"] = parent_state
+        if company.get("pending_reason"):
+            merged["pending_reason"] = company.get("pending_reason")
+        return merged
     return sanctions or {}
 
 
@@ -23319,6 +23344,8 @@ def _screening_queue_row_triage(row):
     without a stored rts score sort last and are counted as unscored rather
     than guessed.
     """
+    from screening_complyadvantage.normalizer import TRIAGE_SCORE_VERSION
+
     items = ((row.get("screening_evidence") or {}).get("items")) or []
     buckets = {"sanctions": 0, "pep": 0, "adverse_media": 0, "watchlist": 0, "other": 0}
     scored, weak, unscored = [], 0, 0
@@ -23343,7 +23370,10 @@ def _screening_queue_row_triage(row):
             unscored += 1
     scored.sort(key=lambda entry: (-entry["score"], entry["name"]))
     return {
-        "version": "rts-1.0",
+        # Current formula version (single source of truth: normalizer).
+        # Individual stored hits keep the version they were scored under
+        # (item.triage_score_version), e.g. historical rts-1.0.
+        "version": TRIAGE_SCORE_VERSION,
         "total": sum(buckets.values()),
         "buckets": buckets,
         "weak_count": weak,

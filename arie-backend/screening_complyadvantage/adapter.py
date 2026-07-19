@@ -231,11 +231,65 @@ def _combine_reports(reports):
     company_adverse = (company_screening.get("adverse_media") or {})
     screening_subjects = directors + ubos + intermediaries
     adverse_hit = any(p.get("has_adverse_media_hit") for p in screening_subjects) or bool(company_adverse.get("matched"))
+    # ARF-QAFIX-001 (staging, live Mesh): an errored company workflow leaves
+    # the company block explicitly non-terminal (screening_state
+    # "pending_provider", pending_reason "workflow_errored"). The old rollup
+    # was a match/clear binary that could never express that, so the report
+    # rendered "Clear — provider screening completed with no hits" off zero
+    # evidence. Fail closed: a non-terminal company block state propagates
+    # verbatim, and the company block counts toward any_non_terminal_subject.
+    company_block_state = (
+        str(company_screening.get("screening_state") or "").strip()
+        if isinstance(company_screening, dict)
+        else ""
+    )
+    company_non_terminal = bool(company_block_state) and company_block_state not in (
+        "completed_clear",
+        "completed_match",
+    )
     any_non_terminal_subject = any(
         (p.get("screening_state") not in ("completed_clear", "completed_match"))
         for p in screening_subjects
         if isinstance(p, dict)
+    ) or company_non_terminal
+    # ARF-QAFIX-001 → SRP-2a recovery: persist the per-subject existing Mesh
+    # customer UUIDs harvested from conflict errors ("external identifier ...
+    # in use and belongs to the customer identifier <uuid>") so a later
+    # rescreen can recover when both the subscription and the
+    # external-identifier lookup fail. Keyed by person_key ("entity" for the
+    # company block); a keyless non-entity subject is omitted — a UUID that
+    # cannot be attributed to exactly one subject must never be reused.
+    conflict_existing_by_subject = {}
+    for report in reports:
+        harvested = report.get("customer_identifier_conflict_existing_customers")
+        if not isinstance(harvested, dict) or not harvested:
+            continue
+        scope = ((report.get("provider_specific") or {}).get("complyadvantage") or {}).get("screening_subject") or {}
+        subject_person_key = scope.get("person_key") or report.get("screening_subject_person_key")
+        subject_kind = scope.get("kind") or report.get("screening_subject_kind")
+        key = str(subject_person_key) if subject_person_key else ("entity" if subject_kind == "entity" else "")
+        if not key:
+            continue
+        entry = {
+            pass_name: str(value)
+            for pass_name, value in harvested.items()
+            if pass_name in ("strict", "relaxed") and value
+        }
+        if entry:
+            conflict_existing_by_subject[key] = entry
+    extra_report_fields = (
+        {"customer_identifier_conflict_existing_customers": conflict_existing_by_subject}
+        if conflict_existing_by_subject
+        else {}
     )
+    # The per-subject reports carry customer_identifier_conflict (set by
+    # _mark_report_customer_conflict), but the combined report previously
+    # dropped it — so the review page's conflict-variant honesty banner
+    # (which checks report.customer_identifier_conflict === true) could
+    # never fire on a stored report. Any conflicted subject marks the
+    # combined report.
+    if any(bool(report.get("customer_identifier_conflict")) for report in reports):
+        extra_report_fields["customer_identifier_conflict"] = True
     return create_normalized_screening_report(
         provider="complyadvantage",
         normalized_version="2.0",
@@ -256,10 +310,15 @@ def _combine_reports(reports):
         total_hits=sum(r.get("total_hits", 0) for r in reports),
         degraded_sources=sorted(set(degraded)),
         any_non_terminal_subject=any_non_terminal_subject,
-        company_screening_state="completed_match" if has_company_hit else "completed_clear",
+        company_screening_state=(
+            company_block_state
+            if company_non_terminal
+            else ("completed_match" if has_company_hit else "completed_clear")
+        ),
         provider_specific={"complyadvantage": {"subjects": provider_subjects}},
         source_screening_report_hash=_reports_hash(reports),
         provenance=None,
+        **extra_report_fields,
     )
 
 

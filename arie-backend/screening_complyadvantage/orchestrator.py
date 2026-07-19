@@ -152,6 +152,7 @@ class ComplyAdvantageScreeningOrchestrator:
             _mark_report_errored(report, strict=strict, relaxed=relaxed)
         if strict.identifier_conflict or relaxed.identifier_conflict:
             _mark_report_customer_conflict(report)
+            _attach_conflict_existing_customers(report, strict=strict, relaxed=relaxed)
         self._seed_subscription_if_needed(strict, application_context, db)
         return report
 
@@ -443,6 +444,16 @@ def _mark_report_degraded(
             company["matched"] = False
         company.setdefault("results", [])
         company["pending_reason"] = pending_reason
+        # Stamp the sanctions/adverse-media sub-records too: consumers that
+        # derive entity state from a sub-record (e.g. the screening queue's
+        # entity resolver) must never read a leftover ``api_status: "live"``
+        # as a terminal clear answer for a screening that never completed.
+        for nested_key in ("sanctions", "adverse_media"):
+            nested = company.get(nested_key)
+            if isinstance(nested, dict):
+                nested["api_status"] = "pending"
+                nested["screening_state"] = "pending_provider"
+                nested["pending_reason"] = pending_reason
     for group_name in ("director_screenings", "ubo_screenings", "intermediary_screenings"):
         for subject in report.get(group_name) or []:
             if not isinstance(subject, dict):
@@ -548,7 +559,19 @@ def _customer_identifier_conflict(raw):
     except Exception:
         return False
     if "external identifier" in text or "external_identifier" in text:
-        return "already" in text or "duplicate" in text or "exists" in text or "assigned" in text
+        # Live Mesh wording (2026-07 staging run): "external identifier <id>
+        # in use and belongs to the customer identifier <uuid>". Earlier
+        # wordings ("already assigned", "already exists", ...) must keep
+        # classifying, so this stays a token disjunction under the
+        # external-identifier conjunction.
+        return (
+            "already" in text
+            or "duplicate" in text
+            or "exists" in text
+            or "assigned" in text
+            or "in use" in text
+            or "belongs to" in text
+        )
     return "already assigned" in text or "already exists" in text
 
 
@@ -561,6 +584,29 @@ def _mark_report_customer_conflict(report):
     if CUSTOMER_CONFLICT_FLAG not in flags:
         flags.append(CUSTOMER_CONFLICT_FLAG)
     report["customer_identifier_conflict"] = True
+
+
+def _attach_conflict_existing_customers(report, *, strict, relaxed):
+    """Surface the EXISTING Mesh customer UUIDs a conflict pointed at.
+
+    The live conflict error carries the existing customer identifier in the
+    errored customer-creation ``step_output`` ("external identifier ... in use
+    and belongs to the customer identifier <uuid>"); ``_run_one_pass`` already
+    harvests it tolerantly via ``_extract_customer_identifier``. Recording it
+    per pass gives the SRP-2a existing-customer re-screen path (RESCREEN-1)
+    the identifiers it needs to recover without re-deriving them from raw
+    provider payloads. Additive only: nothing else about conflict handling
+    changes, and passes without a harvested identifier are simply omitted.
+    """
+    existing = {}
+    for pass_name, result in (("strict", strict), ("relaxed", relaxed)):
+        if not getattr(result, "identifier_conflict", False):
+            continue
+        identifier = getattr(getattr(result, "customer_response", None), "identifier", None)
+        if identifier:
+            existing[pass_name] = str(identifier)
+    if existing:
+        report["customer_identifier_conflict_existing_customers"] = existing
 
 
 def _workflow_complete(workflow):

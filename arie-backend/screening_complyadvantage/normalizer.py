@@ -212,12 +212,33 @@ def merge_two_pass_results(
     return merged, provenance
 
 
+def _aml_type_fallback_categories(match: MergedMatch) -> set:
+    """Categories from the provider aml-type strings on a match's profile.
+
+    rts-1.1 defect fix (ARF-QAFIX-006, live Mesh staging run): live payloads
+    can carry categories ONLY in ``provider_aml_types_raw`` (typed indicator
+    models absent, ``risk`` empty). This reuses the SAME mapping the evidence/
+    display layer uses for legacy ``match_categories``
+    (``_categories_from_provider_aml_types``), so the scorer's category always
+    agrees with the displayed category. Callers apply it only when no typed
+    indicators are present — typed indicators keep precedence.
+    """
+    return {
+        category
+        for category in _categories_from_provider_aml_types(
+            _profile_list(match.profile, "provider_aml_types_raw")
+        )
+        if category != "other"
+    }
+
+
 def compute_match_rollups(match: MergedMatch) -> dict:
     """Compute cross-provider rollups from one CA match."""
     has_pep = False
     has_sanctions = False
     has_media = False
-    for indicator in _all_indicators(match.risk):
+    typed_indicators = _all_indicators(match.risk)
+    for indicator in typed_indicators:
         key = _indicator_key(indicator)
         if isinstance(indicator, CAPEPIndicator):
             has_pep = True
@@ -227,6 +248,14 @@ def compute_match_rollups(match: MergedMatch) -> dict:
             has_media = True
         elif isinstance(indicator, CAWatchlistIndicator) and key.startswith("r_sanctions_exposure"):
             has_sanctions = True
+    if not typed_indicators:
+        # Aml-type fallback (rts-1.1): categories present only as provider
+        # aml-type strings must still roll up — previously such matches
+        # reported all-False rollups and a 200-hit report claimed "no hit".
+        fallback = _aml_type_fallback_categories(match)
+        has_pep = "pep" in fallback
+        has_sanctions = "sanctions" in fallback
+        has_media = "adverse_media" in fallback
     profile = match.profile
     if profile is not None and profile.company is not None:
         is_rca = None
@@ -249,8 +278,19 @@ def compute_ca_screening_hash(merged_matches: list[MergedMatch]) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:32]
 
 
-TRIAGE_SCORE_VERSION = "rts-1.0"
+# rts-1.1 (2026-07-19): defect fix — category base points were not applied to
+# live provider payloads that carry categories only in provider_aml_types_raw
+# (typed indicator models absent). Weights are UNCHANGED from rts-1.0; scores
+# for affected hits rise by their category base. Historical rts-1.0 scores
+# stay stored and interpretable under their own version label.
+TRIAGE_SCORE_VERSION = "rts-1.1"
 _TRIAGE_EXACT_NAME_TOKENS = {"name_exact", "exact_match", "aka_exact"}
+_PEP_CLASS_BY_AML_TYPE = {
+    "pep-class-1": "PEP_CLASS_1",
+    "pep-class-2": "PEP_CLASS_2",
+    "pep-class-3": "PEP_CLASS_3",
+    "pep-class-4": "PEP_CLASS_4",
+}
 
 
 def compute_triage_score(match: MergedMatch, rollups: dict) -> dict:
@@ -263,7 +303,8 @@ def compute_triage_score(match: MergedMatch, rollups: dict) -> dict:
     is versioned (TRIAGE_SCORE_VERSION) so historical scores stay
     interpretable when weights are recalibrated.
 
-    v1 weights (calibration pending the first enriched staging sample):
+    Weights (unchanged since rts-1.0; calibration pending the first enriched
+    staging sample):
       category base (strongest wins): sanctions 40 · PEP class 1-2 30 ·
       other PEP 22 · watchlist 18 · adverse media 15 · uncategorized 5;
       +6 when more than one category applies;
@@ -271,17 +312,25 @@ def compute_triage_score(match: MergedMatch, rollups: dict) -> dict:
       +15, relaxed-only pass +6;
       +8 when article evidence is attached; +6 when the provider marks the
       profile a relative/close associate.
+
+    rts-1.1: when a match carries NO typed indicator models, category
+    detection falls back to the provider aml-type strings via the same
+    mapping the display layer uses (see _aml_type_fallback_categories), so
+    live hits are no longer scored as "uncategorized provider match".
     """
     score = 0
     reasons = []
     categories = 0
 
     pep_classes = extract_pep_classes(match) or []
+    typed_indicators = _all_indicators(match.risk)
     has_watchlist = any(
         isinstance(indicator, CAWatchlistIndicator)
         and not _indicator_key(indicator).startswith("r_sanctions_exposure")
-        for indicator in _all_indicators(match.risk)
+        for indicator in typed_indicators
     )
+    if not typed_indicators and not has_watchlist:
+        has_watchlist = "watchlist" in _aml_type_fallback_categories(match)
 
     category_points = []
     if rollups.get("has_sanctions_hit"):
@@ -336,12 +385,22 @@ def compute_triage_score(match: MergedMatch, rollups: dict) -> dict:
 
 
 def extract_pep_classes(match: MergedMatch) -> list[str] | None:
+    typed_indicators = _all_indicators(match.risk)
     classes = []
-    for indicator in _all_indicators(match.risk):
+    for indicator in typed_indicators:
         if isinstance(indicator, CAPEPIndicator):
             value = getattr(indicator.value, "class_", None)
             if value in KNOWN_PEP_CLASSES:
                 classes.append(value)
+    if not typed_indicators:
+        # Aml-type fallback (rts-1.1): live matches without typed indicator
+        # models can still carry "pep-class-N" aml-type strings; keep the
+        # class 1-2 distinction working from that stored data.
+        for value in _profile_list(match.profile, "provider_aml_types_raw"):
+            token = str(value).strip().lower().replace("_", "-").replace(" ", "-")
+            mapped = _PEP_CLASS_BY_AML_TYPE.get(token)
+            if mapped:
+                classes.append(mapped)
     return sorted(set(classes)) or None
 
 
