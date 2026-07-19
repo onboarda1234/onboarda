@@ -16808,12 +16808,12 @@ async function generateAgent3ScreeningInterpretation(event) {
 
 // ═══════════════════════════════════════════════════════════
 // SRP-3 Phase B — screening review triage redesign (presentation only).
-// Renders the server-computed triage block (row.triage, rts-1.0) as bucketed,
+// Renders the server-computed triage block (row.triage, rts-1.1) as bucketed,
 // ranked hit sections with a collapsed weak tail. Aggregate counts come ONLY
 // from row.triage — the browser never re-derives them. Ranking orders matches
 // for review; it never hides them and never affects risk scores or approvals.
 
-var SCREENING_TRIAGE_RTS_CAPTION = 'RegMind triage ranking (rts-1.0) orders matches for review — it never hides them and never affects risk scores or approvals.';
+var SCREENING_TRIAGE_RTS_CAPTION = 'RegMind triage ranking (rts-1.1) orders matches for review — it never hides them and never affects risk scores or approvals.';
 
 var SCREENING_TRIAGE_BUCKET_META = [
   { key: 'sanctions', label: 'Sanctions & warnings', color: '#991b1b' },
@@ -17037,7 +17037,13 @@ function screeningTriageHitAction(applicationRef, subjectType, subjectName, disp
 
 function screeningTriageHitActions(row) {
   if (!row) return '';
-  if (!row.review_required || row.review_actionable === false) {
+  // ARF-QAFIX Secondary B: review_actionable === false with NO recorded
+  // review means "no review exists yet" (the server's actionability check is
+  // about an EXISTING review needing action, e.g. pending second review).
+  // Acting is what CREATES the review, so actions must be offered then.
+  // Suppress only when review is not required, or a recorded review exists
+  // and is not actionable (resolved/locked — governed via the audit trail).
+  if (!row.review_required || (row.review_disposition && row.review_actionable === false)) {
     if (row.review_disposition) {
       return '<div style="border-top:1px solid var(--border1);padding-top:10px;font-size:11.5px;color:var(--text2);">Review recorded: <strong>' + escapeHtml(screeningReviewDisplayLabel(row) || String(row.review_disposition).replace(/_/g, ' ')) + '</strong>. Changes are governed through the audit trail.</div>';
     }

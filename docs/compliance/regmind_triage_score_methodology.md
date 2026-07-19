@@ -1,8 +1,20 @@
-# RegMind Triage Score — Methodology (rts-1.0)
+# RegMind Triage Score — Methodology (rts-1.1)
 
 **Purpose:** rank screening hits for officer attention. **Nothing else.**
-**Effective:** 2026-07-17 (PR #790) · **Version:** `rts-1.0` (stamped on every scored hit as `triage_score_version`)
+**Effective:** 2026-07-17 (PR #790, rts-1.0) · **Current version:** `rts-1.1` (stamped on every scored hit as `triage_score_version`)
 **Owner:** compliance engineering; weight changes are governed changes requiring founder approval and a version bump.
+
+## Version history
+- **rts-1.1 (2026-07-19):** defect fix — category base points were not applied to
+  live provider payloads that carry categories only in `provider_aml_types_raw`
+  (typed indicator models absent); such hits scored under the uncategorized floor
+  (base 5) despite a correctly displayed category. Category detection now falls
+  back to the same aml-type → category mapping the display layer uses. **Weights
+  unchanged**; scores for affected hits rise by their category base (e.g.
+  watchlist `["warning"]` + exact name: 40 → 53; adverse media + exact name +
+  article evidence: 48 → 58). Historical rts-1.0 scores stay stored and
+  interpretable under their own version label.
+- **rts-1.0 (2026-07-17, PR #790):** initial version.
 
 ## 1. What the score is — and is not
 The RegMind triage score is a deterministic 0–100 ranking computed at screening time

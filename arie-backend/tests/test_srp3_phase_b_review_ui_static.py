@@ -52,7 +52,7 @@ def test_agent3_panel_carries_advisory_officer_decision_label():
 def test_rts_caption_is_exactly_the_approved_ordering_only_copy():
     html = _html()
     assert (
-        "RegMind triage ranking (rts-1.0) orders matches for review — it never hides them "
+        "RegMind triage ranking (rts-1.1) orders matches for review — it never hides them "
         "and never affects risk scores or approvals." in html
     )
     # The caption is rendered with the bucketed sections.

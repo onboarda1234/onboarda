@@ -231,11 +231,27 @@ def _combine_reports(reports):
     company_adverse = (company_screening.get("adverse_media") or {})
     screening_subjects = directors + ubos + intermediaries
     adverse_hit = any(p.get("has_adverse_media_hit") for p in screening_subjects) or bool(company_adverse.get("matched"))
+    # ARF-QAFIX-001 (staging, live Mesh): an errored company workflow leaves
+    # the company block explicitly non-terminal (screening_state
+    # "pending_provider", pending_reason "workflow_errored"). The old rollup
+    # was a match/clear binary that could never express that, so the report
+    # rendered "Clear — provider screening completed with no hits" off zero
+    # evidence. Fail closed: a non-terminal company block state propagates
+    # verbatim, and the company block counts toward any_non_terminal_subject.
+    company_block_state = (
+        str(company_screening.get("screening_state") or "").strip()
+        if isinstance(company_screening, dict)
+        else ""
+    )
+    company_non_terminal = bool(company_block_state) and company_block_state not in (
+        "completed_clear",
+        "completed_match",
+    )
     any_non_terminal_subject = any(
         (p.get("screening_state") not in ("completed_clear", "completed_match"))
         for p in screening_subjects
         if isinstance(p, dict)
-    )
+    ) or company_non_terminal
     return create_normalized_screening_report(
         provider="complyadvantage",
         normalized_version="2.0",
@@ -256,7 +272,11 @@ def _combine_reports(reports):
         total_hits=sum(r.get("total_hits", 0) for r in reports),
         degraded_sources=sorted(set(degraded)),
         any_non_terminal_subject=any_non_terminal_subject,
-        company_screening_state="completed_match" if has_company_hit else "completed_clear",
+        company_screening_state=(
+            company_block_state
+            if company_non_terminal
+            else ("completed_match" if has_company_hit else "completed_clear")
+        ),
         provider_specific={"complyadvantage": {"subjects": provider_subjects}},
         source_screening_report_hash=_reports_hash(reports),
         provenance=None,
