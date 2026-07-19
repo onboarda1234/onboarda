@@ -181,3 +181,18 @@ def test_triage_strip_and_buckets_read_only_server_computed_triage():
     assert "if (sa === null) return 1;" in sections
     # Calm affirmative empty state for the sanctions section.
     assert "No sanctions or watchlist matches — every subject was screened against sanction lists." in sections
+
+
+def test_lazy_evidence_fetch_mirrors_fixture_visibility():
+    # E-0 hydration fix: the review page's lazy evidence fetch
+    # (ensureScreeningQueueRowEvidence) must carry the queue's
+    # fixture-visibility state. Without show_fixtures, fixture applications
+    # are excluded from the secondary fetch, the row comes back not_found,
+    # and the review page silently falls back to the legacy summary view.
+    html = _html()
+    fetch_fn = _function_region(
+        html, "ensureScreeningQueueRowEvidence", "openScreeningReviewByRow"
+    )
+    assert "include_evidence=1" in fetch_fn
+    assert "showTestSmokeRecordsEnabled" in fetch_fn
+    assert "show_fixtures=true" in fetch_fn
