@@ -154,11 +154,6 @@ def _runtime_prescreening_projection(inputs: Mapping[str, Any]) -> Dict[str, Any
         services[0] if services else ""
     )
     projected["service_required"] = projected["primary_service"]
-    projected["countries_of_operation"] = deepcopy(
-        inputs.get("operating_countries") or []
-    )
-    projected["payment_corridors"] = inputs.get("transaction_complexity") or ""
-    projected["expected_volume"] = inputs.get("monthly_volume") or ""
     return projected
 
 

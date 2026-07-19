@@ -339,6 +339,9 @@ def test_canonical_runtime_inputs_survive_persistence_and_dry_run(
                 scorer_input["services_required"]
                 == expected_inputs["business"]["services"]["primary_services"]
             )
+            assert scorer_input["_prescreening_mapping_corrections"] == [
+                "primary_service_from_services_required"
+            ]
 
             result = compute_risk_score(scorer_input)
             expected = manifest[app["ref"]]["expected"]
