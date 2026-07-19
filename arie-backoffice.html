@@ -16948,6 +16948,8 @@ function screeningProviderProfileFacts(item) {
   // F9 provider side: ONLY the stored matched-profile fields the server
   // passes through on the evidence item. Absent fields stay empty — sandbox
   // payloads usually carry no person attributes until profile hydration.
+  // F9r adds the sparse COMPANY attributes (jurisdiction / registration /
+  // company aliases) the server passes through for entity subjects.
   item = item || {};
   var name = String(item.matched_name || item.name || '').trim();
   if (name && isUuidLike(name)) name = '';
@@ -16960,7 +16962,10 @@ function screeningProviderProfileFacts(item) {
     country: String(item.nationality || '').trim() || countries.join(', '),
     places_of_birth: Array.isArray(item.places_of_birth) ? item.places_of_birth.filter(Boolean) : [],
     aka_names: Array.isArray(item.aka_names) ? item.aka_names.filter(Boolean) : [],
-    positions: Array.isArray(item.positions) ? item.positions.filter(Boolean) : []
+    positions: Array.isArray(item.positions) ? item.positions.filter(Boolean) : [],
+    jurisdiction: String(item.company_jurisdiction || '').trim(),
+    registration_number: String(item.company_registration_number || '').trim(),
+    company_aka_names: Array.isArray(item.company_aka_names) ? item.company_aka_names.filter(Boolean) : []
   };
 }
 
@@ -16991,62 +16996,113 @@ function screeningTriageMatchQualityChip(item) {
   return screeningTagBadge(label, 'draft');
 }
 
+function screeningComparisonEntityKind(item, provider) {
+  // F9r entity-type resolver for the reconciliation grid. An explicit stored
+  // subject type wins ('entity'/'company' → company; any person role —
+  // director / ubo / intermediary / applicant / client → individual). With
+  // no stored subject type, infer from the provider profile shape: company
+  // attributes (jurisdiction / registration / company aliases) → company;
+  // person attributes (birth year / DOB / place of birth / listed role) →
+  // individual. Defaults to individual when nothing disambiguates.
+  var subjectType = String((item || {}).subject_type || '').trim().toLowerCase();
+  if (subjectType === 'entity' || subjectType === 'company') return 'company';
+  if (subjectType) return 'individual';
+  provider = provider || {};
+  if (provider.jurisdiction || provider.registration_number || (provider.company_aka_names && provider.company_aka_names.length)) return 'company';
+  if (provider.birth_year || provider.dob || (provider.places_of_birth && provider.places_of_birth.length) || (provider.positions && provider.positions.length)) return 'individual';
+  return 'individual';
+}
+
 function screeningTriageHitApplicantComparison(item) {
-  // F9 self-lighting "Applicant vs matched profile" grid: a row renders ONLY
-  // when at least one side carries stored data — no placeholder rows, no
-  // dash grids, no empty shell. Verdicts state only what the stored values
-  // support: equality lights match/exact, a real two-sided difference lights
-  // differs, one-sided data stays labelled applicant only / provider only.
+  // F9r relevance-gated, entity-type-aware "Applicant vs matched profile"
+  // grid. Self-lighting: a row renders ONLY when at least one side carries
+  // stored data — no placeholder rows, no dash grids, no empty shell.
+  // Entity-type aware: individual subjects show Year of birth / Place of
+  // birth / Listed role; company subjects show Jurisdiction / Registration
+  // number (those person rows are meaningless for a company). RELEVANCE
+  // GATE: the Name row alone never earns the grid — it merely restates the
+  // card header. The grid renders ONLY when a DISAMBIGUATING (non-name) row
+  // carries data; otherwise it returns '' and "Why it ranks here" fills the
+  // width. Verdicts state only what the stored values support: equality
+  // lights match/exact, a real two-sided difference lights differs, one-sided
+  // data stays labelled applicant only / provider only.
   item = item || {};
   var applicant = screeningApplicantSubjectFacts(item);
   var provider = screeningProviderProfileFacts(item);
-  var rows = [];
+  var kind = screeningComparisonEntityKind(item, provider);
+  var rows = [];  // DISAMBIGUATING rows only — the Name row never lands here.
   var verdictBadge = function(label, cls) {
     return '<span class="badge ' + cls + '" style="flex:none;">' + escapeHtml(label) + '</span>';
   };
-  var pushRow = function(label, applicantValue, providerValue, verdict) {
+  var rowHtml = function(label, applicantValue, providerValue, verdict) {
     var applicantText = String(applicantValue || '').trim();
     var providerText = String(providerValue || '').trim();
-    if (!applicantText && !providerText) return;
+    if (!applicantText && !providerText) return '';
     var valueHtml = applicantText && providerText
       ? '<strong>' + escapeHtml(applicantText) + '</strong> <span style="color:var(--text3);">→</span> <strong>' + escapeHtml(providerText) + '</strong>'
       : '<strong>' + escapeHtml(applicantText || providerText) + '</strong>';
-    rows.push('<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:11.5px;color:var(--text2);">' +
+    return '<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:11.5px;color:var(--text2);">' +
       '<span style="color:var(--text3);">' + escapeHtml(label) + ':</span> ' + valueHtml + ' ' + verdictBadge(verdict[0], verdict[1]) +
-    '</div>');
+    '</div>';
+  };
+  var pushRow = function(label, applicantValue, providerValue, verdict) {
+    var html = rowHtml(label, applicantValue, providerValue, verdict);
+    if (html) rows.push(html);
   };
   var twoSidedVerdict = function(applicantValue, providerValue, equal) {
     if (applicantValue && providerValue) return equal ? ['match', 'approved'] : ['differs', 'medium'];
     return providerValue ? ['provider only', 'draft'] : ['applicant only', 'draft'];
   };
+  // Name row heads the grid but is EXCLUDED from the relevance gate — a lone
+  // name row is exactly the noise F9r suppresses.
+  var nameRowHtml = '';
   if (applicant.name || provider.name) {
     var nameVerdict = applicant.name && provider.name
       ? (screeningTriageHitExactNameToken(item) ? ['exact', 'approved'] : ['similar', 'draft'])
       : (provider.name ? ['provider only', 'draft'] : ['applicant only', 'draft']);
-    pushRow('Name', applicant.name, provider.name, nameVerdict);
+    nameRowHtml = rowHtml('Name', applicant.name, provider.name, nameVerdict);
   }
-  var providerDobShown = provider.birth_year || provider.dob;
-  if (applicant.birth_year || providerDobShown) {
-    pushRow('Year of birth', applicant.birth_year, providerDobShown,
-      twoSidedVerdict(applicant.birth_year, providerDobShown, applicant.birth_year && provider.birth_year && applicant.birth_year === provider.birth_year));
+  if (kind === 'company') {
+    // Company rows: Jurisdiction / country, Registration number, Also known
+    // as. NO Year of birth, NO Place of birth, NO Listed role.
+    if (applicant.country || provider.jurisdiction) {
+      pushRow('Jurisdiction / country', applicant.country, provider.jurisdiction,
+        twoSidedVerdict(applicant.country, provider.jurisdiction, screeningApplicantProviderCountryMatch(applicant.country, provider.jurisdiction)));
+    }
+    if (provider.registration_number) {
+      pushRow('Registration number', '', provider.registration_number, ['provider only', 'draft']);
+    }
+    var companyAka = provider.company_aka_names.length ? provider.company_aka_names : provider.aka_names;
+    if (companyAka.length) {
+      pushRow('Also known as', '', companyAka.join(', '), ['provider only', 'draft']);
+    }
+  } else {
+    // Individual rows.
+    var providerDobShown = provider.birth_year || provider.dob;
+    if (applicant.birth_year || providerDobShown) {
+      pushRow('Year of birth', applicant.birth_year, providerDobShown,
+        twoSidedVerdict(applicant.birth_year, providerDobShown, applicant.birth_year && provider.birth_year && applicant.birth_year === provider.birth_year));
+    }
+    if (applicant.country || provider.country) {
+      pushRow('Country / nationality', applicant.country, provider.country,
+        twoSidedVerdict(applicant.country, provider.country, screeningApplicantProviderCountryMatch(applicant.country, provider.country)));
+    }
+    if (provider.places_of_birth.length) {
+      pushRow('Place of birth', '', provider.places_of_birth.join(', '), ['provider only', 'draft']);
+    }
+    if (provider.aka_names.length) {
+      pushRow('Also known as', '', provider.aka_names.join(', '), ['provider only', 'draft']);
+    }
+    if (provider.positions.length) {
+      pushRow('Listed role', '', provider.positions.join(', '), ['provider only', 'draft']);
+    }
   }
-  if (applicant.country || provider.country) {
-    pushRow('Country / nationality', applicant.country, provider.country,
-      twoSidedVerdict(applicant.country, provider.country, screeningApplicantProviderCountryMatch(applicant.country, provider.country)));
-  }
-  if (provider.places_of_birth.length) {
-    pushRow('Place of birth', '', provider.places_of_birth.join(', '), ['provider only', 'draft']);
-  }
-  if (provider.aka_names.length) {
-    pushRow('Also known as', '', provider.aka_names.join(', '), ['provider only', 'draft']);
-  }
-  if (provider.positions.length) {
-    pushRow('Listed role', '', provider.positions.join(', '), ['provider only', 'draft']);
-  }
+  // R1 relevance gate: suppress the grid unless a disambiguating (non-name)
+  // row carries data. A name-only grid renders NOTHING.
   if (!rows.length) return '';
   return '<div data-screening-hit-applicant-comparison="true" style="border:1px solid var(--border1);border-radius:8px;padding:9px 13px;background:var(--surface2);">' +
     '<div style="font-size:10.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--text3);">Applicant vs matched profile</div>' +
-    '<div style="display:grid;gap:5px;margin-top:6px;">' + rows.join('') + '</div>' +
+    '<div style="display:grid;gap:5px;margin-top:6px;">' + nameRowHtml + rows.join('') + '</div>' +
   '</div>';
 }
 

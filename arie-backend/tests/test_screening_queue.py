@@ -2383,3 +2383,84 @@ def test_f9_evidence_item_profile_person_shape_and_alias_names_beyond_primary():
     # Empty collections emit nothing.
     assert "positions" not in item
     assert "nationality" not in item
+
+
+_F9R_ENTITY_ROW = {
+    "subject_name": "Wirecard AG",
+    "subject_type": "entity",
+    "application_id": "f9r-app-1",
+    "application_ref": "ARF-F9R-001",
+    "company_name": "Wirecard AG",
+    "total_hits": 2,
+}
+
+_F9R_COMPANY_FIELDS = (
+    "company_jurisdiction", "company_registration_number", "company_aka_names",
+)
+
+
+def test_f9r_company_profile_fields_pass_through_ca_collection_shapes():
+    """F9r: a company matched-profile passes through lean company attributes —
+    jurisdiction and registration number from the CA registration_numbers
+    collection, and company aliases from the company names collection (minus
+    the primary matched name)."""
+    from server import _normalise_screening_evidence_item
+
+    evidence = {
+        "name": "Wirecard AG",
+        "provider_match_types": ["name_exact"],
+        "match_category": "sanctions",
+        "provider_profile_identifier": "prof-f9r-1",
+        "company": {
+            "names": {"values": [{"name": "Wirecard AG"}, {"name": "Wirecard Technologies GmbH"}]},
+            "registration_numbers": {"values": [{"registration_number": "HRB 12345", "jurisdiction": "Germany"}]},
+            "locations": {"values": [{"country": "Germany"}]},
+        },
+    }
+    item = _normalise_screening_evidence_item(dict(_F9R_ENTITY_ROW), evidence, source="screening_result")
+
+    assert item["company_registration_number"] == "HRB 12345"
+    assert item["company_jurisdiction"] == "Germany"
+    assert item["company_aka_names"] == ["Wirecard Technologies GmbH"]
+    # Person fields are meaningless here and must stay absent.
+    for field in ("date_of_birth", "positions", "places_of_birth"):
+        assert field not in item
+
+
+def test_f9r_company_fields_absent_when_no_company_object_payload_lean():
+    """F9r: a name-only company hit (no company attributes) emits NO company
+    keys — the queue payload stays lean and the reconciliation grid stays
+    suppressed (nothing beyond the name to disambiguate)."""
+    from server import _normalise_screening_evidence_item
+
+    item = _normalise_screening_evidence_item(
+        dict(_F9R_ENTITY_ROW),
+        {"name": "Wirecard AG", "provider_profile_identifier": "prof-f9r-2"},
+        source="screening_result",
+    )
+    for field in _F9R_COMPANY_FIELDS:
+        assert field not in item, f"{field} must be absent when the hit carries no company attributes"
+
+
+def test_f9r_company_fields_tolerate_flat_shape_and_profile_company():
+    """F9r: flat company keys and the nested profile.company shape are both
+    tolerated; the primary matched name is never echoed as its own alias."""
+    from server import _normalise_screening_evidence_item
+
+    evidence = {
+        "name": "Wirecard AG",
+        "provider_profile_identifier": "prof-f9r-3",
+        "profile": {
+            "company": {
+                "registration_number": "HRB 12345",
+                "country": "Germany",
+                "names": {"values": [{"name": "Wirecard AG"}]},
+            }
+        },
+    }
+    item = _normalise_screening_evidence_item(dict(_F9R_ENTITY_ROW), evidence, source="screening_result")
+
+    assert item["company_registration_number"] == "HRB 12345"
+    assert item["company_jurisdiction"] == "Germany"
+    # Only the primary name present → no alias echoed.
+    assert "company_aka_names" not in item

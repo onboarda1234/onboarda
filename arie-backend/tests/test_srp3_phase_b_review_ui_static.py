@@ -313,24 +313,85 @@ def test_phase_f_provider_id_walls_collapsed():
 # Phase F — F9 per-hit applicant-vs-profile reconciliation (self-lighting)
 # ---------------------------------------------------------------------------
 
-def test_f9_comparison_grid_rows_are_conditional_never_empty():
-    """F9: the "Applicant vs matched profile" grid self-lights — a row renders
-    ONLY when at least one side carries stored data, and an empty grid renders
-    nothing at all (no shell, no placeholder dash rows)."""
+def test_f9r_comparison_grid_relevance_gated_suppresses_name_only():
+    """F9r: the "Applicant vs matched profile" grid is relevance-gated — the
+    Name row alone never earns it (a lone name row merely restates the card
+    header). The grid renders ONLY when a DISAMBIGUATING (non-name) row carries
+    data; a name-only hit renders NOTHING (no shell, no placeholder rows).
+    Rows still self-light: each renders only when a side has stored data."""
     html = _html()
     grid = _function_region(
         html, "screeningTriageHitApplicantComparison", "screeningTriageHitEvidenceBody"
     )
     assert "Applicant vs matched profile" in grid
-    assert "if (!applicantText && !providerText) return;" in grid
+    # Per-row self-lighting (rowHtml returns '' when both sides empty).
+    assert "if (!applicantText && !providerText) return '';" in grid
+    # The Name row is built into nameRowHtml and NEVER pushed into `rows`,
+    # so it cannot satisfy the relevance gate on its own.
+    assert "nameRowHtml = rowHtml('Name'" in grid
+    assert "rows = [];" in grid
+    assert "the Name row never lands here" in grid
+    # Relevance gate: suppress unless a disambiguating (non-name) row exists.
     assert "if (!rows.length) return '';" in grid
     assert "applicant.name || provider.name" in grid
-    assert "provider.places_of_birth.length" in grid
-    assert "provider.aka_names.length" in grid
-    assert "provider.positions.length" in grid
+    # When the grid DOES render, the name row heads it.
+    assert "nameRowHtml + rows.join('')" in grid
     # One-sided data stays labelled honestly, never guessed into a verdict.
     assert "['provider only', 'draft']" in grid
     assert "'applicant only'" in grid
+
+
+def test_f9r_person_item_renders_disambiguating_rows():
+    """F9r pin (a): an individual subject shows the disambiguating person rows
+    (Year of birth, Country / nationality, Place of birth, Also known as,
+    Listed role) — so a person hit carrying DOB/country lights the grid."""
+    html = _html()
+    grid = _function_region(
+        html, "screeningTriageHitApplicantComparison", "screeningTriageHitEvidenceBody"
+    )
+    assert "pushRow('Year of birth'" in grid
+    assert "pushRow('Country / nationality'" in grid
+    assert "provider.places_of_birth.length" in grid
+    assert "provider.aka_names.length" in grid
+    assert "provider.positions.length" in grid
+
+
+def test_f9r_company_item_uses_company_rows_no_person_rows():
+    """F9r pins (c)+(d): a company subject shows company rows (Jurisdiction /
+    country, Registration number, Also known as) and NEVER the person-only
+    rows (Year of birth / Place of birth / Listed role) — those are gated to
+    the individual branch."""
+    html = _html()
+    grid = _function_region(
+        html, "screeningTriageHitApplicantComparison", "screeningTriageHitEvidenceBody"
+    )
+    assert "if (kind === 'company')" in grid
+    assert "pushRow('Jurisdiction / country'" in grid
+    assert "pushRow('Registration number'" in grid
+    assert "provider.registration_number" in grid
+    # Person-only rows live ONLY under the individual `else` branch — they must
+    # not appear inside the company branch. The company branch text ends at the
+    # `} else {` that opens the individual branch.
+    company_branch = grid[grid.index("if (kind === 'company')"):grid.index("} else {")]
+    assert "pushRow('Year of birth'" not in company_branch
+    assert "provider.places_of_birth.length" not in company_branch
+    assert "provider.positions.length" not in company_branch
+
+
+def test_f9r_entity_kind_resolver_type_aware():
+    """F9r pin (d): the entity-kind resolver drives row selection — an explicit
+    'entity'/'company' subject type resolves to company, any person role to
+    individual, and with no stored type it infers from the provider profile
+    shape (company attributes → company, person attributes → individual)."""
+    html = _html()
+    resolver = _function_region(
+        html, "screeningComparisonEntityKind", "screeningTriageHitApplicantComparison"
+    )
+    assert "subjectType === 'entity' || subjectType === 'company'" in resolver
+    assert "return 'company'" in resolver
+    assert "if (subjectType) return 'individual'" in resolver
+    assert "provider.jurisdiction || provider.registration_number" in resolver
+    assert "provider.birth_year || provider.dob" in resolver
 
 
 def test_f9_name_row_verdict_comes_from_stored_match_types():

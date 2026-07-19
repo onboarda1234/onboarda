@@ -21709,6 +21709,59 @@ def _screening_evidence_matched_profile_fields(evidence):
             seen_aka.add(candidate.lower())
     if aka_names:
         fields["aka_names"] = aka_names
+    # F9r: lean COMPANY attributes for entity subjects — jurisdiction,
+    # registration number, and company aliases from the matched profile's
+    # ``company`` object (CA collection shapes or flat keys). Additive and
+    # non-empty-only, so person hits stay lean. Nothing is derived or invented.
+    company = evidence.get("company") if isinstance(evidence.get("company"), dict) else {}
+    profile_company = profile.get("company") if isinstance(profile.get("company"), dict) else {}
+    company_sources = tuple(src for src in (company, profile_company) if src)
+
+    def company_entries(*keys):
+        for src in company_sources:
+            for key in keys:
+                raw = src.get(key)
+                if isinstance(raw, dict):
+                    raw = raw.get("values")
+                if isinstance(raw, (list, tuple)) and raw:
+                    return [entry for entry in raw if isinstance(entry, dict)]
+        return []
+
+    def company_flat(*keys):
+        for src in company_sources:
+            for key in keys:
+                value = src.get(key)
+                if value not in (None, "", [], {}):
+                    return value
+        return None
+
+    registration_number = ""
+    company_jurisdiction = ""
+    for entry in company_entries("registration_numbers"):
+        if not registration_number:
+            registration_number = _screening_evidence_text(entry.get("registration_number"))
+        if not company_jurisdiction:
+            company_jurisdiction = _screening_evidence_text(entry.get("jurisdiction"))
+    if not registration_number:
+        registration_number = _screening_evidence_text(company_flat("registration_number"))
+    if not company_jurisdiction:
+        for entry in company_entries("locations"):
+            company_jurisdiction = _screening_evidence_text(entry.get("country"))
+            if company_jurisdiction:
+                break
+    if not company_jurisdiction:
+        company_jurisdiction = _screening_evidence_text(company_flat("jurisdiction", "country"))
+    company_aka = _screening_evidence_value_list(company_flat("names", "aka", "aliases", "alias_names"))
+    company_aka = [
+        alias for alias in company_aka
+        if not (matched_name and alias.lower() == matched_name.lower())
+    ]
+    if registration_number:
+        fields["company_registration_number"] = registration_number
+    if company_jurisdiction:
+        fields["company_jurisdiction"] = company_jurisdiction
+    if company_aka:
+        fields["company_aka_names"] = company_aka
     return fields
 
 
