@@ -210,6 +210,21 @@ process.stdout.write(JSON.stringify({{
     }
 
 
+def test_risk_assessment_uses_compact_executive_dashboard_and_collapsed_technical_details():
+    html = _html()
+    region = _region(html, "function renderStoredRiskComputationHtml", "function setMemoDownloadState")
+    assert "risk-executive-dashboard" in region
+    assert "Why this risk?" in region
+    assert "Risk breakdown" in region
+    assert "Rule outcomes" in region
+    assert "Evidence at a glance" in region
+    assert "<details style=\"margin-top:12px" in region
+    assert "applications.risk_dimensions" not in region
+    pdf = _region(html, "function downloadRiskPDF", "</script>")
+    assert "Why this risk?" in pdf
+    assert "Evidence at a glance" in pdf
+
+
 def test_supervisor_scope_guard_is_confined_to_canonical_ui_projection():
     html = _html()
     application_blockers = _region(

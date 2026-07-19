@@ -1581,17 +1581,16 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
       <div id="detail-agents" style="display:none;" aria-hidden="true"></div>
 
-      <!-- Rule-Based Score Breakdown -->
+      <!-- Executive Risk Assessment (presentation only; values remain authoritative stored evidence) -->
       <div class="card">
         <div class="card-header" style="flex-wrap:wrap;gap:8px;">
-          <div class="card-title">Rule-Based Score Computation</div>
+          <div class="card-title">Risk Assessment <span style="font-size:10px;color:var(--text3);font-weight:600;">Executive summary</span></div>
           <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
             <span class="badge low" style="font-size:10px;">Deterministic</span>
             <button class="btn btn-outline btn-sm" onclick="downloadRiskCSV()" title="Download as CSV" style="font-size:11px;padding:4px 10px;">📥 CSV</button>
             <button class="btn btn-outline btn-sm" onclick="downloadRiskPDF()" title="Download as PDF" style="font-size:11px;padding:4px 10px;">📄 PDF</button>
           </div>
         </div>
-        <p style="font-size:12px;color:var(--text3);margin-bottom:14px;">The composite risk score is computed using a weighted average of 5 dimensions. Each dimension score (1–4) is derived from rule-based lookups — not AI. The formula is: <code style="font-size:11px;background:var(--surface2);padding:2px 6px;border-radius:3px;">Composite = (D1×w1 + D2×w2 + D3×w3 + D4×w4 + D5×w5) / (w1+w2+w3+w4+w5) × 25</code></p>
         <div id="detail-score-breakdown"></div>
       </div>
 
@@ -10649,36 +10648,42 @@ function renderStoredRiskComputationHtml(app) {
     return '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Authoritative risk evidence is missing, incomplete, or stale. Recompute risk before using this breakdown or exporting a report.</div>';
   }
   var risk = evidence.application || {};
-  var rowsHtml = (risk.dimensions || []).map(function(row) {
-    return '<tr>' +
-      '<td style="padding:8px 10px;font-weight:600;">' + escapeHtml(row.id + ': ' + row.name) + '</td>' +
-      '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(String(row.weight)) + '%</td>' +
-      '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(Number(row.stored_score).toFixed(2)) + '</td>' +
-      '<td style="padding:8px 10px;">' + escapeHtml(row.source || 'Stored application evidence') + '</td>' +
-    '</tr>';
+  var route = risk.approval_route || {};
+  var factors = evidence.factor_evidence || [];
+  var dimensions = risk.dimensions || [];
+  var driverHtml = factors.slice(0, 6).map(function(f) {
+    return '<span style="display:inline-flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid #dbe4f0;border-radius:999px;background:#f8fbff;color:#183b63;font-size:11px;font-weight:700;">✓ ' + escapeHtml(f.label || f.family || 'Stored factor') + '</span>';
   }).join('');
-  function riskScoreTile(label, value, helper) {
-    return '<div style="padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface1);">' +
-      '<div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;color:var(--text3);">' + escapeHtml(label) + '</div>' +
-      '<div style="font-size:24px;line-height:1.1;font-weight:800;color:var(--text1);margin-top:6px;">' + escapeHtml(value) + '</div>' +
-      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(helper) + '</div>' +
-    '</div>';
-  }
-  var scoreSummaryHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:12px;">' +
-    riskScoreTile('Authoritative score', Number(risk.score).toFixed(1), 'Persisted application score') +
-    riskScoreTile('Authoritative tier', risk.tier, 'Persisted final risk tier') +
-    riskScoreTile('Approval route', (risk.approval_route || {}).route || '—', 'Backend approval classifier') +
-  '</div>';
-
-  return '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);">' +
-    scoreSummaryHtml +
-    '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
-      '<thead><tr><th style="text-align:left;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Dimension</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Runtime weight</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Stored score</th><th style="text-align:left;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Evidence source</th></tr></thead>' +
-      '<tbody>' + rowsHtml + '</tbody>' +
-    '</table>' +
-    '<div style="margin-top:10px;font-size:12px;color:var(--text2);">Risk computed at: <strong>' + escapeHtml(evidence.risk_computed_at) + '</strong></div>' +
-    '<div style="margin-top:6px;font-size:12px;color:var(--text2);">Configuration version: <strong>' + escapeHtml(evidence.config_version) + '</strong></div>' +
-  '</div>';
+  var rowsHtml = dimensions.map(function(row) {
+    var score = Number(row.stored_score) || 0;
+    var weight = Number(row.weight) || 0;
+    var contribution = score * weight * 0.25;
+    return '<tr><td style="padding:8px 10px;font-weight:700;">' + escapeHtml(row.name || row.id) + '</td>' +
+      '<td style="padding:8px 10px;text-align:center;">' + score.toFixed(1) + '</td>' +
+      '<td style="padding:8px 10px;text-align:center;">' + weight + '%</td>' +
+      '<td style="padding:8px 10px;text-align:center;font-weight:700;">' + contribution.toFixed(1) + '</td>' +
+      '<td style="padding:8px 10px;min-width:150px;"><div style="height:7px;border-radius:99px;background:#e8eef6;overflow:hidden;"><div style="height:100%;width:' + Math.min(100, score / 4 * 100) + '%;background:linear-gradient(90deg,#234e7d,#4f83b7);border-radius:99px;"></div></div></td></tr>';
+  }).join('');
+  var score = Number(risk.score || 0).toFixed(1);
+  var tier = risk.tier || '—';
+  var edd = risk.edd_route || risk.edd_required ? 'Required' : 'Not required';
+  var evidenceStatus = evidence.config_version ? 'Authoritative stored evidence · configuration verified' : 'Authoritative stored evidence';
+  function card(label, value, helper) { return '<div style="padding:12px 14px;border:1px solid #dbe4f0;border-radius:12px;background:#fff;min-width:0;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#718096;font-weight:800;">' + label + '</div><div style="font-size:20px;line-height:1.2;font-weight:800;color:#102a43;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(value) + '</div><div style="font-size:10px;color:#718096;margin-top:4px;">' + escapeHtml(helper) + '</div></div>'; }
+  return '<section class="risk-executive-dashboard" style="padding:14px;border:1px solid #dbe4f0;border-radius:14px;background:linear-gradient(180deg,#f7faff 0%,#fff 46%);color:#102a43;">' +
+    '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;">' +
+      card('Overall risk', score + ' / 100 · ' + tier, 'Authoritative stored outcome') +
+      card('Approval route', route.route || '—', 'Compliance decision path') +
+      card('EDD', edd, 'Enhanced due diligence') +
+      card('Status', 'Verified', evidenceStatus) +
+    '</div>' +
+    '<div style="margin-top:14px;"><div style="font-size:13px;font-weight:800;margin-bottom:8px;">Why this risk?</div><div style="display:flex;gap:7px;flex-wrap:wrap;">' + (driverHtml || '<span style="font-size:11px;color:#718096;">No factor evidence recorded.</span>') + '</div></div>' +
+    '<div style="display:grid;grid-template-columns:minmax(0,1.7fr) minmax(180px,.7fr);gap:14px;margin-top:14px;align-items:start;">' +
+      '<div><div style="font-size:13px;font-weight:800;margin-bottom:6px;">Risk breakdown</div><table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr><th style="text-align:left;padding:6px 10px;color:#718096;font-size:9px;text-transform:uppercase;">Dimension</th><th style="text-align:center;padding:6px;color:#718096;font-size:9px;">Score</th><th style="text-align:center;padding:6px;color:#718096;font-size:9px;">Weight</th><th style="text-align:center;padding:6px;color:#718096;font-size:9px;">Contribution</th><th style="padding:6px;"></th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>' +
+      '<div style="display:flex;align-items:center;justify-content:center;min-height:150px;border:1px solid #dbe4f0;border-radius:12px;background:#fff;"><div style="width:112px;height:112px;border-radius:50%;background:conic-gradient(#234e7d ' + Math.min(100, Number(score)) + '%,#e8eef6 0);display:flex;align-items:center;justify-content:center;"><div style="width:76px;height:76px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;text-align:center;font-size:16px;font-weight:800;color:#102a43;">' + score + '<small style="display:block;font-size:9px;font-weight:600;color:#718096;">/ 100</small></div></div></div>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;"><div style="padding:10px 12px;border-radius:10px;background:#f8fbff;border:1px solid #dbe4f0;font-size:11px;"><strong>Rule outcomes</strong><div style="margin-top:5px;">High floor: ' + escapeHtml((risk.floor_reasons || []).join(', ') || 'None recorded') + '<br>Escalation: ' + escapeHtml((risk.escalations || []).join(', ') || 'None recorded') + '</div></div><div style="padding:10px 12px;border-radius:10px;background:#f8fbff;border:1px solid #dbe4f0;font-size:11px;"><strong>Evidence at a glance</strong><div style="margin-top:5px;">Screening ✓ stored · KYC ✓ stored · Risk evidence ✓ authoritative</div></div></div>' +
+    '<details style="margin-top:12px;border-top:1px solid #dbe4f0;padding-top:9px;"><summary style="cursor:pointer;font-size:11px;font-weight:800;color:#234e7d;">Calculation details · Runtime configuration · Factor evidence · Technical provenance</summary><div style="margin-top:9px;font-size:11px;color:#52606d;">Composite = weighted dimensions × 25. Configuration: ' + escapeHtml(evidence.config_version || '—') + '. Computed: ' + escapeHtml(evidence.risk_computed_at || '—') + '. Evidence source: ' + escapeHtml(evidence.source || 'stored runtime evidence') + '. Factor evidence is retained in the authoritative report and export.</div></details>' +
+  '</section>';
 }
 
 function setMemoDownloadState(enabled, reason) {
@@ -34546,7 +34551,7 @@ function downloadRiskPDF() {
 
   function reportCell(value) { return escapeHtml(value == null ? '' : value); }
   var html = '<!DOCTYPE html><html><head><title>Authoritative Risk Evidence — ' + reportCell(app.ref) + '</title>';
-  html += '<style>body{font-family:"Segoe UI",system-ui,sans-serif;margin:40px 50px;color:#1a1a2e;font-size:13px;line-height:1.5}.header{border-bottom:3px solid #0f3460;padding-bottom:16px;margin-bottom:24px}.header h1{margin:0;font-size:22px;color:#0f3460}.notice{padding:10px 12px;background:#eef4ff;border:1px solid #cbd8ee;border-radius:6px;margin:14px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.item{padding:10px 12px;background:#f8f9fc;border:1px solid #e2e6ee;border-radius:6px}.label{font-size:10px;text-transform:uppercase;color:#777}.value{font-size:14px;font-weight:700;overflow-wrap:anywhere}.section{font-size:15px;font-weight:700;color:#0f3460;margin:24px 0 10px;border-bottom:1px solid #d9dfeb;padding-bottom:5px}table{width:100%;border-collapse:collapse;margin-bottom:14px}th{text-align:left;padding:7px;background:#eef3fb;font-size:10px;text-transform:uppercase}td{padding:7px;border-bottom:1px solid #eee;font-size:11px}.outcome{background:#0f3460;color:#fff;padding:16px;border-radius:8px;margin:16px 0}.outcome strong{font-size:26px}.footer{margin-top:28px;border-top:1px solid #ddd;padding-top:10px;font-size:10px;color:#777}.no-print{margin-bottom:16px}@media print{body{margin:20px 30px}.no-print{display:none!important}}</style></head><body>';
+  html += '<style>body{font-family:"Segoe UI",system-ui,sans-serif;margin:34px 46px;color:#102a43;font-size:13px;line-height:1.5}.header{border-bottom:4px solid #102a43;padding-bottom:16px;margin-bottom:20px}.header h1{margin:0;font-size:24px;color:#102a43;letter-spacing:-.02em}.notice{padding:10px 12px;background:#f3f7fc;border:1px solid #dbe4f0;border-radius:8px;margin:14px 0;color:#52606d}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.item{padding:11px 13px;background:#fff;border:1px solid #dbe4f0;border-radius:9px}.label{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#718096;font-weight:800}.value{font-size:14px;font-weight:800;overflow-wrap:anywhere}.section{font-size:15px;font-weight:800;color:#102a43;margin:22px 0 10px;border-bottom:2px solid #dbe4f0;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-bottom:14px}th{text-align:left;padding:8px;background:#edf3f9;font-size:9px;text-transform:uppercase;color:#52606d}td{padding:8px;border-bottom:1px solid #edf2f7;font-size:11px}.outcome{background:linear-gradient(120deg,#102a43,#234e7d);color:#fff;padding:18px;border-radius:10px;margin:16px 0}.outcome strong{font-size:28px}.driver{display:inline-block;padding:6px 9px;background:#f3f7fc;border:1px solid #dbe4f0;border-radius:999px;margin:2px;font-size:11px;font-weight:700}.footer{margin-top:28px;border-top:1px solid #dbe4f0;padding-top:10px;font-size:10px;color:#718096}@media print{body{margin:20px 30px}.no-print{display:none!important}}</style></head><body>';
   html += '<div class="header"><h1>RegMind Authoritative Risk Evidence Report</h1><div>Application ' + reportCell(app.ref) + '</div></div>';
   html += '<div class="no-print"><button onclick="window.print()" style="padding:8px 18px;background:#0f3460;color:white;border:0;border-radius:5px">Print / Save as PDF</button></div>';
   html += '<div class="notice">This report displays stored application risk outcomes and the validated runtime configuration that produced them. No score is calculated in this document or in the browser.</div>';
@@ -34560,6 +34565,8 @@ function downloadRiskPDF() {
   });
   html += '</div>';
   html += '<div class="outcome"><div>Stored authoritative outcome</div><strong>' + reportCell(risk.score) + ' / 100 — ' + reportCell(risk.tier) + '</strong><div>EDD / onboarding route: ' + reportCell(risk.edd_route) + '</div><div>Approval route: ' + reportCell(route.route) + '</div></div>';
+  html += '<div class="section">Why this risk?</div><div>' + (evidence.factor_evidence || []).slice(0, 8).map(function(f) { return '<span class="driver">✓ ' + reportCell(f.label || f.family || 'Stored factor') + '</span>'; }).join('') + '</div>';
+  html += '<div class="section">Evidence at a glance</div><div class="grid"><div class="item"><div class="label">Screening</div><div class="value">✓ Stored evidence</div></div><div class="item"><div class="label">KYC</div><div class="value">✓ Stored evidence</div></div><div class="item"><div class="label">Risk evidence</div><div class="value">✓ Authoritative</div></div></div>';
   html += '<div class="section">Stored Dimension Evidence</div><table><thead><tr><th>Dimension</th><th>Runtime Weight</th><th>Stored Score</th><th>Source</th></tr></thead><tbody>';
   (risk.dimensions || []).forEach(function(dimension) {
     html += '<tr><td>' + reportCell(dimension.id + ': ' + dimension.name) + '</td><td>' + reportCell(dimension.weight) + '%</td><td>' + reportCell(dimension.stored_score) + '</td><td>' + reportCell(dimension.source) + '</td></tr>';
