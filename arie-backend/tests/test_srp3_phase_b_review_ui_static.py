@@ -196,3 +196,26 @@ def test_lazy_evidence_fetch_mirrors_fixture_visibility():
     assert "include_evidence=1" in fetch_fn
     assert "showTestSmokeRecordsEnabled" in fetch_fn
     assert "show_fixtures=true" in fetch_fn
+
+
+def test_application_tab_hydrates_evidence_without_queue_visit():
+    # E-1: the Application Review tab must fetch evidence-mode queue rows for
+    # its application when the shared queue state has none — arriving via the
+    # queue first must not be a precondition for the triage view. Single
+    # flight per application ref, fixture visibility mirrored, and the panel
+    # re-renders when the rows arrive.
+    html = _html()
+    fetch_fn = _function_region(
+        html, "ensureApplicationScreeningEvidenceRows", "renderScreeningReviewPanel"
+    )
+    assert "include_evidence=1" in fetch_fn
+    assert "application_ref=" in fetch_fn
+    assert "showTestSmokeRecordsEnabled" in fetch_fn
+    assert "show_fixtures=true" in fetch_fn
+    assert "SCREENING_REVIEW_APP_EVIDENCE_FETCHES[appRef] = 'loading'" in fetch_fn
+    assert "SCREENING_REVIEW_APP_EVIDENCE_FETCHES[appRef] = 'error'" in fetch_fn
+    assert "renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus)" in fetch_fn
+    panel_start = html.index("function renderScreeningReviewPanel")
+    panel_head = html[panel_start:panel_start + 1600]
+    assert "ensureApplicationScreeningEvidenceRows(app.ref)" in panel_head
+    assert "row.screening_evidence" in panel_head

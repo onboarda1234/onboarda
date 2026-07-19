@@ -17045,6 +17045,54 @@ function screeningTriageRankedHitSections(row) {
   return html;
 }
 
+// E-1 (Phase E, one data path): the Application Review tab must not depend on
+// the Screening Queue having been visited first. When the panel renders for
+// an application whose queue rows carry no evidence-mode data, fetch the
+// evidence rows for THAT application once (same endpoint + fixture-visibility
+// idiom as ensureScreeningQueueRowEvidence), merge them into the shared queue
+// state, and re-render. Single-flight per application ref; a failed fetch is
+// recorded so the panel keeps its honest legacy fallback without retry loops.
+var SCREENING_REVIEW_APP_EVIDENCE_FETCHES = {};
+
+async function ensureApplicationScreeningEvidenceRows(appRef) {
+  var state = SCREENING_REVIEW_APP_EVIDENCE_FETCHES[appRef];
+  if (state === 'loading' || state === 'done' || state === 'error') return;
+  SCREENING_REVIEW_APP_EVIDENCE_FETCHES[appRef] = 'loading';
+  try {
+    var params = [
+      'limit=100',
+      'offset=0',
+      'include_evidence=1',
+      'application_ref=' + encodeURIComponent(appRef)
+    ];
+    if (typeof showTestSmokeRecordsEnabled === 'function' && showTestSmokeRecordsEnabled()) {
+      params.push('show_fixtures=true');
+    }
+    var payload = await boApiCall('GET', '/screening/queue?' + params.join('&'), null, { suppressAuthReset: true, sessionId: getCurrentBoSessionId() });
+    var fetched = (payload && payload.rows) || [];
+    if (!SCREENING_QUEUE || !Array.isArray(SCREENING_QUEUE.rows)) {
+      SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null, pagination:null, is_loading:false };
+    }
+    fetched.forEach(function(fullRow) {
+      var existingIndex = SCREENING_QUEUE.rows.findIndex(function(candidate) {
+        return screeningQueueRowsMatch(candidate, fullRow);
+      });
+      if (existingIndex >= 0) {
+        SCREENING_QUEUE.rows[existingIndex] = Object.assign({}, SCREENING_QUEUE.rows[existingIndex], fullRow);
+      } else {
+        SCREENING_QUEUE.rows.push(fullRow);
+      }
+    });
+    SCREENING_REVIEW_APP_EVIDENCE_FETCHES[appRef] = 'done';
+    if (typeof currentApp !== 'undefined' && currentApp && currentApp.ref === appRef) {
+      renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    }
+  } catch (e) {
+    console.warn('Could not load screening evidence rows for application:', appRef, e);
+    SCREENING_REVIEW_APP_EVIDENCE_FETCHES[appRef] = 'error';
+  }
+}
+
 function renderScreeningReviewPanel(app, focus) {
   var host = document.getElementById('detail-screening-review');
   if (!host || !app) return;
@@ -17053,6 +17101,10 @@ function renderScreeningReviewPanel(app, focus) {
   var queueRows = (SCREENING_QUEUE && SCREENING_QUEUE.rows ? SCREENING_QUEUE.rows : []).filter(function(row) {
     return row.application_ref === app.ref;
   });
+  // E-1: no evidence-mode data for this application yet → hydrate once.
+  if (app.ref && !queueRows.some(function(row) { return row && row.screening_evidence; })) {
+    ensureApplicationScreeningEvidenceRows(app.ref);
+  }
   var queueMap = {};
   queueRows.forEach(function(row) {
     queueMap[(row.subject_type || '') + '|' + (row.subject_name || '')] = row;
