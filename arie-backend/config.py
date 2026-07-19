@@ -154,6 +154,30 @@ DEBUG = os.getenv("DEBUG", "0") == "1"
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(os.path.dirname(__file__), "uploads", "documents"))
 LOG_FORMAT = os.getenv("LOG_FORMAT", "text")
 
+
+# RDI-107: explicit trusted reverse-proxy CIDR allowlist. When set (comma-
+# separated CIDRs, e.g. "10.0.0.0/16,172.31.0.0/16"), only a direct peer whose
+# address falls inside one of these networks is trusted to set the client IP
+# via X-Forwarded-For / X-Real-IP. When UNSET, the legacy permissive behaviour
+# (trust any RFC1918-private or loopback peer) applies, so existing ALB/ECS
+# deployments keep working until an operator configures the exact proxy CIDRs.
+def _parse_trusted_proxy_cidrs(raw):
+    import ipaddress
+
+    nets = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            logger.warning("Ignoring invalid TRUSTED_PROXY_CIDRS entry: %r", part)
+    return nets
+
+
+TRUSTED_PROXY_CIDRS = _parse_trusted_proxy_cidrs(os.getenv("TRUSTED_PROXY_CIDRS", ""))
+
 ADMIN_INITIAL_PASSWORD = os.getenv("ADMIN_INITIAL_PASSWORD", "")
 
 

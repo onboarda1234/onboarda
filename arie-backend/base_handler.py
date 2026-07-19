@@ -26,7 +26,13 @@ from auth import (
     build_shared_rate_limit_key,
     decode_token,
 )
-from config import ALLOWED_ORIGIN, IS_DEVELOPMENT, IS_DEMO, ENVIRONMENT as _CFG_ENVIRONMENT
+from config import (
+    ALLOWED_ORIGIN,
+    IS_DEVELOPMENT,
+    IS_DEMO,
+    ENVIRONMENT as _CFG_ENVIRONMENT,
+    TRUSTED_PROXY_CIDRS as _TRUSTED_PROXY_CIDRS,
+)
 from db import get_db as db_get_db
 from observability import (
     clear_request_id,
@@ -834,7 +840,14 @@ class BaseHandler(tornado.web.RequestHandler):
                 ip = ipaddress.ip_address(value)
             except ValueError:
                 return False
-            # ALB/ECS hops are private. In tests, loopback is the local proxy.
+            # RDI-107: when an explicit proxy-CIDR allowlist is configured
+            # (TRUSTED_PROXY_CIDRS), trust ONLY peers inside it — so a rogue
+            # host elsewhere in the private range can no longer spoof audit
+            # provenance. When unset, fall back to the legacy permissive rule
+            # (any private/loopback peer) so unconfigured deployments keep
+            # working. ALB/ECS hops are private; in tests, loopback is local.
+            if _TRUSTED_PROXY_CIDRS:
+                return any(ip in net for net in _TRUSTED_PROXY_CIDRS)
             return ip.is_private or ip.is_loopback
 
         # AWS ALB writes the original client as the leftmost X-Forwarded-For
