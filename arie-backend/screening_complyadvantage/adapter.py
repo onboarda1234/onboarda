@@ -252,6 +252,44 @@ def _combine_reports(reports):
         for p in screening_subjects
         if isinstance(p, dict)
     ) or company_non_terminal
+    # ARF-QAFIX-001 → SRP-2a recovery: persist the per-subject existing Mesh
+    # customer UUIDs harvested from conflict errors ("external identifier ...
+    # in use and belongs to the customer identifier <uuid>") so a later
+    # rescreen can recover when both the subscription and the
+    # external-identifier lookup fail. Keyed by person_key ("entity" for the
+    # company block); a keyless non-entity subject is omitted — a UUID that
+    # cannot be attributed to exactly one subject must never be reused.
+    conflict_existing_by_subject = {}
+    for report in reports:
+        harvested = report.get("customer_identifier_conflict_existing_customers")
+        if not isinstance(harvested, dict) or not harvested:
+            continue
+        scope = ((report.get("provider_specific") or {}).get("complyadvantage") or {}).get("screening_subject") or {}
+        subject_person_key = scope.get("person_key") or report.get("screening_subject_person_key")
+        subject_kind = scope.get("kind") or report.get("screening_subject_kind")
+        key = str(subject_person_key) if subject_person_key else ("entity" if subject_kind == "entity" else "")
+        if not key:
+            continue
+        entry = {
+            pass_name: str(value)
+            for pass_name, value in harvested.items()
+            if pass_name in ("strict", "relaxed") and value
+        }
+        if entry:
+            conflict_existing_by_subject[key] = entry
+    extra_report_fields = (
+        {"customer_identifier_conflict_existing_customers": conflict_existing_by_subject}
+        if conflict_existing_by_subject
+        else {}
+    )
+    # The per-subject reports carry customer_identifier_conflict (set by
+    # _mark_report_customer_conflict), but the combined report previously
+    # dropped it — so the review page's conflict-variant honesty banner
+    # (which checks report.customer_identifier_conflict === true) could
+    # never fire on a stored report. Any conflicted subject marks the
+    # combined report.
+    if any(bool(report.get("customer_identifier_conflict")) for report in reports):
+        extra_report_fields["customer_identifier_conflict"] = True
     return create_normalized_screening_report(
         provider="complyadvantage",
         normalized_version="2.0",
@@ -280,6 +318,7 @@ def _combine_reports(reports):
         provider_specific={"complyadvantage": {"subjects": provider_subjects}},
         source_screening_report_hash=_reports_hash(reports),
         provenance=None,
+        **extra_report_fields,
     )
 
 

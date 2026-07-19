@@ -202,6 +202,47 @@ class TestBug2ErroredStateRollup:
         assert record == {"api_status": "live", "matched": False, "results": []}
 
 
+class TestConflictPropagationToCombinedReport:
+    """The per-subject conflict boolean and harvested UUIDs must survive
+    _combine_reports — the review page's conflict-variant honesty banner
+    checks report.customer_identifier_conflict === true on the STORED
+    (combined) report, and the SRP-2a recovery reads the harvested UUIDs
+    from it."""
+
+    def _conflicted_subject_report(self):
+        report = _errored_company_report()
+        report["degraded_sources"] = [
+            "complyadvantage_customer_identifier_conflict"
+        ]
+        report["customer_identifier_conflict"] = True
+        report["customer_identifier_conflict_existing_customers"] = {
+            "strict": "019f6bc5-ec91-74e8-9964-8482200ed051"
+        }
+        report["provider_specific"] = {
+            "complyadvantage": {"screening_subject": {"kind": "entity"}}
+        }
+        return report
+
+    def test_conflict_boolean_survives_combine(self):
+        combined = _combine_reports([self._conflicted_subject_report()])
+        assert combined["customer_identifier_conflict"] is True
+
+    def test_harvested_uuids_survive_combine_keyed_by_subject(self):
+        combined = _combine_reports([self._conflicted_subject_report()])
+        assert combined["customer_identifier_conflict_existing_customers"] == {
+            "entity": {"strict": "019f6bc5-ec91-74e8-9964-8482200ed051"}
+        }
+
+    def test_clean_report_carries_neither_field(self):
+        combined = _combine_reports([_errored_company_report()])
+        assert "customer_identifier_conflict" not in combined or not combined[
+            "customer_identifier_conflict"
+        ]
+        assert (
+            "customer_identifier_conflict_existing_customers" not in combined
+        )
+
+
 def _live_shape_match(aml_types, *, match_types=("exact_match",), media=False):
     """A match shaped like the live ARF-QAFIX-006 payloads: typed indicators
     absent (empty risk), categories only in provider_aml_types_raw."""
