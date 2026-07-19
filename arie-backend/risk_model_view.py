@@ -790,6 +790,7 @@ def build_authoritative_risk_report_evidence(
     stored_version = str(app.get("risk_config_version") or "").strip()
     computed_at = str(app.get("risk_computed_at") or "").strip()
     dimensions = _json_object(app.get("risk_dimensions"))
+    computation_evidence = _json_object(dimensions.get("factor_computation_evidence"))
     escalations = [str(item) for item in _json_list(app.get("risk_escalations")) if str(item)]
     route = dict(approval_route or {})
 
@@ -804,6 +805,63 @@ def build_authoritative_risk_report_evidence(
         reasons.append("risk_config_version_mismatch")
     if not computed_at:
         reasons.append("risk_computed_at_missing")
+    expected_factor_keys = {
+        "D1": {"entity_type", "ownership_structure", "pep_status", "adverse_media", "source_of_wealth", "source_of_funds"},
+        "D2": {"country_of_incorporation", "ubo_nationalities", "intermediary_jurisdictions", "countries_of_operation", "target_markets"},
+        "D3": {"service_type", "monthly_volume", "transaction_complexity"},
+        "D4": {"industry_sector"},
+        "D5": {"introduction_method", "delivery_channel"},
+    }
+    stored_factors = computation_evidence.get("factors")
+    stored_dimensions = computation_evidence.get("dimensions")
+    if computation_evidence.get("schema_version") != "risk-factor-evidence-v1":
+        reasons.append("factor_evidence_schema_missing")
+    if not isinstance(stored_factors, list):
+        reasons.append("factor_evidence_missing")
+        stored_factors = []
+    if not isinstance(stored_dimensions, list):
+        reasons.append("dimension_computation_evidence_missing")
+        stored_dimensions = []
+    required_factor_fields = {
+        "dimension_id", "factor_key", "factor_label", "raw_value",
+        "normalized_value", "rule_score", "factor_weight",
+        "weighted_factor_contribution", "resolution_status",
+        "rule_identifier", "evidence_source",
+    }
+    for item in stored_factors:
+        if not isinstance(item, Mapping):
+            reasons.append("factor_evidence_invalid")
+            continue
+        missing_fields = required_factor_fields - set(item)
+        for field in sorted(missing_fields):
+            reasons.append(
+                f"factor_evidence_field_missing:{item.get('dimension_id', 'unknown')}:"
+                f"{item.get('factor_key', 'unknown')}:{field}"
+            )
+    for dimension_id, factor_keys in expected_factor_keys.items():
+        present = {
+            str(item.get("factor_key") or "")
+            for item in stored_factors
+            if isinstance(item, Mapping) and item.get("dimension_id") == dimension_id
+        }
+        for missing_key in sorted(factor_keys - present):
+            reasons.append(f"factor_evidence_missing:{dimension_id}:{missing_key}")
+        matching_dimensions = [
+            item for item in stored_dimensions
+            if isinstance(item, Mapping) and item.get("dimension_id") == dimension_id
+        ]
+        if len(matching_dimensions) != 1:
+            reasons.append(f"dimension_computation_evidence_missing:{dimension_id}")
+        else:
+            row = matching_dimensions[0]
+            required_dimension_fields = {
+                "dimension_id", "dimension_score", "dimension_weight",
+                "rounding_adjustment", "composite_contribution", "factor_keys",
+            }
+            for field in sorted(required_dimension_fields - set(row)):
+                reasons.append(
+                    f"dimension_computation_field_missing:{dimension_id}:{field}"
+                )
 
     try:
         score = float(app.get("risk_score"))
@@ -838,6 +896,26 @@ def build_authoritative_risk_report_evidence(
         if not 1 <= stored_score <= 4:
             reasons.append(f"{stored_key}_evidence_invalid")
             continue
+        matching_computation = [
+            item for item in stored_dimensions
+            if isinstance(item, Mapping) and item.get("dimension_id") == dimension_id
+        ]
+        if matching_computation:
+            try:
+                if abs(float(matching_computation[0]["dimension_score"]) - stored_score) > 0.0001:
+                    reasons.append(f"dimension_computation_score_mismatch:{dimension_id}")
+                factor_total = sum(
+                    float(item["weighted_factor_contribution"])
+                    for item in stored_factors
+                    if isinstance(item, Mapping) and item.get("dimension_id") == dimension_id
+                )
+                reproduced_dimension = factor_total + float(
+                    matching_computation[0]["rounding_adjustment"]
+                )
+                if abs(reproduced_dimension - stored_score) > 0.0001:
+                    reasons.append(f"factor_contribution_mismatch:{dimension_id}")
+            except (KeyError, TypeError, ValueError):
+                reasons.append(f"dimension_computation_evidence_invalid:{dimension_id}")
         runtime_dimension = configured_dimensions[dimension_id]
         dimension_rows.append({
             "id": dimension_id,
@@ -848,17 +926,21 @@ def build_authoritative_risk_report_evidence(
             "source": f"applications.risk_dimensions.{stored_key}",
         })
 
+    if score is not None:
+        try:
+            reproduced_score = sum(
+                float(item["composite_contribution"])
+                for item in stored_dimensions
+            ) + float(computation_evidence["policy_adjustment"])
+            if abs(reproduced_score - score) > 0.0001:
+                reasons.append("composite_computation_mismatch")
+            if abs(float(computation_evidence["final_composite_score"]) - score) > 0.0001:
+                reasons.append("final_composite_evidence_mismatch")
+        except (KeyError, TypeError, ValueError):
+            reasons.append("composite_computation_evidence_invalid")
+
     if reasons:
         return _blocked_risk_report_evidence(*reasons)
-
-    factor_evidence: list[Dict[str, Any]] = []
-    for role in _declared_pep_roles(app):
-        factor_evidence.append({
-            "family": "pep",
-            "label": role,
-            "score": GATE0_DECLARED_PEP_SCORE,
-            "source": "stored pep_declaration.pep_role_type + rule_engine.GATE0_DECLARED_PEP_SCORE",
-        })
 
     floor_reasons = [item for item in escalations if item.startswith("floor_rule_")]
     return {
@@ -878,7 +960,9 @@ def build_authoritative_risk_report_evidence(
             "edd_route": edd_route,
             "approval_route": route,
         },
-        "factor_evidence": factor_evidence,
+        "factor_evidence": deepcopy(stored_factors),
+        "dimension_computation_evidence": deepcopy(stored_dimensions),
+        "computation_evidence": deepcopy(computation_evidence),
     }
 
 
