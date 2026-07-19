@@ -158,11 +158,13 @@ are out of scope for every SRP item.
 | SRP-0 | Verify stale-snapshot vs live-normalizer split (ARF-2026-920016; fresh-screen contrast; distinct-profile count of the 298 hits) — read-only | — | — | ✅ 2026-07-16 — stale/partial snapshot confirmed (profile ids present; names/scores/match-types/media absent) · positive-hit fresh contrast inconclusive (fixture screen = 0 hits) | — |
 | SRP-1 | ComplyAdvantage clarifications: match-score scale, stable profile id, hit-volume tuning, RPT-5 adverse-media persistence, data residency | — | — | ◐ partial: media/match-type API paths answered 2026-07-16; dashboard recon 2026-07-17 settled score display, triage UX, URLs, EU hosting · open: score scale, API-level entity key, fuzziness levers, region per Order Form | — |
 | SRP-2 | Stale-report refresh pathway (governed re-screen; archive-first, adjudication guard, regulated archive table) | — | #786 | ✅ closed 2026-07-17 — harness merged + batch 1 validated all governance rails (10/10 archives, chained audits, adjudication guard, clean stop); fleet execution overtaken by events (legacy test apps deleted) | — |
-| SRP-2a / RESCREEN-1 | Re-screen of an already-screened subject errors Mesh customer-creation (external identifier already assigned) — batch-1 finding; hits every future officer/periodic re-screen | P1 | #787 | ◐ distinct fail-closed classification shipped (customer_identifier_conflict degraded source); existing-customer re-screen wiring ⏸ pending Mesh endpoint confirmation (docs blocked from this env; Codex/CA to confirm) | — |
+| SRP-2a / RESCREEN-1 | Re-screen of an already-screened subject errors Mesh customer-creation (external identifier already assigned) — batch-1 finding; hits every future officer/periodic re-screen | P1 | #787 #801 | ◐ classification shipped + live-wording fix and existing-UUID harvest validated on staging 2026-07-19 (#801); Mesh rescreen endpoint confirmed in docs 2026-07-18; Phase D wiring (delta-merge rescreen, ENABLE_CA_RESCREEN default-off, Re-screen button) built + verified, PR pending founder go · open: monitor-on-demand entitlement (CA) | — |
 | SRP-2b / RISK-FC-1 | Risk recompute lowered HIGH→LOW off a non-terminal/degraded screening report (TESCO 55→12.3) — fail-open | P1 | #787 | ✅ fixed 2026-07-17 — recompute_risk holds prior risk when a non-terminal report would lower it; raises still allowed; audited | — |
-| SRP-3 | Review-page triage IA: summary strip, score-ranked hits with factor bands (profile-UUID dedup ruled out — Mesh recon 2026-07-17: profiles are minted per case, not stable entity keys), risk-type buckets, side-by-side disambiguation, progressive disclosure | — | #790 #793 | ◐ Phase A (rts-1.0 scorer + queue triage block, #790) and Phase B (review-page triage UI redesign, #793) merged + deployed + empty-state smoke PASS 2026-07-18 · open: populated-staging browser acceptance (post-seeding combined run) + enriched-sample field inventory/score cross-check · Phase D re-screen button rides SRP-2a | — |
-| SRP-4 | Agent 3 → triage narrative ("review these N first, here's why"), advisory-only, never mutates dispositions | — | — | ⬜ after SRP-3 | — |
+| SRP-3 | Review-page triage IA: summary strip, score-ranked hits with factor bands (profile-UUID dedup ruled out — Mesh recon 2026-07-17: profiles are minted per case, not stable entity keys), risk-type buckets, side-by-side disambiguation, progressive disclosure | — | #790 #793 #801 | ✅ closed 2026-07-19 — Phases A/B merged (#790/#793); populated-staging browser acceptance + enriched-sample inventory PASS (QAFIX-006/007 combined run); truth-flow defects found by that run fixed + validated (#801, rts-1.1) · Re-screen button tracked under SRP-2a; presentation consolidation tracked as SRP-3e (Phase E) | — |
+| SRP-3e | Phase E — screening presentation consolidation: retire evidence popup chains (evidence inline on ranked hit cards), one-fact-one-place dedup, single renderer on queue + application surfaces, retire Agent 3 flat hit recital | — | — | 📋 scoped 2026-07-19 (founder direction: approved mockup is the target everywhere; no popups; no repeated fields) · design spec for sign-off after Phase D | — |
+| SRP-4 | Agent 3 → triage narrative ("review these N first, here's why"), advisory-only, never mutates dispositions | — | #797 | ✅ closed 2026-07-19 — merged + deployed 2026-07-18; populated-data narrative acceptance PASS in combined run (ranked narrative, advisory labels, no probability vocabulary) | — |
 | SRP-5 | Provider-side noise reduction for entity searches — validate against **Mesh** docs (Manus cited legacy API); sanctions/PEP-1 recall must not decrease | — | — | ⏸ blocked on SRP-1 answers · deliberately last | — |
+| SRP-FIX-1 | Screening truth-flow hardening: live Mesh conflict wording classified; errored entity screens can never roll up as Clear; aml-type category fallback (rts-1.1, weights unchanged); conflict boolean + harvested UUIDs persist to stored report | P0 | #801 | ✅ merged + deployed + staging-validated 2026-07-19 (QAFIX-001 conflict classifies + non-clear; QAFIX-007 fresh screen scores 58/53 with category reasons; QAFIX-006 historical rts-1.0 untouched) | — |
 
 ## Phase 6 — Post-#661 staging follow-ups
 
@@ -471,22 +473,22 @@ are out of scope for every SRP item.
 
 ---
 
-## Roll-up — computed by counting rows, 2026-07-18
+## Roll-up — computed by counting rows, 2026-07-19
 
 Counting rule: every row in Phases 0–14 + the Re-audit/RSMP tables counts once.
 The 3 cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 7
 APP-CONF-003, Phase 13 CA row) and the Optional Modernization tables are
 excluded. ◐ = items with one named half done and one open (SRP-1, SRP-2a,
-SRP-3, staging-SHA gate, P12-4, P13-7, P9-13, DCI-104). Note: parallel register PRs (`#780` and
+staging-SHA gate, P12-4, P13-7, P9-13, DCI-104). Note: parallel register PRs (`#780` and
 merged `#783`) recount their own streams; on merge, recount the union.
 
 | Status | Count |
 |--------|:--:|
-| ✅ done/merged | 99 |
-| ◐ split — one half open | 8 |
+| ✅ done/merged | 102 |
+| ◐ split — one half open | 7 |
 | 🟢 PR open | 0 |
 | 🔨 in progress | 2 |
-| 📋 scoped | 20 |
+| 📋 scoped | 21 |
 | ⏸ blocked | 5 |
-| ⬜ pending | 36 |
-| **Total tracked items** | **170** |
+| ⬜ pending | 35 |
+| **Total tracked items** | **172** |

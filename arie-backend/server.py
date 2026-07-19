@@ -23432,6 +23432,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         "applications_screened": 0,
         "applications_requiring_review": 0,
         "subject_rows": 0,
+        # SRP-2a Phase D: gates the back-office Re-screen button render.
+        "rescreen_enabled": _rescreen_ui_enabled(),
     }
 
     for app in apps:
@@ -24634,6 +24636,65 @@ def _ca_screening_audit_enabled():
         return get_active_provider_name() == "complyadvantage"
     except Exception:
         return False
+
+
+def _rescreen_ui_enabled():
+    """SRP-2a Phase D: server-sent flag gating the back-office Re-screen button."""
+    try:
+        from screening_config import is_ca_rescreen_enabled, is_complyadvantage_active
+        return bool(is_ca_rescreen_enabled() and is_complyadvantage_active())
+    except Exception:
+        return False
+
+
+def _ca_rescreen_branch_active(db, application_id, previous_report):
+    """True when POST /api/screening/run will take the SRP-2a rescreen branch.
+
+    Requires the feature flag, an active CA provider, a stored previous report
+    (the delta baseline), and at least one active monitoring subscription for
+    the application. Any check failure keeps today's create-and-screen path.
+    """
+    try:
+        if not _rescreen_ui_enabled():
+            return False
+        if not isinstance(previous_report, dict) or not previous_report:
+            return False
+        from screening_complyadvantage.subscriptions import application_has_active_subscriptions
+        return application_has_active_subscriptions(db, application_id)
+    except Exception:
+        logger.warning("ca_rescreen_branch_check_failed application_id=%s", application_id, exc_info=True)
+        return False
+
+
+def _archive_report_for_officer_rescreen(db, app, previous_report):
+    """Archive the outgoing report BEFORE any rescreen provider I/O.
+
+    Reuses the SRP-2 harness insert shape for screening_report_archive and
+    commits immediately: if the re-screen fails midway the archive row is a
+    harmless extra snapshot, whereas the reverse order could replace regulated
+    screening evidence without a preserved copy.
+    """
+    import hashlib as _hashlib
+    digest = _hashlib.sha256(
+        json.dumps(previous_report, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    db.execute(
+        """
+        INSERT INTO screening_report_archive
+            (application_id, application_ref, archived_by, reason, report_hash, report_json)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app["id"],
+            app["ref"],
+            "officer_rescreen_endpoint",
+            "srp2a_officer_rescreen",
+            digest,
+            json.dumps(previous_report, default=str),
+        ),
+    )
+    db.commit()
+    return digest
 
 
 AGENT3_SCREENING_INTERPRETATION_NAME = "fincrime_screening_interpretation"
@@ -26359,9 +26420,37 @@ class ScreeningHandler(BaseHandler):
                 before_state={"screening_report": prescreening.get("screening_report")},
                 after_state={"requested": True, "provider": "complyadvantage"},
             )
+        # SRP-2a Phase D: existing-customer re-screen branch (flag-gated).
+        # When active, the outgoing report is archived FIRST (before any
+        # provider I/O) and threaded down as the delta baseline. When the flag
+        # is off or no subscriptions exist, behaviour is exactly today's
+        # create-and-screen path with the conflict classification intact.
+        rescreen_branch = _ca_rescreen_branch_active(db, real_id, prescreening.get("screening_report"))
+        provider_options = None
+        if rescreen_branch:
+            previous_report = prescreening.get("screening_report")
+            archived_hash = _archive_report_for_officer_rescreen(db, app, previous_report)
+            provider_options = {"previous_report": previous_report}
+            if ca_audit_enabled:
+                self.log_audit(
+                    user,
+                    "ca_screening.rescreen_requested",
+                    app["ref"],
+                    _ca_screening_audit_detail("ca_rescreen_requested", dict(app)),
+                    db=db,
+                    commit=True,
+                    before_state={"screening_report_hash": archived_hash},
+                    after_state={
+                        "rescreen_requested": True,
+                        "provider": "complyadvantage",
+                        "archived_report_hash": archived_hash,
+                        "archive_reason": "srp2a_officer_rescreen",
+                    },
+                )
         try:
             report = run_full_screening(
-                app_data, directors, ubos, intermediaries, client_ip=self.get_client_ip(), db=db
+                app_data, directors, ubos, intermediaries, client_ip=self.get_client_ip(), db=db,
+                provider_options=provider_options,
             )
         except Exception as exc:
             if ca_audit_enabled:
@@ -26473,6 +26562,22 @@ class ScreeningHandler(BaseHandler):
                         "evidence_quality": _ca_report_evidence_quality_summary(report),
                     },
                 )
+        if ca_audit_enabled and rescreen_branch:
+            self.log_audit(
+                user,
+                "ca_screening.rescreen_result",
+                app["ref"],
+                _ca_screening_audit_detail("ca_rescreen_result", dict(app), report=report),
+                db=db,
+                commit=False,
+                before_state={"rescreen_requested": True},
+                after_state={
+                    "provider": "complyadvantage",
+                    "rescreen_summary": report.get("rescreen_summary"),
+                    "total_hits": report.get("total_hits"),
+                    "degraded_sources": report.get("degraded_sources"),
+                },
+            )
         db.commit()
         db.close()
 
@@ -28258,6 +28363,8 @@ class APIStatusHandler(BaseHandler):
                 "description": "Individual identity verification and KYC (document + selfie + liveness)"
             },
             "complyadvantage": ca_status,
+            # SRP-2a Phase D: gates the back-office Re-screen button render.
+            "rescreen_enabled": _rescreen_ui_enabled(),
             "anthropic": {
                 "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
                 "status": "configured" if os.environ.get("ANTHROPIC_API_KEY") else "simulated",

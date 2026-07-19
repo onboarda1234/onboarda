@@ -31,6 +31,7 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
         allow_pending_on_timeout=False,
         db=None,
         monitoring_enabled=True,
+        previous_report=None,
     ):
         self._client = client
         self._config = config
@@ -39,6 +40,10 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
         self._allow_pending_on_timeout = bool(allow_pending_on_timeout)
         self._db = db
         self._monitoring_enabled = bool(monitoring_enabled)
+        # SRP-2a Phase D: the stored previous screening report is the delta
+        # baseline for existing-customer re-screens (gated by ENABLE_CA_RESCREEN).
+        self._previous_report = previous_report if isinstance(previous_report, dict) else None
+        self._rescreen_stats = None
 
     def is_configured(self) -> bool:
         try:
@@ -81,6 +86,13 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
         company_name = _first(application_data, "company_name", "name", "legal_name")
         application_id = _application_id(application_data, company_name)
         client_id = str(_first(application_data, "client_id") or "unknown")
+        self._rescreen_stats = {
+            "requested_subjects": 0,
+            "rescreened": 0,
+            "no_changes": 0,
+            "delta_applied": 0,
+            "failed": 0,
+        }
         reports = []
 
         if company_name:
@@ -108,7 +120,22 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
             reports.append(report)
         for intermediary in intermediaries or []:
             reports.append(self._screen_intermediary(intermediary, application_id, client_id))
-        return _combine_reports(reports)
+        combined = _combine_reports(reports)
+        stats = self._rescreen_stats or {}
+        if stats.get("rescreened"):
+            # Report-level fail-closed rule: a rescreen merges deltas into the
+            # stored baseline, so total hits can never drop below it.
+            previous_total = int((self._previous_report or {}).get("total_hits") or 0)
+            combined["total_hits"] = max(int(combined.get("total_hits") or 0), previous_total)
+            combined["rescreen_summary"] = {
+                "requested_subjects": stats["requested_subjects"],
+                "rescreened": stats["rescreened"],
+                "no_changes": stats["no_changes"],
+                "delta_applied": stats["delta_applied"],
+                "failed": stats["failed"],
+                "carried_forward_baseline": True,
+            }
+        return combined
 
     def _screen_party(self, party, kind, application_id, client_id):
         name = _first(party, "full_name", "name") or "Unknown"
@@ -166,6 +193,9 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
             outcome="success",
             active_provider=active_provider,
         )
+        rescreen_report = self._rescreen_subject(context, external_identifier)
+        if rescreen_report is not None:
+            return rescreen_report
         return self._get_orchestrator().screen_customer_two_pass(
             strict_customer=strict_customer,
             relaxed_customer=relaxed_customer,
@@ -177,6 +207,103 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
             strict_external_identifier=_pass_external_identifier(external_identifier, "strict"),
             relaxed_external_identifier=_pass_external_identifier(external_identifier, "relaxed"),
         )
+
+    def _rescreen_subject(self, context, external_identifier):
+        """SRP-2a Phase D: rescreen one already-subscribed subject, or None.
+
+        Returns None whenever the rescreen pathway does not apply — feature
+        flag off, no baseline report, no stored subscription, or no previous
+        section to merge into — so the caller falls back to the existing
+        create-and-screen path (where the customer-identifier conflict
+        classification remains the fail-closed net). Never creates a new Mesh
+        customer and never calls create-and-screen itself.
+        """
+        from screening_config import is_ca_rescreen_enabled
+
+        if not is_ca_rescreen_enabled():
+            return None
+        if self._previous_report is None or self._db is None or not external_identifier:
+            return None
+        kind = context.screening_subject_kind
+        person_key = context.screening_subject_person_key
+        if not person_key and kind != "entity":
+            # A keyless non-entity subject cannot be matched unambiguously to
+            # a NULL-person_key subscription row; keep the existing path.
+            return None
+
+        from .subscriptions import find_subscription_customer_identifier
+
+        customer_identifier = find_subscription_customer_identifier(
+            self._db,
+            context.application_id,
+            person_key if person_key else None,
+        )
+
+        from .rescreen import (
+            build_rescreen_subject_report,
+            find_previous_subject_section,
+            harvested_conflict_customer_identifiers,
+        )
+
+        # ARF-QAFIX-001 recovery: when no subscription stored the strict UUID,
+        # the previous stored report may still carry the existing Mesh customer
+        # UUIDs harvested from a prior conflict error. They are the per-pass
+        # last resort after the external-identifier lookup fails; with neither
+        # a subscription nor a harvested UUID the rescreen path does not apply
+        # and the existing create-and-screen path (with its fail-closed
+        # conflict classification) runs instead.
+        harvested = harvested_conflict_customer_identifiers(
+            self._previous_report, kind, person_key,
+        )
+        if not customer_identifier and not harvested:
+            return None
+
+        previous_section = find_previous_subject_section(
+            self._previous_report,
+            kind,
+            person_key,
+            context.screening_subject_name,
+        )
+        if previous_section is None:
+            return None
+
+        stats = self._rescreen_stats if isinstance(self._rescreen_stats, dict) else {
+            "requested_subjects": 0, "rescreened": 0, "no_changes": 0, "delta_applied": 0, "failed": 0,
+        }
+        self._rescreen_stats = stats
+        stats["requested_subjects"] += 1
+        emit_metric(
+            "ca_rescreen_invocation",
+            metric_name="CaRescreenInvocations",
+            component="adapter",
+            outcome="success",
+            subject_kind=kind,
+        )
+        passes = self._get_orchestrator().rescreen_customer_two_pass(
+            strict_customer_identifier=customer_identifier,
+            strict_external_identifier=_pass_external_identifier(external_identifier, "strict"),
+            relaxed_external_identifier=_pass_external_identifier(external_identifier, "relaxed"),
+            strict_harvested_customer_identifier=harvested.get("strict"),
+            relaxed_harvested_customer_identifier=harvested.get("relaxed"),
+            application_context=context,
+            db=self._db,
+        )
+        report = build_rescreen_subject_report(
+            kind=kind,
+            context=context,
+            previous_section=previous_section,
+            strict=passes["strict"],
+            relaxed=passes["relaxed"],
+        )
+        stats["rescreened"] += 1
+        outcome = ((report.get("provider_specific") or {}).get("complyadvantage") or {}).get("rescreen", {}).get("outcome")
+        if outcome == "no_changes":
+            stats["no_changes"] += 1
+        elif outcome == "delta_applied":
+            stats["delta_applied"] += 1
+        else:
+            stats["failed"] += 1
+        return report
 
     def _get_config(self):
         if self._config is None:

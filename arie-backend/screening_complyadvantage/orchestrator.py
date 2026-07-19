@@ -1,14 +1,15 @@
 """ComplyAdvantage Mesh workflow orchestration."""
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import logging
 import re
 import time
+import uuid
 from urllib.parse import urlparse
 
-from .exceptions import CATimeout, CAUnexpectedResponse
+from .exceptions import CABadRequest, CATimeout, CAUnexpectedResponse
 from .models import (
     CAAlertResponse,
     CACustomerInput,
@@ -84,6 +85,34 @@ class _PassResult:
     timed_out: bool = False
     errored: bool = False
     identifier_conflict: bool = False
+
+
+# SRP-2a Phase D: rescreen pass outcomes (existing-customer re-screen).
+RESCREEN_COMPLETED_CHANGES = "completed_changes"
+RESCREEN_COMPLETED_NO_CHANGES = "completed_no_changes"
+RESCREEN_ERRORED = "errored"
+RESCREEN_TIMED_OUT = "timed_out"
+RESCREEN_CUSTOMER_NOT_FOUND = "customer_not_found"
+
+RESCREEN_FAILED_OUTCOMES = frozenset({
+    RESCREEN_ERRORED,
+    RESCREEN_TIMED_OUT,
+    RESCREEN_CUSTOMER_NOT_FOUND,
+})
+
+RESCREEN_NOT_FOUND_DEGRADED_SOURCE = "complyadvantage_rescreen_customer_not_found"
+RESCREEN_ERRORED_DEGRADED_SOURCE = "complyadvantage_rescreen_errored"
+
+
+@dataclass
+class _RescreenPassResult:
+    """Outcome of one DELTA rescreen pass against an existing Mesh customer."""
+
+    outcome: str
+    raw: dict = field(default_factory=dict)
+    alerts: list = field(default_factory=list)
+    deep_risks: dict = field(default_factory=dict)
+    customer_identifier: str = ""
 
 
 class ComplyAdvantageScreeningOrchestrator:
@@ -196,6 +225,213 @@ class ComplyAdvantageScreeningOrchestrator:
     def fetch_deep_risk(self, risk_id):
         return _fetch_deep_risk(self.client, risk_id)
 
+    # ── SRP-2a Phase D: existing-customer re-screen (Mesh rescreen workflow) ──
+
+    def rescreen_customer_two_pass(
+        self,
+        *,
+        strict_customer_identifier,
+        strict_external_identifier=None,
+        relaxed_external_identifier=None,
+        strict_harvested_customer_identifier=None,
+        relaxed_harvested_customer_identifier=None,
+        application_context=None,
+        db=None,
+    ):
+        """Run DELTA rescreens for the strict and relaxed Mesh customers.
+
+        NEVER calls create-and-screen and NEVER creates a new Mesh customer.
+        The strict customer UUID comes from the stored monitoring subscription;
+        when absent it is recovered via the external-identifier lookup. The
+        relaxed customer's UUID is never stored, so it is always recovered by
+        lookup. When BOTH the subscription and the lookup fail for a pass, the
+        harvested identifier from the previous stored report's
+        ``customer_identifier_conflict_existing_customers`` map (ARF-QAFIX-001:
+        the existing Mesh customer UUID the conflict error itself pointed at)
+        is the last-resort recovery for that pass. Every remaining failure mode
+        returns a failed pass outcome — callers must treat that as degraded
+        evidence, never as zero hits.
+        """
+        strict_uuid_was_stored = bool(strict_customer_identifier)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            strict_future = executor.submit(
+                self._run_one_rescreen_pass,
+                strict_customer_identifier,
+                strict_external_identifier,
+                strict_harvested_customer_identifier,
+            )
+            relaxed_future = executor.submit(
+                self._run_one_rescreen_pass,
+                "",
+                relaxed_external_identifier,
+                relaxed_harvested_customer_identifier,
+            )
+            strict = strict_future.result()
+            relaxed = relaxed_future.result()
+        self._seed_recovered_subscription_if_needed(strict, strict_uuid_was_stored, application_context, db)
+        return {"strict": strict, "relaxed": relaxed}
+
+    def _run_one_rescreen_pass(self, customer_identifier, external_identifier, harvested_customer_identifier=None):
+        if not customer_identifier:
+            failure = None
+            if not external_identifier:
+                failure = _RescreenPassResult(outcome=RESCREEN_CUSTOMER_NOT_FOUND)
+            else:
+                try:
+                    customer_identifier = self.lookup_customer_by_external_identifier(external_identifier)
+                except CABadRequest as exc:
+                    outcome = (
+                        RESCREEN_CUSTOMER_NOT_FOUND
+                        if str((exc.context or {}).get("status_code")) == "404"
+                        else RESCREEN_ERRORED
+                    )
+                    failure = _RescreenPassResult(outcome=outcome)
+                except CATimeout:
+                    failure = _RescreenPassResult(outcome=RESCREEN_TIMED_OUT)
+                except Exception:
+                    logger.warning(
+                        "ca_rescreen_customer_lookup_failed external_identifier=%s",
+                        external_identifier,
+                        exc_info=True,
+                    )
+                    failure = _RescreenPassResult(outcome=RESCREEN_ERRORED)
+                if failure is None and not customer_identifier:
+                    failure = _RescreenPassResult(outcome=RESCREEN_CUSTOMER_NOT_FOUND)
+            if failure is not None:
+                if not harvested_customer_identifier:
+                    return failure
+                # ARF-QAFIX-001 recovery: no stored subscription and the
+                # external-identifier lookup failed, but the PREVIOUS stored
+                # report harvested this pass's existing Mesh customer UUID from
+                # the conflict error ("external identifier ... in use and
+                # belongs to the customer identifier <uuid>"). Rescreen against
+                # that harvested UUID rather than degrading — it is the very
+                # customer the provider said already exists.
+                logger.info(
+                    "ca_rescreen_recovered_via_harvested_conflict_uuid external_identifier=%s",
+                    external_identifier,
+                )
+                customer_identifier = harvested_customer_identifier
+        customer_identifier = str(customer_identifier)
+        try:
+            raw = self.client.post(
+                f"/v2/customers/{customer_identifier}/workflows/sync/rescreen",
+                params={"rescreen_type": "DELTA"},
+                headers={"X-ComplyAdvantage-Idempotency-Key": str(uuid.uuid4())},
+            )
+        except CATimeout:
+            return _RescreenPassResult(outcome=RESCREEN_TIMED_OUT, customer_identifier=customer_identifier)
+        except Exception:
+            # Includes 403 "monitor on demand not enabled" feature-gate errors:
+            # fail closed as a degraded pass, never as zero hits.
+            logger.warning(
+                "ca_rescreen_workflow_failed customer_identifier=%s",
+                customer_identifier,
+                exc_info=True,
+            )
+            return _RescreenPassResult(outcome=RESCREEN_ERRORED, customer_identifier=customer_identifier)
+        return self._classify_rescreen_response(raw, customer_identifier)
+
+    def _classify_rescreen_response(self, raw, customer_identifier):
+        raw = raw if isinstance(raw, dict) else {}
+        if _rescreen_no_changes_found(raw):
+            # "NO CHANGES FOUND": the previous screening baseline stands.
+            # This is NOT zero hits — callers carry the baseline forward.
+            return _RescreenPassResult(
+                outcome=RESCREEN_COMPLETED_NO_CHANGES,
+                raw=raw,
+                customer_identifier=customer_identifier,
+            )
+        try:
+            workflow = CAWorkflowResponse.model_validate(raw)
+        except Exception:
+            logger.warning(
+                "ca_rescreen_response_unparseable customer_identifier=%s",
+                customer_identifier,
+                exc_info=True,
+            )
+            return _RescreenPassResult(outcome=RESCREEN_ERRORED, raw=raw, customer_identifier=customer_identifier)
+        if _workflow_errored(workflow):
+            return _RescreenPassResult(outcome=RESCREEN_ERRORED, raw=raw, customer_identifier=customer_identifier)
+        try:
+            complete = _workflow_complete(workflow)
+        except CAUnexpectedResponse:
+            return _RescreenPassResult(outcome=RESCREEN_ERRORED, raw=raw, customer_identifier=customer_identifier)
+        if not complete:
+            workflow_id = workflow.workflow_instance_identifier or raw.get("workflow_instance_identifier")
+            if not workflow_id:
+                return _RescreenPassResult(outcome=RESCREEN_ERRORED, raw=raw, customer_identifier=customer_identifier)
+            try:
+                polled = self.poll_workflow_until_complete(workflow_id)
+            except CATimeout:
+                return _RescreenPassResult(outcome=RESCREEN_TIMED_OUT, raw=raw, customer_identifier=customer_identifier)
+            except Exception:
+                logger.warning(
+                    "ca_rescreen_poll_failed customer_identifier=%s",
+                    customer_identifier,
+                    exc_info=True,
+                )
+                return _RescreenPassResult(outcome=RESCREEN_ERRORED, raw=raw, customer_identifier=customer_identifier)
+            if polled.timed_out:
+                return _RescreenPassResult(outcome=RESCREEN_TIMED_OUT, raw=polled.raw, customer_identifier=customer_identifier)
+            if polled.errored:
+                return _RescreenPassResult(outcome=RESCREEN_ERRORED, raw=polled.raw, customer_identifier=customer_identifier)
+            raw = polled.raw
+            if _rescreen_no_changes_found(raw):
+                return _RescreenPassResult(
+                    outcome=RESCREEN_COMPLETED_NO_CHANGES,
+                    raw=raw,
+                    customer_identifier=customer_identifier,
+                )
+        try:
+            alerts, deep_risks = _fetch_alerts_and_deep_risks(self.client, raw)
+        except Exception:
+            logger.warning(
+                "ca_rescreen_alert_fetch_failed customer_identifier=%s",
+                customer_identifier,
+                exc_info=True,
+            )
+            return _RescreenPassResult(outcome=RESCREEN_ERRORED, raw=raw, customer_identifier=customer_identifier)
+        outcome = RESCREEN_COMPLETED_CHANGES if alerts else RESCREEN_COMPLETED_NO_CHANGES
+        return _RescreenPassResult(
+            outcome=outcome,
+            raw=raw,
+            alerts=alerts,
+            deep_risks=deep_risks,
+            customer_identifier=customer_identifier,
+        )
+
+    def lookup_customer_by_external_identifier(self, external_identifier):
+        """Resolve a Mesh customer UUID via GET /v2/customers/external/{id}.
+
+        Mesh answers with a 308 redirect to /v2/customers/{customer_identifier};
+        the HTTP client follows it, so the final body carries the customer
+        record. The identifier is extracted tolerantly from the known shapes.
+        """
+        raw = self.client.get(f"/v2/customers/external/{external_identifier}")
+        return _customer_identifier_from_lookup(raw)
+
+    def _seed_recovered_subscription_if_needed(self, strict, strict_uuid_was_stored, context, db):
+        """Seed the recovered STRICT customer UUID when no subscription stored it.
+
+        Same Mesh customer, never a duplicate — the unique subscription index
+        dedupes anyway. Historical backfill is not scheduled here: the stored
+        baseline report already IS the customer's history for a rescreen.
+        """
+        if strict_uuid_was_stored or not strict.customer_identifier:
+            return
+        if context is None or db is None:
+            return
+        seed_monitoring_subscription(
+            db,
+            context.client_id,
+            context.application_id,
+            strict.customer_identifier,
+            person_key=context.screening_subject_person_key,
+            source="srp2a_rescreen_recovery",
+            schedule_backfill=False,
+        )
+
     def _run_one_pass(
         self,
         customer,
@@ -283,6 +519,57 @@ class ComplyAdvantageScreeningOrchestrator:
 
 def _status_value(value):
     return getattr(value, "value", value)
+
+
+def _rescreen_no_changes_found(raw):
+    """Tolerantly detect the Mesh "WORKFLOW COMPLETED (NO CHANGES FOUND)" variant.
+
+    DELTA semantics: differential vs the customer's previous screening
+    baseline. "NO CHANGES FOUND" means the baseline stands — it is NOT zero
+    hits. The response label shape is not modelled, so detection is tolerant
+    text matching over the status/step fields.
+    """
+    if not isinstance(raw, dict):
+        return False
+    candidates = [
+        raw.get("status"),
+        raw.get("result"),
+        raw.get("outcome"),
+        raw.get("message"),
+        raw.get("detail"),
+    ]
+    step_details = raw.get("step_details")
+    if isinstance(step_details, dict):
+        for detail in step_details.values():
+            if isinstance(detail, dict):
+                candidates.extend([
+                    detail.get("status"),
+                    detail.get("result"),
+                    detail.get("message"),
+                    detail.get("detail"),
+                ])
+            else:
+                candidates.append(detail)
+    text = " ".join(str(value) for value in candidates if value)
+    text = text.lower().replace("_", " ").replace("-", " ")
+    return "no changes" in text or "no change found" in text
+
+
+def _customer_identifier_from_lookup(raw):
+    """Extract the Mesh customer UUID from a customer-lookup response body."""
+    if not isinstance(raw, dict):
+        return None
+    for key in ("identifier", "customer_identifier"):
+        value = raw.get(key)
+        if value:
+            return str(value)
+    data = raw.get("data")
+    if isinstance(data, dict):
+        for key in ("identifier", "customer_identifier"):
+            value = data.get(key)
+            if value:
+                return str(value)
+    return None
 
 
 def _poll_workflow_until_complete(

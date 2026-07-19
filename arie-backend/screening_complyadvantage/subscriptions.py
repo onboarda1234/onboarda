@@ -80,6 +80,71 @@ def seed_monitoring_subscription(
         raise
 
 
+def find_subscription_customer_identifier(db, application_id, person_key=None):
+    """Return the stored Mesh customer UUID for one screening subject, or None.
+
+    SRP-2a Phase D: the rescreen pathway needs the MESH-ASSIGNED customer UUID
+    (never our external identifier). Persons are keyed by (application_id,
+    person_key); the entity subject is the application's NULL-person_key row.
+    Entity rows are read oldest-first because the company is always the first
+    subject screened (and therefore seeded) for an application. Any lookup
+    ambiguity or failure returns None so the caller falls back to the existing
+    create-and-screen path, where the conflict classification stays the
+    fail-closed net.
+    """
+    if person_key:
+        sql = (
+            "SELECT customer_identifier FROM screening_monitoring_subscriptions "
+            "WHERE application_id = ? AND provider = ? AND person_key = ? AND status = 'active' "
+            "ORDER BY id DESC"
+        )
+        params = (str(application_id), COMPLYADVANTAGE_PROVIDER_NAME, str(person_key))
+    else:
+        sql = (
+            "SELECT customer_identifier FROM screening_monitoring_subscriptions "
+            "WHERE application_id = ? AND provider = ? AND person_key IS NULL AND status = 'active' "
+            "ORDER BY id ASC"
+        )
+        params = (str(application_id), COMPLYADVANTAGE_PROVIDER_NAME)
+    try:
+        rows = db.execute(sql, params).fetchall()
+    except Exception:
+        logger.warning(
+            "ca_rescreen_subscription_lookup_failed application_id=%s", application_id, exc_info=True
+        )
+        return None
+    for row in rows:
+        try:
+            customer_identifier = row["customer_identifier"]
+        except (TypeError, IndexError, KeyError):
+            customer_identifier = row[0] if row else None
+        if customer_identifier:
+            return customer_identifier
+    return None
+
+
+def application_has_active_subscriptions(db, application_id):
+    """True when the application has ANY active CA monitoring subscription."""
+    try:
+        row = db.execute(
+            "SELECT COUNT(*) AS n FROM screening_monitoring_subscriptions "
+            "WHERE application_id = ? AND provider = ? AND status = 'active'",
+            (str(application_id), COMPLYADVANTAGE_PROVIDER_NAME),
+        ).fetchone()
+    except Exception:
+        logger.warning(
+            "ca_rescreen_subscription_count_failed application_id=%s", application_id, exc_info=True
+        )
+        return False
+    if row is None:
+        return False
+    try:
+        count = row["n"]
+    except (TypeError, IndexError, KeyError):
+        count = row[0] if row else 0
+    return bool(count)
+
+
 def update_monitoring_subscription_event(db, client_id, customer_identifier, last_webhook_type, trace_id=None):
     """Record the latest CA monitoring webhook event for an existing subscription."""
     db.execute(

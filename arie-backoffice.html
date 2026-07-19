@@ -15788,6 +15788,61 @@ function screeningReportDownloadButtonHtml() {
     '📄 Screening report (PDF)</button>';
 }
 
+// SRP-2a Phase D: the Re-screen button renders only when the server says the
+// existing-customer rescreen pathway is enabled. The flag arrives on the
+// screening queue payload metrics (SCREENING_QUEUE is the queue/review pages'
+// shared plumbing — renderScreeningReviewPanel already reads it for queue
+// rows) and, equivalently, on /api/screening/status. Absent or false → no
+// button, today's UI unchanged.
+function screeningRescreenEnabled() {
+  return !!(SCREENING_QUEUE && SCREENING_QUEUE.metrics && SCREENING_QUEUE.metrics.rescreen_enabled === true);
+}
+
+function screeningRescreenButtonHtml(appRef) {
+  return '<button class="btn btn-outline btn-sm" ' +
+    'onclick="confirmReScreenApplication(\'' + escapeHtml(appRef) + '\')" ' +
+    'title="Re-screen this application against the provider. Existing results are archived first and never reduced by a re-screen.">' +
+    '↻ Re-screen</button>';
+}
+
+function confirmReScreenApplication(appRef) {
+  if (!confirm('Re-screen this application against the provider now? Existing results are archived first and never reduced by a re-screen.')) return;
+  reScreenApplication(appRef);
+}
+
+// SRP-2a mockup-gap 1: entity screening review card header overflow menu.
+// Native <details> menu following the screeningTriageHitActions More-menu
+// idiom (Escape closes). Its single action reuses downloadScreeningReportPDF()
+// — the page's EXISTING screening-report export — no new export pathway.
+// "View screening history" is deliberately absent until the archive viewer
+// ships: no dead buttons.
+function screeningEntityHeaderMenuHtml() {
+  var menuItemStyle = 'display:block;width:100%;text-align:left;background:none;border:none;padding:8px 10px;border-radius:6px;font-size:12px;color:var(--text1);cursor:pointer;';
+  return '<details data-screening-entity-header-menu="true" style="position:relative;display:inline-block;" onkeydown="if(event.key===\'Escape\'){this.removeAttribute(\'open\');}">' +
+    '<summary class="btn btn-outline btn-sm" aria-label="More screening actions" title="More screening actions" style="list-style:none;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:4px;">⋯</summary>' +
+    '<div style="position:absolute;top:calc(100% + 4px);right:0;z-index:40;min-width:210px;background:#fff;border:1px solid var(--border2);border-radius:8px;box-shadow:0 6px 20px rgba(26,26,46,0.15);padding:5px;">' +
+      '<button type="button" style="' + menuItemStyle + '" title="Generate a PDF of the stored screening results for officer review" onclick="downloadScreeningReportPDF()">Export screening pack</button>' +
+    '</div>' +
+  '</details>';
+}
+
+// SRP-2a mockup-gap 2: header freshness line. Renders ONLY when the stored
+// freshness metadata exists (server: populate_screening_freshness_metadata —
+// report.screened_at / prescreening.last_screened_at, with
+// prescreening.screening_valid_until when a validity window is stamped).
+// Dates use the page-wide "T"-stripped timestamp formatting.
+function screeningFreshnessLineHtml(screeningSummary) {
+  screeningSummary = screeningSummary || {};
+  var screenedAt = screeningSummary.screened_at || screeningSummary.last_screened_at || null;
+  if (!screenedAt) return '';
+  var fmt = function(value) { return String(value).replace('T', ' ').slice(0, 19); };
+  var line = 'Screened ' + fmt(screenedAt);
+  if (screeningSummary.screening_valid_until) {
+    line += ' · valid until ' + fmt(screeningSummary.screening_valid_until);
+  }
+  return '<div data-screening-freshness-line="true" style="font-size:11px;font-weight:400;color:var(--text3);margin-top:3px;">' + escapeHtml(line) + '</div>';
+}
+
 function screeningDecisionSummaryPanel(config) {
   config = config || {};
   var indicators = (config.indicators || []).filter(Boolean);
@@ -15905,6 +15960,8 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   if (companyHits.sanctions_hits > 0) badges.push(screeningTagBadge('Sanctions', 'high'));
   if (companyHits.adverse_media_hits > 0) badges.push(screeningTagBadge('Adverse Media', 'pending'));
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow, { suppressChip: screeningReviewDisplayLabel(reviewRow) === String(primaryEntityLabel || '') }));
+  if (screeningRescreenEnabled()) badges.push(screeningRescreenButtonHtml(app.ref));
+  badges.push(screeningEntityHeaderMenuHtml());
 
   var body = '';
   // SRP-3 Phase B: conditional honesty banner + server-computed triage strip
@@ -15953,7 +16010,7 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   body += '</div>';
   body += screeningReviewHistory(reviewRow);
 
-  return screeningReviewCard('Entity Screening — ' + escapeHtml(app.company), badges.join(''), body, screeningFocusMatches(focus, 'entity', app.company));
+  return screeningReviewCard('Entity Screening — ' + escapeHtml(app.company) + screeningFreshnessLineHtml(screeningSummary), badges.join(''), body, screeningFocusMatches(focus, 'entity', app.company));
 }
 
 function screeningSubjectJoinName(value) {
@@ -16439,8 +16496,10 @@ function agent3ProviderEvidenceCellHtml(row) {
   if (score !== null && score !== undefined && score !== '') {
     var n = Number(score);
     if (!isNaN(n)) {
-      return '<div style="font-weight:800;color:var(--text1);">' + escapeHtml(String(n)) + '%</div>' +
-        '<div style="font-size:10.5px;color:var(--text3);line-height:1.35;margin-top:2px;">Numeric score supplied by provider.</div>';
+      // SRP-2a: rendered as the bare provider score (no % suffix) to match
+      // ComplyAdvantage's own dashboard framing ("Match score 77").
+      return '<div style="font-weight:800;color:var(--text1);">' + escapeHtml(String(n)) + '</div>' +
+        '<div style="font-size:10.5px;color:var(--text3);line-height:1.35;margin-top:2px;">Match score supplied by provider.</div>';
     }
     return '<div style="font-weight:700;color:var(--text1);">' + escapeHtml(String(score)) + '</div>';
   }
@@ -16815,6 +16874,12 @@ async function generateAgent3ScreeningInterpretation(event) {
 
 var SCREENING_TRIAGE_RTS_CAPTION = 'RegMind triage ranking (rts-1.1) orders matches for review — it never hides them and never affects risk scores or approvals.';
 
+// SRP-2a mockup-gap 3: default number of ranked hits shown per bucket before
+// the honest "+N more — show all (ranked)" expander. Presentation only —
+// header counts stay the full server-computed number and every hit remains
+// reviewable after expanding.
+var SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT = 5;
+
 var SCREENING_TRIAGE_BUCKET_META = [
   { key: 'sanctions', label: 'Sanctions & warnings', color: '#991b1b' },
   { key: 'pep', label: 'Politically exposed persons', color: '#92400e' },
@@ -17185,9 +17250,27 @@ function screeningTriageRankedHitSections(row) {
       }
       html += '<div style="padding:11px 14px;font-size:12px;color:var(--text2);border:1px solid var(--border1);border-top:none;border-radius:0 0 10px 10px;background:#fff;">' + escapeHtml(emptyCopy) + '</div>';
     } else {
-      entries.forEach(function(entry) {
+      // SRP-2a mockup-gap 3: show at most SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT
+      // ranked hits per bucket by default. Header counts stay the full
+      // server-computed number, the expander states the exact overflow, and
+      // every hit remains reviewable after expanding — nothing is hidden
+      // permanently and nothing is re-ranked.
+      var visibleEntries = entries.slice(0, SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT);
+      var overflowEntries = entries.slice(SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT);
+      visibleEntries.forEach(function(entry) {
         html += screeningTriageHitCard(row, entry.item, entry.index, weakThreshold);
       });
+      if (overflowEntries.length) {
+        html += '<details data-screening-triage-bucket-overflow="' + escapeHtml(meta.key) + '" style="border:1px solid var(--border1);border-top:none;background:#fff;">' +
+          '<summary style="list-style:none;display:flex;gap:10px;align-items:center;padding:10px 14px;cursor:pointer;">' +
+            '<span style="font-size:12px;color:var(--text2);"><strong style="color:var(--text1);">' + escapeHtml('+' + overflowEntries.length + ' more — show all (ranked)') + '</strong></span>' +
+            '<span style="margin-left:auto;font-size:11px;color:var(--text3);">Expand ▾</span>' +
+          '</summary>' +
+          '<div>' + overflowEntries.map(function(entry) {
+            return screeningTriageHitCard(row, entry.item, entry.index, weakThreshold);
+          }).join('') + '</div>' +
+        '</details>';
+      }
     }
     html += '</section>';
   });
