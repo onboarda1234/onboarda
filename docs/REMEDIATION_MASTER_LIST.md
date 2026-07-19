@@ -24,10 +24,10 @@ things stand") was retired in the 2026-07-15 restructure; see git history.
 
 # Onboarda / RegMind — Audit-Remediation Master List
 
-**Reconciled:** 2026-07-17 against live GitHub · `main` = `97ae6f8` · scope of this reconcile: row union of the Applications-module confirmation-audit stream with the Phase 5 screening rows merged through #783/#786; full-register reconcile remains in [#780](https://github.com/onboarda1234/onboarda/pull/780)
-**Pilot:** all 4 code blockers ✅ closed · remaining pilot work = **RSMP Tier 0C** + the open 🟠 gates below · Applications module: unconditional **PILOT-READY** (confirmation audit, 2026-07-16)
+**Reconciled:** 2026-07-19 against live GitHub · `main` = `8b0d0f2` (merge of #805) · full-register reconcile: unions the #780 stream (RSMP Tier 0C verdict + split) with rows merged through #805 and the 2026-07-17 staging reset
+**Pilot:** all 4 code blockers ✅ closed · remaining pilot work = **RSMP Tier 0C** (post-reset 0C-A rerun → 0C-B) + the open 🟠 gates below · Applications module: unconditional **PILOT-READY** (confirmation audit, 2026-07-16)
 **Production:** blocked — Audit-3 verdict REMEDIATE BEFORE PROCEEDING; Phase 14 largely open. Nothing in this file is a production-readiness claim.
-**Open PRs:** [#785](https://github.com/onboarda1234/onboarda/pull/785) (Applications tab-preserving refresh + register row union) · [#780](https://github.com/onboarda1234/onboarda/pull/780) (docs — full register reconcile; supersedes drafts #777/#767/#752) · [#779](https://github.com/onboarda1234/onboarda/pull/779) (draft — RSMP Tier 0C-A evidence pack, verdict NOT READY) · [#737](https://github.com/onboarda1234/onboarda/pull/737) (draft — P12-1 Phase A discovery report)
+**Open PRs:** [#788](https://github.com/onboarda1234/onboarda/pull/788) (draft docs — staging-reset closure; content incorporated here) · [#780](https://github.com/onboarda1234/onboarda/pull/780) (this reconcile) · [#779](https://github.com/onboarda1234/onboarda/pull/779) (draft — 0C-A evidence pack, pre-reset verdict) · [#737](https://github.com/onboarda1234/onboarda/pull/737) (draft — P12-1 Phase A discovery report)
 
 **Legend:** ✅ done/merged · ◐ split item (one half done, one open) · 🟢 PR open · 🔨 in progress · 📋 scoped · ⏸ blocked · ⬜ pending · 🔴 pilot code blocker · 🟠 pilot operational gate
 **E column** = closure evidence in [`compliance/REMEDIATION_CLOSURE_EVIDENCE.md`](compliance/REMEDIATION_CLOSURE_EVIDENCE.md).
@@ -47,7 +47,7 @@ things stand") was retired in the 2026-07-15 restructure; see git history.
 
 | Gate | Tracked at | State |
 |------|-----------|-------|
-| RSMP Tier 0C — activation + recomputation | Re-audit → RSMP | ⬜ last remaining pilot code workstream |
+| RSMP Tier 0C — post-reset 0C-A rerun (read-only) → 0C-B controlled activation + recomputation | Re-audit → RSMP | 🔴 0C-A 2026-07-16 verdict NOT READY was against the pre-reset population (purged 2026-07-17); fresh 0C-A on the canonical baseline next; 0C-B unauthorized |
 | item 33 — pilot-scope guards (server-side) | Phase 13 | ⬜ |
 | P13-7 — SOP pack Section 16 execution (docs merged) | Phase 12 | 🟠 open |
 | CA production workspace validation — complete or formally exclude from pilot scope | Phase 14 (P9-3) | ⏸ |
@@ -141,6 +141,7 @@ Two gates are decisions, not rows: **Applications-page readiness audit** — 202
 | — | Section M latency: stage-timing attribution (`metrics.timings_ms`) → transfer-dominated | — | #778 | ✅ merged · attribution complete 2026-07-16 | — |
 | — | Section M latency: gzip responses (4.7MB raw → ~15x compressed transfer) | — | #781 | ✅ merged + close-out PASS 2026-07-16 — evidence p50/p95 1.096s/1.202s (was 21.1s/33.6s) | — |
 | — | Phase 6 closeout: module card, ops runbook, CLAUDE.md change-control entry, rts-1.0 methodology | — | #792 | ✅ merged + deployed 2026-07-18 — queue verdict VALIDATED/CHANGE-CONTROLLED; end-to-end workflow verdict stays gated on SRP-3 | — |
+| — | Test hygiene: uuid-hex fixture-collision flake class retired, prefix-aware fixture-safe suffixes, async timeout raise | — | #800 #802 | ✅ merged 2026-07-19 | — |
 | — | Ops tickets (Phase 6): CloudWatch p95 alarm on /api/screening/queue · PG-backed test lane for seed/ops tooling | — | — | ⬜ recorded — not yet created | — |
 
 ### Screening Review page & Agent 3 — simplification work plan (SRP, added 2026-07-16)
@@ -158,7 +159,7 @@ are out of scope for every SRP item.
 | SRP-0 | Verify stale-snapshot vs live-normalizer split (ARF-2026-920016; fresh-screen contrast; distinct-profile count of the 298 hits) — read-only | — | — | ✅ 2026-07-16 — stale/partial snapshot confirmed (profile ids present; names/scores/match-types/media absent) · positive-hit fresh contrast inconclusive (fixture screen = 0 hits) | — |
 | SRP-1 | ComplyAdvantage clarifications: match-score scale, stable profile id, hit-volume tuning, RPT-5 adverse-media persistence, data residency | — | — | ◐ partial: media/match-type API paths answered 2026-07-16; dashboard recon 2026-07-17 settled score display, triage UX, URLs, EU hosting · open: score scale, API-level entity key, fuzziness levers, region per Order Form | — |
 | SRP-2 | Stale-report refresh pathway (governed re-screen; archive-first, adjudication guard, regulated archive table) | — | #786 | ✅ closed 2026-07-17 — harness merged + batch 1 validated all governance rails (10/10 archives, chained audits, adjudication guard, clean stop); fleet execution overtaken by events (legacy test apps deleted) | — |
-| SRP-2a / RESCREEN-1 | Re-screen of an already-screened subject errors Mesh customer-creation (external identifier already assigned) — batch-1 finding; hits every future officer/periodic re-screen | P1 | #787 #801 | ◐ classification shipped + live-wording fix and existing-UUID harvest validated on staging 2026-07-19 (#801); Mesh rescreen endpoint confirmed in docs 2026-07-18; Phase D wiring (delta-merge rescreen, ENABLE_CA_RESCREEN default-off, Re-screen button) built + verified, PR pending founder go · open: monitor-on-demand entitlement (CA) | — |
+| SRP-2a / RESCREEN-1 | Re-screen of an already-screened subject errors Mesh customer-creation (external identifier already assigned) — batch-1 finding; hits every future officer/periodic re-screen | P1 | #787 #801 | ◐ classification shipped + live-wording fix and existing-UUID harvest validated on staging 2026-07-19 (#801); Mesh rescreen endpoint confirmed 2026-07-18; Phase D merged 2026-07-19 ([#804](https://github.com/onboarda1234/onboarda/pull/804): delta-merge rescreen, `ENABLE_CA_RESCREEN` default-OFF, Re-screen button) · open: staging flag-on validation + monitor-on-demand entitlement (CA) | — |
 | SRP-2b / RISK-FC-1 | Risk recompute lowered HIGH→LOW off a non-terminal/degraded screening report (TESCO 55→12.3) — fail-open | P1 | #787 | ✅ fixed 2026-07-17 — recompute_risk holds prior risk when a non-terminal report would lower it; raises still allowed; audited | — |
 | SRP-3 | Review-page triage IA: summary strip, score-ranked hits with factor bands (profile-UUID dedup ruled out — Mesh recon 2026-07-17: profiles are minted per case, not stable entity keys), risk-type buckets, side-by-side disambiguation, progressive disclosure | — | #790 #793 #801 | ✅ closed 2026-07-19 — Phases A/B merged (#790/#793); populated-staging browser acceptance + enriched-sample inventory PASS (QAFIX-006/007 combined run); truth-flow defects found by that run fixed + validated (#801, rts-1.1) · Re-screen button tracked under SRP-2a; presentation consolidation tracked as SRP-3e (Phase E) | — |
 | SRP-3e | Phase E — screening presentation consolidation: retire evidence popup chains (evidence inline on ranked hit cards), one-fact-one-place dedup, single renderer on queue + application surfaces, retire Agent 3 flat hit recital | — | — | 📋 scoped 2026-07-19 (founder direction: approved mockup is the target everywhere; no popups; no repeated fields) · design spec for sign-off after Phase D | — |
@@ -215,6 +216,7 @@ are out of scope for every SRP item.
 |----|-------|:--:|:--:|----|:--:|
 | APP-REV-MEMO-HARDENING-1 | Memo workflow hardening — mutations via `boApiCall` (no false success), authoritative detail refresh, signoff disabled-state + static guards | P1 | `a237008` (direct to main) | ✅ merged + browser-validated | — |
 | APP-PERF-DETAIL-INDEX-1 | Detail-open perf — `idx_agent_executions_document_id`, committed independently of later failing migrations + ERROR-level verify | P2 | [#771](https://github.com/onboarda1234/onboarda/pull/771)→[#774](https://github.com/onboarda1234/onboarda/pull/774) | ✅ merged + staging-validated 2026-07-16 (index active, planner verified) | — |
+| — | Party correction modal locked to clicked person; residence/appointment fields correctable; directors-UBOs report de-flake | — | #794 | ✅ merged 2026-07-18 | — |
 | APP-CONF-001 | Analyst RMI/Escalate UI/authz mismatch — matrix + UI aligned to decision-endpoint authority; contract tests pin all three surfaces | P1 | [#782](https://github.com/onboarda1234/onboarda/pull/782) | ✅ merged + revalidated 2026-07-16 (33/33 Chromium/Firefox/WebKit; analyst API 403) | — |
 | APP-CONF-002 | Retained synthetic records visible in normal staging list | P2 | — | ✅ closed 2026-07-16 — all 3 records fixture-marked (approved); full normal-list sweep clean (247 rows, 0 synthetic visible) | — |
 | APP-CONF-003 | Role-harness cross-client probe not actually cross-client — *(cross-ref: = P9-13 open half "cross-client seed fix" — not counted)* | P2 | — | ⬜ see P9-13 | — |
@@ -334,6 +336,17 @@ are out of scope for every SRP item.
 | 38 | Pilot operations runbook | — | #689 | ✅ merged | — |
 | 🟠 — | *(cross-ref: CA production workspace validation = P9-3, Phase 14 — not counted)* | — | #498 | ⏸ see P9-3 | — |
 
+### Pilot canonical dataset & staging baseline (2026-07)
+
+| ID | Title | Sev | GitHub | Status | E |
+|----|-------|:--:|:--:|----|:--:|
+| — | Canonical dataset v1 — 41-scenario reviewed manifest + guarded idempotent seeder + triple-gated CLI | — | #784 | ✅ merged | — |
+| — | Authorized staging reset — all 944 pre-reset synthetic applications purged at `a10d2c3`; risk-config aligned (Manufacturing 2; D3 40/35/25); RSMP OFF; audit chains intact | — | [#788](https://github.com/onboarda1234/onboarda/pull/788) | ◐ executed 2026-07-17 · closure docs open as draft #788 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#staging-reset-2026-07-17-pr-788) |
+| — | Canonical seeder PostgreSQL dry-run fix (override flag / type mismatch) | — | #789 | ✅ merged | — |
+| — | Canonical demo completion — structured memo fixture sections, deterministic periodic-review dates, notification suppression, fixture labels | — | #791 | ✅ merged 2026-07-18; dataset seeded on reset staging (41/41 `RM-PILOT-*`, validation pinned `9a77e11`) | — |
+| — | Canonical document-types fix | — | #795 | ✅ merged | — |
+| — | Canonical memo detail rendering compatibility | — | #796 | ✅ merged | — |
+
 ## Phase 14 — Production readiness
 
 | ID | Title | Type | GitHub | Status | E |
@@ -369,8 +382,8 @@ are out of scope for every SRP item.
 
 | ID | Title | Sev | GitHub | Status | E |
 |----|-------|:--:|:--:|----|:--:|
-| 🔴 DCI-108 | Risk parser under-scores "very complex" ownership → 3 (`rule_engine.py:1219-1273`); with DCI-109 can flip MEDIUM→LOW | HIGH | [#753](https://github.com/onboarda1234/onboarda/pull/753), [#755](https://github.com/onboarda1234/onboarda/pull/755) | 🔨 Tier 0A+0B merged (see RSMP below) · Tier 0C ⬜ | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
-| 🔴 DCI-109 | "non-regulated" resolves to 1 via dict-ordering fall-through (same site); same MEDIUM→LOW flip risk | HIGH | [#753](https://github.com/onboarda1234/onboarda/pull/753), [#755](https://github.com/onboarda1234/onboarda/pull/755) | 🔨 Tier 0A+0B merged (see RSMP below) · Tier 0C ⬜ | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
+| 🔴 DCI-108 | Risk parser under-scores "very complex" ownership → 3 (`rule_engine.py:1219-1273`); with DCI-109 can flip MEDIUM→LOW | HIGH | [#753](https://github.com/onboarda1234/onboarda/pull/753), [#755](https://github.com/onboarda1234/onboarda/pull/755) | 🔨 engineering merged (0A/0B/0D/PR-1b/0C-A hotfix — see RSMP below) · Tier 0C-A rerun + 0C-B ⬜ | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
+| 🔴 DCI-109 | "non-regulated" resolves to 1 via dict-ordering fall-through (same site); same MEDIUM→LOW flip risk | HIGH | [#753](https://github.com/onboarda1234/onboarda/pull/753), [#755](https://github.com/onboarda1234/onboarda/pull/755) | 🔨 engineering merged (0A/0B/0D/PR-1b/0C-A hotfix — see RSMP below) · Tier 0C-A rerun + 0C-B ⬜ | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
 | DCI-110 | Middle-band turnover 500k–5m over-scores to 4 (severity corrected HIGH→MED 2026-07-11: over-, not under-scoring) | MED | — | 📋 scoped | — |
 | R2-BSA-001 | Supervisor routes bypass BaseHandler middleware + wildcard CORS on authenticated APIs | HIGH | [#743](https://github.com/onboarda1234/onboarda/pull/743) | ✅ closed, staging-validated 2026-07-11 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#r2-bsa-cluster-prs-743-747) |
 | R2-BSA-002 | Supervisor actor client-forgeable via request-body reviewer/escalation fields | HIGH | [#743](https://github.com/onboarda1234/onboarda/pull/743) | ✅ closed, staging-validated 2026-07-11 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#r2-bsa-cluster-prs-743-747) |
@@ -384,7 +397,7 @@ are out of scope for every SRP item.
 | R2-BSA-016 | item 26 / #728 | AI-route limiter gaps: `/api/documents/{id}/verify` + both supervisor pipeline triggers unlimited; enhanced-upload limiter process-local | — | ⬜ partial open | — |
 | R2-BSA-019 | P11-8 / #712 | No hash-pinned lockfile / `pip install --require-hashes`; deps pinned by version only | — | ⬜ partial open | — |
 | RDI-107 | P10-6 / #708 | Trusted-proxy check trusts ANY private/loopback peer; needs explicit proxy-CIDR allowlist | — | ⬜ partial open | — |
-| DCI-104 | P12-5 / #716 | 3 v2.47 CHECK constraints absent on staging + 54 unindexed FKs | [#739](https://github.com/onboarda1234/onboarda/pull/739) | ◐ constraints ✅ executed on staging 2026-07-11 · 54 FK indexes ⬜ | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-5-dci-006-prs-716-and-739) |
+| DCI-104 | P12-5 / #716 | 3 v2.47 CHECK constraints absent on staging + 54 unindexed FKs | [#739](https://github.com/onboarda1234/onboarda/pull/739) | ◐ constraints ✅ executed on staging 2026-07-11 · FK-index backlog ⬜ (first indexes ✅ #771/#774 — see APP-PERF-DETAIL-INDEX-1) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-5-dci-006-prs-716-and-739) |
 | R2-PROC-1 | (new, LOW) | Staging QA/validation must not write raw SQL into regulated tables — route probe writes through the app or a marked fixture path | — | ⬜ pending | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-5-dci-006-prs-716-and-739) |
 
 ### Canonical staging dataset
@@ -398,12 +411,19 @@ are out of scope for every SRP item.
 | ID | Title | GitHub | Status | E |
 |----|-------|:--:|----|:--:|
 | RSMP-DOCS | Audit/review pack (full audit, founder decision pack, scenario matrix, settings register) | [#751](https://github.com/onboarda1234/onboarda/pull/751) | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
-| RSMP-0A | Tier 0A — guarded parser + mapping fidelity (activation flag OFF) | [#753](https://github.com/onboarda1234/onboarda/pull/753) | ✅ merged | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
+| RSMP-0A | Tier 0A — guarded parser + mapping fidelity (activation flag OFF) | [#753](https://github.com/onboarda1234/onboarda/pull/753) | ✅ merged; deployed within the 0B staging validation at `dd4784b` | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
 | RSMP-0B | Tier 0B — fail-closed routing on unresolved mappings | [#755](https://github.com/onboarda1234/onboarda/pull/755) | ✅ merged + staging-validated at `dd4784b` | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
 | RSMP-0D | Tier 0D — runtime and Back Office risk-model alignment | [#768](https://github.com/onboarda1234/onboarda/pull/768) | ✅ merged + staging-validated at `7e91114`; read-only UI/export evidence aligned; activation OFF | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-tier-0d-pr-768) |
-| RSMP-0C | Tier 0C — activation + recomputation | — | ⬜ **final remaining RSMP pilot-readiness workstream**; no recomputation executed | — |
-| RSMP-PR1B | PR-1b — declared-PEP runtime alignment with approved Gate 0 v4 model | [#764](https://github.com/onboarda1234/onboarda/pull/764) | ✅ merged 2026-07-15 at `a823fb6` | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
-
+| RSMP-0D-UI | Risk presentation alignment — executive Risk Assessment dashboard + evidence PDF redesign; dashboard labels/EDD presentation aligned | [#798](https://github.com/onboarda1234/onboarda/pull/798), [#799](https://github.com/onboarda1234/onboarda/pull/799) | ✅ merged 2026-07-18/19 | — |
+| RSMP-0C-HF | Tier 0C-A hotfix — maximum selected-service risk (D3.1 read the legacy singular `primary_service` alias; now MAX of all selected services) | [#775](https://github.com/onboarda1234/onboarda/pull/775) | ✅ merged + staging-validated 2026-07-16 at `8025040`; 28/28 maximum-risk outcomes correct; activation OFF | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-tier-0c-a-hotfix-pr-775) |
+| 🔴 RSMP-0C-A | Tier 0C-A — final frozen-baseline read-only replay + impact assessment | [#779](https://github.com/onboarda1234/onboarda/pull/779) | ◐ executed 2026-07-16 (read-only vs frozen `8025040`) — verdict **NOT READY** (705/802 pre-reset apps blocked; evidence draft #779) · that population was purged by the staging reset 2026-07-17 → fresh 0C-A on the canonical baseline is next | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-tier-0c-a-final-assessment-pr-779) |
+| RSMP-0C-REM | Tier 0C data/mapping remediation from the 0C-A findings | — | ◐ overtaken by the authorized staging reset 2026-07-17 (#788): blocking population purged, risk-config aligned (Manufacturing 2; D3 40/35/25) · residual scope = findings of the post-reset 0C-A rerun | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#staging-reset-2026-07-17-pr-788) |
+| 🔴 RSMP-0C-B | Tier 0C-B — controlled activation + recomputation + officer review + final staging validation | — | ⬜ **pilot blocker** — unauthorized until the post-reset 0C-A concludes "Ready" | — |
+| RSMP-PR1B | PR-1b — declared-PEP runtime alignment with approved Gate 0 v4 model | [#764](https://github.com/onboarda1234/onboarda/pull/764) | ✅ merged + staging-validated 2026-07-15 at `a823fb6`; activation OFF | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#rsmp-prs-751-753-755-764) |
+| RSMP-FEV | Authoritative factor-level (D1–D5) computation-evidence ledger in `risk_dimensions`; fail-closed reconciliation identities; existing apps fail closed for detailed explainability until authorised recomputation | [#803](https://github.com/onboarda1234/onboarda/pull/803) | ✅ merged 2026-07-19 | — |
+| RSMP-1A | Tier 1A — sector risk programme redesign (incl. 22 Lane B sector labels) | — | ⬜ post-pilot | — |
+| RSMP-1B | Tier 1B — country risk programme (130 deferred countries + 19 regions) | — | ⬜ post-pilot | — |
+| RSMP-2 | Tier 2 — model governance: versioning, maker-checker, effective dating, rollback, activation workflow | — | ⬜ production readiness | — |
 ---
 
 ## Optional / Post-Production Modernization (NOT required for pilot or first production cut; excluded from roll-up)
@@ -479,16 +499,17 @@ Counting rule: every row in Phases 0–14 + the Re-audit/RSMP tables counts once
 The 3 cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 7
 APP-CONF-003, Phase 13 CA row) and the Optional Modernization tables are
 excluded. ◐ = items with one named half done and one open (SRP-1, SRP-2a,
-staging-SHA gate, P12-4, P13-7, P9-13, DCI-104). Note: parallel register PRs (`#780` and
-merged `#783`) recount their own streams; on merge, recount the union.
+staging-SHA gate, P12-4, P13-7, staging-reset closure, P9-13, DCI-104,
+RSMP-0C-A, RSMP-0C-REM). This count is the 2026-07-19 union of the #780
+stream with the rows merged through #805.
 
 | Status | Count |
 |--------|:--:|
-| ✅ done/merged | 102 |
-| ◐ split — one half open | 7 |
+| ✅ done/merged | 112 |
+| ◐ split — one half open | 10 |
 | 🟢 PR open | 0 |
-| 🔨 in progress | 2 |
+| 🔨 in progress | 3 |
 | 📋 scoped | 21 |
 | ⏸ blocked | 5 |
-| ⬜ pending | 35 |
-| **Total tracked items** | **172** |
+| ⬜ pending | 38 |
+| **Total tracked items** | **189** |

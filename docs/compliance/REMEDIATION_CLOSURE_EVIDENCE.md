@@ -392,6 +392,14 @@ parser under-scoring). Reference docs:
   `pep_declaration.pep_role_type` authoritative). Merged 2026-07-15 at
   `a823fb6491ea35a1647800853a97dc7a0f328b6f`; Gate 0 v4 canonical Markdown SHA-256
   `33cdcaac5f01ba431776a4b8a300aee4cb6e48f0d585d9c1665c726d655f66f0`.
+- **PR-1b staging validation (added 2026-07-15, from the controlled #764
+  deployment; recorded in draft docs PR #767, incorporated here):**
+  AWS-staging-validated at merge SHA `a823fb6`; backend task definition
+  `regmind-staging:850`, worker task definition
+  `regmind-verification-worker:298`. Every declared PEP role scores 4 while
+  the existing High floor, EDD route, and approval routing remain unchanged.
+  RSMP activation remains OFF; Tier 0C stays the next incomplete
+  risk-scoring pilot gate.
 
 ## rsmp tier 0d pr 768
 
@@ -434,6 +442,96 @@ parser under-scoring). Reference docs:
 - **Next gate:** Tier 0C remains outstanding. This validation is not a
   production-readiness claim.
 
+## rsmp tier 0c-a hotfix PR 775
+
+Multi-service maximum-risk hotfix — merged 2026-07-16 (`8025040`),
+staging-validated at the merge SHA (ledger draft #777, incorporated here).
+Found by the Tier 0C-A read-only frozen-baseline replay.
+
+- **Root cause:** `services_required` correctly persisted all selections, but
+  normalization also populated the legacy singular
+  `primary_service`/`service_required` alias from the first element, and
+  D3.1 consumed only that alias — selection order and stale primary values
+  determined 15 of 28 multi-service outcomes. Submission, replay, and
+  recompute shared the defect through `build_prescreening_risk_input()` and
+  `compute_risk_score()`.
+- **Fix:** preserve the full plural payload in the canonical scorer input;
+  parse every supported form (arrays, nested objects, JSON/Python-list
+  strings, delimited legacy); score every selection independently; set D3.1
+  to MAX of the individual selected-service scores. Single-service and
+  activation-OFF behavior preserved exactly; genuinely unmatched
+  multi-select values reuse the existing hashed `stale:unmapped_*` approval
+  block (no fuzzy matching, no silent lower default). The runtime-owned
+  maximum rule surfaces through the read-only Tier 0D model projection.
+- **Replay evidence (650 active scored applications, READ ONLY txn):**
+  28/28 multi-service applications correct after fix (13 before); 15
+  service-factor changes, 9 composite-score changes, **0 tier / EDD-route /
+  approval-route / newly-unresolved / unexplained changes**. Risk-config
+  version `risk_config:2026-07-13 07:15:16.941658` and hash unchanged;
+  Gate 0 canonical SHA-256 unchanged. Full pseudonymised 28-case evidence:
+  `docs/risk-programme/RSMP_TIER0C_MULTISERVICE_MAX_HOTFIX.md`.
+- **Boundaries:** no activation, no recomputation, no staging config
+  mutation; the Tier 0C-A unresolved-mapping and data-remediation backlogs
+  were not changed.
+
+**Tier 0C definition (founder status 2026-07-16):** 0C-A = final
+frozen-baseline read-only replay + impact assessment (rerun next,
+post-hotfix); 0C-B = controlled activation + recomputation + officer review
++ final staging validation, authorized only if 0C-A concludes "Ready". Both
+are pilot blockers. Post-pilot workstreams: Tier 1A (sector risk programme,
+incl. 22 Lane B sector labels), Tier 1B (country risk programme — 130
+deferred countries + 19 regions); production-readiness workstream: Tier 2
+model governance (versioning, maker-checker, effective dating, rollback,
+activation workflow).
+
+## rsmp tier 0c-a final assessment PR 779
+
+Tier 0C-A final frozen-baseline activation assessment — executed 2026-07-16
+against frozen/deployed `main` `8025040089000fdca2e4c013f70397d59f436e55`.
+Evidence lives in draft PR **#779** (docs/evidence only: executive founder
+report, pseudonymised classification of all 944 applications,
+per-application active replay deltas, terminal would-have-changed evidence,
+machine-readable replay/policy evidence). Draft awaiting founder review —
+facts below verified against the PR record 2026-07-16.
+
+**Verdict: NOT READY.** The runtime model is technically reconciled with
+zero unexplained deltas, but the current staging data population blocks
+Tier 0C-B activation:
+
+- 705/802 active applications classify `BLOCKED`, including 405 nonfixture;
+- 363 applications would become newly approval-blocked, including 132
+  nonfixture and 76 pilot-relevant nonfixture;
+- 22 additional unresolved controlled labels affect 44 active applications;
+- 15 unresolved service labels affect 32 active applications;
+- 47 nonfixture applications are cleanup-only before recomputation;
+- all 104 current compliance-review applications are blocked.
+
+**Technical validation:** activation environment absent (runtime evaluation
+false); Gate 0 hash and risk-config version/hash unchanged; application
+snapshot and recomputation timestamp unchanged; PostgreSQL transaction
+confirmed READ ONLY; 802 active applications replayed + 142 terminal
+read-only classifications; 28/28 active scored multi-service cases use
+maximum selected-service risk; 0 tier / EDD-route / High-floor changes;
+0 unexplained deltas; focused Tier 0D/0C/PEP/0B tests 86 passed; CloudWatch
+clean (no errors, exceptions, tracebacks, unexpected 5xx, replay/routing
+failures, recomputation, config mutation, provider calls, or email sends).
+
+**Consequence:** Tier 0C-B remains unauthorized pending explicit founder
+review and the data/mapping remediation tracked as RSMP-0C-REM. No
+activation, recomputation, mutation, or deployment occurred; no pilot- or
+production-readiness claim.
+
+## dci-104 first fk indexes PRs 771 774
+
+First landings against the 54-unindexed-FK follow-up (DCI-104), merged
+2026-07-16: **#771** adds `idx_agent_executions_document_id` (fixes slow
+application-detail open — the document-reliance gate full-scanned
+`agent_executions` per document; planner-usage regression test included).
+**#774** commits the index migration independently with loud verification,
+adds the migration-047 ledger file, and bounds
+`monitoring_alert_evidence` growth with an `application_id` index. The
+broader FK-index backlog remains open.
+
 ## screening-queue-stream PRs 756-763
 
 Screening-queue audit remediation stream, merged 2026-07-13/15 —
@@ -448,6 +546,10 @@ reconcile** (statuses from merge commits on `main`):
 - **#761** — audit Phase 3: hydrate evidence for the returned page only.
 - **#763** — audit Phase 4: fixture governance, QA disposition fixtures,
   7-column layout (merge `c17135e`).
+- **#769 / #770 (added 2026-07-15)** — audit Phase 4d follow-ups: seed the
+  fixture client to satisfy the FK (`e8c896e`) and de-flake declared-PEP
+  queue tests against fixture text patterns (`73bd05e`); merged 2026-07-15
+  (merges `9d14405`, `7badf4b`).
 
 ## p9-3 PR-498
 
@@ -465,6 +567,47 @@ To resume: redacted dashboard evidence showing Production mode (or written
 operator confirmation), then run the controlled matrix under the approved
 caps. Pilot alternative: formally exclude CA production validation from
 pilot scope.
+
+## staging reset 2026-07-17 PR 788
+
+Authorized AWS staging reset, executed 2026-07-17 at deployed main
+`a10d2c3e3894b433a0435534d27bc20f03c00863` (closure docs open as draft #788;
+facts verified against the PR record 2026-07-19):
+
+- live-schema purge of all 944 founder-confirmed synthetic applications and
+  scoped data; encrypted post-migration snapshot retained; zero
+  application/database/S3 residue after purge and failed dry-run rollback;
+- protected audit/system data retained; audit verifiers pass;
+- admin-API risk-config alignment to Manufacturing 2 and D3 40/35/25 with
+  zero recomputation; RSMP remained OFF; Tier 0C was not run;
+- deployment run `29572158632` green (backend/PostgreSQL, Docker, PDF,
+  deploy); backend 2/2, worker 6/6, ALB healthy; CloudWatch window clean;
+- at reset time the 41-scenario canonical dataset was NOT yet seeded (the
+  PostgreSQL canonical dry-run type mismatch blocked it — fixed by #789);
+  seeding completed subsequently (see canonical stream below; validation doc
+  pinned staging `9a77e11`, 41/41 `RM-PILOT-*`, zero noncanonical).
+
+**RSMP consequence:** the population that produced the Tier 0C-A NOT READY
+verdict (705/802 blocked, unresolved labels, cleanup-only apps) no longer
+exists. RSMP-0C-REM's pre-reset backlog is overtaken; the next step is a
+fresh 0C-A read-only assessment on the canonical baseline, then (only on a
+"Ready" verdict) Tier 0C-B. No pilot- or production-readiness claim.
+
+## canonical dataset stream PRs 784-796
+
+Pilot Canonical Dataset v1: **#784** (41-scenario reviewed manifest, guarded
+idempotent seeder, triple-gated CLI — `ENVIRONMENT=staging`,
+`ALLOW_PILOT_CANONICAL_SEED=1`, confirm token, reviewed manifest hash) ·
+**#789** (PostgreSQL dry-run override-flag/type fix) · **#791** (demo
+completion: deterministic structured memo fixture payloads, deterministic
+periodic-review dates/priority, authoritative `is_fixture` notification
+suppression, monitoring fixture labels; seeder converges existing canonical
+rows in place — memo/periodic-review UPDATE by id) · **#795** (document-types
+fix) · **#796** (memo detail rendering compatibility). Manifest SHA-256
+`fee7436a6bf6ead1cc9a8090ceaa3de7071a9b745e43f2c69a445cf74efdf9c9`
+(unchanged across the stream). Re-seed procedure: dry-run then apply via
+`fixtures.pilot_canonical_cli` as a one-off Fargate task on the deployed
+image (post-#791 image required for the converged fixture format).
 
 ## Appendix — de-flake backlog and CI-infra notes
 
