@@ -17065,7 +17065,10 @@ function screeningTriageHitApplicantComparison(item) {
   if (kind === 'company') {
     // Company rows: Jurisdiction / country, Registration number, Also known
     // as. NO Year of birth, NO Place of birth, NO Listed role.
-    if (applicant.country || provider.jurisdiction) {
+    // F9r2: a row is DISAMBIGUATING only when the PROVIDER supplied the
+    // attribute — an applicant-only row (our own data, nothing to reconcile
+    // against) is not disambiguation and must not render or earn the grid.
+    if (provider.jurisdiction) {
       pushRow('Jurisdiction / country', applicant.country, provider.jurisdiction,
         twoSidedVerdict(applicant.country, provider.jurisdiction, screeningApplicantProviderCountryMatch(applicant.country, provider.jurisdiction)));
     }
@@ -17077,13 +17080,15 @@ function screeningTriageHitApplicantComparison(item) {
       pushRow('Also known as', '', companyAka.join(', '), ['provider only', 'draft']);
     }
   } else {
-    // Individual rows.
+    // Individual rows. F9r2: only render when the PROVIDER supplied the
+    // attribute — applicant-only rows restate our own data and don't
+    // disambiguate the match, so they neither render nor earn the grid.
     var providerDobShown = provider.birth_year || provider.dob;
-    if (applicant.birth_year || providerDobShown) {
+    if (providerDobShown) {
       pushRow('Year of birth', applicant.birth_year, providerDobShown,
         twoSidedVerdict(applicant.birth_year, providerDobShown, applicant.birth_year && provider.birth_year && applicant.birth_year === provider.birth_year));
     }
-    if (applicant.country || provider.country) {
+    if (provider.country) {
       pushRow('Country / nationality', applicant.country, provider.country,
         twoSidedVerdict(applicant.country, provider.country, screeningApplicantProviderCountryMatch(applicant.country, provider.country)));
     }

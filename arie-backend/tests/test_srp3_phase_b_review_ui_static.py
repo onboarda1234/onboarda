@@ -339,6 +339,16 @@ def test_f9r_comparison_grid_relevance_gated_suppresses_name_only():
     # One-sided data stays labelled honestly, never guessed into a verdict.
     assert "['provider only', 'draft']" in grid
     assert "'applicant only'" in grid
+    # F9r2: a disambiguating row requires the PROVIDER side — an applicant-only
+    # row (our own data, nothing to reconcile against) must not render or earn
+    # the grid, so every non-name row guards on a provider field, never on
+    # "applicant OR provider".
+    assert "if (provider.jurisdiction)" in grid
+    assert "if (providerDobShown)" in grid
+    assert "if (provider.country)" in grid
+    assert "if (applicant.country || provider.jurisdiction)" not in grid
+    assert "if (applicant.birth_year || providerDobShown)" not in grid
+    assert "if (applicant.country || provider.country)" not in grid
 
 
 def test_f9r_person_item_renders_disambiguating_rows():
