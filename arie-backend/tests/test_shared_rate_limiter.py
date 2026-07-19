@@ -287,7 +287,22 @@ def test_sensitive_endpoints_use_shared_fail_closed_limiter():
         '"reset_password_token"',
         '"doc_upload"',
         '"ai_verify"',
+        # R2-BSA-016: previously-unlimited / process-local endpoints now on
+        # the shared fail-closed limiter.
+        '"document_verify"',
+        '"supervisor_run"',
+        '"enhanced_requirement_officer_upload"',
+        '"enhanced_requirement_upload"',
     ):
         assert marker in source
     assert "check_sensitive_rate_limit" in source
     assert "evaluate_sensitive_rate_limit" in source
+
+
+def test_supervisor_pipeline_run_uses_shared_fail_closed_limiter():
+    """R2-BSA-016: the /api/supervisor/pipeline/run trigger is DB-backed limited."""
+    source = (Path(__file__).resolve().parents[1] / "supervisor" / "api.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"supervisor_pipeline_run"' in source
+    assert "check_sensitive_rate_limit" in source

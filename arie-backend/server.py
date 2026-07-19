@@ -12182,6 +12182,16 @@ class DocumentVerifyHandler(BaseHandler):
         user = self.require_auth()
         if not user:
             return
+        # R2-BSA-016: the authoritative persisted document-verify path is a
+        # heavy AI-agent trigger and was previously unlimited. Fail-closed,
+        # DB-backed limit (mirrors the /ai-verify helper).
+        if not self.check_sensitive_rate_limit(
+            "document_verify",
+            max_attempts=10,
+            window_seconds=60,
+            error_message="Rate limit exceeded for document verification. Try again later.",
+        ):
+            return
 
         db = get_db()
         try:
@@ -15907,7 +15917,9 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
         user = self.require_auth(roles=APPLICATION_ENHANCED_REQUIREMENT_UPDATE_ROLES)
         if not user:
             return
-        if not self.check_rate_limit("enhanced_requirement_officer_upload", max_attempts=20, window_seconds=60):
+        # R2-BSA-016: use the shared DB-backed fail-closed limiter (was the
+        # process-local in-memory check_rate_limit, unshared across ECS tasks).
+        if not self.check_sensitive_rate_limit("enhanced_requirement_officer_upload", max_attempts=20, window_seconds=60):
             return
 
         db = get_db()
@@ -31014,6 +31026,15 @@ class SupervisorRunHandler(BaseHandler):
 
         if not SUPERVISOR_AVAILABLE:
             return self.error("Supervisor framework not available", 503)
+        # R2-BSA-016: supervisor pipeline runs are expensive (120s timeout).
+        # Fail-closed, DB-backed limit on the per-application trigger.
+        if not self.check_sensitive_rate_limit(
+            "supervisor_run",
+            max_attempts=10,
+            window_seconds=60,
+            error_message="Rate limit exceeded for supervisor pipeline. Try again later.",
+        ):
+            return
 
         db = get_db()
         app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
@@ -41558,7 +41579,9 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
             return
         if user.get("type") != "client":
             return self.error("Only clients can submit requested information", 403)
-        if not self.check_rate_limit("enhanced_requirement_upload", max_attempts=20, window_seconds=60):
+        # R2-BSA-016: use the shared DB-backed fail-closed limiter (was the
+        # process-local in-memory check_rate_limit, unshared across ECS tasks).
+        if not self.check_sensitive_rate_limit("enhanced_requirement_upload", max_attempts=20, window_seconds=60):
             return
 
         db = get_db()
