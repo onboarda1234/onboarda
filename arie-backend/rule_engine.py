@@ -2024,17 +2024,12 @@ def compute_risk_score(app_data, config_override=None):
     for dimension_id, dimension_score, dimension_weight, factors in dimension_specs:
         stored_dimension_score = round(dimension_score, 2)
         factor_total = round(sum(item["weighted_factor_contribution"] for item in factors), 4)
-        if factors and factor_total != stored_dimension_score:
-            factors[-1]["weighted_factor_contribution"] = round(
-                factors[-1]["weighted_factor_contribution"]
-                + stored_dimension_score - factor_total,
-                4,
-            )
         factor_evidence.extend(factors)
         dimension_evidence.append({
             "dimension_id": dimension_id,
             "dimension_score": stored_dimension_score,
             "dimension_weight": round(dimension_weight * 100, 4),
+            "rounding_adjustment": round(stored_dimension_score - factor_total, 4),
             "composite_contribution": round(
                 (dimension_score - 1) * dimension_weight / 3 * 100, 4
             ),

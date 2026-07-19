@@ -856,7 +856,7 @@ def build_authoritative_risk_report_evidence(
             row = matching_dimensions[0]
             required_dimension_fields = {
                 "dimension_id", "dimension_score", "dimension_weight",
-                "composite_contribution", "factor_keys",
+                "rounding_adjustment", "composite_contribution", "factor_keys",
             }
             for field in sorted(required_dimension_fields - set(row)):
                 reasons.append(
@@ -909,7 +909,10 @@ def build_authoritative_risk_report_evidence(
                     for item in stored_factors
                     if isinstance(item, Mapping) and item.get("dimension_id") == dimension_id
                 )
-                if abs(factor_total - stored_score) > 0.0001:
+                reproduced_dimension = factor_total + float(
+                    matching_computation[0]["rounding_adjustment"]
+                )
+                if abs(reproduced_dimension - stored_score) > 0.0001:
                     reasons.append(f"factor_contribution_mismatch:{dimension_id}")
             except (KeyError, TypeError, ValueError):
                 reasons.append(f"dimension_computation_evidence_invalid:{dimension_id}")

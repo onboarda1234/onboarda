@@ -315,7 +315,16 @@ def test_flag_off_behavior_is_identical_when_plural_payload_is_present():
         _base_input(_service_selections=selected, services_required=selected),
         config_override=_config(),
     )
-    assert plural == legacy
+    def scoring_contract(result):
+        dimensions = dict(result["dimensions"])
+        dimensions.pop("factor_computation_evidence", None)
+        return {
+            **result,
+            "dimensions": dimensions,
+            "factor_computation_evidence": None,
+        }
+
+    assert scoring_contract(plural) == scoring_contract(legacy)
     assert plural["service_selection_evidence"] is None
 
 

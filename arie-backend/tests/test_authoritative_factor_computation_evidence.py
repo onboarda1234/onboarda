@@ -80,7 +80,14 @@ def test_persisted_factor_ledger_reproduces_every_dimension_and_final_composite(
     assert [row["dimension_id"] for row in ledger["dimensions"]] == ["D1", "D2", "D3", "D4", "D5"]
     for dimension in ledger["dimensions"]:
         factors = [row for row in ledger["factors"] if row["dimension_id"] == dimension["dimension_id"]]
-        assert sum(row["weighted_factor_contribution"] for row in factors) == pytest.approx(dimension["dimension_score"])
+        for factor in factors:
+            assert factor["weighted_factor_contribution"] == pytest.approx(
+                factor["rule_score"] * factor["factor_weight"] / 100
+            )
+        factor_total = sum(row["weighted_factor_contribution"] for row in factors)
+        assert factor_total + dimension["rounding_adjustment"] == pytest.approx(
+            dimension["dimension_score"]
+        )
         assert dimension["dimension_score"] == result["dimensions"][dimension["dimension_id"].lower()]
         assert all(set(row) == {
             "dimension_id", "factor_key", "factor_label", "raw_value", "normalized_value",
