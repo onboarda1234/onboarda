@@ -10651,8 +10651,12 @@ function renderStoredRiskComputationHtml(app) {
   var route = risk.approval_route || {};
   var factors = evidence.factor_evidence || [];
   var dimensions = risk.dimensions || [];
-  var driverHtml = factors.slice(0, 6).map(function(f) {
-    return '<span style="display:inline-flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid #dbe4f0;border-radius:999px;background:#f8fbff;color:#183b63;font-size:11px;font-weight:700;">✓ ' + escapeHtml(f.label || f.family || 'Stored factor') + '</span>';
+  var driverValues = factors.map(function(f) { return f.label || f.family; }).filter(Boolean);
+  [app.sector, app.country, app.entityType].forEach(function(value) {
+    if (value && driverValues.indexOf(value) === -1) driverValues.push(value);
+  });
+  var driverHtml = driverValues.slice(0, 6).map(function(value) {
+    return '<span style="display:inline-flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid #dbe4f0;border-radius:999px;background:#f8fbff;color:#183b63;font-size:11px;font-weight:700;">✓ ' + escapeHtml(value) + '</span>';
   }).join('');
   var rowsHtml = dimensions.map(function(row) {
     var score = Number(row.stored_score) || 0;
@@ -10666,7 +10670,8 @@ function renderStoredRiskComputationHtml(app) {
   }).join('');
   var score = Number(risk.score || 0).toFixed(1);
   var tier = risk.tier || '—';
-  var edd = risk.edd_route || risk.edd_required ? 'Required' : 'Not required';
+  var eddRoute = String(risk.edd_route || '').toLowerCase();
+  var edd = risk.edd_required === true || eddRoute === 'edd' || eddRoute.indexOf('enhanced') !== -1 ? 'Required' : 'Not required';
   var evidenceStatus = evidence.config_version ? 'Authoritative stored evidence · configuration verified' : 'Authoritative stored evidence';
   function card(label, value, helper) { return '<div style="padding:12px 14px;border:1px solid #dbe4f0;border-radius:12px;background:#fff;min-width:0;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#718096;font-weight:800;">' + label + '</div><div style="font-size:20px;line-height:1.2;font-weight:800;color:#102a43;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(value) + '</div><div style="font-size:10px;color:#718096;margin-top:4px;">' + escapeHtml(helper) + '</div></div>'; }
   return '<section class="risk-executive-dashboard" style="padding:14px;border:1px solid #dbe4f0;border-radius:14px;background:linear-gradient(180deg,#f7faff 0%,#fff 46%);color:#102a43;">' +
@@ -10676,7 +10681,7 @@ function renderStoredRiskComputationHtml(app) {
       card('EDD', edd, 'Enhanced due diligence') +
       card('Status', 'Verified', evidenceStatus) +
     '</div>' +
-    '<div style="margin-top:14px;"><div style="font-size:13px;font-weight:800;margin-bottom:8px;">Why this risk?</div><div style="display:flex;gap:7px;flex-wrap:wrap;">' + (driverHtml || '<span style="font-size:11px;color:#718096;">No factor evidence recorded.</span>') + '</div></div>' +
+    '<div style="margin-top:14px;"><div style="font-size:13px;font-weight:800;margin-bottom:8px;">Key Risk Drivers <span style="font-size:10px;color:#718096;font-weight:600;">Why this risk?</span></div><div style="display:flex;gap:7px;flex-wrap:wrap;">' + driverHtml + '</div></div>' +
     '<div style="display:grid;grid-template-columns:minmax(0,1.7fr) minmax(180px,.7fr);gap:14px;margin-top:14px;align-items:start;">' +
       '<div><div style="font-size:13px;font-weight:800;margin-bottom:6px;">Risk breakdown</div><table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr><th style="text-align:left;padding:6px 10px;color:#718096;font-size:9px;text-transform:uppercase;">Dimension</th><th style="text-align:center;padding:6px;color:#718096;font-size:9px;">Score</th><th style="text-align:center;padding:6px;color:#718096;font-size:9px;">Weight</th><th style="text-align:center;padding:6px;color:#718096;font-size:9px;">Contribution</th><th style="padding:6px;"></th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>' +
       '<div style="display:flex;align-items:center;justify-content:center;min-height:150px;border:1px solid #dbe4f0;border-radius:12px;background:#fff;"><div style="width:112px;height:112px;border-radius:50%;background:conic-gradient(#234e7d ' + Math.min(100, Number(score)) + '%,#e8eef6 0);display:flex;align-items:center;justify-content:center;"><div style="width:76px;height:76px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;text-align:center;font-size:16px;font-weight:800;color:#102a43;">' + score + '<small style="display:block;font-size:9px;font-weight:600;color:#718096;">/ 100</small></div></div></div>' +
@@ -34564,10 +34569,12 @@ function downloadRiskPDF() {
     html += '<div class="item"><div class="label">' + reportCell(item[0]) + '</div><div class="value">' + reportCell(item[1]) + '</div></div>';
   });
   html += '</div>';
-  html += '<div class="outcome"><div>Stored authoritative outcome</div><strong>' + reportCell(risk.score) + ' / 100 — ' + reportCell(risk.tier) + '</strong><div>EDD / onboarding route: ' + reportCell(risk.edd_route) + '</div><div>Approval route: ' + reportCell(route.route) + '</div></div>';
-  html += '<div class="section">Why this risk?</div><div>' + (evidence.factor_evidence || []).slice(0, 8).map(function(f) { return '<span class="driver">✓ ' + reportCell(f.label || f.family || 'Stored factor') + '</span>'; }).join('') + '</div>';
+  html += '<div class="section">Executive Summary</div><div class="outcome"><div>Stored authoritative outcome</div><strong>' + reportCell(risk.score) + ' / 100 — ' + reportCell(risk.tier) + '</strong><div>EDD / onboarding route: ' + reportCell(risk.edd_route) + '</div><div>Approval route: ' + reportCell(route.route) + '</div></div>';
+  var pdfDrivers = (evidence.factor_evidence || []).map(function(f) { return f.label || f.family; }).filter(Boolean);
+  [app.sector, app.country, app.entityType].forEach(function(value) { if (value && pdfDrivers.indexOf(value) === -1) pdfDrivers.push(value); });
+  html += '<div class="section">Key Risk Drivers</div><div>' + pdfDrivers.slice(0, 8).map(function(value) { return '<span class="driver">✓ ' + reportCell(value) + '</span>'; }).join('') + '</div>';
   html += '<div class="section">Evidence at a glance</div><div class="grid"><div class="item"><div class="label">Screening</div><div class="value">✓ Stored evidence</div></div><div class="item"><div class="label">KYC</div><div class="value">✓ Stored evidence</div></div><div class="item"><div class="label">Risk evidence</div><div class="value">✓ Authoritative</div></div></div>';
-  html += '<div class="section">Stored Dimension Evidence</div><table><thead><tr><th>Dimension</th><th>Runtime Weight</th><th>Stored Score</th><th>Source</th></tr></thead><tbody>';
+  html += '<div class="section">Risk Breakdown</div><table><thead><tr><th>Dimension</th><th>Runtime Weight</th><th>Stored Score</th><th>Source</th></tr></thead><tbody>';
   (risk.dimensions || []).forEach(function(dimension) {
     html += '<tr><td>' + reportCell(dimension.id + ': ' + dimension.name) + '</td><td>' + reportCell(dimension.weight) + '%</td><td>' + reportCell(dimension.stored_score) + '</td><td>' + reportCell(dimension.source) + '</td></tr>';
   });
@@ -34579,7 +34586,7 @@ function downloadRiskPDF() {
     });
   });
   html += '</tbody></table>';
-  html += '<div class="section">Floors and Routes</div><table><tbody>';
+  html += '<div class="section">Rule Outcomes</div><table><tbody>';
   html += '<tr><td>High floor reasons</td><td>' + reportCell((risk.floor_reasons || []).join('; ') || 'None recorded') + '</td></tr>';
   html += '<tr><td>All escalation evidence</td><td>' + reportCell((risk.escalations || []).join('; ') || 'None recorded') + '</td></tr>';
   html += '<tr><td>Approval reasons</td><td>' + reportCell((route.reasons || []).join('; ') || 'None recorded') + '</td></tr>';

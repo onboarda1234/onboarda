@@ -221,7 +221,10 @@ def test_risk_assessment_uses_compact_executive_dashboard_and_collapsed_technica
     assert "<details style=\"margin-top:12px" in region
     assert "applications.risk_dimensions" not in region
     pdf = _region(html, "function downloadRiskPDF", "</script>")
-    assert "Why this risk?" in pdf
+    assert "Executive Summary" in pdf
+    assert "Key Risk Drivers" in pdf
+    assert "Risk Breakdown" in pdf
+    assert "Rule Outcomes" in pdf
     assert "Evidence at a glance" in pdf
 
 
