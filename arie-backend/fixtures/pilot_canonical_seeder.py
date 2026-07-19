@@ -12,6 +12,7 @@ in one transaction and uses the existing fixture audit writer.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
 import logging
@@ -114,6 +115,48 @@ def _identity_matches(record: Mapping[str, Any], row: Mapping[str, Any]) -> bool
     return all(data.get(key) == value for key, value in expected.items())
 
 
+_RUNTIME_PRESCREENING_INPUT_KEYS = (
+    "adverse_media",
+    "cross_border",
+    "customer_interaction",
+    "introduction_method",
+    "monthly_volume",
+    "operating_countries",
+    "screening_concern",
+    "screening_results",
+    "source_of_funds",
+    "source_of_wealth",
+    "target_markets",
+    "transaction_complexity",
+)
+
+
+def _runtime_prescreening_projection(inputs: Mapping[str, Any]) -> Dict[str, Any]:
+    """Project fixture inputs onto the normal runtime submission fields.
+
+    The nested ``risk_inputs`` object is retained as fixture provenance, but
+    ``build_prescreening_risk_input`` intentionally consumes normalized
+    top-level prescreening fields.
+    """
+    projected = {
+        key: deepcopy(inputs[key])
+        for key in _RUNTIME_PRESCREENING_INPUT_KEYS
+        if key in inputs
+    }
+    services = (
+        ((inputs.get("business") or {}).get("services") or {}).get(
+            "primary_services"
+        )
+        or []
+    )
+    projected["services_required"] = deepcopy(services)
+    projected["primary_service"] = inputs.get("primary_service") or (
+        services[0] if services else ""
+    )
+    projected["service_required"] = projected["primary_service"]
+    return projected
+
+
 def _preflight_references(db, rows: Sequence[Mapping[str, Any]]) -> None:
     """Check every reserved ref and deterministic application id before writes."""
     lock = " FOR UPDATE" if USE_POSTGRESQL else ""
@@ -160,6 +203,7 @@ def _application_payload(
         "summary": f"Canonical fixture screening state: {screening_state}",
     }
     prescreening = {
+        **_runtime_prescreening_projection(inputs),
         **_identity(row),
         "purpose": row["purpose"],
         "category": row["category"],

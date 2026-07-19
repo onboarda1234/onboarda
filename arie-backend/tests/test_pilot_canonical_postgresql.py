@@ -288,6 +288,85 @@ def test_complete_postgres_dry_run_is_repeatable_and_zero_residue(
     }
 
 
+def test_canonical_runtime_inputs_survive_persistence_and_dry_run(
+    canonical_postgres,
+):
+    from party_utils import get_application_parties
+    from prescreening.risk_inputs import build_prescreening_risk_input
+    from rule_engine import compute_risk_score
+
+    runtime = canonical_postgres
+    manifest = {
+        row["reference"]: row for row in runtime.canonical.scenarios()
+    }
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+    before = _canonical_application_risk_snapshot(runtime.db)
+
+    dry_run = runtime.seeder.seed_pilot_canonical_dataset(dry_run=True)
+    assert len(dry_run) == 41
+    assert _canonical_application_risk_snapshot(runtime.db) == before
+
+    connection = runtime.db.get_db()
+    try:
+        applications = connection.execute(
+            "SELECT * FROM applications WHERE ref LIKE ? ORDER BY ref",
+            ("RM-PILOT-%",),
+        ).fetchall()
+        assert len(applications) == 41
+        for application in applications:
+            app = dict(application)
+            directors, ubos, intermediaries = get_application_parties(
+                connection, app["id"]
+            )
+            scorer_input = build_prescreening_risk_input(
+                application=app,
+                prescreening_data=app["prescreening_data"],
+                directors=directors,
+                ubos=ubos,
+                intermediaries=intermediaries,
+            )
+            expected_inputs = manifest[app["ref"]]["risk_inputs"]
+            assert scorer_input["monthly_volume"] == expected_inputs["monthly_volume"]
+            assert (
+                scorer_input["payment_corridors"]
+                == expected_inputs["transaction_complexity"]
+            )
+            assert (
+                scorer_input["introduction_method"]
+                == expected_inputs["introduction_method"]
+            )
+            assert (
+                scorer_input["services_required"]
+                == expected_inputs["business"]["services"]["primary_services"]
+            )
+            assert scorer_input["_prescreening_mapping_corrections"] == [
+                "primary_service_from_services_required"
+            ]
+
+            result = compute_risk_score(scorer_input)
+            expected = manifest[app["ref"]]["expected"]
+            assert result["score"] == expected["score"]
+            assert result["level"] == expected["tier"]
+            stale = {
+                str(reason).split(":", 2)[1]
+                for reason in result.get("escalations", [])
+                if str(reason).startswith("stale:unmapped_")
+            }
+            assert "unmapped_monthly_volume" not in stale
+            assert "unmapped_complexity" not in stale
+            assert "unmapped_introduction" not in stale
+            expected_unresolved = {
+                "RM-PILOT-033": {"unmapped_sector"},
+                "RM-PILOT-034": {"unmapped_entity_type"},
+                "RM-PILOT-035": {"unmapped_incorporation_country"},
+            }.get(app["ref"], set())
+            assert stale == expected_unresolved
+    finally:
+        connection.close()
+
+    assert runtime.canonical.manifest_sha256() == EXPECTED_MANIFEST_SHA256
+
+
 def test_canonical_document_types_are_canonical_and_startup_stable(
     canonical_postgres,
 ):
