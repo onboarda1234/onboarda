@@ -670,16 +670,6 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "False-positive assessment" in html
     assert "Adverse media relevance" in html
     assert "Evidence used" in html
-    assert "Provider evidence" in html
-    assert "Strict pass" in html
-    assert "Relaxed pass" in html
-    assert "Strict + relaxed" in html
-    assert "Provider score unavailable" in html
-    assert "Stronger provider match signal; officer verification required." in html
-    assert "Broader provider match; review identifiers before clearing." in html
-    assert "Surfaced in both provider passes; high review priority." in html
-    assert "Provider did not supply numeric score or pass evidence." in html
-    assert "No article URL supplied by provider payload." in html
     assert "Provider reference" in html
     assert "Provider result rows:" in html
     assert "provider screening adverse-media row(s)" in html
@@ -724,8 +714,6 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "output.hit_row_status_counts" in html
     assert "Hit-by-hit review" in html
     assert "surfaced_by_pass" in html
-    assert "agent3ProviderEvidenceCellHtml" in html
-    assert "agent3HitEvidenceDetailsHtml" in html
     assert "agent3AuditTraceHtml" in html
     for _status_label in ("Needs review", "Likely false positive", "High-confidence match", "Unavailable"):
         assert _status_label in html
@@ -734,8 +722,22 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "/agent3/screening-interpretation" not in table_body
     assert "agent3HitActionButtonsHtml" not in html
     assert "False Positive" not in table_body
-    evidence_body = _extract_function(html, "agent3HitEvidenceDetailsHtml")
-    assert "Audit trace" not in evidence_body
+    # SRP-3e Phase E: dense audit table — subject / matched name / category /
+    # RegMind triage / status & reason; the recital is a collapsed disclosure
+    # and per-row article evidence lives on the ranked hit cards instead.
+    assert "data-agent3-hit-audit-table" in table_body
+    assert "RegMind triage" in table_body
+    assert "agent3TriageCellHtml" in table_body
+    triage_cell = _extract_function(html, "agent3TriageCellHtml")
+    assert "unscored" in triage_cell
+    assert "screeningTriageScoreBand" in triage_cell
+    assert "Not a provider score" in triage_cell
+    panel_src = _extract_function(html, "renderAgent3ScreeningInterpretationPanel")
+    hit_by_hit_details = panel_src[panel_src.index("Hit-by-hit review") - 400:panel_src.index("Hit-by-hit review")]
+    assert "<details style=" in hit_by_hit_details
+    assert "' open' " not in hit_by_hit_details
+    assert "agent3HitEvidenceDetailsHtml" not in html
+    assert "agent3ProviderEvidenceCellHtml" not in html
     comparison_body = _extract_function(html, "buildScreeningComparisonPanel")
     assert "Declared vs Provider Match" in comparison_body
     assert "Provider profile attributes unavailable. Raw provider reference is retained in Audit trace." in comparison_body
@@ -834,32 +836,38 @@ def test_backoffice_agent3_provider_evidence_helpers_render_expected_copy():
             }
             """
         ),
-        _extract_function(html, "agent3SurfacedByPassMeta"),
-        _extract_function(html, "agent3ProviderEvidenceCellHtml"),
+        _extract_function(html, "screeningTriageScoreBand"),
+        _extract_function(html, "agent3TriageCellHtml"),
         _extract_function(html, "agent3TraceRowsHtml"),
-        _extract_function(html, "agent3HitEvidenceDetailsHtml"),
+        _extract_function(html, "agent3LooksLikeUuid"),
+        _extract_function(html, "agent3HitStatusBadge"),
+        _extract_function(html, "agent3HitStatusMeta"),
+        "var AGENT3_HIT_STATUS_META = {};",
+        _extract_function(html, "agent3HitRowsTableHtml"),
         textwrap.dedent(
             """
-            assertIncludes('strict', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'strict'}), 'Strict pass');
-            assertIncludes('strict help', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'strict'}), 'Stronger provider match signal; officer verification required.');
-            assertIncludes('relaxed', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'relaxed'}), 'Relaxed pass');
-            assertIncludes('both', agent3ProviderEvidenceCellHtml({match_score:null, surfaced_by_pass:'both'}), 'Strict + relaxed');
-            assertIncludes('unavailable', agent3ProviderEvidenceCellHtml({match_score:null}), 'Provider score unavailable');
-            const numericCell = agent3ProviderEvidenceCellHtml({match_score:88});
-            assertIncludes('numeric', numericCell, '>88<');
-            assertExcludes('numeric percent suffix', numericCell, '88%');
-            assertIncludes('numeric caption', numericCell, 'Match score supplied by provider.');
-            const evidence = agent3HitEvidenceDetailsHtml({
-              evidence_url:'https://news.example/article',
-              evidence_title:'Article title',
-              evidence_source:'Example News',
-              evidence_snippet:'Article snippet',
-              audit_trace:{provider:'complyadvantage', surfaced_by_pass:'strict'}
-            });
-            assertIncludes('evidence link', evidence, 'href="https://news.example/article"');
-            assertIncludes('evidence title', evidence, 'Article title');
-            assertExcludes('per-row audit trace', evidence, 'Audit trace');
-            assertIncludes('missing url', agent3HitEvidenceDetailsHtml({}), 'No article URL supplied by provider payload.');
+            const strongCell = agent3TriageCellHtml({triage_score: 92});
+            assertIncludes('strong score', strongCell, '>92<');
+            assertIncludes('strong band', strongCell, 'Strong');
+            assertExcludes('strong percent', strongCell, '%');
+            assertIncludes('ranking tooltip', strongCell, 'Not a provider score');
+            assertIncludes('unscored', agent3TriageCellHtml({}), 'unscored');
+            const table = agent3HitRowsTableHtml([{
+              subject_name: 'Jane Director',
+              subject_type: 'director',
+              matched_entity: 'MURPHY, Gerard',
+              list: 'PEP class 2',
+              triage_score: 92,
+              suggested_status: 'needs_review',
+              reason: 'provider match score 92',
+              evidence_ref: 'prov-1'
+            }]);
+            assertIncludes('table subject', table, 'Jane Director');
+            assertIncludes('table matched', table, 'MURPHY, Gerard');
+            assertIncludes('table list', table, 'PEP class 2');
+            assertIncludes('table triage', table, '>92<');
+            assertIncludes('table marker', table, 'data-agent3-hit-audit-table');
+            assertExcludes('no per-row evidence disclosure', table, 'Evidence details');
             if (failures.length) {
               console.error(failures.join('\\n'));
               process.exit(1);
