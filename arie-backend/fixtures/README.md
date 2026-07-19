@@ -86,6 +86,40 @@ All three of these must be true or `apply` refuses:
 
 `dry-run`, `list`, `register`, and `check` have no environment gate.
 
+## Staging data-write policy (regulated tables)
+
+**Staging QA, validation, and diagnostic activity must never write raw SQL
+directly into regulated tables.** Every write to a regulated table on a
+staging (or production) database must go through one of exactly two paths:
+
+1. **The application layer** — a normal authenticated API call, or
+2. **This explicitly-marked fixture path** — `fixtures.cli` / `fixtures.pilot_canonical_cli`
+   under the safety gates above, which audit-tag every write and set the
+   `is_fixture` / provenance markers.
+
+**Why this is a hard rule, not a preference.** The P12-1 regulated-deletion
+interceptor (`DBConnection`, see `regulated_deletion.py`), the fixture audit
+writer, and the `is_fixture` / provenance guards only observe writes that
+flow through the application or this marked fixture path. A raw `INSERT` /
+`UPDATE` / `DELETE` executed straight against staging RDS — e.g. from a
+`psql` session or an ad-hoc probe script — bypasses all of them. Such a row
+is un-audited, has no provenance, and is invisible to the in-process guards.
+
+This is not hypothetical: the DCI-006 off-canon `agent_executions` rows
+(`direct_probe` / `staging_direct_probe`) were injected by exactly this kind
+of direct staging-DB probe during an earlier validation sprint. They
+bypassed the interceptor, went un-audited, and later caused three CHECK
+constraints to silently skip installation on staging until they were found
+and remediated (finding **R2-PROC-1**, cross-referenced from DCI-006 /
+DCI-104).
+
+**If you need to write to a regulated table on staging for QA:** add or
+extend a registered fixture scenario (so the write is gated, audited, and
+provenance-marked), or exercise the real API endpoint. Do not open a raw SQL
+session against staging RDS to insert or mutate regulated-table rows.
+
+Read-only inspection (`SELECT`) against staging is unaffected by this policy.
+
 ## What is in the package
 
 | File | Role |
