@@ -1193,13 +1193,18 @@ class TestInlineScreeningRuntime:
                 },
             )
         )
-        assert "Evidence groups" in result["providerHighlightsHtml"]
+        # Phase E: legacy stored-report renderer is inline-only — grouped,
+        # no modal chain, identifiers collapsed under the Audit trace.
+        assert "Provider match records (stored report)" in result["providerHighlightsHtml"]
         assert "PEP · 2 evidence records" in result["providerHighlightsHtml"]
         assert "Provider risk match - review context · 2 evidence records" in result["providerHighlightsHtml"]
         assert result["providerHighlightsHtml"].count("Vladimir Putin") >= 4
-        assert "Show evidence" in result["providerHighlightsHtml"]
+        assert "Show details" in result["providerHighlightsHtml"]
+        assert "View evidence" not in result["providerHighlightsHtml"]
+        assert "openScreeningEvidenceDrawer" not in result["providerHighlightsHtml"]
         assert "Technical provider details" not in result["providerHighlightsHtml"]
         assert "Audit trace" in result["providerHighlightsHtml"]
+        assert "Grouped alert IDs" in result["providerHighlightsHtml"]
         assert "Provider case ID" not in result["providerHighlightsHtml"]
         assert "Provider alert ID" not in result["providerHighlightsHtml"]
         assert "Provider risk ID" not in result["providerHighlightsHtml"]
@@ -1241,13 +1246,13 @@ class TestInlineScreeningRuntime:
         assert "Select one subject to review comparison, evidence, and disposition state." in result["triageCockpitHtml"]
         assert 'data-screening-subject-card="review"' in result["triageCockpitHtml"]
         assert 'data-screening-subject-card="clear"' in result["triageCockpitHtml"]
-        assert 'data-screening-decision-summary="true"' in result["triageCockpitHtml"]
-        assert "Decision summary" in result["triageCockpitHtml"]
-        # Disposition controls (action buttons) sit between the decision summary and the
-        # evidence groups. Anchor on an always-present action button, since the save/form
-        # is now revealed only after an action is selected (progressive disclosure).
-        assert result["triageCockpitHtml"].index("Decision summary") < result["triageCockpitHtml"].index("Clear as False Positive")
-        assert result["triageCockpitHtml"].index("Clear as False Positive") < result["triageCockpitHtml"].index("Evidence groups")
+        # Phase E: the Decision Summary grid is retired — the compact status
+        # strip carries the facts, and evidence renders before the officer
+        # disposition bar (review first, then decide).
+        assert 'data-screening-status-strip="true"' in result["triageCockpitHtml"]
+        assert "Decision summary" not in result["triageCockpitHtml"]
+        assert result["triageCockpitHtml"].index('data-screening-status-strip="true"') < result["triageCockpitHtml"].index("Provider match records (stored report)")
+        assert result["triageCockpitHtml"].index("Provider match records (stored report)") < result["triageCockpitHtml"].index("Clear as False Positive")
         assert "Jane Director" in result["triageCockpitHtml"]
         assert "John Harbor" in result["triageCockpitHtml"]
         assert "Triage Holdings Ltd" in result["triageCockpitHtml"]
@@ -1255,7 +1260,7 @@ class TestInlineScreeningRuntime:
         assert "UBO" in result["triageCockpitHtml"]
         assert "ENT" in result["triageCockpitHtml"]
         assert "Declared vs Provider Match" in result["triageCockpitHtml"]
-        assert "Evidence groups" in result["triageCockpitHtml"]
+        assert "Agent 3 Screening Interpretation" in result["triageCockpitHtml"]
         # Unresolved focused subject shows the disposition action buttons + hint (form
         # reveals after an action is chosen); resolved shows read-only, no form.
         assert "Select a screening action above to continue" in result["triageCockpitHtml"]
@@ -1608,7 +1613,8 @@ class TestScreeningQueueSlimRowTemplate:
         assert "<th>PEP (Declared / Screening)</th>" not in html
         assert "function screeningQueueContextCell" not in html
         assert "Registry lookup not performed" in html
-        assert "'Awaiting screening'" not in html.split("Registry Status")[1][:400]
+        # Phase E: the registry fact lives in the workspace status strip.
+        assert "'Awaiting screening'" not in html.split("['Registry status'")[1][:400]
 
 
 def _queue_error_state_runtime_js(html):

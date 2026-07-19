@@ -25,7 +25,9 @@ def test_backoffice_company_review_uses_monitoring_media_alerts():
     assert "companyMonitoringMediaFacts(app)" in region
     assert "monitoringMedia.matched" in region
     assert ".concat(monitoringMedia.results || [])" in region
-    assert "Provider adverse-media evidence is persisted and listed above." in region
+    # Phase E: monitoring-media results flow into the consolidated workspace
+    # evidence chain (ranked sections / legacy inline renderer) via companyResults.
+    assert "legacyResults: companyResults" in region
 
     media_region = _function_region(html, "companyMonitoringMediaFacts", "declaredPepFromScreeningRecord")
     assert "monitoringAlertSubjectScope(alert) === 'entity'" in media_region
@@ -45,37 +47,45 @@ def test_backoffice_company_review_includes_top_level_company_results():
     assert "companyResults = dedupScreeningResults(companyResults)" in entity_region
 
 
-def test_backoffice_screening_review_renders_provider_evidence_details():
+def test_backoffice_screening_review_renders_provider_evidence_inline():
+    """Phase E: screening evidence renders INLINE on the ranked hit cards and
+    the legacy stored-report renderer — the View-evidence modal chain is
+    retired for screening. The invariants survive relocated: media evidence
+    (title/publisher/date/snippet) is shown, provider identifiers stay
+    reachable under Technical details, and external links open safely."""
     html = BACKOFFICE_HTML.read_text()
 
-    assert "Evidence groups" in html
-    assert "modal-screening-evidence" in html
-    assert "screening-evidence-body" in html
-    assert "function openScreeningEvidenceDrawer" in html
-    assert "View evidence" in html
-    assert "Provider case ID" in html
-    assert "Provider alert ID" in html
-    assert "Provider risk ID" in html
-    assert "Provider profile ID" in html
+    # Modal chain fully retired for screening evidence.
+    assert "modal-screening-evidence" not in html
+    assert "openScreeningEvidenceDrawer" not in html
+    assert "View evidence" not in html
 
+    # Enriched rows: media evidence inline on the hit card body.
+    hit_body = _function_region(html, "screeningTriageHitEvidenceBody", "screeningTriageHitTechnicalDetails")
+    assert "item.source_title" in hit_body
+    assert "item.snippet" in hit_body
+    assert "Open source" in hit_body
+    assert 'target="_blank" rel="noopener"' in hit_body
+    tech = _function_region(html, "screeningTriageHitTechnicalDetails", "screeningClearanceNeedsSecondReviewer")
+    assert "Provider case ID" in tech
+    assert "Provider alert ID" in tech
+    assert "Provider risk ID" in tech
+    assert "Provider profile ID" in tech
+
+    # Legacy stored-report rows: grouped inline renderer, no popups.
     region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
     assert "providerEvidenceRecordCard" in region
     assert "evidencePrimaryCategoryLabel" in region
     assert "evidenceSensitivityLabel" in region
-    assert "Show evidence" in region
+    assert "Provider match records (stored report)" in region
+    assert "Show details" in region
     assert "evidence records grouped for this" in region
     record_region = _function_region(html, "providerEvidenceRecordCard", "providerResultHighlights")
-    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
     title_region = _function_region(html, "evidenceSourceTitle", "evidenceSourcePublisher")
-    assert "provider_case_identifier" in record_region
-    assert "provider_alert_identifier" in record_region
-    assert "provider_risk_identifier" in record_region
-    assert "provider_profile_identifier" in record_region
-    assert "registerScreeningEvidence" in record_region
-    assert "openScreeningEvidenceDrawer" in record_region
+    assert "Open source" in record_region
     assert "target=\"_blank\" rel=\"noopener\"" in record_region
     assert "media_title" in title_region
-    assert "media_snippet" in drawer_region
+    assert "media_snippet" in record_region
 
 
 def test_backoffice_screening_review_adds_declared_vs_provider_comparison():
@@ -128,8 +138,8 @@ def test_backoffice_screening_review_renders_triage_cockpit_layout():
     # Provider provenance moved from the queue context cell (removed in the
     # queue slimming) to the review detail cards, which state the source for
     # the entity and per-person records.
-    assert "Company screening source:" in html
-    assert "Provider source:" in html
+    assert "'Company screening source'" in html
+    assert "'Provider source'" in html
     assert "Screening Subjects" in review_region
     assert "Select one subject to review comparison, evidence, and disposition state." in review_region
     assert "screeningTriageSubjectListItem(subject" in review_region
@@ -229,63 +239,62 @@ def test_backoffice_pr_b_queue_and_detail_paths_stay_narrow():
     assert "&offset=" in lifecycle_region
 
 
-def test_backoffice_screening_evidence_drawer_renders_structured_review_fields():
+def test_backoffice_screening_evidence_inline_renders_structured_review_fields():
+    """Phase E re-anchor of the retired drawer pins: the structured review
+    fields the drawer carried must all remain reachable inline — media
+    evidence fields on the record cards, PEP/declared-PEP signals on the
+    workspace, provider identifiers in the audit disclosures."""
     html = BACKOFFICE_HTML.read_text()
 
-    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
-    assert "Why this needs review" in drawer_region
-    assert "Evidence summary" in drawer_region
+    record_region = _function_region(html, "providerEvidenceRecordCard", "providerResultHighlights")
+    assert "Match name" in record_region
+    assert "Role / scope" in record_region
+    assert "Article / source title" in record_region
+    assert "Publisher / source" in record_region
+    assert "Publication date" in record_region
+    assert "Why it matched" in record_region
+    assert "Open source" in record_region
+    tech = _function_region(html, "screeningTriageHitTechnicalDetails", "screeningClearanceNeedsSecondReviewer")
+    assert "Provider case ID" in tech
+    assert "Provider alert ID" in tech
+    assert "Provider risk ID" in tech
+    assert "Provider profile ID" in tech
     assert "Audit trace" in html
-    assert "Media Evidence" in drawer_region
-    assert "PEP Evidence" in drawer_region
-    assert "Sanctions / Watchlist Evidence" in drawer_region
-    assert "Provider case ID" in drawer_region
-    assert "Provider alert ID" in drawer_region
-    assert "Provider risk ID" in drawer_region
-    assert "Provider profile ID" in drawer_region
-    assert "Subject scope" in drawer_region
-    assert "Declared PEP" in drawer_region
-    assert "Provider PEP match" in drawer_region
-    assert "Undeclared PEP" in drawer_region
-    assert "Article / source title" in drawer_region
-    assert "Publisher / source" in drawer_region
-    assert "Publication date" in drawer_region
-    assert "Snippet" in drawer_region
-    assert "Open source" in drawer_region
+    person_region = _function_region(html, "buildPersonScreeningReviewCard", "renderScreeningReviewPanel")
+    assert "'Declared PEP'" in person_region
 
 
-def test_backoffice_screening_evidence_drawer_is_evidence_first_before_traceability():
+def test_backoffice_screening_evidence_inline_is_evidence_first_before_traceability():
+    """Evidence-first survives inline: the hit card renders the evidence body
+    before the collapsed Technical details; the legacy group renderer keeps
+    its Audit trace as a collapsed <details>."""
     html = BACKOFFICE_HTML.read_text()
 
-    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
-
-    assert drawer_region.index("Why this needs review") < drawer_region.index("Evidence summary")
-    assert drawer_region.index("Evidence summary") < drawer_region.index("evidenceTraceabilitySection")
-    assert drawer_region.index("Evidence summary") < drawer_region.index("Provider risk ID")
-    assert "function evidenceTraceabilitySection" in html
-    assert "<details" in html
-    assert "<summary" in html
-    assert "Audit trace" in html
+    card_region = _function_region(html, "screeningTriageHitCard", "screeningTriageWeakTailSection")
+    assert card_region.index("screeningTriageHitEvidenceBody(item)") < card_region.index("screeningTriageHitTechnicalDetails(item)")
+    highlights_region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
+    assert "Audit trace" in highlights_region
+    assert "<details" in highlights_region
+    assert "<summary" in highlights_region
 
 
-def test_backoffice_screening_evidence_drawer_uses_review_friendly_fallbacks():
+def test_backoffice_screening_evidence_uses_review_friendly_fallbacks():
+    """Unknown providers stay 'Unknown Provider' (never silently rebranded
+    ComplyAdvantage) and UUID-only matches get readable fallbacks — the same
+    truth rules the retired drawer enforced, now on the inline surfaces."""
     html = BACKOFFICE_HTML.read_text()
 
-    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
-    register_region = _function_region(html, "registerScreeningEvidence", "evidenceInfoGrid")
-    title_region = _function_region(html, "evidencePrimaryLabel", "isPepEvidenceRelevant")
+    highlights_region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
+    title_region = _function_region(html, "evidencePrimaryLabel", "evidenceCategoryPriority")
 
     assert "function formatProviderName" in html
-    assert "|| 'Unknown Provider'" in register_region
-    assert "var provider = formatProviderName(hit.provider || hit.source || hit._provider) || 'Unknown Provider'" in drawer_region
-    assert "|| 'ComplyAdvantage'" not in register_region
-    assert "|| 'ComplyAdvantage'" not in drawer_region
-    assert "Provider', provider" in drawer_region
-    assert "Not recorded" not in drawer_region
+    assert "|| 'Unknown Provider'" in highlights_region
+    assert "|| 'ComplyAdvantage'" not in highlights_region
     assert "function isUuidLike" in html
-    assert "evidencePrimaryLabel(hit, hit)" in drawer_region
     assert "!isUuidLike(candidate)" in title_region
-    assert "Screening Evidence — ' + matchedName" in drawer_region
+    display_region = _function_region(html, "screeningTriageHitDisplayName", "screeningTriageHitChips")
+    assert "isUuidLike(name)" in display_region
+    assert "'Unnamed provider match'" in display_region
 
 
 def test_backoffice_screening_review_includes_intermediary_subjects():
@@ -311,8 +320,7 @@ def test_backoffice_screening_evidence_drawer_normalizes_categories_and_sections
     html = BACKOFFICE_HTML.read_text()
 
     category_region = _function_region(html, "normalizeEvidenceCategoryLabel", "evidenceCategories")
-    categories_region = _function_region(html, "evidenceCategories", "evidenceGroupedIdentifiers")
-    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
+    categories_region = _function_region(html, "evidenceCategories", "evidenceSubjectLabel")
 
     assert "Provider risk match - review context" in categories_region
     assert "Potential provider match" not in categories_region
@@ -322,49 +330,37 @@ def test_backoffice_screening_evidence_drawer_normalizes_categories_and_sections
     assert "Sanctions" in category_region
     assert "Watchlist / warning" in category_region
     assert "Regulatory" in category_region
-    assert "function isPepEvidenceRelevant" in html
-    assert "if (isPepEvidenceRelevant(hit, categories, riskLabels))" in drawer_region
-    assert "if (mediaTitle || mediaSnippet || mediaUrl || categories.join(' ').toLowerCase().indexOf('adverse') !== -1)" in drawer_region
 
 
 def test_backoffice_screening_evidence_groups_repeated_hits_before_rendering():
     html = BACKOFFICE_HTML.read_text()
 
-    grouping_region = _function_region(html, "groupProviderEvidenceHits", "openScreeningEvidenceDrawer")
+    grouping_region = _function_region(html, "groupProviderEvidenceHits", "evidenceBirthDate")
     provider_region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
-    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
-    grouped_ids_region = _function_region(html, "evidenceGroupedIdentifiers", "evidenceReviewCategoryLabel")
 
     assert "function providerEvidenceGroupKey" in html
     assert "function groupProviderEvidenceHits" in html
-    assert "function evidenceGroupedIdentifiers" in html
     assert "_group_count" in grouping_region
     assert "_group_records" in grouping_region
     assert "_group_record_keys" in grouping_region
     assert "_grouped_profile_identifiers" in grouping_region
     assert "_grouped_risk_identifiers" in grouping_region
     assert "_grouped_alert_identifiers" in grouping_region
-    assert "var seen = {};" in grouped_ids_region
-    assert "return grouped.length > 1 ? grouped : [];" in grouped_ids_region
     assert "var hits = groupProviderEvidenceHits" in provider_region
-    assert "Evidence groups" in provider_region
     assert "providerEvidenceRecordCard(record, context, index, recordIndex)" in provider_region
     assert "evidence records grouped for this provider profile/category" in provider_region
-    assert "Evidence records grouped" in drawer_region
-    assert "Grouped alert IDs" in drawer_region
-    assert "Grouped risk IDs" in drawer_region
-    assert "var groupedAlertIdentifiers = evidenceGroupedIdentifiers(hit._grouped_alert_identifiers);" in drawer_region
-    assert "var groupedRiskIdentifiers = evidenceGroupedIdentifiers(hit._grouped_risk_identifiers);" in drawer_region
-    assert "['Grouped alert IDs', groupedAlertIdentifiers]" in drawer_region
-    assert "['Grouped risk IDs', groupedRiskIdentifiers]" in drawer_region
+    # Grouped provider identifiers stay reachable in the group Audit trace.
+    assert "_grouped_alert_identifiers || []).join(', ')" in provider_region
+    assert "_grouped_risk_identifiers || []).join(', ')" in provider_region
 
 
-def test_backoffice_screening_evidence_drawer_adds_officer_review_rationale():
+def test_backoffice_screening_evidence_adds_officer_review_rationale():
     html = BACKOFFICE_HTML.read_text()
 
     category_label_region = _function_region(html, "evidenceReviewCategoryLabel", "evidenceReviewRationale")
     rationale_region = _function_region(html, "evidenceReviewRationale", "evidencePrimaryLabel")
-    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
+    provider_region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
+    record_region = _function_region(html, "providerEvidenceRecordCard", "providerResultHighlights")
 
     assert "var EVIDENCE_REVIEW_GUIDANCE" in html
     assert "function evidenceReviewCategoryLabel" in html
@@ -375,29 +371,28 @@ def test_backoffice_screening_evidence_drawer_adds_officer_review_rationale():
     assert "found a potential PEP match" in rationale_region
     assert "found potential adverse media" in rationale_region
     assert "returned provider risk context" in rationale_region
-    assert "var reviewRationale = evidenceReviewRationale(provider, categories, hit, matchedName);" in drawer_region
-    assert "escapeHtml(reviewRationale)" in drawer_region
+    assert "evidenceReviewRationale(providerName, categories, hit, evidencePrimaryLabel(hit, context))" in provider_region
+    assert "evidenceReviewRationale(hit.provider || hit.source || (context || {}).provider, categories, hit, evidencePrimaryLabel(hit, context))" in record_region
 
 
-def test_backoffice_screening_evidence_drawer_prioritizes_human_readable_fields():
+def test_backoffice_screening_evidence_prioritizes_human_readable_fields():
     html = BACKOFFICE_HTML.read_text()
 
-    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
+    record_region = _function_region(html, "providerEvidenceRecordCard", "providerResultHighlights")
+    provider_region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
 
-    assert "Matched person/company" in drawer_region
-    assert "Role / scope" in drawer_region
-    assert "Provider', provider" in drawer_region
-    assert "Role / title" in drawer_region
-    assert "Country" in drawer_region
-    assert "Provider risk ID" in drawer_region
-    assert drawer_region.index("Matched person/company") < drawer_region.index("Provider risk ID")
-    assert drawer_region.index("Role / scope") < drawer_region.index("Provider profile ID")
+    assert "Match name" in record_region
+    assert "Role / scope" in record_region
+    assert record_region.index("Match name") < record_region.index("Nationality / country")
+    # The group renderer keeps identifiers inside the collapsed Audit trace,
+    # after the human-readable summary content.
+    assert provider_region.index("groupSummary") < provider_region.index("_grouped_alert_identifiers")
 
 
 def test_backoffice_screening_evidence_sorts_decision_useful_hits_first():
     html = BACKOFFICE_HTML.read_text()
 
-    priority_region = _function_region(html, "evidenceCategoryPriority", "screeningEvidenceKey")
+    priority_region = _function_region(html, "evidenceCategoryPriority", "evidencePrimaryCategoryLabel")
     provider_region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
 
     assert "function evidenceCategoryPriority" in html
@@ -416,38 +411,48 @@ def test_backoffice_screening_review_uses_backend_provider_evidence_payload():
 
     assert "reviewRow && reviewRow.provider_evidence" in entity_region
     assert "reviewRow && reviewRow.provider_evidence" in person_region
-    assert "providerResultHighlights(companyResults, {" in entity_region
-    assert "var personProviderResults = [].concat(screening.results || []).concat((reviewRow && reviewRow.provider_evidence) || []);" in person_region
-    assert "providerResultHighlights(personProviderResults, personProviderContext);" in person_region
+    # Phase E: backend provider evidence reaches the single evidence renderer
+    # through the workspace config (ranked sections when triage exists,
+    # inline legacy renderer otherwise).
+    assert "legacyResults: companyResults" in entity_region
+    assert "var personProviderResults = [].concat((screening && screening.results) || []).concat((reviewRow && reviewRow.provider_evidence) || []);" in person_region
+    assert "legacyResults: personProviderResults" in person_region
     assert "provider: company.source || company.provider || screeningSummary.provider" in entity_region
     assert "provider: facts.source || screeningSummary.provider" in person_region
 
 
 def test_backoffice_screening_queue_renders_structured_evidence_readiness_panel():
+    """Phase E: the readiness panel is slimmed to evidence-state note +
+    evidence + a collapsed provider-reference audit disclosure. The retired
+    Mesh-Summary heading / subject-fact grid / Officer Decision note must NOT
+    reappear (their facts live once in the header/status strip/disposition
+    panel); the truth-state machinery (quality reasons, loading/error states,
+    honest source-unavailable copy) survives."""
     html = BACKOFFICE_HTML.read_text()
 
     reason_region = _function_region(html, "screeningQueueEvidenceQualityReason", "screeningQueueEvidenceItemCard")
     panel_region = _function_region(html, "screeningQueueEvidenceReadinessPanel", "providerIndicatorDetails")
+    body_region = _function_region(html, "screeningSubjectWorkspaceBody", "buildEntityScreeningReviewCard")
     entity_region = _function_region(html, "buildEntityScreeningReviewCard", "buildPersonScreeningReviewCard")
     person_region = _function_region(html, "buildPersonScreeningReviewCard", "renderScreeningReviewPanel")
 
     assert "function screeningQueueEvidenceReadinessPanel" in html
     assert "function screeningQueueEvidenceQualityReason" in html
-    assert "screeningQueueEvidenceReadinessPanel(reviewRow)" in entity_region
-    assert "screeningQueueEvidenceReadinessPanel(reviewRow)" in person_region
-    assert "ComplyAdvantage Mesh Screening Summary" in panel_region
-    assert "Client / application" in panel_region
-    assert "Role / relationship" in panel_region
-    assert "Current risks" in panel_region
-    assert "Unresolved current risks" in panel_region
-    assert "Evidence readiness:" in panel_region
+    # Both builders render through the single Phase E workspace body, which
+    # carries the evidence panel.
+    assert "screeningSubjectWorkspaceBody" in entity_region
+    assert "screeningSubjectWorkspaceBody" in person_region
+    assert "screeningQueueEvidenceReadinessPanel(row, config.legacyResults, config.legacyContext)" in body_region
+    # One fact, one place: the retired repeat-surfaces must not come back.
+    assert "ComplyAdvantage Mesh Screening Summary" not in html
+    assert "Officer Decision" not in panel_region
+    assert "Client / application" not in panel_region
     assert "evidence_quality_reason" in reason_region
     assert "screeningQueueEvidenceQualityReason(row, qualityLabel, items)" in panel_region
     assert "Provider screening completed with no hits; detailed source evidence is not applicable." in reason_region
     assert "Provider screening failed before detailed evidence was available." in reason_region
     assert "Provider did not return source link." in reason_region
-    assert "Evidence" in panel_region
-    assert "Officer Decision" in panel_region
+    assert "Evidence readiness: " in panel_region
     assert "View provider references" in panel_region
     assert "data-screening-technical-details" in panel_region
     assert "SCREENING_SOURCE_UNAVAILABLE_MESSAGE" in panel_region
@@ -456,6 +461,8 @@ def test_backoffice_screening_queue_renders_structured_evidence_readiness_panel(
     assert "Provider case IDs" in panel_region
     assert "Provider alert IDs" in panel_region
     assert "Provider risk IDs" in panel_region
+    assert "Current risks" in panel_region
+    assert "Unresolved current risks" in panel_region
     assert "JSON.stringify" not in panel_region
 
 
@@ -551,15 +558,17 @@ def test_backoffice_person_review_prefers_screening_declared_pep_truth():
     region = _function_region(html, "buildPersonScreeningReviewCard", "renderScreeningReviewPanel")
     assert "declaredPepFromScreeningRecord(screeningRecord, person.pep)" in region
     assert "screeningTagBadge('Declared PEP'" in region
-    assert "Declared PEP:</strong> ' + escapeHtml(personDeclaredPep ? 'Yes' : 'No')" in region
-    assert "Declared PEP:</strong> ' + escapeHtml(person.pep === 'Yes' ? 'Yes' : 'No')" not in region
+    # Phase E: the explicit Yes/No answer renders once in the workspace status
+    # strip, still sourced from the screening-record truth (never person.pep alone).
+    assert "['Declared PEP', personDeclaredPep ? 'Yes' : 'No']" in region
+    assert "['Declared PEP', person.pep" not in region
 
 
 def test_backoffice_screening_disposition_modal_matches_api_contract():
     html = BACKOFFICE_HTML.read_text()
 
     modal_start = html.index("<!-- ═══════════════ SCREENING DISPOSITION MODAL")
-    modal_end = html.index('<div class="modal-overlay" id="modal-screening-evidence">', modal_start)
+    modal_end = html.index('<div class="modal-overlay" id="modal-idv-resolution">', modal_start)
     modal_region = html[modal_start:modal_end]
     options_region = _function_region(html, "screeningDispositionCodeOptions", "screeningRationaleWordCount")
     submit_region = _function_region(html, "submitScreeningDisposition", "renderScreening")

@@ -27,17 +27,24 @@ def test_screening_subject_list_prioritizes_review_and_deemphasizes_clear_subjec
     assert "opacity:0.72" in item
 
 
-def test_screening_review_decision_summary_and_actions_precede_evidence_detail():
+def test_screening_review_workspace_orders_triage_before_evidence_and_actions():
+    """Phase E: both builders render through the single workspace body —
+    banner → triage strip → status strip → Agent 3 guidance → inline evidence
+    → officer disposition bar → comparison → history."""
     html = _html()
     entity = _function_region(html, "buildEntityScreeningReviewCard", "buildPersonScreeningReviewCard")
     person = _function_region(html, "buildPersonScreeningReviewCard", "buildScreeningTriageSubjects")
 
     for region in (entity, person):
-        assert "screeningDecisionSummaryPanel" in region
-        assert "renderInlineScreeningDispositionPanel" in region
-        assert "providerResultHighlights" in region
-        assert region.index("screeningDecisionSummaryPanel") < region.index("renderInlineScreeningDispositionPanel")
-        assert region.index("renderInlineScreeningDispositionPanel") < region.index("providerResultHighlights")
+        assert "screeningSubjectWorkspaceBody" in region
+
+    body = _function_region(html, "screeningSubjectWorkspaceBody", "buildEntityScreeningReviewCard")
+    assert body.index("screeningReviewHonestyBanner") < body.index("screeningTriageStrip")
+    assert body.index("screeningTriageStrip") < body.index("screeningWorkspaceStatusStrip")
+    assert body.index("screeningWorkspaceStatusStrip") < body.index("renderAgent3ScreeningInterpretationPanel")
+    assert body.index("renderAgent3ScreeningInterpretationPanel") < body.index("screeningQueueEvidenceReadinessPanel")
+    assert body.index("screeningQueueEvidenceReadinessPanel") < body.index("renderInlineScreeningDispositionPanel")
+    assert body.index("renderInlineScreeningDispositionPanel") < body.index("screeningReviewHistory")
 
 
 def test_screening_evidence_is_grouped_by_business_category_with_technical_ids_out_of_main_view():
@@ -45,7 +52,6 @@ def test_screening_evidence_is_grouped_by_business_category_with_technical_ids_o
     group_key = _function_region(html, "providerEvidenceGroupKey", "groupProviderEvidenceHits")
     record_card = _function_region(html, "providerEvidenceRecordCard", "firstEvidenceIndicatorValue")
     highlights = _function_region(html, "providerResultHighlights", "screeningEvidenceArrayText")
-    drawer = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
 
     assert "'category'" in group_key
     assert "profileIdentifier" not in group_key
@@ -55,10 +61,13 @@ def test_screening_evidence_is_grouped_by_business_category_with_technical_ids_o
     assert "Provider alert ID" not in record_card
     assert "Provider risk ID" not in record_card
     assert "JSON.stringify" not in highlights
-    assert "Evidence groups" in highlights
+    # Phase E: the legacy renderer is inline-only (no modal chain) and keeps
+    # its identifiers inside the collapsed Audit trace.
+    assert "Provider match records (stored report)" in highlights
+    assert "View evidence" not in html
     assert "Source article link is not available from the ComplyAdvantage payload" in highlights
-    assert "Provider case ID" in drawer
-    assert "Provider alert ID" in drawer
+    assert "Grouped alert IDs" in highlights
+    assert "Grouped risk IDs" in highlights
 
 
 def test_onboarding_adverse_media_is_in_screening_review_while_monitoring_detail_remains_accessible():
@@ -70,7 +79,7 @@ def test_onboarding_adverse_media_is_in_screening_review_while_monitoring_detail
     assert "provider === 'complyadvantage'" in company_media
     assert "type === 'media' || type === 'adverse_media'" in company_media
     assert "monitoringMedia.results" in entity
-    assert "Adverse media" in entity
+    assert "screeningTagBadge('Adverse Media', 'pending')" in entity
     assert "monitoringDetailCard('Issue / Evidence'" in monitoring_detail
     assert "renderMonitoringTechnicalDetails" in monitoring_detail
 

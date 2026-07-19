@@ -3463,16 +3463,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   </div>
 </div>
 
-<div class="modal-overlay" id="modal-screening-evidence">
-  <div class="modal" style="width:860px;max-width:calc(100vw - 32px);max-height:88vh;overflow-y:auto;">
-    <div class="modal-header"><h3 id="screening-evidence-title">Screening Evidence</h3><button class="modal-close" onclick="closeModal('modal-screening-evidence')">&times;</button></div>
-    <div class="modal-body" id="screening-evidence-body"></div>
-    <div class="modal-footer" id="screening-evidence-footer">
-      <button class="btn btn-outline" onclick="closeModal('modal-screening-evidence')">Close</button>
-    </div>
-  </div>
-</div>
-
 <div class="modal-overlay" id="modal-idv-resolution">
   <div class="modal" style="width:640px;max-width:calc(100vw - 32px);">
     <div class="modal-header"><h3>Resolve IDV Exception</h3><button class="modal-close" onclick="closeModal('modal-idv-resolution')">&times;</button></div>
@@ -6090,7 +6080,6 @@ var SCREENING_QUEUE_ACTIVE_REQUEST_ID = 0;
 var SCREENING_PROVIDER_STATUS = null;
 var SCREENING_REVIEW_ROWS = {};
 var SUMSUB_IDV_ROWS = {};
-var SCREENING_EVIDENCE_DETAILS = {};
 var pendingScreeningDisposition = null;
 var INLINE_SCREENING_DISPOSITION_STATE = {};
 var INLINE_SCREENING_DISPOSITION_SUBMITTING = {};
@@ -14580,18 +14569,6 @@ function evidenceCategories(hit) {
   return normalized.length ? normalized : ['Provider risk match - review context'];
 }
 
-function evidenceGroupedIdentifiers(values) {
-  var grouped = [];
-  var seen = {};
-  (Array.isArray(values) ? values : [values]).forEach(function(value) {
-    var normalized = String(value || '').trim();
-    if (!normalized || seen[normalized]) return;
-    seen[normalized] = true;
-    grouped.push(normalized);
-  });
-  return grouped.length > 1 ? grouped : [];
-}
-
 var EVIDENCE_REVIEW_GUIDANCE = 'Review the evidence, source context, and traceability details before recording a decision.';
 
 function evidenceReviewCategoryLabel(categories) {
@@ -14642,14 +14619,6 @@ function evidencePrimaryLabel(hit, context) {
     if (candidate && !isUuidLike(candidate)) return candidate;
   }
   return (formatProviderName(hit.provider || hit.source || context.provider) || 'Unknown Provider') + ' Evidence';
-}
-
-function isPepEvidenceRelevant(hit, categories, riskLabels) {
-  var text = (categories || []).concat(riskLabels || []).join(' ').toLowerCase();
-  return text.indexOf('pep') !== -1 ||
-    hit.is_pep === true ||
-    hit._provider_detected_pep === 'Yes' ||
-    hit._undeclared_pep === 'Yes';
 }
 
 function evidenceCategoryPriority(hit, context) {
@@ -14967,36 +14936,6 @@ function buildScreeningComparisonPanel(mode, declaredSubject, results, options, 
   '</details>';
 }
 
-function screeningEvidenceKey(hit, context, index) {
-  hit = hit || {};
-  context = context || {};
-  return [
-    context.application_ref || '',
-    context.subject_type || '',
-    context.subject_name || '',
-    hit.provider_case_identifier || hit.case_identifier || '',
-    hit.provider_alert_identifier || hit.alert_identifier || '',
-    hit.provider_risk_identifier || hit.risk_id || hit.risk_identifier || '',
-    hit.provider_profile_identifier || hit.profile_identifier || '',
-    index
-  ].join('|').replace(/[^A-Za-z0-9_-]/g, '_');
-}
-
-function registerScreeningEvidence(hit, context, index) {
-  var key = screeningEvidenceKey(hit, context, index);
-  SCREENING_EVIDENCE_DETAILS[key] = Object.assign({}, hit || {}, {
-    _application_ref: (context || {}).application_ref || '',
-    _subject_type: (context || {}).subject_type || hit.subject_scope || '',
-    _subject_name: (context || {}).subject_name || '',
-    _provider: formatProviderName((hit || {}).provider || (hit || {}).source || (context || {}).provider) || 'Unknown Provider',
-    _screened_at: (context || {}).screened_at || hit.screened_at || '',
-    _declared_pep: (context || {}).declared_pep,
-    _provider_detected_pep: (context || {}).provider_detected_pep,
-    _undeclared_pep: (context || {}).undeclared_pep
-  });
-  return key;
-}
-
 function evidenceInfoGrid(rows) {
   var visible = rows.filter(function(row) { return evidenceDisplayValue(row[1]); });
   if (!visible.length) return '';
@@ -15006,30 +14945,6 @@ function evidenceInfoGrid(rows) {
       '<div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">' + escapeHtml(row[0]) + '</div>' +
       '<div style="font-size:12px;color:var(--text1);font-weight:600;word-break:break-word;' + (mono ? 'font-family:monospace;' : '') + '">' + escapeHtml(evidenceDisplayValue(row[1])) + '</div>' +
     '</div>';
-  }).join('') + '</div>';
-}
-
-function evidenceSection(title, body) {
-  if (!body) return '';
-  return '<div style="margin-top:14px;padding:14px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
-    '<div style="font-size:12px;font-weight:700;color:var(--text1);margin-bottom:8px;">' + escapeHtml(title) + '</div>' +
-    body +
-  '</div>';
-}
-
-function evidenceTraceabilitySection(body) {
-  if (!body) return '';
-  return '<details style="margin-top:14px;padding:12px 14px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
-    '<summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text1);">Audit trace</summary>' +
-    '<div style="margin-top:10px;color:var(--text2);">' + body + '</div>' +
-  '</details>';
-}
-
-function evidenceBadgeList(values) {
-  values = (Array.isArray(values) ? values : []).filter(Boolean);
-  if (!values.length) return '';
-  return '<div style="display:flex;flex-wrap:wrap;gap:6px;">' + values.map(function(v) {
-    return '<span class="badge pending">' + escapeHtml(v) + '</span>';
   }).join('') + '</div>';
 }
 
@@ -15139,7 +15054,6 @@ function providerEvidenceRecordCard(hit, context, groupIndex, recordIndex) {
   var mediaDate = hit.publication_date || hit.article_date || hit.published_at || '';
   var mediaSnippet = hit.media_snippet || hit.snippet || hit.match_rationale || '';
   var summary = hit.summary || mediaSnippet || evidenceReviewRationale(hit.provider || hit.source || (context || {}).provider, categories, hit, evidencePrimaryLabel(hit, context));
-  var evidenceKey = registerScreeningEvidence(hit, context || {}, String(groupIndex) + '_' + String(recordIndex));
   var rows = [
     ['Match name', evidencePrimaryLabel(hit, context)],
     ['Role / scope', evidenceSubjectLabel(hit, (context || {}).subject_type)],
@@ -15161,9 +15075,7 @@ function providerEvidenceRecordCard(hit, context, groupIndex, recordIndex) {
     (rows ? '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;margin-top:8px;font-size:11px;color:var(--text2);">' + rows + '</div>' : '') +
     (riskLabels ? '<div style="font-size:11px;color:var(--text3);margin-top:6px;"><strong>Risk labels:</strong> ' + escapeHtml(riskLabels) + '</div>' : '') +
     (summary ? '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(summary) + '</div>' : '') +
-    '<div style="margin-top:8px;"><button type="button" class="btn btn-outline btn-sm" onclick="openScreeningEvidenceDrawer(\'' + evidenceKey + '\')">View evidence</button>' +
-    (mediaUrl ? ' <a class="btn btn-outline btn-sm" href="' + escapeHtml(mediaUrl) + '" target="_blank" rel="noopener">Open source</a>' : '') +
-    '</div>' +
+    (mediaUrl ? '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(mediaUrl) + '" target="_blank" rel="noopener">Open source ↗</a></div>' : '') +
   '</div>';
 }
 
@@ -15220,113 +15132,18 @@ function evidencePepContext(hit) {
   return found.value || {};
 }
 
-function openScreeningEvidenceDrawer(key) {
-  var hit = SCREENING_EVIDENCE_DETAILS[key];
-  if (!hit) { showToast('Screening evidence is no longer available', 'error'); return; }
-
-  var categories = evidenceCategories(hit);
-  var riskLabels = Array.isArray(hit.risk_type_labels) ? hit.risk_type_labels : [];
-  var riskKeys = Array.isArray(hit.risk_type_keys) ? hit.risk_type_keys : [];
-  var provider = formatProviderName(hit.provider || hit.source || hit._provider) || 'Unknown Provider';
-  var matchedName = evidencePrimaryLabel(hit, hit);
-  var mediaUrl = evidenceSourceUrl(hit);
-  var mediaTitle = evidenceSourceTitle(hit);
-  var mediaPublisher = evidenceSourcePublisher(hit);
-  var mediaDate = evidenceSourceDate(hit);
-  var mediaSnippet = hit.media_snippet || hit.snippet || hit.match_rationale || '';
-  var mediaMissingMessage = hit.source_url_unavailable_message || SCREENING_SOURCE_UNAVAILABLE_MESSAGE;
-  var subjectScope = hit.subject_scope || hit._subject_type || '';
-  var subjectType = hit._subject_type || subjectScope || 'screening subject';
-  var discovered = hit.discovered_at || hit._screened_at || hit.screened_at || '';
-  var groupedAlertIdentifiers = evidenceGroupedIdentifiers(hit._grouped_alert_identifiers);
-  var groupedRiskIdentifiers = evidenceGroupedIdentifiers(hit._grouped_risk_identifiers);
-  var reviewRationale = evidenceReviewRationale(provider, categories, hit, matchedName);
-  var drawerTitle = 'Screening Evidence — ' + matchedName;
-  var pepContext = evidencePepContext(hit);
-
-  var body = '';
-  body += '<div style="padding:14px 16px;border-left:4px solid var(--brand);background:rgba(43,47,143,0.04);border-radius:8px;font-size:12px;line-height:1.5;color:var(--text2);">' +
-    '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);font-weight:700;">Why this needs review</div>' +
-    '<div style="margin-top:6px;font-weight:700;color:var(--text1);font-size:15px;">' + escapeHtml(reviewRationale) + '</div>' +
-    (hit.summary ? '<div style="margin-top:8px;">' + escapeHtml(hit.summary) + '</div>' : '') +
-  '</div>';
-
-  body += evidenceSection('Evidence summary',
-    evidenceBadgeList(categories.concat(riskLabels)) +
-    evidenceInfoGrid([
-      ['Matched person/company', matchedName],
-      ['Role / scope', evidenceSubjectLabel(hit, subjectType)],
-      ['Provider', provider],
-      ['Discovered / screened', discovered ? String(discovered).replace('T', ' ').slice(0, 19) : ''],
-      ['Matched entity/profile', matchedName],
-      ['Subject scope', subjectScope],
-      ['Evidence records grouped', hit._group_count && hit._group_count > 1 ? String(hit._group_count) : ''],
-    ])
-  );
-
-  if (mediaTitle || mediaSnippet || mediaUrl || categories.join(' ').toLowerCase().indexOf('adverse') !== -1) {
-    body += evidenceSection('Media Evidence',
-      evidenceInfoGrid([
-        ['Article / source title', mediaTitle],
-        ['Publisher / source', mediaPublisher],
-        ['Publication date', mediaDate],
-        ['Snippet', mediaSnippet],
-        ['Why it matched', hit.match_rationale],
-        ['Relevance / confidence', hit.relevance || hit.confidence || evidenceMatchStrength(hit)],
-      ]) +
-      (mediaUrl ? '<div style="margin-top:10px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(mediaUrl) + '" target="_blank" rel="noopener">Open source</a></div>' : '<div style="font-size:11px;color:var(--text3);margin-top:8px;">' + escapeHtml(mediaMissingMessage) + '</div>')
-    );
-  }
-
-  if (isPepEvidenceRelevant(hit, categories, riskLabels)) {
-    body += evidenceSection('PEP Evidence',
-      evidenceInfoGrid([
-        ['PEP class / labels', riskLabels],
-        ['Role / title', hit.position || pepContext.position],
-        ['Country', hit.country || pepContext.country],
-        ['Declared PEP', hit._declared_pep],
-        ['Provider PEP match', hit._provider_detected_pep],
-        ['Undeclared PEP', hit._undeclared_pep],
-      ])
-    );
-  }
-
-  if (categories.join(' ').toLowerCase().match(/sanction|watchlist|warning|regulatory/) || hit.authority || hit.list_name) {
-    body += evidenceSection('Sanctions / Watchlist Evidence',
-      evidenceInfoGrid([
-        ['Authority / program', hit.authority],
-        ['Reason / list name', hit.list_name || hit.sanctions_list],
-        ['Categories', categories],
-      ])
-    );
-  }
-
-  body += evidenceTraceabilitySection(
-    evidenceInfoGrid([
-      ['Application', hit._application_ref],
-      ['Provider case ID', hit.provider_case_identifier || hit.case_identifier],
-      ['Provider alert ID', hit.provider_alert_identifier || hit.alert_identifier],
-      ['Provider risk ID', hit.provider_risk_identifier || hit.risk_id || hit.risk_identifier],
-      ['Provider profile ID', hit.provider_profile_identifier || hit.profile_identifier],
-      ['Grouped alert IDs', groupedAlertIdentifiers],
-      ['Grouped risk IDs', groupedRiskIdentifiers],
-      ['Risk type keys', riskKeys],
-      ['Discovered via', hit.discovered_via],
-    ])
-  );
-
-  document.getElementById('screening-evidence-title').textContent = drawerTitle;
-  document.getElementById('screening-evidence-body').innerHTML = body;
-  document.getElementById('modal-screening-evidence').classList.add('open');
-}
-
 function providerResultHighlights(results, context) {
   context = context || {};
   var hits = groupProviderEvidenceHits(Array.isArray(results) ? results : [], context).sort(function(a, b) {
     return evidenceCategoryPriority(a, context) - evidenceCategoryPriority(b, context);
   });
   if (!hits.length) return '';
-  return '<div style="margin-top:10px;"><strong>Evidence groups</strong>' + hits.map(function(hit, index) {
+  // SRP-3e Phase E: legacy-report fallback only. Rows carrying the enriched
+  // screening_evidence/triage block render the ranked hit sections instead;
+  // this inline renderer covers stored reports that predate enrichment.
+  // Everything renders inline — no modal chain; the external source link is
+  // the only navigation.
+  return '<div data-screening-legacy-provider-matches="true" style="margin-top:10px;"><strong>Provider match records (stored report)</strong>' + hits.map(function(hit, index) {
     var categories = evidenceCategories(hit);
     var groupLabel = evidencePrimaryCategoryLabel(hit);
     var groupCount = hit._group_count || ((hit._group_records || []).length) || 1;
@@ -15350,7 +15167,10 @@ function providerResultHighlights(results, context) {
       ['Risk labels', riskLabels],
       ['Surfaced by pass', hit.surfaced_by_pass],
       ['Match score raw value', hit.match_score],
-      ['Discovered', discovered]
+      ['Discovered', discovered],
+      ['Grouped alert IDs', (hit._grouped_alert_identifiers || []).join(', ')],
+      ['Grouped risk IDs', (hit._grouped_risk_identifiers || []).join(', ')],
+      ['Grouped profile IDs', (hit._grouped_profile_identifiers || []).join(', ')]
     ].filter(function(row) { return row[1]; }).map(function(row) {
       return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <strong>' + escapeHtml(String(row[1])) + '</strong></div>';
     }).join('');
@@ -15361,7 +15181,7 @@ function providerResultHighlights(results, context) {
       '<summary style="cursor:pointer;display:flex;align-items:center;gap:8px;list-style:none;">' +
         '<span style="font-weight:700;color:var(--text1);">' + escapeHtml(groupLabel) + ' · ' + escapeHtml(String(groupCount)) + ' evidence record' + (groupCount === 1 ? '' : 's') + '</span>' +
         '<span class="badge ' + (evidenceCategoryPriority(hit, context) <= 2 ? 'high' : 'pending') + '">' + escapeHtml(sensitivity) + '</span>' +
-        '<span style="margin-left:auto;font-size:11px;color:var(--brand);font-weight:700;">Show evidence</span>' +
+        '<span style="margin-left:auto;font-size:11px;color:var(--brand);font-weight:700;">Show details</span>' +
       '</summary>' +
       '<div style="margin-top:8px;font-size:11px;color:var(--text2);line-height:1.6;">' +
         '<details style="margin-top:6px;">' +
@@ -15443,7 +15263,7 @@ function screeningQueueEvidenceItemCard(item, index) {
     ['Category', item.category],
     ['Source', item.source_name],
     ['Publication date', item.publication_date],
-    ['Match confidence', item.match_score],
+    ['Provider match score (raw)', item.match_score],
     ['Severity', item.severity]
   ].filter(function(row) { return evidenceDisplayValue(row[1]); }).map(function(row) {
     return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <strong>' + escapeHtml(evidenceDisplayValue(row[1])) + '</strong></div>';
@@ -15458,11 +15278,17 @@ function screeningQueueEvidenceItemCard(item, index) {
     '</div>' +
     (rows ? '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;margin-top:8px;font-size:11px;color:var(--text2);">' + rows + '</div>' : '') +
     (snippet ? '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:8px;">' + escapeHtml(snippet) + '</div>' : '') +
-    (sourceUrl ? '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(sourceUrl) + '" target="_blank" rel="noopener">Open source</a></div>' : '<div style="font-size:11px;color:var(--text3);margin-top:8px;">' + escapeHtml(sourceMessage) + '</div>') +
+    (sourceUrl ? '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(sourceUrl) + '" target="_blank" rel="noopener">Open source ↗</a></div>' : '<div style="font-size:11px;color:var(--text3);margin-top:8px;">' + escapeHtml(sourceMessage) + '</div>') +
   '</div>';
 }
 
-function screeningQueueEvidenceReadinessPanel(row) {
+function screeningQueueEvidenceReadinessPanel(row, legacyResults, legacyContext) {
+  // SRP-3e Phase E: slimmed to (1) a conditional evidence-state note, (2) the
+  // evidence itself — ranked triage sections when the server-computed triage
+  // block exists, flat honest cards otherwise, or the legacy stored-report
+  // renderer for pre-enrichment rows — and (3) a collapsed provider-reference
+  // audit disclosure. Subject/role/provider/status facts live once in the
+  // workspace header and status strip, never repeated here.
   if (!row) return '';
   var evidence = row.screening_evidence || {};
   var summary = row.evidence_summary || evidence || {};
@@ -15470,25 +15296,11 @@ function screeningQueueEvidenceReadinessPanel(row) {
   var isLoadingFullEvidence = !!(row.evidence_detail_available && row.evidence_detail_loading && !screeningQueueRowHasFullEvidence(row));
   var evidenceDetailError = row.evidence_detail_error || '';
   var qualityLabel = isLoadingFullEvidence ? 'Loading' : screeningQueueEvidenceQuality(row);
-  var categories = screeningEvidenceArrayText(summary.categories);
-  var providers = screeningEvidenceArrayText(summary.providers) || formatProviderName(row.provider || row.source || '');
   var partialMessage = isLoadingFullEvidence
     ? 'Detailed provider evidence is loading.'
     : (summary.partial_evidence_message || (qualityLabel !== 'Complete' ? 'Detailed provider evidence is partial or unavailable for this screening result.' : ''));
   var missingSourceMessage = summary.source_url_unavailable_message || (items.some(function(item) { return !item.source_url; }) ? SCREENING_SOURCE_UNAVAILABLE_MESSAGE : '');
   var qualityReason = screeningQueueEvidenceQualityReason(row, qualityLabel, items);
-  var summaryRows = evidenceInfoGrid([
-    ['Client / application', (row.company_name || '') + (row.application_ref ? ' (' + row.application_ref + ')' : '')],
-    ['Subject', row.subject_name],
-    ['Role / relationship', (items[0] && items[0].relationship_to_application) || String(row.subject_type || '').replace('_', ' ')],
-    ['Provider', providers],
-    ['Status', screeningBusinessStatusLabel(row.status_label)],
-    ['Category', categories],
-    ['Current risks', row.current_risk_count != null ? String(row.current_risk_count) : (row.total_hits != null ? String(row.total_hits) : '')],
-    ['Unresolved current risks', row.current_unresolved_risk_count != null ? String(row.current_unresolved_risk_count) : ''],
-    ['Duplicate provider records', row.duplicate_provider_record_count ? String(row.duplicate_provider_record_count) : ''],
-    ['Stale / historical risks', (row.stale_risk_count || row.historical_risk_count) ? String(row.stale_risk_count || 0) + ' stale · ' + String(row.historical_risk_count || 0) + ' historical' : '']
-  ]);
   var evidenceCards = '';
   if (isLoadingFullEvidence) {
     evidenceCards = '<div data-screening-evidence-loading="true" style="font-size:12px;color:var(--text3);line-height:1.5;margin-top:8px;padding:10px;border:1px dashed var(--border1);border-radius:8px;background:#fff;">Loading detailed provider evidence...</div>';
@@ -15499,10 +15311,26 @@ function screeningQueueEvidenceReadinessPanel(row) {
     evidenceCards = screeningTriageRankedHitSections(row) || items.map(screeningQueueEvidenceItemCard).join('');
   } else if (evidenceDetailError) {
     evidenceCards = '<div data-screening-evidence-error="true" style="font-size:12px;color:#991b1b;line-height:1.5;margin-top:8px;padding:10px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;">Detailed provider evidence could not be loaded. Summary evidence remains available.</div>';
+  } else if (Array.isArray(legacyResults) && legacyResults.length) {
+    // Stored report predates the enriched evidence payload: render the raw
+    // provider results inline (grouped, no modal chain).
+    evidenceCards = providerResultHighlights(legacyResults, legacyContext || {});
   } else {
     evidenceCards = '<div style="font-size:12px;color:var(--text3);line-height:1.5;margin-top:8px;">Detailed provider evidence is unavailable for this screening result.</div>';
   }
+  var stateNoteBits = [];
+  if (qualityLabel !== 'Complete') stateNoteBits.push('Evidence readiness: ' + qualityLabel);
+  if (qualityReason) stateNoteBits.push(qualityReason);
+  if (partialMessage) stateNoteBits.push(partialMessage);
+  if (missingSourceMessage) stateNoteBits.push(missingSourceMessage);
+  var stateNote = stateNoteBits.length
+    ? '<div data-screening-evidence-state="true" style="font-size:11px;color:var(--text3);line-height:1.5;margin-bottom:6px;">' + escapeHtml(stateNoteBits.join(' · ')) + '</div>'
+    : '';
   var technicalRows = evidenceInfoGrid([
+    ['Current risks', row.current_risk_count != null ? String(row.current_risk_count) : (row.total_hits != null ? String(row.total_hits) : '')],
+    ['Unresolved current risks', row.current_unresolved_risk_count != null ? String(row.current_unresolved_risk_count) : ''],
+    ['Duplicate provider records', row.duplicate_provider_record_count ? String(row.duplicate_provider_record_count) : ''],
+    ['Stale / historical risks', (row.stale_risk_count || row.historical_risk_count) ? String(row.stale_risk_count || 0) + ' stale · ' + String(row.historical_risk_count || 0) + ' historical' : ''],
     ['Provider case IDs', screeningEvidenceArrayText(summary.provider_case_ids)],
     ['Provider alert IDs', screeningEvidenceArrayText(summary.provider_alert_ids)],
     ['Provider risk IDs', screeningEvidenceArrayText(summary.provider_risk_ids)],
@@ -15510,26 +15338,15 @@ function screeningQueueEvidenceReadinessPanel(row) {
     ['Linked CA-1B evidence', (evidence.technical_details && evidence.technical_details.linked_ca_1b_evidence_count != null) ? String(evidence.technical_details.linked_ca_1b_evidence_count) : ''],
     ['Stored legacy evidence', (evidence.technical_details && evidence.technical_details.legacy_provider_evidence_count != null) ? String(evidence.technical_details.legacy_provider_evidence_count) : '']
   ]);
-  return '<div data-screening-evidence-readiness="true" style="margin-top:14px;padding:14px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
-    '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
-      '<div>' +
-        '<div style="font-size:13px;font-weight:800;color:var(--text1);">ComplyAdvantage Mesh Screening Summary</div>' +
-        '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Evidence readiness: ' + escapeHtml(qualityLabel) + '</div>' +
-        (qualityReason ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(qualityReason) + '</div>' : '') +
-      '</div>' +
-      '<span class="badge ' + screeningQueueEvidenceStatusClass(qualityLabel) + '">' + escapeHtml(qualityLabel) + '</span>' +
-    '</div>' +
-    summaryRows +
-    '<div style="margin-top:14px;font-size:13px;font-weight:800;color:var(--text1);">Evidence</div>' +
-    (partialMessage ? '<div style="font-size:11px;color:var(--text3);line-height:1.5;margin-top:6px;">' + escapeHtml(partialMessage) + '</div>' : '') +
-    (missingSourceMessage ? '<div style="font-size:11px;color:var(--text3);line-height:1.5;margin-top:4px;">' + escapeHtml(missingSourceMessage) + '</div>' : '') +
+  return '<div data-screening-evidence-readiness="true" style="margin-top:4px;">' +
+    stateNote +
     evidenceCards +
-    '<div style="margin-top:14px;font-size:13px;font-weight:800;color:var(--text1);">Officer Decision</div>' +
-    '<div style="font-size:11px;color:var(--text3);line-height:1.5;margin-top:6px;">' + escapeHtml(row.review_disposition ? ('Current disposition: ' + String(row.review_disposition).replace(/_/g, ' ')) : 'Disposition actions are shown below for review-required items.') + '</div>' +
-    '<details data-screening-technical-details style="margin-top:14px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:#fff;">' +
-      '<summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text1);">View provider references</summary>' +
-      '<div style="margin-top:10px;color:var(--text2);">' + technicalRows + '</div>' +
-    '</details>' +
+    (technicalRows
+      ? '<details data-screening-technical-details style="margin-top:14px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+          '<summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text1);list-style:none;">View provider references</summary>' +
+          '<div style="margin-top:10px;color:var(--text2);">' + technicalRows + '</div>' +
+        '</details>'
+      : '') +
   '</div>';
 }
 
@@ -15843,46 +15660,49 @@ function screeningFreshnessLineHtml(screeningSummary) {
   return '<div data-screening-freshness-line="true" style="font-size:11px;font-weight:400;color:var(--text3);margin-top:3px;">' + escapeHtml(line) + '</div>';
 }
 
-function screeningDecisionSummaryPanel(config) {
-  config = config || {};
-  var indicators = (config.indicators || []).filter(Boolean);
-  var indicatorHtml = indicators.length
-    ? '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">' + indicators.map(function(label) {
-        return screeningTagBadge(label, /sanction|pep/i.test(label) ? 'high' : 'pending');
-      }).join('') + '</div>'
-    : '<div style="font-size:12px;color:var(--text3);margin-top:8px;">No provider risk indicators recorded for this subject.</div>';
-  var rows = [
-    ['Subject', config.subjectName],
-    ['Role', config.role],
-    ['Declared PEP', config.declaredPep],
-    ['Provider detected', config.providerDetected],
-    ['Current status', config.currentStatus],
-    ['Materiality / severity', config.materiality],
-    ['Last screened', config.lastScreened],
-    ['Action needed', config.actionNeeded]
-  ].filter(function(row) { return evidenceDisplayValue(row[1]); }).map(function(row) {
-    return '<div style="padding:8px 0;border-bottom:1px solid var(--border1);"><span style="display:block;font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">' + escapeHtml(row[0]) + '</span><strong style="display:block;font-size:13px;color:var(--text1);margin-top:2px;">' + escapeHtml(evidenceDisplayValue(row[1])) + '</strong></div>';
-  }).join('');
-  return '<div data-screening-decision-summary="true" style="margin:0 18px 14px;padding:14px;border:1px solid var(--border1);border-left:4px solid var(--brand);border-radius:10px;background:rgba(43,47,143,0.035);">' +
-    '<div style="font-size:10px;text-transform:uppercase;color:var(--text3);font-weight:800;letter-spacing:.04em;">Decision summary</div>' +
-    '<div style="font-size:15px;font-weight:800;color:var(--text1);margin-top:4px;">' + escapeHtml(config.heading || 'Screening review required') + '</div>' +
-    indicatorHtml +
-    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0 14px;margin-top:12px;">' + rows + '</div>' +
+// ═══════════════════════════════════════════════════════════
+// SRP-3e Phase E — screening presentation consolidation.
+// One workspace renderer for both surfaces (Screening Queue drawer and the
+// Application Review Screening Review tab): mockup layout, evidence inline on
+// the ranked hit cards, one fact in one place. The legacy Decision Summary
+// grid, Mesh Summary panel and the View-evidence modal chain are retired;
+// facts they carried live once in the header, the compact status strip below,
+// or the collapsed provider-reference audit disclosure.
+
+function screeningWorkspaceStatusStrip(facts) {
+  // Compact strip for officer-relevant facts that have no other home in the
+  // consolidated layout (declared-PEP answer, materiality, registry status,
+  // stored-result summary, provenance). Render-if-present.
+  var rows = (Array.isArray(facts) ? facts : []).filter(function(pair) {
+    return pair && evidenceDisplayValue(pair[1]);
+  });
+  if (!rows.length) return '';
+  return '<div data-screening-status-strip="true" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:4px 16px;margin-bottom:14px;padding:10px 13px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:11.5px;color:var(--text2);line-height:1.5;">' +
+    rows.map(function(pair) {
+      return '<div><span style="color:var(--text3);">' + escapeHtml(pair[0]) + ':</span> <strong>' + escapeHtml(evidenceDisplayValue(pair[1])) + '</strong></div>';
+    }).join('') +
   '</div>';
 }
 
-function screeningProviderDetectedSummary(labels, facts) {
-  labels = (Array.isArray(labels) ? labels : []).filter(Boolean);
-  if (labels.length) return labels.join(', ');
-  if (facts && facts.matched) return 'Provider risk context';
-  return 'No provider match';
-}
-
-function screeningActionNeededText(row, hasHits) {
-  if (row && row.review_disposition) return 'Review recorded: ' + screeningReviewDisplayLabel(row) + '.';
-  if (row && row.review_required) return 'Decide whether this is a false positive, true match, escalation, or information request.';
-  if (hasHits) return 'Provider match exists but no actionable review is currently open.';
-  return 'No officer action needed unless new information appears.';
+function screeningSubjectWorkspaceBody(config) {
+  // The single Phase E workspace body: honesty banner → triage strip → status
+  // strip → Agent 3 guidance (advisory) → ranked evidence (inline, weak tail,
+  // rts caption) → officer disposition bar → declared-vs-provider comparison
+  // → disposition history. Wiring, validation and four-eyes flows are the
+  // pre-existing ones — presentation only.
+  config = config || {};
+  var app = config.app;
+  var row = config.reviewRow;
+  var body = '';
+  body += screeningReviewHonestyBanner(row, config.screeningSummary);
+  body += screeningTriageStrip(row);
+  body += screeningWorkspaceStatusStrip(config.statusFacts);
+  body += renderAgent3ScreeningInterpretationPanel(app);
+  body += screeningQueueEvidenceReadinessPanel(row, config.legacyResults, config.legacyContext);
+  body += renderInlineScreeningDispositionPanel(app, row, config.subjectType, config.subjectName);
+  body += config.comparisonHtml || '';
+  body += screeningReviewHistory(row);
+  return body;
 }
 
 function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus) {
@@ -15963,54 +15783,37 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   if (screeningRescreenEnabled()) badges.push(screeningRescreenButtonHtml(app.ref));
   badges.push(screeningEntityHeaderMenuHtml());
 
-  var body = '';
-  // SRP-3 Phase B: conditional honesty banner + server-computed triage strip
-  // lead the workspace (render-if-present; healthy reports show no banner).
-  body += screeningReviewHonestyBanner(reviewRow, screeningSummary);
-  body += screeningTriageStrip(reviewRow);
-  body += screeningDecisionSummaryPanel({
-    heading: app.company + (companyHits.adverse_media_hits > 0 ? ' - possible adverse media match' : (companyHits.sanctions_hits > 0 ? ' - possible sanctions/watchlist match' : ' - entity screening')),
+  var entityLegacyContext = {
+    application_ref: app.ref,
+    subject_type: 'entity',
+    subject_name: app.company,
+    provider: company.source || company.provider || screeningSummary.provider,
+    screened_at: screeningSummary.screened_at
+  };
+  var body = screeningSubjectWorkspaceBody({
+    app: app,
+    reviewRow: reviewRow,
+    screeningSummary: screeningSummary,
+    subjectType: 'entity',
     subjectName: app.company,
-    role: 'Entity',
-    declaredPep: 'Not applicable',
-    providerDetected: screeningProviderDetectedSummary(screeningTriageCategoryLabels(companyResults, companyHits), companyHits),
-    currentStatus: screeningTriageDisplayStatusLabel(reviewRow, primaryEntityLabel),
-    materiality: companyHits.sanctions_hits > 0 ? 'High sensitivity - sanctions/watchlist' : (companyHits.adverse_media_hits > 0 ? 'Elevated sensitivity - adverse media' : (companyHits.matched ? 'Review context' : 'Clear')),
-    lastScreened: ((screeningSummary.screened_at || 'Not recorded') + '').replace('T', ' ').slice(0, 19),
-    actionNeeded: screeningActionNeededText(reviewRow, companyHits.matched),
-    indicators: screeningTriageCategoryLabels(companyResults, companyHits)
+    statusFacts: [
+      ['Registry status', company.found === true ? 'Registry record found' : (company.found === false ? 'Registry record not found' : 'Registry lookup not performed')],
+      ['Materiality', companyHits.sanctions_hits > 0 ? 'High sensitivity - sanctions/watchlist' : (companyHits.adverse_media_hits > 0 ? 'Elevated sensitivity - adverse media' : (companyHits.matched ? 'Review context' : 'Clear'))],
+      ['Stored screening result', companyHits.matched ? 'Provider recorded company/entity matches requiring officer review.' : (screeningSummary.screening_run_recorded ? 'No company/entity provider matches recorded in the stored screening run.' : 'No stored screening run recorded yet.')],
+      ['Company screening source', (company.source || 'Not recorded') + (company.api_status ? ' (' + company.api_status + ')' : '')],
+      ['IP / geolocation flags', ipFlags.join(' · ')],
+      ['KYC review flags', redApplicants.length ? 'RED outcome for ' + redApplicants.join(', ') : '']
+    ],
+    legacyResults: companyResults,
+    legacyContext: entityLegacyContext,
+    comparisonHtml: buildScreeningComparisonPanel('entity', app, companyResults, {}, entityLegacyContext)
   });
-  body += renderInlineScreeningDispositionPanel(app, reviewRow, 'entity', app.company);
-  body += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px;">';
-  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Registry Status</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(company.found === true ? 'Registry record found' : (company.found === false ? 'Registry record not found' : 'Registry lookup not performed')) + '</div></div>';
-  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Provider Match Count</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(String(companyHits.total_hits || 0)) + '</div></div>';
-  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Last Screened</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(((screeningSummary.screened_at || 'Not recorded') + '').replace('T', ' ').slice(0, 19)) + '</div></div>';
-  body += '</div>';
-  body += '<div style="font-size:12px;color:var(--text2);line-height:1.6;">';
-  body += '<div><strong>Company screening source:</strong> ' + escapeHtml(company.source || 'Not recorded') + (company.api_status ? ' (' + escapeHtml(company.api_status) + ')' : '') + '</div>';
-  body += '<div style="margin-top:6px;"><strong>Stored screening summary:</strong> ' + escapeHtml(companyHits.matched ? 'Provider recorded company/entity matches requiring officer review.' : (screeningSummary.screening_run_recorded ? 'No company/entity provider matches recorded in the stored screening run.' : 'No stored screening run recorded yet.')) + '</div>';
-  body += screeningQueueEvidenceReadinessPanel(reviewRow);
-  body += buildScreeningComparisonPanel('entity', app, companyResults, {}, {
-    application_ref: app.ref,
-    subject_type: 'entity',
-    subject_name: app.company,
-    provider: company.source || company.provider || screeningSummary.provider,
-    screened_at: screeningSummary.screened_at
-  });
-  body += providerResultHighlights(companyResults, {
-    application_ref: app.ref,
-    subject_type: 'entity',
-    subject_name: app.company,
-    provider: company.source || company.provider || screeningSummary.provider,
-    screened_at: screeningSummary.screened_at
-  });
-  if (ipFlags.length) body += '<div style="margin-top:10px;"><strong>IP / geolocation flags:</strong> ' + escapeHtml(ipFlags.join(' · ')) + '</div>';
-  if (redApplicants.length) body += '<div style="margin-top:10px;"><strong>KYC review flags:</strong> RED outcome for ' + escapeHtml(redApplicants.join(', ')) + '</div>';
-  body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> ' + escapeHtml((companyAdverse.matched || monitoringMedia.matched) ? 'Provider adverse-media evidence is persisted and listed above.' : 'No adverse-media company match recorded.') + '</div>';
-  body += '</div>';
-  body += screeningReviewHistory(reviewRow);
 
-  return screeningReviewCard('Entity Screening — ' + escapeHtml(app.company) + screeningFreshnessLineHtml(screeningSummary), badges.join(''), body, screeningFocusMatches(focus, 'entity', app.company));
+  var entityTitle = escapeHtml(app.company) +
+    ' <span class="badge draft" style="vertical-align:2px;">Entity</span>' +
+    (app.ref ? '<div style="font-size:11px;font-weight:400;color:var(--text3);margin-top:3px;font-family:ui-monospace,Menlo,monospace;">' + escapeHtml(app.ref) + '</div>' : '') +
+    screeningFreshnessLineHtml(screeningSummary);
+  return screeningReviewCard(entityTitle, badges.join(''), body, screeningFocusMatches(focus, 'entity', app.company));
 }
 
 function screeningSubjectJoinName(value) {
@@ -16106,68 +15909,58 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
   if (facts.adverse_media_hits > 0) badges.push(screeningTagBadge('Adverse Media', 'pending'));
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow, { suppressChip: screeningReviewDisplayLabel(reviewRow) === String(primaryPersonLabel || '') }));
 
-  var body = '';
-  // SRP-3 Phase B: conditional honesty banner + server-computed triage strip
-  // lead the workspace (render-if-present; healthy reports show no banner).
-  body += screeningReviewHonestyBanner(reviewRow, screeningSummary);
-  body += screeningTriageStrip(reviewRow);
-  var personProviderResultsForSummary = [].concat((screening && screening.results) || []).concat((reviewRow && reviewRow.provider_evidence) || []);
-  var personIndicators = screeningTriageCategoryLabels(personProviderResultsForSummary, facts);
-  if (personDeclaredPep && personIndicators.indexOf('Declared PEP') === -1) personIndicators.unshift('Declared PEP');
-  body += screeningDecisionSummaryPanel({
-    heading: person.name + (providerPep ? ' - possible PEP match' : (facts.adverse_media_hits > 0 ? ' - possible adverse media match' : ' - screening review')),
-    subjectName: person.name,
-    role: screeningSubjectTypeLabel(person.subject_type),
-    declaredPep: personDeclaredPep ? 'Yes' : 'No',
-    providerDetected: screeningProviderDetectedSummary(personIndicators, facts),
-    currentStatus: screeningTriageDisplayStatusLabel(reviewRow, primaryPersonLabel),
-    materiality: providerPep || facts.sanctions_hits > 0 ? 'High sensitivity - PEP/sanctions' : (facts.adverse_media_hits > 0 ? 'Elevated sensitivity - adverse media' : (facts.matched ? 'Review context' : 'Clear')),
-    lastScreened: ((facts.screened_at || screeningSummary.screened_at || 'Not recorded') + '').replace('T', ' ').slice(0, 19),
-    actionNeeded: screeningActionNeededText(reviewRow, facts.matched || personDeclaredPep),
-    indicators: personIndicators
-  });
-  body += renderInlineScreeningDispositionPanel(app, reviewRow, person.subject_type, person.name);
-  body += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px;">';
-  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Role</div><div style="font-size:13px;font-weight:600;text-transform:capitalize;">' + escapeHtml(person.subject_type) + '</div></div>';
-  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Jurisdiction / Ownership</div><div style="font-size:13px;font-weight:600;">' + escapeHtml((person.subject_type === 'ubo' || person.subject_type === 'intermediary') ? String(person.pct || 0) + '%' + (person.nat ? ' · ' + person.nat : '') : (person.nat || 'Not recorded')) + '</div></div>';
-  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Provider Match Count</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(String(facts.total_hits || 0)) + '</div></div>';
-  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Last Screened</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(((facts.screened_at || screeningSummary.screened_at || 'Not recorded') + '').replace('T', ' ').slice(0, 19)) + '</div></div>';
-  body += '</div>';
-  body += '<div style="font-size:12px;color:var(--text2);line-height:1.6;">';
+  var personProviderResults = [].concat((screening && screening.results) || []).concat((reviewRow && reviewRow.provider_evidence) || []);
+  var personLegacyContext = {
+    application_ref: app.ref,
+    subject_type: person.subject_type,
+    subject_name: person.name,
+    provider: facts.source || screeningSummary.provider,
+    screened_at: facts.screened_at || screeningSummary.screened_at,
+    declared_pep: personDeclaredPep ? 'Yes' : 'No',
+    provider_detected_pep: providerPep ? 'Yes' : 'No',
+    undeclared_pep: undeclaredPep ? 'Yes' : 'No'
+  };
+  var storedResultText;
   if (!screeningSummary.screening_run_recorded) {
-    body += '<div>No screening run is recorded yet for this application.</div>';
+    storedResultText = 'No screening run is recorded yet for this application.';
   } else if (!screening) {
-    body += '<div>The stored screening report does not contain a person-level screening record for this subject.</div>';
+    storedResultText = 'The stored screening report does not contain a person-level screening record for this subject.';
+  } else if (personDeclaredPep && !facts.matched) {
+    storedResultText = 'Self-declared PEP review is required even though no provider matches were recorded for this screening subject.';
+  } else if (facts.matched) {
+    storedResultText = 'Provider recorded one or more potential matches that require officer review.';
   } else {
-    body += '<div><strong>Provider source:</strong> ' + escapeHtml(facts.source || 'Not recorded') + (facts.api_status ? ' (' + escapeHtml(facts.api_status) + ')' : '') + '</div>';
-    body += '<div style="margin-top:6px;"><strong>Declared PEP:</strong> ' + escapeHtml(personDeclaredPep ? 'Yes' : 'No') + '</div>';
-    body += '<div style="margin-top:6px;"><strong>Provider PEP Match:</strong> ' + escapeHtml(providerPep ? 'Yes' : 'No') + '</div>';
-    body += '<div style="margin-top:6px;"><strong>Undeclared PEP:</strong> ' + escapeHtml(undeclaredPep ? 'Yes' : 'No') + '</div>';
-    body += '<div style="margin-top:6px;"><strong>Stored provider result:</strong> ' + escapeHtml(personDeclaredPep && !facts.matched ? 'Self-declared PEP review is required even though no provider matches were recorded for this screening subject.' : (facts.matched ? 'Provider recorded one or more potential matches that require officer review.' : 'No provider matches were recorded for this screening subject.')) + '</div>';
-    if ((screeningRecord || {}).undeclared_pep) body += '<div style="margin-top:6px;"><strong>Undeclared PEP flag:</strong> Provider evidence indicates possible undeclared PEP exposure.</div>';
-    var personProviderResults = [].concat(screening.results || []).concat((reviewRow && reviewRow.provider_evidence) || []);
-    var personProviderContext = {
-      application_ref: app.ref,
-      subject_type: person.subject_type,
-      subject_name: person.name,
-      provider: facts.source || screeningSummary.provider,
-      screened_at: facts.screened_at || screeningSummary.screened_at,
-      declared_pep: personDeclaredPep ? 'Yes' : 'No',
-      provider_detected_pep: providerPep ? 'Yes' : 'No',
-      undeclared_pep: undeclaredPep ? 'Yes' : 'No'
-	    };
-	    body += screeningQueueEvidenceReadinessPanel(reviewRow);
-	    body += buildScreeningComparisonPanel('person', person, personProviderResults, {
-	      declaredPep: personDeclaredPep ? 'Yes' : 'No',
-	      providerPep: providerPep ? 'Yes' : 'No'
-	    }, personProviderContext);
-	    body += providerResultHighlights(personProviderResults, personProviderContext);
-	  }
-	  body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> ' + escapeHtml(facts.adverse_media_hits > 0 ? 'Provider adverse-media evidence is persisted and listed above.' : 'No adverse-media person match recorded.') + '</div>';
-	  body += '</div>';
-	  body += screeningReviewHistory(reviewRow);
+    storedResultText = 'No provider matches were recorded for this screening subject.';
+  }
+  var body = screeningSubjectWorkspaceBody({
+    app: app,
+    reviewRow: reviewRow,
+    screeningSummary: screeningSummary,
+    subjectType: person.subject_type,
+    subjectName: person.name,
+    statusFacts: [
+      ['Declared PEP', personDeclaredPep ? 'Yes' : 'No'],
+      ['Nationality / jurisdiction', person.nat || 'Not recorded'],
+      ['Materiality', providerPep || facts.sanctions_hits > 0 ? 'High sensitivity - PEP/sanctions' : (facts.adverse_media_hits > 0 ? 'Elevated sensitivity - adverse media' : (facts.matched ? 'Review context' : 'Clear'))],
+      ['Stored provider result', storedResultText],
+      ['Provider source', screening ? ((facts.source || 'Not recorded') + (facts.api_status ? ' (' + facts.api_status + ')' : '')) : '']
+    ],
+    legacyResults: personProviderResults,
+    legacyContext: personLegacyContext,
+    comparisonHtml: screening ? buildScreeningComparisonPanel('person', person, personProviderResults, {
+      declaredPep: personDeclaredPep ? 'Yes' : 'No',
+      providerPep: providerPep ? 'Yes' : 'No'
+    }, personLegacyContext) : ''
+  });
 
-  return screeningReviewCard(escapeHtml(person.name), badges.join(''), body, screeningFocusMatches(focus, person.subject_type, person.name));
+  var personTitle = escapeHtml(person.name) +
+    ' <span class="badge draft" style="vertical-align:2px;">' + escapeHtml(screeningSubjectTypeLabel(person.subject_type)) + '</span>' +
+    (app.ref ? '<div style="font-size:11px;font-weight:400;color:var(--text3);margin-top:3px;font-family:ui-monospace,Menlo,monospace;">' + escapeHtml(app.ref) + '</div>' : '') +
+    screeningFreshnessLineHtml({
+      screened_at: facts.screened_at || screeningSummary.screened_at,
+      screening_valid_until: screeningSummary.screening_valid_until
+    });
+  return screeningReviewCard(personTitle, badges.join(''), body, screeningFocusMatches(focus, person.subject_type, person.name));
 }
 
 function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap) {
@@ -16482,32 +16275,6 @@ function agent3HitStatusBadge(status) {
   return '<span style="display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:12px;white-space:nowrap;background:' + m.bg + ';border:1px solid ' + m.border + ';color:' + m.text + ';">' + escapeHtml(m.label) + '</span>';
 }
 
-function agent3SurfacedByPassMeta(value) {
-  var v = String(value || '').trim().toLowerCase();
-  if (v === 'strict') return { label: 'Strict pass', help: 'Stronger provider match signal; officer verification required.' };
-  if (v === 'relaxed') return { label: 'Relaxed pass', help: 'Broader provider match; review identifiers before clearing.' };
-  if (v === 'both') return { label: 'Strict + relaxed', help: 'Surfaced in both provider passes; high review priority.' };
-  return { label: 'Provider score unavailable', help: 'Provider did not supply numeric score or pass evidence.' };
-}
-
-function agent3ProviderEvidenceCellHtml(row) {
-  row = row || {};
-  var score = row.match_score;
-  if (score !== null && score !== undefined && score !== '') {
-    var n = Number(score);
-    if (!isNaN(n)) {
-      // SRP-2a: rendered as the bare provider score (no % suffix) to match
-      // ComplyAdvantage's own dashboard framing ("Match score 77").
-      return '<div style="font-weight:800;color:var(--text1);">' + escapeHtml(String(n)) + '</div>' +
-        '<div style="font-size:10.5px;color:var(--text3);line-height:1.35;margin-top:2px;">Match score supplied by provider.</div>';
-    }
-    return '<div style="font-weight:700;color:var(--text1);">' + escapeHtml(String(score)) + '</div>';
-  }
-  var meta = agent3SurfacedByPassMeta(row.surfaced_by_pass);
-  return '<div style="font-weight:800;color:var(--text1);">' + escapeHtml(meta.label) + '</div>' +
-    '<div style="font-size:10.5px;color:var(--text3);line-height:1.35;margin-top:2px;">' + escapeHtml(meta.help) + '</div>';
-}
-
 function agent3HitStatusCountsHtml(counts) {
   counts = counts && typeof counts === 'object' ? counts : {};
   var chips = [];
@@ -16530,24 +16297,6 @@ function agent3TraceRowsHtml(rows) {
   return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px 12px;font-size:11px;">' + rows.map(function(row) {
     return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <strong style="color:var(--text2);word-break:break-word;">' + escapeHtml(String(row[1])) + '</strong></div>';
   }).join('') + '</div>';
-}
-
-function agent3HitEvidenceDetailsHtml(row) {
-  row = row || {};
-  var url = row.evidence_url || '';
-  var title = row.evidence_title || '';
-  var source = row.evidence_source || '';
-  var snippet = row.evidence_snippet || '';
-  var evidenceBody = '<div style="font-size:11.5px;color:var(--text2);line-height:1.55;">' +
-    (title ? '<div><strong>' + escapeHtml(title) + '</strong></div>' : '') +
-    (source ? '<div style="color:var(--text3);">Source: ' + escapeHtml(source) + '</div>' : '') +
-    (snippet ? '<div style="margin-top:5px;">' + escapeHtml(snippet) + '</div>' : '') +
-    (url ? '<div style="margin-top:7px;"><a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer">Open article/source URL</a></div>' : '<div style="margin-top:7px;color:var(--text3);">No article URL supplied by provider payload.</div>') +
-    '</div>';
-  return '<details style="margin-top:8px;border:1px solid var(--border1);border-radius:8px;background:#fff;">' +
-    '<summary style="cursor:pointer;padding:7px 9px;font-size:11px;font-weight:700;color:var(--text2);">Evidence details</summary>' +
-    '<div style="padding:8px 9px;border-top:1px solid var(--border1);">' + evidenceBody + '</div>' +
-  '</details>';
 }
 
 function agent3AuditTraceHtml(output) {
@@ -16580,41 +16329,53 @@ function agent3AuditTraceHtml(output) {
   }).join('');
 }
 
-// Compact 4-column layout matching the approved mock: Provider evidence | Matched entity
-// (subject folded beneath) | List | Status & reason. Display only — advisory.
+// SRP-3e Phase E: dense audit table — subject · matched name · category ·
+// RegMind triage (rts) · status & reason. One compact row per hit; article
+// evidence lives inline on the ranked hit cards, provider score/pass live in
+// the Audit trace disclosure. Display only — advisory.
+function agent3TriageCellHtml(row) {
+  row = row || {};
+  var score = typeof row.triage_score === 'number' && !isNaN(row.triage_score) ? row.triage_score : null;
+  if (score === null) {
+    return '<span style="font-size:11px;color:var(--text3);">unscored</span>';
+  }
+  var band = screeningTriageScoreBand(score, null);
+  return '<span style="font-family:ui-monospace,Menlo,monospace;font-weight:700;color:' + band.color + ';" title="RegMind triage score — a ranking that orders matches for review. Not a provider score.">' + escapeHtml(String(score)) + '</span>' +
+    (band.label ? ' <span style="font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:' + band.color + ';">' + escapeHtml(band.label) + '</span>' : '');
+}
+
 function agent3HitRowsTableHtml(rows) {
   rows = Array.isArray(rows) ? rows : [];
   if (!rows.length) return '<div style="font-size:12px;color:var(--text3);">No provider hit rows in the stored screening results.</div>';
   var th = 'text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);font-weight:700;padding:0 8px 6px;border-bottom:1px solid var(--border1);white-space:nowrap;';
-  var td = 'padding:8px;border-bottom:1px solid var(--border1);vertical-align:top;';
-  var html = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">';
+  var td = 'padding:6px 8px;border-bottom:1px solid var(--border1);vertical-align:top;';
+  var html = '<div style="overflow-x:auto;"><table data-agent3-hit-audit-table="true" style="width:100%;border-collapse:collapse;font-size:12px;">';
   html += '<thead><tr>' +
-    '<th style="' + th + 'width:16%;">Provider evidence</th>' +
-    '<th style="' + th + 'width:24%;">Matched entity</th>' +
-    '<th style="' + th + 'width:18%;">List</th>' +
+    '<th style="' + th + 'width:16%;">Subject</th>' +
+    '<th style="' + th + 'width:24%;">Matched name</th>' +
+    '<th style="' + th + 'width:16%;">Category</th>' +
+    '<th style="' + th + 'width:12%;">RegMind triage</th>' +
     '<th style="' + th + '">Status &amp; reason</th>' +
     '</tr></thead><tbody>';
   rows.forEach(function(r) {
     r = r || {};
+    var subjectBits = [r.subject_name, r.subject_type ? '(' + String(r.subject_type) + ')' : ''].filter(Boolean).join(' ');
     // Readable fallback when the stored provider result only carries an id.
     var matched;
     if (agent3LooksLikeUuid(r.matched_entity)) {
       matched = '<span>Unnamed provider match</span>' +
-        '<div style="font-size:10.5px;color:var(--text3);margin-top:2px;">Provider reference</div>' +
-        '<div style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--text3);word-break:break-all;" title="' + escapeHtml(String(r.matched_entity)) + '">' + escapeHtml(String(r.matched_entity)) + '</div>';
+        '<div style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--text3);word-break:break-all;" title="Provider reference">' + escapeHtml(String(r.matched_entity)) + '</div>';
     } else {
       matched = '<span style="font-weight:600;">' + escapeHtml(r.matched_entity || 'n/a') + '</span>';
     }
-    var subjectBits = [r.subject_name, r.subject_type ? '(' + String(r.subject_type) + ')' : ''].filter(Boolean).join(' ');
-    if (subjectBits) matched += '<div style="font-size:11px;color:var(--text3);margin-top:2px;">for ' + escapeHtml(subjectBits) + '</div>';
     var listCell = escapeHtml(r.list || (r.type ? String(r.type).replace(/_/g, ' ') : '') || 'n/a');
-    if (r.provider) listCell += '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(String(r.provider)) + '</div>';
     var evRef = r.evidence_ref ? ' <span style="color:var(--text3);font-size:10.5px;">[' + escapeHtml(String(r.evidence_ref)) + ']</span>' : '';
     html += '<tr>' +
-      '<td style="' + td + '">' + agent3ProviderEvidenceCellHtml(r) + '</td>' +
+      '<td style="' + td + '">' + (subjectBits ? escapeHtml(subjectBits) : '<span style="color:var(--text3);">n/a</span>') + '</td>' +
       '<td style="' + td + '">' + matched + '</td>' +
       '<td style="' + td + '">' + listCell + '</td>' +
-      '<td style="' + td + '">' + agent3HitStatusBadge(r.suggested_status) + ' <span style="color:#475569;">' + escapeHtml(r.reason || '') + '</span>' + evRef + agent3HitEvidenceDetailsHtml(r) + '</td>' +
+      '<td style="' + td + '">' + agent3TriageCellHtml(r) + '</td>' +
+      '<td style="' + td + '">' + agent3HitStatusBadge(r.suggested_status) + ' <span style="color:#475569;">' + escapeHtml(r.reason || '') + '</span>' + evRef + '</td>' +
       '</tr>';
   });
   html += '</tbody></table></div>';
@@ -16798,8 +16559,10 @@ function renderAgent3ScreeningInterpretationPanel(app) {
   html += agent3ScreeningFieldHtml('Key concerns', output.key_concerns || []);
   html += '</div>';
 
-  // Hit-by-hit review — open by default when rows exist (this is the answer)
-  html += '<details' + (hitRows.length ? ' open' : '') + ' style="margin-top:12px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
+  // SRP-3e Phase E: the hit-by-hit recital is a collapsed audit disclosure —
+  // the compact status-count chips above summarise it; the ranked hit cards
+  // below carry the evidence. Expanding reveals the dense audit table.
+  html += '<details style="margin-top:12px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
   html += '<summary style="' + expSummary + '"><span>Hit-by-hit review</span><span style="' + expCnt + '">' + escapeHtml(hitCountLabel) + '</span></summary>';
   if (!Array.isArray(output.hit_rows) && totalHits > 0) {
     // Interpretation predates hit-level output — do not present it as "0 hits".
@@ -16942,7 +16705,7 @@ function screeningReviewHonestyBanner(row, screeningSummary) {
   // warrants it (identifier conflict / pre-enrichment blind report / degraded
   // sources). Healthy reports render no banner.
   var report = (screeningSummary && screeningSummary.report) || {};
-  var base = 'margin:0 18px 14px;padding:12px 15px;border:1px solid #f59e0b;border-radius:9px;background:#fffbeb;color:#92400e;font-size:12.5px;line-height:1.55;';
+  var base = 'margin:0 0 14px;padding:12px 15px;border:1px solid #f59e0b;border-radius:9px;background:#fffbeb;color:#92400e;font-size:12.5px;line-height:1.55;';
   if (report.customer_identifier_conflict === true) {
     return '<div data-screening-honesty-banner="identifier_conflict" style="' + base + '">' +
       '<strong>Re-screen blocked.</strong> The screening provider already holds a record for this subject. This is not evidence of zero hits. An updated re-screen path is in progress.' +
@@ -16976,7 +16739,7 @@ function screeningTriageStrip(row) {
       '<div style="font-size:10.5px;color:var(--text3);margin-top:3px;">' + escapeHtml(sub) + '</div>' +
     '</div>';
   }
-  var html = '<div data-screening-triage-strip="true" style="margin:0 18px 14px;">';
+  var html = '<div data-screening-triage-strip="true" style="margin:0 0 14px;">';
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;">';
   html += tile(buckets.sanctions, 'Sanctions & warnings', 'Screened against sanction lists', '#dc2626');
   html += tile(buckets.pep, 'PEP matches', Number(buckets.pep || 0) > 0 ? 'Review first' : 'Politically exposed persons', '#d97706');
@@ -17036,7 +16799,7 @@ function screeningTriageHitEvidenceBody(item) {
       (item.source_name || item.publication_date ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml([item.source_name, item.publication_date].filter(Boolean).join(' · ')) + '</div>' : '') +
       (item.snippet ? '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:5px;">' + escapeHtml(item.snippet) + '</div>' : '') +
       (item.source_url
-        ? '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(item.source_url) + '" target="_blank" rel="noopener">Open source</a></div>'
+        ? '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(item.source_url) + '" target="_blank" rel="noopener">Open source ↗</a></div>'
         : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(item.source_url_unavailable_message || SCREENING_SOURCE_UNAVAILABLE_MESSAGE) + '</div>') +
     '</div>';
   }
@@ -17286,7 +17049,6 @@ function renderScreeningReviewPanel(app, focus) {
   var host = document.getElementById('detail-screening-review');
   if (!host || !app) return;
 
-  SCREENING_EVIDENCE_DETAILS = {};
   var screeningSummary = getApplicationScreeningSummary(app);
   var queueRows = (SCREENING_QUEUE && SCREENING_QUEUE.rows ? SCREENING_QUEUE.rows : []).filter(function(row) {
     return row.application_ref === app.ref;
@@ -17322,7 +17084,9 @@ function renderScreeningReviewPanel(app, focus) {
   }
   if (focus && focus.subject_name) html += '<div style="font-size:12px;color:var(--text2);padding:0 18px 18px;">Focused subject: <strong>' + escapeHtml(focus.subject_name) + '</strong> (' + escapeHtml(String(focus.subject_type || '').replace('_', ' ')) + ')</div>';
   html += '</div>';
-  html += renderAgent3ScreeningInterpretationPanel(app);
+  // SRP-3e Phase E: the Agent 3 guidance panel renders inside the selected
+  // subject workspace (between the triage strip and the ranked hit sections)
+  // per the approved mockup — see screeningSubjectWorkspaceBody.
 
   var triageSubjects = buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap);
   var selectedSubject = triageSubjects.find(function(subject) {
