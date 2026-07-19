@@ -2396,14 +2396,35 @@ def approve_change_request(
         )
 
     now = datetime.now(timezone.utc).isoformat()
+    # APP-AUD-gov-dup-1 (CM sibling): the SELECT..validate..UPDATE above is not
+    # atomic. Two concurrent approvals on the same pending request could each
+    # read status=approval_pending, both pass validate_request_transition, and
+    # both write an approval + review + "Change Request Approved" audit row.
+    # Guard the state transition with a compare-and-set on the exact status we
+    # validated against: if another request already transitioned it, 0 rows
+    # change and we abort BEFORE writing the review/audit, so no duplicate
+    # approval evidence is produced. CAS works on both SQLite and PostgreSQL
+    # without SELECT ... FOR UPDATE.
+    expected_status = request["status"]
     try:
-        db.execute(
+        update_result = db.execute(
             """UPDATE change_requests
                SET status = 'approved', approved_by = ?, approved_at = ?,
                    decision_notes = ?, updated_at = ?
-               WHERE id = ?""",
-            (user.get("sub"), now, decision_notes, now, request_id),
+               WHERE id = ? AND status = ?""",
+            (user.get("sub"), now, decision_notes, now, request_id, expected_status),
         )
+        # rowcount lives on db._cursor for the production DBConnection and on the
+        # object returned by execute() for the raw-connection wrappers used in
+        # tests; support both.
+        cas_cursor = getattr(db, "_cursor", None) or update_result
+        rows_affected = getattr(cas_cursor, "rowcount", -1)
+        if rows_affected == 0:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return False, "Change request was already decided by another reviewer"
 
         # Record review
         review_id = f"{request_id}-RV-{secrets.token_hex(3).upper()}"
