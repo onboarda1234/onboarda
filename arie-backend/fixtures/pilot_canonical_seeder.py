@@ -145,8 +145,10 @@ def _preflight_references(db, rows: Sequence[Mapping[str, Any]]) -> None:
 
 
 def _application_payload(
-    row: Mapping[str, Any], *, risk_config_version: str
+    row: Mapping[str, Any], *, risk_config_version: str, risk_config: Mapping[str, Any]
 ) -> tuple:
+    from rule_engine import compute_risk_score
+
     inputs = row["risk_inputs"]
     expected = row["expected"]
     workflow = row["workflow_state"]
@@ -175,8 +177,17 @@ def _application_payload(
         "supervisor_evidence": row.get("supervisor_evidence") or {},
     }
     runtime_dimensions = _bind_runtime_config_version(expected["dimensions"], risk_config_version)
+    computed = compute_risk_score(inputs, config_override=dict(risk_config))
+    factor_computation_evidence = (computed.get("dimensions") or {}).get(
+        "factor_computation_evidence"
+    )
+    if not factor_computation_evidence:
+        raise PilotDatasetValidationError(
+            f"{row['reference']}: authoritative factor computation evidence is missing"
+        )
     risk_dimensions = {
         **runtime_dimensions,
+        "factor_computation_evidence": factor_computation_evidence,
         "controlled_mapping_evidence": _bind_runtime_config_version(
             expected["controlled_mapping_evidence"], risk_config_version
         ),
@@ -221,8 +232,13 @@ def _application_payload(
     )
 
 
-def _upsert_application(db, audit, row: Mapping[str, Any], *, risk_config_version: str) -> str:
-    values = _application_payload(row, risk_config_version=risk_config_version)
+def _upsert_application(
+    db, audit, row: Mapping[str, Any], *, risk_config_version: str,
+    risk_config: Mapping[str, Any]
+) -> str:
+    values = _application_payload(
+        row, risk_config_version=risk_config_version, risk_config=risk_config
+    )
     existing = db.execute(
         "SELECT id FROM applications WHERE ref=?", (row["reference"],)
     ).fetchone()
@@ -1010,8 +1026,14 @@ def _upsert_memo(
     return memo_id
 
 
-def _seed_one(db, audit, row: Mapping[str, Any], *, risk_config_version: str) -> Dict[str, Any]:
-    app_id = _upsert_application(db, audit, row, risk_config_version=risk_config_version)
+def _seed_one(
+    db, audit, row: Mapping[str, Any], *, risk_config_version: str,
+    risk_config: Mapping[str, Any]
+) -> Dict[str, Any]:
+    app_id = _upsert_application(
+        db, audit, row, risk_config_version=risk_config_version,
+        risk_config=risk_config,
+    )
     parties = _upsert_people(db, audit, row)
     documents = _upsert_documents(db, audit, row)
     alert_id = _upsert_monitoring(db, audit, row)
@@ -1080,7 +1102,10 @@ def seed_pilot_canonical_dataset(
     try:
         _preflight_references(db, rows)
         for row in rows:
-            results.append(_seed_one(db, audit, row, risk_config_version=risk_config_version))
+            results.append(_seed_one(
+                db, audit, row, risk_config_version=risk_config_version,
+                risk_config=config,
+            ))
         if dry_run:
             _rollback(db)
         else:

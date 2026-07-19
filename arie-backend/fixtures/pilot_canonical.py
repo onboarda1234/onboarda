@@ -340,7 +340,10 @@ def validate_runtime_alignment(
             "scorer_lane": actual.get("lane"),
             "requires_compliance_approval": actual.get("requires_compliance_approval"),
             "escalations": actual.get("escalations"),
-            "dimensions": stable_evidence(actual.get("dimensions")),
+            "dimensions": stable_evidence({
+                key: value for key, value in (actual.get("dimensions") or {}).items()
+                if key != "factor_computation_evidence"
+            }),
             "controlled_mapping_evidence": stable_evidence(actual.get("controlled_mapping_evidence")),
             "service_selection_evidence": stable_evidence(actual.get("service_selection_evidence")),
             "elevation_reason_text": actual.get("elevation_reason_text"),

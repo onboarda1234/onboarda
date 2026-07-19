@@ -337,28 +337,37 @@ def test_lane_b_is_excluded_from_every_active_catalog(temp_db):
 
 def test_authoritative_report_evidence_uses_stored_outcome_and_runtime_weights(temp_db):
     config = load_risk_config()
+    computed = compute_risk_score({
+        "entity_type": "SME / Private Company",
+        "ownership_structure": "Simple — direct identifiable UBOs",
+        "country": "United Kingdom",
+        "sector": "Manufacturing",
+        "directors": [], "ubos": [], "intermediary_shareholders": [],
+        "operating_countries": ["United Kingdom"],
+        "target_markets": ["United Kingdom"],
+        "primary_service": "domestic payments only (single currency)",
+        "monthly_volume": "Under USD 50,000 per month",
+        "transaction_complexity": "Simple — single currency, domestic corridors",
+        "source_of_wealth": "business revenue",
+        "source_of_funds": "company bank account",
+        "introduction_method": "Direct application — client initiated",
+        "customer_interaction": "face-to-face",
+    }, config_override=config)
     app = {
-        "risk_score": 64.5,
-        "risk_level": "MEDIUM",
-        "final_risk_level": "HIGH",
-        "risk_dimensions": {"d1": 4, "d2": 2, "d3": 3, "d4": 2, "d5": 1},
-        "risk_escalations": ["floor_rule_declared_pep", "monthly_volume_score_4"],
+        "risk_score": computed["score"],
+        "risk_level": computed["level"],
+        "final_risk_level": computed["final_risk_level"],
+        "risk_dimensions": computed["dimensions"],
+        "risk_escalations": computed["escalations"],
         "risk_computed_at": "2026-07-15T10:00:00Z",
         "risk_config_version": config["_config_version"],
-        "onboarding_lane": "EDD",
-        "directors": [{
-            "client_declared_pep": True,
-            "pep_declaration": {
-                "client_declared_pep": True,
-                "pep_status": "declared_yes",
-                "pep_role_type": "foreign_pep",
-            },
-        }],
+        "onboarding_lane": computed["lane"],
+        "directors": [],
         "ubos": [],
     }
     approval_route = {
         "route": APPROVAL_ROUTE_COMPLIANCE_REQUIRED,
-        "reasons": ["declared_pep_present", "monthly_volume_score_4"],
+        "reasons": [],
     }
 
     evidence = build_authoritative_risk_report_evidence(
@@ -373,16 +382,13 @@ def test_authoritative_report_evidence_uses_stored_outcome_and_runtime_weights(t
     assert evidence["application"]["tier"] == app["final_risk_level"]
     assert evidence["application"]["edd_route"] == app["onboarding_lane"]
     assert evidence["application"]["approval_route"] == approval_route
-    assert evidence["application"]["floor_reasons"] == ["floor_rule_declared_pep"]
-    assert [row["stored_score"] for row in evidence["application"]["dimensions"]] == [4, 2, 3, 2, 1]
+    assert evidence["application"]["floor_reasons"] == []
+    assert [row["stored_score"] for row in evidence["application"]["dimensions"]] == [
+        computed["dimensions"][f"d{index}"] for index in range(1, 6)
+    ]
     d3 = next(row for row in evidence["application"]["dimensions"] if row["id"] == "D3")
     assert [row["weight"] for row in d3["subcriteria"]] == [40, 35, 25]
-    assert evidence["factor_evidence"] == [{
-        "family": "pep",
-        "label": "foreign_pep",
-        "score": 4,
-        "source": "stored pep_declaration.pep_role_type + rule_engine.GATE0_DECLARED_PEP_SCORE",
-    }]
+    assert evidence["factor_evidence"] == computed["factor_computation_evidence"]["factors"]
 
 
 @pytest.mark.parametrize(

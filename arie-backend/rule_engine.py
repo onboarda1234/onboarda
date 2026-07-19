@@ -1913,12 +1913,153 @@ def compute_risk_score(app_data, config_override=None):
 
     elevation_reason_text = "; ".join(elevation_reasons) if elevation_reasons else ""
     country_risk_provenance = country_risk_details(data.get("country"), country_scores)
+    def _factor_row(
+        dimension_id, factor_key, factor_label, raw_value, normalized_value,
+        rule_score, factor_weight, rule_identifier, evidence_source,
+        resolution_status="resolved",
+    ):
+        return {
+            "dimension_id": dimension_id,
+            "factor_key": factor_key,
+            "factor_label": factor_label,
+            "raw_value": raw_value,
+            "normalized_value": normalized_value,
+            "rule_score": int(rule_score),
+            "factor_weight": round(float(factor_weight) * 100, 4),
+            "weighted_factor_contribution": round(
+                float(rule_score) * float(factor_weight), 4
+            ),
+            "resolution_status": resolution_status,
+            "rule_identifier": rule_identifier,
+            "evidence_source": evidence_source,
+        }
+
+    def _normalized(value):
+        if isinstance(value, str):
+            return value.strip().lower()
+        if isinstance(value, list):
+            return [_normalized(item) for item in value]
+        if isinstance(value, dict):
+            return {str(key): _normalized(item) for key, item in value.items()}
+        return value
+
+    pep_raw = [
+        pep_evidence["pep_role_type"]
+        for person in all_persons
+        for pep_evidence in [_declared_pep_score_evidence(person)]
+        if pep_evidence
+    ]
+    d1_factors = [
+        _factor_row("D1", "entity_type", "Entity Type", data.get("entity_type"), _normalized(data.get("entity_type")), d1_entity, d1_w[0], "entity_type_runtime_score", "rule_engine._score_entity_type"),
+        _factor_row("D1", "ownership_structure", "Ownership Structure", data.get("ownership_structure"), _normalized(data.get("ownership_structure")), d1_owner, d1_w[1], "ownership_runtime_score", "rule_engine ownership resolution"),
+        _factor_row("D1", "pep_status", "PEP Status", pep_raw or "No declared PEP", _normalized(pep_raw) if pep_raw else "no declared pep", d1_pep, d1_w[2], "declared_pep_runtime_score", "rule_engine._declared_pep_score_evidence"),
+        _factor_row("D1", "adverse_media", "Adverse Media", adverse_media_data or "No adverse media", _normalized(adverse_media_data) if adverse_media_data else "no adverse media", d1_adverse, d1_w[3], "adverse_media_runtime_score", "rule_engine adverse-media evaluation"),
+        _factor_row("D1", "source_of_wealth", "Source of Wealth", data.get("source_of_wealth"), _normalized(data.get("source_of_wealth")), d1_sow, d1_w[4], "source_of_wealth_runtime_score", "rule_engine source-of-wealth evaluation"),
+        _factor_row("D1", "source_of_funds", "Source of Funds", data.get("source_of_funds"), _normalized(data.get("source_of_funds")), d1_sof, d1_w[5], "source_of_funds_runtime_score", "rule_engine source-of-funds evaluation"),
+    ]
+    d2_factors = [
+        _factor_row("D2", "country_of_incorporation", "Country of Incorporation", data.get("country"), normalize_country_key(data.get("country")), d2_inc, d2_w[0], "country_runtime_score", "rule_engine.classify_country"),
+        _factor_row("D2", "ubo_nationalities", "UBO / Director Nationalities", [person.get("nationality") for person in all_persons if person.get("nationality")], _normalized([person.get("nationality") for person in all_persons if person.get("nationality")]), d2_ubo_nat, d2_w[1], "nationality_max_runtime_score", "rule_engine.classify_country"),
+        _factor_row("D2", "intermediary_jurisdictions", "Intermediary Shareholder Jurisdictions", [item.get("jurisdiction") for item in intermediaries if item.get("jurisdiction")], _normalized([item.get("jurisdiction") for item in intermediaries if item.get("jurisdiction")]), d2_inter, d2_w[2], "intermediary_jurisdiction_max_runtime_score", "rule_engine.classify_country"),
+        _factor_row("D2", "countries_of_operation", "Countries of Operation", op_countries, _normalized(op_countries), d2_op, d2_w[3], "operating_country_max_runtime_score", "rule_engine.classify_country"),
+        _factor_row("D2", "target_markets", "Target Markets", target_markets, _normalized(target_markets), d2_tgt, d2_w[4], "target_market_max_runtime_score", "rule_engine.classify_country"),
+    ]
+    selected_services = (
+        (service_selection_evidence or {}).get("raw_selected_services")
+        or data.get("services") or data.get("services_required") or data.get("service_type")
+    )
+    d3_factors = [
+        _factor_row("D3", "service_type", "Service Type", selected_services, _normalized(selected_services), d3_svc, d3_w[0], "selected_service_runtime_score", "rule_engine service-risk evaluation"),
+        _factor_row("D3", "monthly_volume", "Monthly Volume", raw_volume, _normalized(raw_volume), d3_vol, d3_w[1], "monthly_volume_runtime_score", "rule_engine monthly-volume evaluation"),
+        _factor_row("D3", "transaction_complexity", "Transaction Complexity", raw_complexity, _normalized(raw_complexity), d3_complexity, d3_w[2], "transaction_complexity_runtime_score", "rule_engine transaction-complexity evaluation"),
+    ]
+    d4_factors = [
+        _factor_row("D4", "industry_sector", "Industry Sector", data.get("sector"), _normalized(data.get("sector")), d4, 1.0, "sector_runtime_score", "rule_engine.score_sector"),
+    ]
+    raw_interaction = data.get("customer_interaction") or data.get("interaction_type") or ""
+    d5_factors = [
+        _factor_row("D5", "introduction_method", "Introduction Method", raw_intro, _normalized(raw_intro), d5_intro, d5_w[0], "introduction_runtime_score", "rule_engine introduction evaluation"),
+        _factor_row("D5", "delivery_channel", "Delivery Channel", raw_interaction, _normalized(raw_interaction), d5_interaction, d5_w[1], "delivery_channel_runtime_score", "rule_engine delivery-channel evaluation"),
+    ]
+    controlled_factor_families = {
+        "entity_type": "entity_type",
+        "ownership_structure": "ownership",
+        "country_of_incorporation": "country",
+        "monthly_volume": "monthly_volume",
+        "transaction_complexity": "complexity",
+        "industry_sector": "sector",
+        "introduction_method": "introduction",
+    }
+    mapping_by_family = {
+        item.get("family"): item
+        for item in mapping_evidence
+        if isinstance(item, dict) and item.get("family")
+    }
+    for factor in d1_factors + d2_factors + d3_factors + d4_factors + d5_factors:
+        family = controlled_factor_families.get(factor["factor_key"])
+        mapping = mapping_by_family.get(family)
+        if mapping:
+            factor["normalized_value"] = mapping.get(
+                "normalized_value", factor["normalized_value"]
+            )
+            factor["resolution_status"] = mapping.get(
+                "resolution_status", factor["resolution_status"]
+            )
+        if factor["factor_key"] == "service_type" and service_selection_evidence:
+            factor["normalized_value"] = service_selection_evidence.get(
+                "normalized_services", factor["normalized_value"]
+            )
+            factor["resolution_status"] = service_selection_evidence.get(
+                "resolution_status", factor["resolution_status"]
+            )
+    dimension_specs = [
+        ("D1", d1, d1_weight, d1_factors),
+        ("D2", d2, d2_weight, d2_factors),
+        ("D3", d3, d3_weight, d3_factors),
+        ("D4", d4, d4_weight, d4_factors),
+        ("D5", d5, d5_weight, d5_factors),
+    ]
+    factor_evidence = []
+    dimension_evidence = []
+    for dimension_id, dimension_score, dimension_weight, factors in dimension_specs:
+        stored_dimension_score = round(dimension_score, 2)
+        factor_total = round(sum(item["weighted_factor_contribution"] for item in factors), 4)
+        if factors and factor_total != stored_dimension_score:
+            factors[-1]["weighted_factor_contribution"] = round(
+                factors[-1]["weighted_factor_contribution"]
+                + stored_dimension_score - factor_total,
+                4,
+            )
+        factor_evidence.extend(factors)
+        dimension_evidence.append({
+            "dimension_id": dimension_id,
+            "dimension_score": stored_dimension_score,
+            "dimension_weight": round(dimension_weight * 100, 4),
+            "composite_contribution": round(
+                (dimension_score - 1) * dimension_weight / 3 * 100, 4
+            ),
+            "factor_keys": [item["factor_key"] for item in factors],
+        })
+
+    base_contribution_total = round(
+        sum(item["composite_contribution"] for item in dimension_evidence), 4
+    )
+    computation_evidence = {
+        "schema_version": "risk-factor-evidence-v1",
+        "dimensions": dimension_evidence,
+        "factors": factor_evidence,
+        "base_composite_score": base_score,
+        "policy_adjustment": round(composite - base_contribution_total, 4),
+        "final_composite_score": composite,
+    }
+
     risk_dimensions = {
         "d1": round(d1, 2),
         "d2": round(d2, 2),
         "d3": round(d3, 2),
         "d4": round(d4, 2),
         "d5": round(d5, 2),
+        "factor_computation_evidence": computation_evidence,
     }
     if mapping_fidelity_enabled():
         risk_dimensions["controlled_mapping_evidence"] = mapping_evidence
@@ -1935,6 +2076,7 @@ def compute_risk_score(app_data, config_override=None):
         "escalations": escalations,
         "controlled_mapping_evidence": mapping_evidence,
         "service_selection_evidence": service_selection_evidence,
+        "factor_computation_evidence": computation_evidence,
         "elevation_reason_text": elevation_reason_text,
         "requires_compliance_approval": requires_compliance_approval,
         "declared_pep_present": bool(pep_scores),
