@@ -21602,6 +21602,116 @@ def _screening_evidence_diagnostics(row, items, *, evidence_status, reason_code,
     }
 
 
+def _screening_evidence_value_list(value):
+    """F9: flatten provider list shapes to a lean list of display strings.
+
+    Accepts plain lists, CA ``{"values": [...]}`` collections, dict entries
+    carrying name/title/value keys (position entries append their stored
+    from/to dates), or a single string. Empty entries drop; order and raw
+    provider text are preserved."""
+    if isinstance(value, dict):
+        value = value.get("values")
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if not isinstance(value, (list, tuple)):
+        text = _screening_evidence_text(value)
+        return [text] if text else []
+    out = []
+    for entry in value:
+        if isinstance(entry, dict):
+            text = _screening_evidence_text(_first_non_empty(
+                entry.get("name"), entry.get("title"), entry.get("value")))
+            if text and _screening_evidence_text(entry.get("title")):
+                dates = "-".join(
+                    _screening_evidence_text(entry.get(key))
+                    for key in ("from_date", "to_date")
+                    if _screening_evidence_text(entry.get(key))
+                )
+                if dates:
+                    text = f"{text} ({dates})"
+        else:
+            text = _screening_evidence_text(entry)
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _screening_evidence_dob_text(value):
+    """F9: CA structured DOB ({'year':..,'date':..}) or a plain string/int."""
+    if isinstance(value, dict):
+        value = _first_non_empty(value.get("date"), value.get("year"))
+    return _screening_evidence_text(value)
+
+
+def _screening_evidence_matched_profile_fields(evidence):
+    """F9 (additive passthrough): matched-profile facts already stored on the
+    hit — matched name, provider match types, PEP classes, and the sparse
+    person attributes some payloads carry (date of birth / nationality /
+    countries / places of birth / positions / alias names; usually null in
+    sandbox payloads until profile hydration lands). Only non-empty fields
+    are emitted so the queue payload stays lean. Nothing is derived, scored,
+    or invented here — raw stored provider values only."""
+    evidence = evidence if isinstance(evidence, dict) else {}
+    person = evidence.get("person") if isinstance(evidence.get("person"), dict) else {}
+    profile = evidence.get("profile") if isinstance(evidence.get("profile"), dict) else {}
+    profile_person = profile.get("person") if isinstance(profile.get("person"), dict) else {}
+    sources = (evidence, person, profile_person)
+
+    def first_present(*keys):
+        for candidate_source in sources:
+            for key in keys:
+                value = candidate_source.get(key)
+                if value not in (None, "", [], {}):
+                    return value
+        return None
+
+    fields = {}
+    name_values = _screening_evidence_value_list(first_present("names"))
+    matched_name = _screening_evidence_text(_first_non_empty(
+        evidence.get("matched_name"),
+        evidence.get("profile_name"),
+        evidence.get("name"),
+        name_values[0] if name_values else None,
+    ))
+    if matched_name:
+        fields["matched_name"] = matched_name
+    match_types = _screening_evidence_value_list(evidence.get("provider_match_types"))
+    if match_types:
+        fields["provider_match_types"] = match_types
+    pep_classes = _screening_evidence_value_list(evidence.get("pep_classes"))
+    if pep_classes:
+        fields["pep_classes"] = pep_classes
+    dob = _screening_evidence_dob_text(first_present("date_of_birth", "dob", "birth_date", "year_of_birth"))
+    if dob:
+        fields["date_of_birth"] = dob
+    nationality = _screening_evidence_text(first_present("nationality"))
+    if nationality:
+        fields["nationality"] = nationality
+    countries = _screening_evidence_value_list(first_present("countries"))
+    if countries:
+        fields["countries"] = countries
+    places_of_birth = _screening_evidence_value_list(first_present("places_of_birth"))
+    if places_of_birth:
+        fields["places_of_birth"] = places_of_birth
+    positions = _screening_evidence_value_list(first_present("positions"))
+    if positions:
+        fields["positions"] = positions
+    aka_names = _screening_evidence_value_list(first_present("aka", "aliases", "alias_names", "alternative_names"))
+    seen_aka = {value.lower() for value in aka_names}
+    for candidate in name_values:
+        if matched_name and candidate.lower() == matched_name.lower():
+            continue
+        if candidate.lower() not in seen_aka:
+            aka_names.append(candidate)
+            seen_aka.add(candidate.lower())
+    if aka_names:
+        fields["aka_names"] = aka_names
+    return fields
+
+
 def _normalise_screening_evidence_item(row, evidence, *, source, link_strategy=None):
     evidence = evidence if isinstance(evidence, dict) else {}
     ids = _screening_evidence_provider_ids(evidence)
@@ -21680,6 +21790,8 @@ def _normalise_screening_evidence_item(row, evidence, *, source, link_strategy=N
             if _screening_evidence_text(reason)
         ],
     }
+    # F9: additive matched-profile passthrough (lean — non-empty fields only).
+    item.update(_screening_evidence_matched_profile_fields(evidence))
     item["evidence_status"] = _screening_evidence_item_status(item)
     item["evidence_quality"] = _screening_evidence_canonical_quality(item["evidence_status"])
     if item["evidence_quality"] != "complete":

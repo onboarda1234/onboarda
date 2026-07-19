@@ -2290,3 +2290,96 @@ def test_evidence_cap_single_subject_rank_unchanged(db, temp_db):
     newest_five = sorted(item["evidence_row_id"] for item in full)[-5:]
     assert sorted(item["evidence_row_id"] for item in capped) == newest_five
     assert all((item.get("application_evidence_total") or 0) == 12 for item in capped)
+
+
+# ---------------------------------------------------------------------------
+# Phase F — F9 matched-profile passthrough on queue evidence items
+# ---------------------------------------------------------------------------
+
+_F9_ROW = {
+    "subject_name": "Gerard M. Murphy",
+    "subject_type": "director",
+    "application_id": "f9-app-1",
+    "application_ref": "ARF-F9-001",
+    "company_name": "Murphy Holdings Ltd",
+    "total_hits": 3,
+}
+
+_F9_PROFILE_FIELDS = (
+    "matched_name", "provider_match_types", "pep_classes", "date_of_birth",
+    "nationality", "countries", "places_of_birth", "positions", "aka_names",
+)
+
+
+def test_f9_evidence_item_passes_through_matched_profile_fields():
+    """F9: the stored hit's matched-profile facts (matched name, match types,
+    PEP classes, sparse person attributes) pass through to the queue evidence
+    item unmodified — CA collection shapes flatten to lean string lists."""
+    from server import _normalise_screening_evidence_item
+
+    evidence = {
+        "name": "MURPHY, Gerard Martin",
+        "provider_match_types": ["exact_match", "aka_exact"],
+        "pep_classes": ["PEP_CLASS_2"],
+        "date_of_birth": {"year": 1961, "month": None, "day": None, "date": None},
+        "nationality": "Ireland",
+        "countries": ["Ireland", "GB"],
+        "places_of_birth": [{"value": "Dublin", "source": "S:1"}],
+        "positions": {"values": [{"title": "Member of Parliament", "from_date": "2016", "to_date": "2024"}]},
+        "aka": ["Gerry Murphy"],
+        "provider_profile_identifier": "prof-f9-1",
+        "match_category": "pep",
+    }
+    item = _normalise_screening_evidence_item(dict(_F9_ROW), evidence, source="screening_result")
+
+    assert item["matched_name"] == "MURPHY, Gerard Martin"
+    assert item["provider_match_types"] == ["exact_match", "aka_exact"]
+    assert item["pep_classes"] == ["PEP_CLASS_2"]
+    assert item["date_of_birth"] == "1961"
+    assert item["nationality"] == "Ireland"
+    assert item["countries"] == ["Ireland", "GB"]
+    assert item["places_of_birth"] == ["Dublin"]
+    assert item["positions"] == ["Member of Parliament (2016-2024)"]
+    assert item["aka_names"] == ["Gerry Murphy"]
+
+
+def test_f9_evidence_item_omits_absent_profile_fields_payload_lean():
+    """F9: absent source data emits NO keys at all — the queue payload stays
+    lean and nothing renders provider-side without a stored value."""
+    from server import _normalise_screening_evidence_item
+
+    item = _normalise_screening_evidence_item(
+        dict(_F9_ROW), {"provider_profile_identifier": "prof-f9-2"}, source="screening_result"
+    )
+    for field in _F9_PROFILE_FIELDS:
+        assert field not in item, f"{field} must be absent when the stored hit carries no value"
+
+
+def test_f9_evidence_item_profile_person_shape_and_alias_names_beyond_primary():
+    """F9: raw CA match-profile person shapes are tolerated (names/positions
+    collections, structured DOB with a date), and stored name values beyond
+    the primary matched name surface as alias names."""
+    from server import _normalise_screening_evidence_item
+
+    evidence = {
+        "provider_profile_identifier": "prof-f9-3",
+        "profile": {
+            "person": {
+                "names": {"values": [{"name": "MURPHY, Gerard Martin"}, {"name": "Gerard Murphy"}]},
+                "date_of_birth": {"year": 1961, "date": "1961-05-04"},
+                "countries": ["IE"],
+                "places_of_birth": [{"value": "Dublin", "source": "S:1"}],
+                "positions": {"values": []},
+            }
+        },
+    }
+    item = _normalise_screening_evidence_item(dict(_F9_ROW), evidence, source="screening_result")
+
+    assert item["matched_name"] == "MURPHY, Gerard Martin"
+    assert item["aka_names"] == ["Gerard Murphy"]
+    assert item["date_of_birth"] == "1961-05-04"
+    assert item["countries"] == ["IE"]
+    assert item["places_of_birth"] == ["Dublin"]
+    # Empty collections emit nothing.
+    assert "positions" not in item
+    assert "nationality" not in item

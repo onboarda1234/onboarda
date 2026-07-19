@@ -16855,27 +16855,199 @@ function screeningTriageHitDisplayName(item) {
 }
 
 function screeningTriageHitChips(item) {
-  // Max TWO chips per hit: risk type + strongest (first, server-ordered)
-  // triage match reason. Phase F (F4): a reason that merely restates the
-  // category ("Adverse Media" chip next to an "adverse media"/"adverse-media"
-  // token) is duplication, not information — the first reason that adds
-  // something renders instead. Raw reason tokens stay visible verbatim in
-  // the hit body ("Why it ranks here") and Technical details.
+  // Max TWO chips per hit. F9 hit-header enrichment, stored facts only:
+  // slot 1 is the PEP-class chip when the stored hit carries a parsable
+  // pep_classes token, else the existing risk-type chip; slot 2 is the
+  // match-quality chip when the stored provider match types carry an exact
+  // token, else the strongest (first, server-ordered) triage reason.
+  // Phase F (F4) still applies to the reason fallback: a reason that merely
+  // restates the category is duplication, not information. Raw tokens stay
+  // visible verbatim in "Why it ranks here" and Technical details.
   item = item || {};
   var chips = [];
   var categoryKey = String(item.category || '').trim().toLowerCase().replace(/[-_]+/g, ' ');
-  if (item.category) {
+  var pepClassChip = screeningTriagePepClassChip(item);
+  if (pepClassChip) {
+    chips.push(pepClassChip);
+  } else if (item.category) {
     var bucket = screeningTriageBucketKeyForCategory(item.category);
     chips.push(screeningTagBadge(item.category, bucket === 'sanctions' || bucket === 'pep' ? 'high' : 'pending'));
   }
-  var reasons = Array.isArray(item.triage_score_reasons) ? item.triage_score_reasons.filter(Boolean) : [];
-  for (var i = 0; i < reasons.length; i++) {
-    var reasonKey = String(reasons[i]).trim().toLowerCase().replace(/[-_]+/g, ' ');
-    if (categoryKey && reasonKey === categoryKey) continue;
-    chips.push(screeningTagBadge(reasons[i], 'draft'));
-    break;
+  var qualityChip = screeningTriageMatchQualityChip(item);
+  if (qualityChip) {
+    chips.push(qualityChip);
+  } else {
+    var reasons = Array.isArray(item.triage_score_reasons) ? item.triage_score_reasons.filter(Boolean) : [];
+    for (var i = 0; i < reasons.length; i++) {
+      var reasonKey = String(reasons[i]).trim().toLowerCase().replace(/[-_]+/g, ' ');
+      if (categoryKey && reasonKey === categoryKey) continue;
+      chips.push(screeningTagBadge(reasons[i], 'draft'));
+      break;
+    }
   }
   return chips.slice(0, 2).join('');
+}
+
+function screeningTriageHitExactNameToken(item) {
+  // F9: TRUE only when the STORED provider match types carry an exact token
+  // (name_exact / exact_match / aka_exact). Never inferred from scores,
+  // reasons, or string similarity.
+  var tokens = Array.isArray((item || {}).provider_match_types) ? item.provider_match_types : [];
+  return tokens.some(function(token) {
+    var key = String(token || '').trim().toLowerCase();
+    return key === 'name_exact' || key === 'exact_match' || key === 'aka_exact';
+  });
+}
+
+function screeningTriagePepClassChip(item) {
+  // F9: "PEP class N" from the strongest stored pep_classes token (class 1
+  // outranks class 4). Renders ONLY when the stored hit carries a parsable
+  // class token — a class is never invented from category or risk labels.
+  var classes = Array.isArray((item || {}).pep_classes) ? item.pep_classes : [];
+  var strongest = null;
+  classes.forEach(function(token) {
+    var parsed = String(token || '').match(/pep[\s_-]*class[\s_-]*(\d)/i);
+    if (parsed && (strongest === null || Number(parsed[1]) < strongest)) strongest = Number(parsed[1]);
+  });
+  if (strongest === null) return '';
+  return screeningTagBadge('PEP class ' + strongest, 'high');
+}
+
+function screeningApplicantSubjectFacts(subject) {
+  // F9 applicant side: the SAME application/party data the Phase E surfaces
+  // already read (app.country for the entity, party.nat / party.dob /
+  // party.jurisdiction for persons — the fields the status strip renders).
+  // No new lookups; unknown facts stay empty and simply do not render.
+  subject = subject || {};
+  var facts = {
+    name: String(subject.subject_name || '').trim(),
+    role: subject.subject_type ? screeningSubjectTypeLabel(subject.subject_type) : '',
+    country: '',
+    dob: '',
+    birth_year: ''
+  };
+  var app = (currentApp && (!subject.application_ref || !currentApp.ref || String(currentApp.ref) === String(subject.application_ref))) ? currentApp : null;
+  if (!app) return facts;
+  if (String(subject.subject_type || '').trim().toLowerCase() === 'entity') {
+    facts.country = app.country || '';
+    return facts;
+  }
+  var target = screeningSubjectJoinName(facts.name);
+  var party = target ? [].concat(app.directors || [], app.ubos || [], app.intermediaries || []).find(function(candidate) {
+    return candidate && screeningSubjectJoinName(candidate.name) === target;
+  }) : null;
+  if (party) {
+    facts.country = party.nat || party.jurisdiction || '';
+    facts.dob = party.dob || '';
+    facts.birth_year = screeningComparisonBirthYear(party.dob);
+  }
+  return facts;
+}
+
+function screeningProviderProfileFacts(item) {
+  // F9 provider side: ONLY the stored matched-profile fields the server
+  // passes through on the evidence item. Absent fields stay empty — sandbox
+  // payloads usually carry no person attributes until profile hydration.
+  item = item || {};
+  var name = String(item.matched_name || item.name || '').trim();
+  if (name && isUuidLike(name)) name = '';
+  var countries = Array.isArray(item.countries) ? item.countries.filter(Boolean) : [];
+  var dob = String(item.date_of_birth || item.dob || item.year_of_birth || '').trim();
+  return {
+    name: name,
+    dob: dob,
+    birth_year: screeningComparisonBirthYear(dob),
+    country: String(item.nationality || '').trim() || countries.join(', '),
+    places_of_birth: Array.isArray(item.places_of_birth) ? item.places_of_birth.filter(Boolean) : [],
+    aka_names: Array.isArray(item.aka_names) ? item.aka_names.filter(Boolean) : [],
+    positions: Array.isArray(item.positions) ? item.positions.filter(Boolean) : []
+  };
+}
+
+function screeningApplicantProviderCountryMatch(applicantValue, providerValue) {
+  var applicantText = screeningComparisonNormalizedText(applicantValue);
+  var providerText = screeningComparisonNormalizedText(providerValue);
+  if (!applicantText || !providerText) return false;
+  if (applicantText === providerText) return true;
+  return screeningComparisonCanonicalCountry(applicantValue) === screeningComparisonCanonicalCountry(providerValue);
+}
+
+function screeningTriageMatchQualityChip(item) {
+  // F9: built ONLY from stored facts. An exact provider match-type token
+  // lights "Exact name"; " + birth year" / " + country" append ONLY when the
+  // stored provider value exists AND equals the applicant's collected value.
+  // No stored exact token → no chip (the reason fallback renders instead);
+  // no corroboration data → the chip stays plain "Exact name".
+  if (!screeningTriageHitExactNameToken(item)) return '';
+  var applicant = screeningApplicantSubjectFacts(item);
+  var provider = screeningProviderProfileFacts(item);
+  var label = 'Exact name';
+  if (provider.birth_year && applicant.birth_year && provider.birth_year === applicant.birth_year) {
+    label += ' + birth year';
+  }
+  if (provider.country && applicant.country && screeningApplicantProviderCountryMatch(applicant.country, provider.country)) {
+    label += ' + country';
+  }
+  return screeningTagBadge(label, 'draft');
+}
+
+function screeningTriageHitApplicantComparison(item) {
+  // F9 self-lighting "Applicant vs matched profile" grid: a row renders ONLY
+  // when at least one side carries stored data — no placeholder rows, no
+  // dash grids, no empty shell. Verdicts state only what the stored values
+  // support: equality lights match/exact, a real two-sided difference lights
+  // differs, one-sided data stays labelled applicant only / provider only.
+  item = item || {};
+  var applicant = screeningApplicantSubjectFacts(item);
+  var provider = screeningProviderProfileFacts(item);
+  var rows = [];
+  var verdictBadge = function(label, cls) {
+    return '<span class="badge ' + cls + '" style="flex:none;">' + escapeHtml(label) + '</span>';
+  };
+  var pushRow = function(label, applicantValue, providerValue, verdict) {
+    var applicantText = String(applicantValue || '').trim();
+    var providerText = String(providerValue || '').trim();
+    if (!applicantText && !providerText) return;
+    var valueHtml = applicantText && providerText
+      ? '<strong>' + escapeHtml(applicantText) + '</strong> <span style="color:var(--text3);">→</span> <strong>' + escapeHtml(providerText) + '</strong>'
+      : '<strong>' + escapeHtml(applicantText || providerText) + '</strong>';
+    rows.push('<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:11.5px;color:var(--text2);">' +
+      '<span style="color:var(--text3);">' + escapeHtml(label) + ':</span> ' + valueHtml + ' ' + verdictBadge(verdict[0], verdict[1]) +
+    '</div>');
+  };
+  var twoSidedVerdict = function(applicantValue, providerValue, equal) {
+    if (applicantValue && providerValue) return equal ? ['match', 'approved'] : ['differs', 'medium'];
+    return providerValue ? ['provider only', 'draft'] : ['applicant only', 'draft'];
+  };
+  if (applicant.name || provider.name) {
+    var nameVerdict = applicant.name && provider.name
+      ? (screeningTriageHitExactNameToken(item) ? ['exact', 'approved'] : ['similar', 'draft'])
+      : (provider.name ? ['provider only', 'draft'] : ['applicant only', 'draft']);
+    pushRow('Name', applicant.name, provider.name, nameVerdict);
+  }
+  var providerDobShown = provider.birth_year || provider.dob;
+  if (applicant.birth_year || providerDobShown) {
+    pushRow('Year of birth', applicant.birth_year, providerDobShown,
+      twoSidedVerdict(applicant.birth_year, providerDobShown, applicant.birth_year && provider.birth_year && applicant.birth_year === provider.birth_year));
+  }
+  if (applicant.country || provider.country) {
+    pushRow('Country / nationality', applicant.country, provider.country,
+      twoSidedVerdict(applicant.country, provider.country, screeningApplicantProviderCountryMatch(applicant.country, provider.country)));
+  }
+  if (provider.places_of_birth.length) {
+    pushRow('Place of birth', '', provider.places_of_birth.join(', '), ['provider only', 'draft']);
+  }
+  if (provider.aka_names.length) {
+    pushRow('Also known as', '', provider.aka_names.join(', '), ['provider only', 'draft']);
+  }
+  if (provider.positions.length) {
+    pushRow('Listed role', '', provider.positions.join(', '), ['provider only', 'draft']);
+  }
+  if (!rows.length) return '';
+  return '<div data-screening-hit-applicant-comparison="true" style="border:1px solid var(--border1);border-radius:8px;padding:9px 13px;background:var(--surface2);">' +
+    '<div style="font-size:10.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--text3);">Applicant vs matched profile</div>' +
+    '<div style="display:grid;gap:5px;margin-top:6px;">' + rows.join('') + '</div>' +
+  '</div>';
 }
 
 function screeningTriageHitEvidenceBody(item) {
@@ -16887,12 +17059,11 @@ function screeningTriageHitEvidenceBody(item) {
   // fact row repeats it only when the raw value differs from that title
   // (e.g. the display name fell back to the article title over a UUID).
   var rawMatchedName = String(item.matched_name || item.name || '').trim();
+  // F9: provider person facts (DOB, country, listed role) moved into the
+  // "Applicant vs matched profile" grid below — one fact in one place.
   var facts = [
     ['Matched name', rawMatchedName && rawMatchedName !== screeningTriageHitDisplayName(item) ? rawMatchedName : ''],
     ['Screening subject', item.subject_name ? item.subject_name + (item.relationship_to_application ? ' — ' + item.relationship_to_application : '') : ''],
-    ['Date of birth', item.date_of_birth || item.dob || item.year_of_birth],
-    ['Country / nationality', item.country || item.nationality],
-    ['Listed role', item.position || item.listed_role],
     ['Severity', item.severity]
   ].filter(function(rowPair) { return evidenceDisplayValue(rowPair[1]); });
   if (facts.length) {
@@ -16910,14 +17081,26 @@ function screeningTriageHitEvidenceBody(item) {
         : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(item.source_url_unavailable_message || SCREENING_SOURCE_UNAVAILABLE_MESSAGE) + '</div>') +
     '</div>';
   }
+  // F9 two-panel arrangement (mockup): "Applicant vs matched profile" beside
+  // "Why it ranks here"; auto-fit grid stacks the panels on narrow layouts.
+  // Each panel self-lights — either may be absent and nothing empty renders.
+  var comparisonHtml = screeningTriageHitApplicantComparison(item);
   var reasons = Array.isArray(item.triage_score_reasons) ? item.triage_score_reasons.filter(Boolean) : [];
+  var reasonsHtml = '';
   if (reasons.length) {
-    html += '<div style="border:1px solid var(--border1);border-radius:8px;padding:9px 13px;background:var(--surface2);">' +
+    reasonsHtml = '<div style="border:1px solid var(--border1);border-radius:8px;padding:9px 13px;background:var(--surface2);">' +
       '<div style="font-size:10.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--text3);">Why it ranks here</div>' +
       '<ul style="margin:6px 0 0;padding-left:18px;font-size:11.5px;color:var(--text2);line-height:1.6;">' + reasons.map(function(reason) {
         return '<li>' + escapeHtml(reason) + '</li>';
       }).join('') + '</ul>' +
     '</div>';
+  }
+  if (comparisonHtml && reasonsHtml) {
+    html += '<div data-screening-hit-detail-panels="true" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;align-items:start;">' +
+      comparisonHtml + reasonsHtml +
+    '</div>';
+  } else {
+    html += comparisonHtml + reasonsHtml;
   }
   return html;
 }
@@ -17027,7 +17210,16 @@ function screeningTriageHitToggled(el) {
 function screeningTriageHitCard(row, item, itemIndex, weakThreshold) {
   item = item || {};
   var name = screeningTriageHitDisplayName(item);
-  var subLine = item.subject_name ? 'Matched against: ' + item.subject_name + (item.relationship_to_application ? ' — ' + item.relationship_to_application : '') : '';
+  // F9: the "Matched against" line gains the applicant context we already
+  // hold — "— <Role> · <Country>" from the application/party data (each part
+  // renders only when known); the generic relationship label stays as the
+  // fallback when neither applicant fact is known.
+  var applicantFacts = screeningApplicantSubjectFacts(row || item);
+  var applicantContext = [applicantFacts.role, applicantFacts.country].filter(Boolean).join(' · ');
+  var subLine = item.subject_name
+    ? 'Matched against: ' + item.subject_name +
+      (applicantContext ? ' — ' + applicantContext : (item.relationship_to_application ? ' — ' + item.relationship_to_application : ''))
+    : '';
   return '<details data-screening-triage-hit="true" ontoggle="screeningTriageHitToggled(this)" style="border:1px solid var(--border1);border-top:none;background:#fff;">' +
     '<summary style="list-style:none;display:flex;align-items:center;gap:13px;padding:10px 14px;cursor:pointer;">' +
       screeningTriageScoreBlock(item, weakThreshold) +

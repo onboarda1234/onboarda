@@ -307,3 +307,100 @@ def test_phase_f_provider_id_walls_collapsed():
     assert "screeningEvidenceArrayText(summary.provider_case_ids)" not in panel
     assert "screeningEvidenceArrayText(summary.provider_alert_ids)" not in panel
     assert "screeningEvidenceArrayText(summary.provider_risk_ids)" not in panel
+
+
+# ---------------------------------------------------------------------------
+# Phase F — F9 per-hit applicant-vs-profile reconciliation (self-lighting)
+# ---------------------------------------------------------------------------
+
+def test_f9_comparison_grid_rows_are_conditional_never_empty():
+    """F9: the "Applicant vs matched profile" grid self-lights — a row renders
+    ONLY when at least one side carries stored data, and an empty grid renders
+    nothing at all (no shell, no placeholder dash rows)."""
+    html = _html()
+    grid = _function_region(
+        html, "screeningTriageHitApplicantComparison", "screeningTriageHitEvidenceBody"
+    )
+    assert "Applicant vs matched profile" in grid
+    assert "if (!applicantText && !providerText) return;" in grid
+    assert "if (!rows.length) return '';" in grid
+    assert "applicant.name || provider.name" in grid
+    assert "provider.places_of_birth.length" in grid
+    assert "provider.aka_names.length" in grid
+    assert "provider.positions.length" in grid
+    # One-sided data stays labelled honestly, never guessed into a verdict.
+    assert "['provider only', 'draft']" in grid
+    assert "'applicant only'" in grid
+
+
+def test_f9_name_row_verdict_comes_from_stored_match_types():
+    """F9: the name-row verdict derives ONLY from the stored provider match
+    types — an exact token lights "exact", anything else stays "similar"."""
+    html = _html()
+    token = _function_region(
+        html, "screeningTriageHitExactNameToken", "screeningTriagePepClassChip"
+    )
+    assert "provider_match_types" in token
+    assert "'name_exact'" in token
+    assert "'exact_match'" in token
+    assert "'aka_exact'" in token
+    grid = _function_region(
+        html, "screeningTriageHitApplicantComparison", "screeningTriageHitEvidenceBody"
+    )
+    assert "screeningTriageHitExactNameToken(item) ? ['exact', 'approved'] : ['similar', 'draft']" in grid
+
+
+def test_f9_birth_year_chip_suffix_gated_on_both_sides_present_and_equal():
+    """F9: the match-quality chip lights only on a stored exact token, and its
+    " + birth year" / " + country" suffixes append ONLY when the stored
+    provider value exists AND equals the applicant's collected value."""
+    html = _html()
+    chip = _function_region(
+        html, "screeningTriageMatchQualityChip", "screeningTriageHitApplicantComparison"
+    )
+    assert "if (!screeningTriageHitExactNameToken(item)) return '';" in chip
+    assert "provider.birth_year && applicant.birth_year && provider.birth_year === applicant.birth_year" in chip
+    assert "' + birth year'" in chip
+    assert "provider.country && applicant.country && screeningApplicantProviderCountryMatch(applicant.country, provider.country)" in chip
+    assert "' + country'" in chip
+    assert "'Exact name'" in chip
+
+
+def test_f9_pep_class_chip_gated_on_stored_class_token():
+    """F9: "PEP class N" renders ONLY from a parsable stored pep_classes
+    token (strongest wins); with no stored class the existing risk-type chip
+    is the fallback — a class is never invented."""
+    html = _html()
+    chip = _function_region(
+        html, "screeningTriagePepClassChip", "screeningApplicantSubjectFacts"
+    )
+    assert "pep_classes" in chip
+    assert "if (strongest === null) return '';" in chip
+    assert "'PEP class ' + strongest" in chip
+    chips = _function_region(
+        html, "screeningTriageHitChips", "screeningTriageHitExactNameToken"
+    )
+    assert "screeningTriagePepClassChip(item)" in chips
+    assert "else if (item.category)" in chips
+
+
+def test_f9_matched_against_suffix_gated_on_known_applicant_facts():
+    """F9: the "Matched against" line appends "— <Role> · <Country>" from the
+    application data we already hold, each part only when known, with the
+    generic relationship label as the fallback."""
+    html = _html()
+    card = _function_region(
+        html, "screeningTriageHitCard", "screeningTriageWeakTailSection"
+    )
+    assert "[applicantFacts.role, applicantFacts.country].filter(Boolean).join(' · ')" in card
+    assert "applicantContext ? ' — ' + applicantContext : (item.relationship_to_application" in card
+    facts = _function_region(
+        html, "screeningApplicantSubjectFacts", "screeningProviderProfileFacts"
+    )
+    # Applicant facts come from the SAME party fields the Phase E surfaces
+    # read (app.country, party.nat / party.jurisdiction / party.dob) and are
+    # guarded to the row's application — never guessed across applications.
+    assert "app.country" in facts
+    assert "party.nat || party.jurisdiction" in facts
+    assert "screeningComparisonBirthYear(party.dob)" in facts
+    assert "String(currentApp.ref) === String(subject.application_ref)" in facts
