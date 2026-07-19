@@ -484,3 +484,99 @@ class TestBackofficeTriageNarrativeStatic:
         )
         assert "boApiCall(" not in helper
         assert "fetch(" not in helper
+
+
+# ---------------------------------------------------------------------------
+# Phase F (F1) — narrative grouping of near-identical priority hits
+# ---------------------------------------------------------------------------
+
+def _mass_hit(i, score=58, matched="WIRECARD"):
+    return _hit(
+        "Wirecard AG", matched, score,
+        reasons=["Adverse media", "Exact name match", "Article evidence"],
+        categories=["adverse_media"],
+    )
+
+
+class TestTriageNarrativeGrouping:
+    """Phase F: hits sharing (matched_name lowercase, score, reason-set)
+    collapse into ONE narrative entry; distinct hits stay individual;
+    standouts lead the narrative; homogeneous masses stop producing a
+    'Review these N hits first' headline."""
+
+    def _mixed_hits(self):
+        hits = [_mass_hit(i) for i in range(198)]
+        hits.append(_hit(
+            "Wirecard AG", "Wirecard AG Warning List", 53,
+            reasons=["Watchlist warning match"], categories=["watchlist"],
+        ))
+        hits.append(_hit("Wirecard AG", "Weak Match A", 20, reasons=["Name-only match"]))
+        hits.append(_hit("Wirecard AG", "Weak Match B", 20, reasons=["Name-only match"]))
+        return hits
+
+    def test_homogeneous_mass_collapses_to_one_group_entry(self):
+        narrative = server._agent3_triage_narrative(self._mixed_hits())
+        entries = narrative["entries"]
+        assert len(entries) == 2
+        kinds = [entry["kind"] for entry in entries]
+        assert kinds == ["hit", "group"]
+        group = entries[1]
+        assert group["count"] == 198
+        assert group["matched_name"] == "wirecard"
+        assert group["score"] == 58
+        assert group["reasons"] == ["Adverse media", "Exact name match", "Article evidence"]
+
+    def test_standout_leads_then_mass_then_weak_tail(self):
+        narrative = server._agent3_triage_narrative(self._mixed_hits())
+        text = narrative["narrative"]
+        assert (
+            "1. Wirecard AG — matched 'Wirecard AG Warning List' (triage 53): "
+            "watchlist warning match." in text
+        )
+        assert (
+            "2. Wirecard AG — 198 adverse-media matches on 'wirecard', all "
+            "triage 58 (adverse media; exact name match; article evidence) — "
+            "no single hit stands out." in text
+        )
+        assert text.index("Warning List") < text.index("198 adverse-media")
+        assert "weak tail" in text
+        assert "Review these" not in narrative["headline"]
+        assert "stand out" in narrative["headline"]
+
+    def test_fully_homogeneous_headline_is_structural(self):
+        narrative = server._agent3_triage_narrative([_mass_hit(i) for i in range(50)])
+        assert narrative["priority_count"] == 50
+        assert len(narrative["entries"]) == 1
+        assert narrative["entries"][0]["kind"] == "group"
+        assert "Review these" not in narrative["headline"]
+        assert "no single hit stands out" in narrative["headline"]
+
+    def test_distinct_hits_keep_pre_grouping_sentences_and_headline(self):
+        narrative = server._agent3_triage_narrative(_sample_hits())
+        assert all(entry["kind"] == "hit" for entry in narrative["entries"])
+        assert narrative["headline"] == "Review these 3 hits first, ranked by RegMind triage."
+        assert (
+            "1. Acme Holdings Ltd — matched 'ACME HOLDING' (strong, triage 92): "
+            "sanctions list match; exact name match." in narrative["narrative"]
+        )
+
+    def test_priority_hits_payload_shape_preserved(self):
+        narrative = server._agent3_triage_narrative(self._mixed_hits())
+        # Data preserved: priority_hits keeps the pre-grouping per-hit shape.
+        assert len(narrative["priority_hits"]) == 5
+        assert all(
+            set(hit.keys()) == {
+                "subject_name", "matched_name", "score", "band",
+                "categories", "reasons", "surfaced_by_pass",
+            }
+            for hit in narrative["priority_hits"]
+        )
+        assert narrative["priority_count"] == 199
+
+    def test_grouped_output_is_deterministic_and_clean(self):
+        first = server._agent3_triage_narrative(self._mixed_hits())
+        second = server._agent3_triage_narrative(self._mixed_hits())
+        assert first == second
+        blob = json.dumps(first, sort_keys=True).lower()
+        for banned in BANNED_VOCABULARY:
+            assert banned not in blob

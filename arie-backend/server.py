@@ -21955,26 +21955,43 @@ def _load_monitoring_evidence_batch(db, application_ids, *, per_app_cap=None):
     if per_app_cap:
         # Cap in SQL so oversized applications neither ship unbounded JSON
         # blobs over the wire nor get parsed in Python. Ranking runs over a
-        # slim (id, application_id) projection — never the JSON columns — and
-        # only the surviving rows are joined back for their full payload.
-        # Newest evidence wins; application_evidence_total lets callers report
-        # the truncation honestly. The targeted drawer path passes no cap and
-        # stays complete.
+        # slim (id, application_id, subject) projection — never the JSON
+        # columns — and only the surviving rows are joined back for their
+        # full payload.
+        #
+        # Per-subject fairness (Phase F, F2): the old rank partitioned by
+        # application_id only, newest-first, so on a two-subject application
+        # whose total evidence exceeded the cap the subject with the newer
+        # rows monopolised the whole budget and the other subject's queue row
+        # rendered with zero enriched evidence. The rank now interleaves
+        # subjects round-robin (each subject's newest rows first, ordered by
+        # per-subject recency rank, ties broken newest-first) so every
+        # subject gets a fair share of the cap. Single-subject applications
+        # rank identically to before. application_evidence_total lets
+        # callers report the truncation honestly (evidence_scan_capped). The
+        # targeted drawer path passes no cap and stays complete.
         query = f"""
             {select_columns}, ranked.application_evidence_total
               FROM (
                 SELECT slim.evidence_row_id,
-                       ROW_NUMBER() OVER (PARTITION BY slim.application_id ORDER BY slim.evidence_row_id DESC) AS app_evidence_rank,
+                       ROW_NUMBER() OVER (PARTITION BY slim.application_id ORDER BY slim.subject_recency_rank ASC, slim.evidence_row_id DESC) AS app_evidence_rank,
                        COUNT(*) OVER (PARTITION BY slim.application_id) AS application_evidence_total
                   FROM (
-                    SELECT e.id AS evidence_row_id, e.application_id AS application_id
-                      FROM monitoring_alert_evidence e
-                     WHERE e.application_id IN ({placeholders})
-                    UNION ALL
-                    SELECT e.id AS evidence_row_id, a.application_id AS application_id
-                      FROM monitoring_alert_evidence e
-                      JOIN monitoring_alerts a ON a.id = e.monitoring_alert_id
-                     WHERE e.application_id IS NULL AND a.application_id IN ({placeholders})
+                    SELECT pool.evidence_row_id,
+                           pool.application_id,
+                           ROW_NUMBER() OVER (PARTITION BY pool.application_id, pool.subject_key ORDER BY pool.evidence_row_id DESC) AS subject_recency_rank
+                      FROM (
+                        SELECT e.id AS evidence_row_id, e.application_id AS application_id,
+                               COALESCE(e.matched_subject_name, '') AS subject_key
+                          FROM monitoring_alert_evidence e
+                         WHERE e.application_id IN ({placeholders})
+                        UNION ALL
+                        SELECT e.id AS evidence_row_id, a.application_id AS application_id,
+                               COALESCE(e.matched_subject_name, '') AS subject_key
+                          FROM monitoring_alert_evidence e
+                          JOIN monitoring_alerts a ON a.id = e.monitoring_alert_id
+                         WHERE e.application_id IS NULL AND a.application_id IN ({placeholders})
+                      ) pool
                   ) slim
               ) ranked
               JOIN monitoring_alert_evidence e ON e.id = ranked.evidence_row_id
@@ -25805,55 +25822,159 @@ def _agent3_triage_narrative(hits):
     ranked_all = sorted(scored, key=lambda entry: -entry[0])
     version = _agent3_text(ranked_all[0][1].get("triage_score_version"), "rts-1.0")
 
+    def _flow_reason_text(reasons):
+        # Lowercase the leading letter for mid-sentence flow, but keep
+        # leading acronyms (e.g. "PEP class 1-2 match") verbatim.
+        return "; ".join(
+            reason[:1].lower() + reason[1:]
+            if len(reason) < 2 or reason[1].islower()
+            else reason
+            for reason in reasons
+        )
+
+    # priority_hits payload keeps its pre-Phase-F shape verbatim: the top
+    # listed individual hits, reasons capped at two. Grouping below changes
+    # narrative presentation only — no stored data is dropped.
     priority_hits = []
-    sentences = []
-    for position, (score, hit) in enumerate(listed, start=1):
-        band = _agent3_triage_band(score)
-        subject_name = _agent3_text(hit.get("subject_name"), "Unknown subject")
-        matched_name = _agent3_text(hit.get("matched_name"), "Stored hit")
-        reasons = _agent3_triage_reasons(hit.get("triage_score_reasons"))[:2]
+    for score, hit in listed:
         priority_hits.append({
-            "subject_name": subject_name,
-            "matched_name": matched_name,
+            "subject_name": _agent3_text(hit.get("subject_name"), "Unknown subject"),
+            "matched_name": _agent3_text(hit.get("matched_name"), "Stored hit"),
             "score": score,
-            "band": band,
+            "band": _agent3_triage_band(score),
             "categories": list(hit.get("categories") or []),
-            "reasons": reasons,
+            "reasons": _agent3_triage_reasons(hit.get("triage_score_reasons"))[:2],
             "surfaced_by_pass": hit.get("surfaced_by_pass") or "",
         })
-        band_prefix = f"{band}, " if band else ""
-        sentence = (
-            f"{position}. {subject_name} — matched '{matched_name}' "
-            f"({band_prefix}triage {score})"
-        )
-        if reasons:
-            # Lowercase the leading letter for mid-sentence flow, but keep
-            # leading acronyms (e.g. "PEP class 1-2 match") verbatim.
-            reason_text = "; ".join(
-                reason[:1].lower() + reason[1:]
-                if len(reason) < 2 or reason[1].islower()
-                else reason
-                for reason in reasons
-            )
-            sentence += f": {reason_text}."
+
+    # Phase F (F1): collapse near-identical priority hits — same matched
+    # name (lowercased), same score, same reason-set — into ONE narrative
+    # entry so a homogeneous 200-hit adverse-media mass reads as a single
+    # structural line instead of five identical sentences. Distinct hits
+    # stay individual. Grouping is deterministic: groups keep the order of
+    # their first occurrence in the score-descending priority list.
+    groups = []
+    group_index = {}
+    for score, hit in priority:
+        matched_name = _agent3_text(hit.get("matched_name"), "Stored hit")
+        reasons_all = _agent3_triage_reasons(hit.get("triage_score_reasons"))
+        key = (matched_name.strip().lower(), score, tuple(sorted(reasons_all)))
+        if key in group_index:
+            groups[group_index[key]]["members"].append(hit)
         else:
-            sentence += "."
+            group_index[key] = len(groups)
+            groups.append({
+                "matched_name_key": matched_name.strip().lower(),
+                "score": score,
+                "reasons_all": reasons_all,
+                "members": [hit],
+            })
+
+    # Standouts (distinct, singleton entries) lead; the homogeneous masses
+    # follow; weak tail and unscored close as before. Within each block the
+    # score-descending first-occurrence order is preserved.
+    singleton_groups = [group for group in groups if len(group["members"]) == 1]
+    mass_groups = [group for group in groups if len(group["members"]) > 1]
+    entries_ordered = singleton_groups + mass_groups
+    listed_entries = entries_ordered[:_AGENT3_TRIAGE_NARRATIVE_LISTED_CAP]
+
+    def _group_category_word(group):
+        buckets = {
+            _agent3_primary_count_bucket(hit.get("categories", []))
+            for hit in group["members"]
+        }
+        if len(buckets) == 1:
+            return {
+                "sanctions": "sanctions",
+                "pep": "PEP",
+                "adverse_media": "adverse-media",
+                "watchlist": "watchlist",
+            }.get(next(iter(buckets)), "screening")
+        return "screening"
+
+    sentences = []
+    entries = []
+    for position, group in enumerate(listed_entries, start=1):
+        head = group["members"][0]
+        score = group["score"]
+        band = _agent3_triage_band(score)
+        subject_name = _agent3_text(head.get("subject_name"), "Unknown subject")
+        matched_name = _agent3_text(head.get("matched_name"), "Stored hit")
+        if len(group["members"]) == 1:
+            reasons = group["reasons_all"][:2]
+            band_prefix = f"{band}, " if band else ""
+            sentence = (
+                f"{position}. {subject_name} — matched '{matched_name}' "
+                f"({band_prefix}triage {score})"
+            )
+            if reasons:
+                sentence += f": {_flow_reason_text(reasons)}."
+            else:
+                sentence += "."
+            entries.append({
+                "kind": "hit",
+                "subject_name": subject_name,
+                "matched_name": matched_name,
+                "score": score,
+                "band": band,
+                "count": 1,
+                "categories": list(head.get("categories") or []),
+                "reasons": reasons,
+                "surfaced_by_pass": head.get("surfaced_by_pass") or "",
+            })
+        else:
+            count = len(group["members"])
+            word = _group_category_word(group)
+            sentence = (
+                f"{position}. {subject_name} — {count} {word} matches on "
+                f"'{group['matched_name_key']}', all triage {score}"
+            )
+            if group["reasons_all"]:
+                sentence += f" ({_flow_reason_text(group['reasons_all'])})"
+            sentence += " — no single hit stands out."
+            entries.append({
+                "kind": "group",
+                "subject_name": subject_name,
+                "matched_name": group["matched_name_key"],
+                "score": score,
+                "band": band,
+                "count": count,
+                "categories": list(head.get("categories") or []),
+                "reasons": list(group["reasons_all"]),
+                "surfaced_by_pass": head.get("surfaced_by_pass") or "",
+            })
         sentences.append(sentence)
 
-    if priority_count == 1:
-        headline = "Review this 1 hit first, ranked by RegMind triage."
-    elif priority_count:
-        headline = f"Review these {priority_count} hits first, ranked by RegMind triage."
-    else:
+    standout_count = len(singleton_groups)
+    grouped_hit_count = sum(len(group["members"]) for group in mass_groups)
+    if not priority_count:
         headline = (
             f"No scored hits rank at or above the weak threshold ({threshold}); "
             "review the weak tail individually."
         )
+    elif not mass_groups:
+        # Fully heterogeneous list — pre-Phase-F headlines verbatim.
+        if priority_count == 1:
+            headline = "Review this 1 hit first, ranked by RegMind triage."
+        else:
+            headline = f"Review these {priority_count} hits first, ranked by RegMind triage."
+    elif standout_count:
+        headline = (
+            f"{standout_count} hit(s) stand out from {priority_count} priority "
+            f"hits; the remaining {grouped_hit_count} are near-identical — "
+            "start with what stands out."
+        )
+    else:
+        headline = (
+            f"All {priority_count} priority hits fall into "
+            f"{len(mass_groups)} near-identical group(s) — no single hit "
+            "stands out; review the group summary below."
+        )
 
     narrative_parts = list(sentences)
-    if priority_count > len(listed):
+    if len(entries_ordered) > len(listed_entries):
         narrative_parts.append(
-            f"Only the top {len(listed)} are listed here; all {priority_count} "
+            f"Only the top {len(listed_entries)} are listed here; all {priority_count} "
             "priority hits are counted."
         )
     if weak_tail_count:
@@ -25875,6 +25996,10 @@ def _agent3_triage_narrative(hits):
         "unscored_count": unscored_count,
         "headline": headline,
         "priority_hits": priority_hits,
+        # Phase F (F1): grouped display entries for the "Where to start"
+        # list — singleton hits first, then homogeneous masses. priority_hits
+        # above keeps the pre-grouping per-hit shape (data preserved).
+        "entries": entries,
         "narrative": " ".join(narrative_parts),
     }
 

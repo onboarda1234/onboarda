@@ -2103,3 +2103,190 @@ def test_evidence_batch_resolves_null_application_id_via_alert_join(db):
 
     capped = server._load_monitoring_evidence_batch(db, [app_id], per_app_cap=10)[app_id]
     assert "Orphan Article" in {item["source_title"] for item in capped}
+
+
+def _insert_f2_two_subject_app(db, *, app_id, ref, company="Wirecard AG", director="Jan Marsalek"):
+    """One application, two screened subjects (entity + director), each with
+    their own provider hits — the Phase F fairness shape."""
+
+    def hit(prefix, name, i):
+        return {
+            "name": name,
+            "is_adverse_media": True,
+            "match_category": "Adverse Media",
+            "match_categories": ["adverse_media"],
+            "provider": "complyadvantage",
+            "provider_case_identifier": f"case-{app_id}-{prefix}",
+            "provider_alert_identifier": f"alert-{prefix}-{app_id}-{i}",
+            "provider_risk_identifier": f"risk-{prefix}-{app_id}-{i}",
+            "provider_profile_identifier": f"profile-{prefix}-{app_id}",
+            "summary": f"{name} adverse media",
+        }
+
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app_id, ref, "client_f2", company, "Germany", "Payments", "SME", "pricing_review",
+            json.dumps({
+                "screening_report": {
+                    "screened_at": "2026-07-01T00:00:00Z",
+                    "screening_mode": "live",
+                    "company_screening": {
+                        "found": True,
+                        "source": "complyadvantage",
+                        "provider": "complyadvantage",
+                        "matched": True,
+                        "api_status": "live",
+                        "results": [hit("ent", company, i) for i in range(3)],
+                        "sanctions": {"matched": False, "results": [], "source": "complyadvantage", "api_status": "live"},
+                        "adverse_media": {"matched": True, "results": [], "source": "complyadvantage", "api_status": "live"},
+                    },
+                    "director_screenings": [
+                        {
+                            "person_name": director,
+                            "screening": {
+                                "matched": True,
+                                "source": "complyadvantage",
+                                "provider": "complyadvantage",
+                                "api_status": "live",
+                                "results": [hit("dir", director, i) for i in range(3)],
+                            },
+                        }
+                    ],
+                    "ubo_screenings": [],
+                    "ip_geolocation": {"risk_level": "LOW", "source": "ipapi"},
+                    "kyc_applicants": [],
+                    "overall_flags": [],
+                    "total_hits": 6,
+                }
+            }),
+        ),
+    )
+    db.execute(
+        "INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?)",
+        (app_id, director, "Austria", "No"),
+    )
+
+
+def _insert_f2_subject_evidence(db, *, monitoring_id, app_id, prefix, subject, relationship, count):
+    case_id = f"case-{app_id}-{prefix}"
+    db.execute(
+        """
+        INSERT INTO monitoring_alerts
+            (id, application_id, client_name, alert_type, severity, detected_by,
+             summary, source_reference, status, provider, case_identifier, discovered_via)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            monitoring_id, app_id, subject, "media", "High", "complyadvantage",
+            f"CA case {case_id} media matches for {subject}",
+            json.dumps({"provider": "complyadvantage", "case_identifier": case_id}),
+            "open", "complyadvantage", case_id, "manual",
+        ),
+    )
+    for i in range(count):
+        db.execute(
+            """
+            INSERT INTO monitoring_alert_evidence
+                (monitoring_alert_id, application_id, provider, case_identifier, alert_identifier,
+                 risk_identifier, profile_identifier, evidence_type, matched_subject_name,
+                 relationship_to_client, match_category, risk_indicator, match_confidence,
+                 source_title, source_name, source_url, source_url_available, publication_date,
+                 snippet, evidence_json, raw_provider_reference, evidence_status, evidence_hash, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                monitoring_id, app_id, "complyadvantage", case_id,
+                f"alert-{prefix}-{app_id}-{i}", f"risk-{prefix}-{app_id}-{i}", f"profile-{prefix}-{app_id}",
+                "adverse_media", subject, relationship,
+                "Adverse Media", "Adverse Media", "0.9",
+                f"Article {i} about {subject}", "Provider News", "", 0, "2026-05-01",
+                f"Snippet {i}", json.dumps({"title": f"Article {i} about {subject}"}),
+                json.dumps({"risk_identifier": f"risk-{prefix}-{app_id}-{i}"}),
+                "fetched", f"hash-{app_id}-{prefix}-{i}", "2026-06-09T00:00:00Z",
+            ),
+        )
+
+
+def test_evidence_cap_is_per_subject_fair_on_two_subject_application(db, temp_db):
+    """Phase F F2 regression: when a two-subject application's total evidence
+    exceeds the per-application cap, the cap must be shared fairly across
+    subjects — the subject with older evidence rows must NOT be starved to
+    zero enriched items while the other subject monopolises the budget.
+
+    Reproduction of the ARF-QAFIX-007 staging symptom: entity evidence rows
+    inserted after (newer than) the director's, entity volume alone near the
+    cap. Under the old per-application newest-first rank the director row got
+    almost nothing; under the per-subject-fair rank both rows get their own
+    items and the truncation is still reported via evidence_scan_capped.
+    """
+    import server
+    from server import _build_screening_queue_payload
+
+    cap = server._SCREENING_QUEUE_EVIDENCE_PER_APP_CAP
+    app_id, ref = "app_f2_fair", "ARF-F2-FAIR"
+    _insert_f2_two_subject_app(db, app_id=app_id, ref=ref)
+    # Director evidence first (older row ids), then a near-cap entity volume
+    # (newer row ids) — the starvation ordering observed on staging.
+    _insert_f2_subject_evidence(
+        db, monitoring_id=910601, app_id=app_id, prefix="dir",
+        subject="Jan Marsalek", relationship="Director", count=100,
+    )
+    _insert_f2_subject_evidence(
+        db, monitoring_id=910602, app_id=app_id, prefix="ent",
+        subject="Wirecard AG", relationship="Company", count=cap - 2,
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(
+        db, {"type": "officer", "sub": "admin001"},
+        filters={"search": ref}, include_evidence=True,
+    )
+    rows = {
+        (r["subject_type"], r["subject_name"]): r
+        for r in payload["rows"] if r["application_ref"] == ref
+    }
+    entity_row = rows[("entity", "Wirecard AG")]
+    director_row = rows[("director", "Jan Marsalek")]
+
+    # Truncation is still reported honestly.
+    assert payload["metrics"]["evidence_scan_capped"] is True
+    assert payload["metrics"]["evidence_items_loaded"] == cap
+
+    def linked_items(row):
+        return [
+            item for item in row["screening_evidence"]["items"]
+            if item.get("evidence_source") == "ca_1b_monitoring_evidence"
+        ]
+
+    entity_linked = linked_items(entity_row)
+    director_linked = linked_items(director_row)
+
+    # BOTH subjects get their own enriched evidence items.
+    assert len(director_linked) == 100, "director row must not be starved by the per-application cap"
+    assert len(entity_linked) >= cap - 100 - 2, "entity row keeps the remaining fair share of the cap"
+
+    # Never cross-attach: every linked item belongs to the row's own subject.
+    assert all("Jan Marsalek" in (i.get("source_title") or "") for i in director_linked)
+    assert all("Wirecard AG" in (i.get("source_title") or "") for i in entity_linked)
+
+
+def test_evidence_cap_single_subject_rank_unchanged(db, temp_db):
+    """Single-subject applications keep the old newest-first cap semantics."""
+    import server
+
+    app_id, ref = _seed_evidence_volume_app(
+        db, ref="ARF-QEVCAP-F2S", app_id="qevcap-f2-single",
+        alert_id=910603, evidence_count=12,
+    )
+    db.commit()
+
+    capped = server._load_monitoring_evidence_batch(db, [app_id], per_app_cap=5)[app_id]
+    full = server._load_monitoring_evidence_batch(db, [app_id])[app_id]
+    newest_five = sorted(item["evidence_row_id"] for item in full)[-5:]
+    assert sorted(item["evidence_row_id"] for item in capped) == newest_five
+    assert all((item.get("application_evidence_total") or 0) == 12 for item in capped)

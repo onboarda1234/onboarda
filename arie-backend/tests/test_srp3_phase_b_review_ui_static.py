@@ -219,3 +219,91 @@ def test_application_tab_hydrates_evidence_without_queue_visit():
     panel_head = html[panel_start:panel_start + 1600]
     assert "ensureApplicationScreeningEvidenceRows(app.ref)" in panel_head
     assert "row.screening_evidence" in panel_head
+
+
+# ---------------------------------------------------------------------------
+# Phase F — polish batch pins (strip honesty, panel consolidation, ID lists)
+# ---------------------------------------------------------------------------
+
+def test_phase_f_first_strip_tile_never_excludes_what_it_names():
+    """F3: the first tile counts sanctions + watchlist/warning and is labelled
+    'Sanctions & watchlist' with an honest sub-caption breakdown — a watchlist
+    'warning' hit must never sit behind a tile showing 0."""
+    html = _html()
+    strip = _function_region(html, "screeningTriageStrip", "screeningTriageHitDisplayName")
+    assert "tile(sanctionsCount + watchlistCount, 'Sanctions & watchlist', sanctionsWatchlistSub" in strip
+    assert "Number(buckets.sanctions || 0)" in strip
+    assert "Number(buckets.watchlist || 0)" in strip
+    assert "' sanctions · '" in strip
+    assert "' watchlist/warning'" in strip
+    assert "'Screened against sanction lists'" in strip
+    # The dishonest label is retired from the strip.
+    assert "Sanctions & warnings" not in strip
+
+
+def test_phase_f_agent3_panel_consolidated_layout():
+    """F1: advisory line → grouped narrative → ONE compact status line →
+    summary (false-positive merged after) → key concerns → ONE collapsed
+    audit disclosure (hit-by-hit table + evidence used + audit trace). The
+    old stacked sub-section cards are retired; their content is folded, not
+    deleted."""
+    html = _html()
+    panel = _function_region(
+        html, "renderAgent3ScreeningInterpretationPanel", "generateAgent3ScreeningInterpretation"
+    )
+    assert panel.count("data-agent3-status-line") == 1
+    assert "Hit-by-hit review, evidence &amp; audit trace" in panel
+    # Retired stacked cards (their labels survive as folded section content).
+    assert "False-positive assessment &amp; context" not in panel
+    assert "sanctions · PEP · adverse media" not in panel
+    # Folded content still renders once each in the hit path.
+    assert "agent3EvidenceHtml(output.evidence_used)" in panel
+    assert "agent3AuditTraceHtml(output)" in panel
+    assert "False-positive assessment" in panel
+    assert "Adverse media relevance" in panel
+    # Order in the hit path: advisory line, narrative, status line, summary.
+    hit_path = panel[panel.index("Officer decision required. Agent 3 provides an advisory interpretation only."):]
+    assert hit_path.index("agent3TriageNarrativeHtml(output.triage_narrative)") \
+        < hit_path.index("statusLineHtml") \
+        < hit_path.index("Plain-English summary")
+
+
+def test_phase_f_narrative_helper_renders_grouped_entries():
+    """F1: the narrative helper renders server-grouped entries when present
+    (homogeneous masses collapse to one line), falling back to priority_hits
+    for older stored narratives. Counts are never recomputed client-side."""
+    html = _html()
+    helper = _function_region(
+        html, "agent3TriageNarrativeHtml", "renderAgent3ScreeningInterpretationPanel"
+    )
+    assert "narrative.entries" in helper
+    assert "narrative.priority_hits" in helper
+    assert "hit.kind === 'group'" in helper
+    assert "near-identical matches on" in helper
+    assert "No single hit stands out." in helper
+    assert "escapeHtml(String(hit.count))" in helper
+
+
+def test_phase_f_provider_id_walls_collapsed():
+    """F8: provider-reference ID lists render as count summary + native
+    <details> ('Show IDs') with a scrollable monospace block and a
+    copy-to-clipboard button — never comma-joined UUID walls. Audit
+    completeness preserved."""
+    html = _html()
+    helper = _function_region(html, "screeningProviderIdListHtml", "copyScreeningProviderIds")
+    assert "<details" in helper and "Show IDs" in helper
+    assert "escapeHtml(idText)" in helper
+    assert "data-copy-provider-ids" in helper
+    assert "overflow:auto" in helper
+    assert "ui-monospace" in helper
+    copy_fn = _function_region(html, "copyScreeningProviderIds", "screeningQueueEvidenceReadinessPanel")
+    assert "navigator.clipboard.writeText" in copy_fn
+    assert "showToast" in copy_fn
+    panel = _function_region(html, "screeningQueueEvidenceReadinessPanel", "providerIndicatorDetails")
+    assert "screeningProviderIdListHtml('Provider case IDs', summary.provider_case_ids" in panel
+    assert "screeningProviderIdListHtml('Provider alert IDs', summary.provider_alert_ids" in panel
+    assert "screeningProviderIdListHtml('Provider risk IDs', summary.provider_risk_ids" in panel
+    # The old comma-joined grid rows are retired.
+    assert "screeningEvidenceArrayText(summary.provider_case_ids)" not in panel
+    assert "screeningEvidenceArrayText(summary.provider_alert_ids)" not in panel
+    assert "screeningEvidenceArrayText(summary.provider_risk_ids)" not in panel
