@@ -69,8 +69,32 @@ class DirectorsUBOsReportHTTPBase(AsyncHTTPTestCase):
             (doc_id, app_id, person_id, doc_type, f"{doc_type}.pdf", f"/tmp/{doc_id}.pdf", status, expiry, 1),
         )
 
+    @staticmethod
+    def _fixture_safe_suffix():
+        """Random ref suffix that can never trip the fixture heuristics.
+
+        The directors/UBOs report excludes rows whose application ref matches
+        the smoke/E2E fixture heuristics in ``fixture_filter``
+        (``LOWER(ref) LIKE '%e2e%'`` etc. via
+        ``fixture_app_exclude_clause(include_text_patterns=True)``). A raw
+        ``uuid4().hex[:8]`` suffix occasionally contains ``e2e`` — observed
+        in CI, where seeded ref ``DU-9e131e2e-001`` was silently classified
+        as an E2E fixture and filtered out of the report, failing whichever
+        test method drew the unlucky suffix. Strip ``e`` from the alphabet so
+        ``e2e`` cannot form, and defensively re-draw if any current heuristic
+        needle still matches a constructed ref.
+        """
+        from fixture_filter import FIXTURE_APP_REF_PATTERNS
+
+        needles = [p.strip("%").lower() for p in FIXTURE_APP_REF_PATTERNS]
+        while True:
+            suffix = uuid.uuid4().hex[:8].replace("e", "x")
+            refs = [f"du-{suffix}-00{i}" for i in range(1, 5)]
+            if not any(needle in ref for ref in refs for needle in needles):
+                return suffix
+
     def _seed_report_data(self, db):
-        suffix = uuid.uuid4().hex[:8]
+        suffix = self._fixture_safe_suffix()
         self.ref_combined = f"DU-{suffix}-001"
         self.ref_director_missing = f"DU-{suffix}-002"
         self.ref_ubo_verified = f"DU-{suffix}-003"
