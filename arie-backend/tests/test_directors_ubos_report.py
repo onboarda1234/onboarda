@@ -76,7 +76,7 @@ class DirectorsUBOsReportHTTPBase(AsyncHTTPTestCase):
         # shared helper carries the full incident history.
         from fixture_safe_refs import fixture_safe_suffix
 
-        suffix = fixture_safe_suffix(8)
+        suffix = fixture_safe_suffix(8, prefix="DU-")
         self.ref_combined = f"DU-{suffix}-001"
         self.ref_director_missing = f"DU-{suffix}-002"
         self.ref_ubo_verified = f"DU-{suffix}-003"

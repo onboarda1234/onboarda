@@ -143,7 +143,7 @@ class TestQuarantineStamping:
                    VALUES (?, ?, ?, ?, 'Mauritius', 'Technology', 'SME',
                            'kyc_submitted', 'LOW', 'LOW', 20,
                            NULL, '{}', datetime('now'), datetime('now'))""",
-                (app_id, f"QRT-{ref_sfx}-{fixture_safe_suffix(6)}", f"{app_id}_c",
+                (app_id, f"QRT-{ref_sfx}-{fixture_safe_suffix(6, prefix=f'QRT-{ref_sfx}-')}", f"{app_id}_c",
                  f"Quarantine {ref_sfx} Ltd"),
             )
         db.commit()

@@ -49,7 +49,7 @@ def _seed_applications(db_conn, count=5):
     """
     app_ids = []
     for i in range(count):
-        uid = fixture_safe_suffix(8)
+        uid = fixture_safe_suffix(8, prefix="EX13-")
         app_id = f"ex13_app_{uid}"
         ref = f"EX13-{uid}"
         db_conn.execute(

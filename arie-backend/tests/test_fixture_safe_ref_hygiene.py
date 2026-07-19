@@ -25,16 +25,32 @@ RAW_UUID_HEX_RE = re.compile(r"uuid4\(\)\.hex")
 EXEMPT_FILES = {"fixture_safe_refs.py", os.path.basename(__file__)}
 
 
+# Every ref prefix used with fixture_safe_suffix across the suite. The
+# composed ref must be needle-free — deploy run 29679007460 failed because a
+# suffix starting "9000" completed the prefix-anchored needle
+# "arf-2026-9000" once composed with "ARF-2026-".
+REAL_REF_PREFIXES = (
+    "ARF-2026-",
+    "ARF-SET-",
+    "ARF-SUP-SCHEMA-",
+    "DU-",
+    "QRT-corr-",
+    "EX13-",
+)
+
+
 def test_safe_suffix_never_matches_fixture_needles():
     from fixture_filter import FIXTURE_APP_REF_PATTERNS
 
     needles = [p.strip("%").lower() for p in FIXTURE_APP_REF_PATTERNS if p.strip("%")]
     assert needles, "fixture needle list unexpectedly empty"
-    for _ in range(10_000):
-        suffix = fixture_safe_suffix(8)
-        assert set(suffix) <= set(FIXTURE_SAFE_ALPHABET)
-        for needle in needles:
-            assert needle not in f"arf-2026-{suffix}", (suffix, needle)
+    for prefix in REAL_REF_PREFIXES:
+        for _ in range(10_000):
+            suffix = fixture_safe_suffix(8, prefix=prefix)
+            assert set(suffix) <= set(FIXTURE_SAFE_ALPHABET)
+            composed = (prefix + suffix).lower()
+            for needle in needles:
+                assert needle not in composed, (prefix, suffix, needle)
 
 
 def test_no_test_builds_ref_like_strings_from_raw_uuid_hex():
