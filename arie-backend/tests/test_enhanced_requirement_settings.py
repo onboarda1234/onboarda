@@ -431,7 +431,7 @@ def test_admin_setting_edit_affects_new_applications_only_and_is_audited(enhance
         """,
         (
             existing_app_id,
-            "ARF-SET-" + fixture_safe_suffix(8),
+            "ARF-SET-" + fixture_safe_suffix(8, prefix="ARF-SET-"),
             "Settings Existing Ltd",
             "United Kingdom",
             "Technology",
@@ -491,7 +491,7 @@ def test_admin_setting_edit_affects_new_applications_only_and_is_audited(enhance
         """,
         (
             new_app_id,
-            "ARF-SET-" + fixture_safe_suffix(8),
+            "ARF-SET-" + fixture_safe_suffix(8, prefix="ARF-SET-"),
             "Settings New Ltd",
             "United Kingdom",
             "Technology",

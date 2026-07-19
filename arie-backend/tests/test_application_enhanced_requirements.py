@@ -132,7 +132,7 @@ def _insert_application(
     onboarding_lane=None,
 ):
     app_id = "app_" + uuid.uuid4().hex[:10]
-    ref = "ARF-2026-" + fixture_safe_suffix(8)
+    ref = "ARF-2026-" + fixture_safe_suffix(8, prefix="ARF-2026-")
     db.execute(
         """
         INSERT INTO applications

@@ -47,7 +47,7 @@ def _setup_test_app(db, client_id="testuser"):
     """Insert a test application with one director. Returns app_id."""
     import uuid
     app_id = f"test_{uuid.uuid4().hex[:8]}"
-    ref = f"ARF-2026-{fixture_safe_suffix(6)}"
+    ref = f"ARF-2026-{fixture_safe_suffix(6, prefix='ARF-2026-')}"
     db.execute("""
         INSERT INTO applications (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)

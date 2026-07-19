@@ -3500,7 +3500,7 @@ class TestMemoSupervisorAuditSchema:
         from tests.conftest import make_base_memo
 
         app_id = f"app_supervisor_schema_{uuid.uuid4().hex[:8]}"
-        app_ref = f"ARF-SUP-SCHEMA-{fixture_safe_suffix(6)}"
+        app_ref = f"ARF-SUP-SCHEMA-{fixture_safe_suffix(6, prefix='ARF-SUP-SCHEMA-')}"
         memo_data = make_base_memo({
             "metadata": {
                 "risk_rating": "LOW",

@@ -375,7 +375,7 @@ def sample_application(db, client_token, request):
 
     from fixture_safe_refs import fixture_safe_suffix
 
-    uid = fixture_safe_suffix(8)
+    uid = fixture_safe_suffix(8, prefix="ARF-2026-")
     app_id = f"testapp_{uid}"
     ref = f"ARF-2026-{uid}"
     db.execute("""
