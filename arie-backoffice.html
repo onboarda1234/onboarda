@@ -17464,6 +17464,14 @@ async function ensureScreeningQueueRowEvidence(rowKey) {
       'offset=0',
       'include_evidence=1'
     ];
+    // E-0 hydration fix: the lazy evidence fetch must mirror the queue's
+    // fixture-visibility state. Without it, fixture applications (QAFIX)
+    // are excluded from this secondary fetch even when the officer has
+    // "Show test/smoke records" on — the row comes back not_found and the
+    // review page falls back to the legacy summary view.
+    if (typeof showTestSmokeRecordsEnabled === 'function' && showTestSmokeRecordsEnabled()) {
+      params.push('show_fixtures=true');
+    }
     if (row.application_ref) {
       params.push('application_ref=' + encodeURIComponent(row.application_ref));
     } else {
