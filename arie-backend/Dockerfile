@@ -33,9 +33,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── Application Setup ──
 WORKDIR /app
 
-# Install Python dependencies first (layer caching)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies first (layer caching).
+# R2-BSA-019: install from the hash-pinned lockfile with --require-hashes, so
+# every dependency (including the full transitive tree) is verified against a
+# reviewed SHA-256 and a compromised/typosquatted upload cannot substitute
+# different bytes. requirements.lock is generated from requirements.txt via
+# pip-compile --generate-hashes (see requirements.txt header).
+COPY requirements.txt requirements.lock .
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 # Copy application code
 COPY . .

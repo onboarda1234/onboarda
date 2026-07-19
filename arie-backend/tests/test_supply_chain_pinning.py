@@ -107,11 +107,17 @@ class TestRequirementsSplit:
             l.strip() for l in open(os.path.join(BACKEND_DIR, "Dockerfile"), encoding="utf-8")
             if l.strip() and not l.strip().startswith("#")
         ]
-        offenders = [l for l in instructions if "requirements-dev.txt" in l]
+        offenders = [l for l in instructions if "requirements-dev" in l]
         assert not offenders, (
-            f"production image must not touch requirements-dev.txt: {offenders}"
+            f"production image must not touch dev requirements (txt or lock): {offenders}"
         )
-        assert any(re.search(r"pip install .*-r requirements\.txt", l) for l in instructions)
+        # R2-BSA-019: the production image installs the hash-pinned RUNTIME lock
+        # (requirements.lock, generated from requirements.txt only — no dev deps)
+        # with --require-hashes.
+        assert any(
+            re.search(r"pip install .*--require-hashes .*-r requirements\.lock", l)
+            for l in instructions
+        ), "production image must install requirements.lock with --require-hashes"
 
 
 # ══════════════════════════════════════════════════════════
