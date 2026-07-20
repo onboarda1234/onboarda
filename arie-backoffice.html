@@ -15742,11 +15742,15 @@ function screeningWorkspaceStatusStrip(facts) {
 }
 
 function screeningSubjectWorkspaceBody(config) {
-  // The single Phase E workspace body: honesty banner → triage strip → status
-  // strip → Agent 3 guidance (advisory) → ranked evidence (inline, weak tail,
-  // rts caption) → officer disposition bar → declared-vs-provider comparison
-  // → disposition history. Wiring, validation and four-eyes flows are the
-  // pre-existing ones — presentation only.
+  // The single workspace body: honesty banner → triage strip → status strip →
+  // Agent 3 guidance (advisory) → computed subject rollup (per-hit redesign) →
+  // ranked evidence with per-hit disposition (inline, grouped tail, rts caption)
+  // → declared-vs-provider comparison → disposition history.
+  // SRP per-hit redesign: each hit is dispositioned on its own card and the
+  // subject status is COMPUTED from those decisions (the rollup strip) — the
+  // old always-visible subject-level disposition bar is retired for the per-hit
+  // path; the subject-level signal the frozen approval gates consume is
+  // submitted from the resolved rollup (server persistence is a fast-follow).
   config = config || {};
   var app = config.app;
   var row = config.reviewRow;
@@ -15755,8 +15759,15 @@ function screeningSubjectWorkspaceBody(config) {
   body += screeningTriageStrip(row);
   body += screeningWorkspaceStatusStrip(config.statusFacts);
   body += renderAgent3ScreeningInterpretationPanel(app);
+  // Per-hit path only exists when the server-computed triage block + evidence
+  // items are present (the ranked hit cards carry the per-hit disposition). For
+  // those subjects the computed rollup replaces the old subject-level bar. For
+  // legacy / no-triage subjects there are no per-hit cards, so the subject-level
+  // disposition bar stays — it is still the only way to record their decision.
+  var hasPerHitDisposition = !!(row && row.triage && row.triage.buckets && (((row.screening_evidence || {}).items) || []).length);
+  if (hasPerHitDisposition) body += screeningSubjectRollupStrip(row);
   body += screeningQueueEvidenceReadinessPanel(row, config.legacyResults, config.legacyContext);
-  body += renderInlineScreeningDispositionPanel(app, row, config.subjectType, config.subjectName);
+  if (!hasPerHitDisposition) body += renderInlineScreeningDispositionPanel(app, row, config.subjectType, config.subjectName);
   body += config.comparisonHtml || '';
   body += screeningReviewHistory(row);
   return body;
@@ -17326,22 +17337,108 @@ function screeningClearanceNeedsSecondReviewer(row) {
     (row.total_hits || 0) > 0);
 }
 
-function screeningTriageHitAction(applicationRef, subjectType, subjectName, disposition) {
-  // Per-hit actions route into the existing inline disposition flow — same
-  // state, validation, endpoint, and four-eyes behavior; presentation only.
-  setInlineScreeningDispositionChoice(applicationRef, subjectType, subjectName, disposition);
-  var target = document.getElementById('screening-inline-save-' + screeningReviewSubjectDomKey(applicationRef, subjectType, subjectName));
-  if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+// ── Per-hit disposition (SRP per-hit redesign) ───────────────────────────
+// Each screening hit is dispositioned on its own — Clear as false positive /
+// Confirm true match, plus a per-hit materiality call recorded with a true
+// match. Decisions are held per (subject, hit) in SCREENING_HIT_DISPOSITION_
+// STATE; the subject-level rollup (screeningSubjectRollup) aggregates them:
+// TRUE MATCH if ANY hit is confirmed true (clearing the others can never
+// override it), CLEAR only once every hit is resolved. The subject-level
+// signal the (frozen) approval gates consume is still submitted through the
+// existing /screening/review flow when the rollup is recorded — this layer
+// sits on top and never changes that contract. Client-state only for now;
+// server persistence of per-hit decisions is a fast-follow.
+var SCREENING_HIT_DISPOSITION_STATE = {};
+var SCREENING_MATERIALITY_LABELS = {
+  high: 'Material — High', moderate: 'Material — Moderate',
+  nonmaterial: 'Non-material', insufficient: 'Insufficient info'
+};
+
+function screeningHitId(item, index) {
+  item = item || {};
+  return String(
+    item.provider_profile_id || item.provider_profile_identifier ||
+    item.provider_alert_id || item.provider_alert_identifier ||
+    item.provider_case_id || item.provider_risk_id ||
+    ('idx-' + index)
+  );
+}
+function screeningHitDispositionState(appRef, subjectType, subjectName, hitId) {
+  var key = screeningReviewSubjectKey(appRef, subjectType, subjectName);
+  if (!SCREENING_HIT_DISPOSITION_STATE[key]) SCREENING_HIT_DISPOSITION_STATE[key] = {};
+  if (!SCREENING_HIT_DISPOSITION_STATE[key][hitId]) SCREENING_HIT_DISPOSITION_STATE[key][hitId] = { status: 'pending', materiality: null };
+  return SCREENING_HIT_DISPOSITION_STATE[key][hitId];
+}
+function screeningHitDispositionSet(appRef, subjectType, subjectName, hitId, status) {
+  var s = screeningHitDispositionState(appRef, subjectType, subjectName, hitId);
+  s.status = status;
+  if (status !== 'match') s.materiality = null;
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+function screeningHitMaterialitySet(appRef, subjectType, subjectName, hitId, materiality) {
+  var s = screeningHitDispositionState(appRef, subjectType, subjectName, hitId);
+  s.materiality = materiality;
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
 }
 
-function screeningTriageHitActions(row) {
+function screeningSubjectHitStates(row) {
+  row = row || {};
+  var items = ((row.screening_evidence || {}).items) || [];
+  var appRef = row.application_ref || (currentApp && currentApp.ref) || '';
+  var out = [];
+  items.forEach(function(item, index) {
+    if (!item || typeof item !== 'object') return;
+    out.push(screeningHitDispositionState(appRef, row.subject_type || '', row.subject_name || '', screeningHitId(item, index)));
+  });
+  return out;
+}
+function screeningSubjectRollup(row) {
+  var states = screeningSubjectHitStates(row);
+  var trueCount = 0, cleared = 0, pending = 0;
+  states.forEach(function(s) {
+    if (s.status === 'match') trueCount++;
+    else if (s.status === 'cleared') cleared++;
+    else pending++;  // pending / escalated / follow_up_required keep the subject open
+  });
+  var cls, label;
+  if (trueCount) { cls = 'match'; label = 'TRUE MATCH — Enhanced Due Diligence required'; }
+  else if (!pending && states.length) { cls = 'clear'; label = 'CLEAR — every hit resolved'; }
+  else { cls = 'progress'; label = 'REVIEW IN PROGRESS'; }
+  return { cls: cls, label: label, trueCount: trueCount, cleared: cleared, pending: pending, total: states.length };
+}
+function screeningSubjectRollupStrip(row) {
+  if (!row || !row.review_required) return '';
+  var triage = row.triage;
+  var items = ((row.screening_evidence || {}).items) || [];
+  if (!triage || !items.length) return '';
+  var r = screeningSubjectRollup(row);
+  if (!r.total) return '';
+  var accent = r.cls === 'match' ? '#dc2626' : (r.cls === 'clear' ? '#15803d' : '#b45309');
+  var bg = r.cls === 'match' ? 'rgba(220,38,38,.07)' : (r.cls === 'clear' ? 'rgba(34,197,94,.10)' : 'rgba(245,158,11,.08)');
+  var pill = function(txt, kind) {
+    var pc = kind === 'ok' ? '#15803d' : (kind === 'warn' ? '#b45309' : 'var(--text3)');
+    var pb = kind === 'ok' ? 'rgba(34,197,94,.14)' : (kind === 'warn' ? 'rgba(245,158,11,.14)' : 'var(--surface2)');
+    return '<span style="background:' + pb + ';color:' + pc + ';padding:3px 10px;border-radius:20px;font-weight:700;">' + escapeHtml(txt) + '</span>';
+  };
+  var pills = '';
+  if (r.trueCount) pills += pill('✓ ' + r.trueCount + ' true match' + (r.trueCount > 1 ? 'es' : ''), 'ok');
+  if (r.cleared) pills += pill(r.cleared + ' cleared', 'mut');
+  if (r.pending) pills += pill(r.pending + ' need decision', 'warn');
+  var adverse = Number(((triage.buckets || {}).adverse_media) || 0);
+  var honesty = adverse >= 10
+    ? '<div style="margin-top:9px;border-top:1px dashed var(--border2);padding-top:8px;font-size:11.5px;color:var(--text2);line-height:1.5;">⚖️ <strong style="color:var(--text1);">' + adverse + ' adverse-media hits</strong>, but near-identical copies of one story — grouped so a single decision covers the set, not counted as ' + adverse + ' independent risks.</div>'
+    : '';
+  return '<div data-screening-subject-rollup="true" style="margin:0 0 14px;border:1px solid ' + accent + ';background:' + bg + ';border-radius:10px;padding:11px 14px;">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
+      '<span style="font-size:13px;font-weight:800;color:' + accent + ';">● Subject status: ' + escapeHtml(r.label) + '</span>' +
+      '<span style="display:inline-flex;gap:8px;font-size:11.5px;flex-wrap:wrap;">' + pills + '</span>' +
+    '</div>' + honesty +
+  '</div>';
+}
+
+function screeningTriageHitActions(row, item, itemIndex) {
   if (!row) return '';
-  // ARF-QAFIX Secondary B: review_actionable === false with NO recorded
-  // review means "no review exists yet" (the server's actionability check is
-  // about an EXISTING review needing action, e.g. pending second review).
-  // Acting is what CREATES the review, so actions must be offered then.
-  // Suppress only when review is not required, or a recorded review exists
-  // and is not actionable (resolved/locked — governed via the audit trail).
+  // A recorded, locked subject review stays read-only (governed via audit).
   if (!row.review_required || (row.review_disposition && row.review_actionable === false)) {
     if (row.review_disposition) {
       return '<div style="border-top:1px solid var(--border1);padding-top:10px;font-size:11.5px;color:var(--text2);">Review recorded: <strong>' + escapeHtml(screeningReviewDisplayLabel(row) || String(row.review_disposition).replace(/_/g, ' ')) + '</strong>. Changes are governed through the audit trail.</div>';
@@ -17352,28 +17449,65 @@ function screeningTriageHitActions(row) {
     return '<div style="border-top:1px solid var(--border1);padding-top:10px;font-size:11.5px;color:#92400e;">You do not have permission to disposition screening results.</div>';
   }
   var appRef = row.application_ref || (currentApp && currentApp.ref) || '';
-  var args = '\'' + escapeHtml(appRef) + '\',\'' + escapeHtml(row.subject_type || '') + '\',\'' + escapeHtml(row.subject_name || '') + '\'';
-  var pendingSecondReview = row.review_four_eyes_status === 'pending_second_review';
+  var subjType = row.subject_type || '', subjName = row.subject_name || '';
+  var hid = screeningHitId(item, itemIndex);
+  var st = screeningHitDispositionState(appRef, subjType, subjName, hid);
+  var args = '\'' + escapeHtml(appRef) + '\',\'' + escapeHtml(subjType) + '\',\'' + escapeHtml(subjName) + '\',\'' + escapeHtml(hid) + '\'';
   var clearBlocked = !canClearScreeningDisposition();
   var menuItemStyle = 'display:block;width:100%;text-align:left;background:none;border:none;padding:8px 10px;border-radius:6px;font-size:12px;color:var(--text1);cursor:pointer;';
-  var html = '<div data-screening-hit-actions="true" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--border1);padding-top:10px;">';
-  html += '<button type="button" class="btn btn-primary btn-sm" ' +
-    (clearBlocked
-      ? 'disabled title="Clear as False Positive requires Onboarding Officer, SCO, or Admin role." '
-      : 'title="Opens the clearance form below — validation, rationale, and audit rules are unchanged." ') +
-    'onclick="screeningTriageHitAction(' + args + ',\'cleared\')">Clear as false positive</button>';
-  if (!pendingSecondReview) {
-    html += '<button type="button" class="btn btn-outline btn-sm" title="Keeps approval blocked and may require escalation or EDD." onclick="screeningTriageHitAction(' + args + ',\'match\')">Confirm true match</button>';
+  var html = '<div data-screening-hit-actions="true" style="border-top:1px solid var(--border1);padding-top:10px;">';
+  html += '<div style="font-size:11.5px;color:var(--text3);margin-bottom:7px;">This decision affects <strong style="color:var(--brand);">this hit only</strong>.</div>';
+  // Per-hit status line.
+  var statusPill = function(text, fg, bg2) {
+    return '<div style="display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:800;padding:5px 11px;border-radius:8px;background:' + bg2 + ';color:' + fg + ';margin-bottom:9px;">' + escapeHtml(text) + '</div>';
+  };
+  if (st.status === 'match') {
+    html += statusPill('✓ Confirmed true match' + (st.materiality ? ' · ' + SCREENING_MATERIALITY_LABELS[st.materiality] : ' · choose materiality'), '#15803d', 'rgba(34,197,94,.12)');
+  } else if (st.status === 'cleared') {
+    html += statusPill('✗ Cleared as false positive', 'var(--text3)', 'var(--surface2)');
+  } else if (st.status === 'escalated') {
+    html += statusPill('↑ Escalated for senior review', '#b45309', '#fffbeb');
+  } else if (st.status === 'follow_up_required') {
+    html += statusPill('… Information requested', '#b45309', '#fffbeb');
+  } else {
+    html += statusPill('● Needs decision', '#b45309', '#fffbeb');
+  }
+  // Buttons.
+  html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">';
+  if (st.status === 'pending') {
+    html += '<button type="button" class="btn btn-primary btn-sm" ' +
+      (clearBlocked ? 'disabled title="Clear as false positive requires Onboarding Officer, SCO, or Admin role." ' : 'title="Clears THIS hit as a false positive; removes it as an approval blocker unless another hit is a true match." ') +
+      'onclick="screeningHitDispositionSet(' + args + ',\'cleared\')">Clear as false positive</button>';
+    html += '<button type="button" class="btn btn-outline btn-sm" title="Confirms THIS hit as a true match — sets the subject to TRUE MATCH regardless of the other hits." onclick="screeningHitDispositionSet(' + args + ',\'match\')">Confirm true match</button>';
     html += '<details data-screening-hit-more-menu="true" style="position:relative;display:inline-block;" onkeydown="if(event.key===\'Escape\'){this.removeAttribute(\'open\');}">' +
       '<summary class="btn btn-outline btn-sm" style="list-style:none;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:4px;">More ▾</summary>' +
       '<div style="position:absolute;top:calc(100% + 4px);left:0;z-index:40;min-width:225px;background:#fff;border:1px solid var(--border2);border-radius:8px;box-shadow:0 6px 20px rgba(26,26,46,0.15);padding:5px;">' +
-        '<button type="button" style="' + menuItemStyle + '" title="Routes this case for senior compliance review or EDD where configured." onclick="screeningTriageHitAction(' + args + ',\'escalated\')">Escalate</button>' +
-        '<button type="button" style="' + menuItemStyle + '" title="Keeps this result under review while missing information is requested." onclick="screeningTriageHitAction(' + args + ',\'follow_up_required\')">Request more information</button>' +
+        '<button type="button" style="' + menuItemStyle + '" title="Routes this hit for senior compliance review or EDD where configured." onclick="screeningHitDispositionSet(' + args + ',\'escalated\')">Escalate</button>' +
+        '<button type="button" style="' + menuItemStyle + '" title="Keeps this hit under review while missing information is requested." onclick="screeningHitDispositionSet(' + args + ',\'follow_up_required\')">Request more information</button>' +
       '</div>' +
     '</details>';
+  } else {
+    html += '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitDispositionSet(' + args + ',\'pending\')">↺ Undo decision</button>';
   }
-  if (screeningClearanceNeedsSecondReviewer(row)) {
-    html += '<span style="font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:3px 9px;">' + escapeHtml(pendingSecondReview ? 'First review recorded — awaiting second reviewer' : 'Clearing this match as a false positive requires a second reviewer') + '</span>';
+  html += '</div>';
+  // Materiality picker — recorded with a true match; drives the risk outcome.
+  if (st.status === 'match') {
+    var opts = ['high', 'moderate', 'nonmaterial', 'insufficient'].map(function(m) {
+      var on = st.materiality === m;
+      var oc = m === 'high' ? '#dc2626' : (m === 'moderate' ? '#b45309' : (m === 'nonmaterial' ? '#15803d' : 'var(--text2)'));
+      var ob = m === 'high' ? 'rgba(220,38,38,.08)' : (m === 'moderate' ? 'rgba(245,158,11,.12)' : (m === 'nonmaterial' ? 'rgba(34,197,94,.12)' : 'var(--surface2)'));
+      return '<button type="button" onclick="screeningHitMaterialitySet(' + args + ',\'' + m + '\')" style="font-size:12px;font-weight:700;padding:6px 12px;border-radius:8px;cursor:pointer;border:1px solid ' + (on ? oc : 'var(--border2)') + ';background:' + (on ? ob : '#fff') + ';color:' + (on ? oc : 'var(--text2)') + ';">' + escapeHtml(SCREENING_MATERIALITY_LABELS[m]) + '</button>';
+    }).join('');
+    html += '<div data-screening-hit-materiality="true" style="margin-top:11px;border:1px solid var(--brand);border-radius:9px;background:rgba(43,47,143,.06);padding:11px 13px;">' +
+      '<div style="font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--brand);margin-bottom:7px;">Materiality — recorded with this decision</div>' +
+      '<div style="display:flex;gap:7px;flex-wrap:wrap;">' + opts + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:8px;">The per-hit materiality call is the authoritative “how serious is it” — it drives the risk outcome.' +
+      (screeningClearanceNeedsSecondReviewer(row) ? ' <strong style="color:#b45309;">Serious hit: requires a second reviewer before it is final.</strong>' : '') + '</div>' +
+    '</div>';
+  }
+  // Four-eyes note when clearing a sensitive match is still pending.
+  if (st.status === 'pending' && screeningClearanceNeedsSecondReviewer(row)) {
+    html += '<div style="margin-top:9px;"><span style="font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:3px 9px;">Clearing this match as a false positive requires a second reviewer</span></div>';
   }
   html += '</div>';
   return html;
@@ -17414,7 +17548,7 @@ function screeningTriageHitCard(row, item, itemIndex, weakThreshold) {
     '<div style="border-top:1px solid var(--border1);padding:12px 14px;display:grid;gap:12px;">' +
       screeningTriageHitEvidenceBody(item) +
       screeningTriageHitTechnicalDetails(item) +
-      screeningTriageHitActions(row) +
+      screeningTriageHitActions(row, item, itemIndex) +
     '</div>' +
   '</details>';
 }
