@@ -317,6 +317,134 @@ class TestRecomputeRiskAudit:
         assert entry["after_state"]["risk_computed_at"] is not None
         db.close()
 
+
+class TestManualWorkflowPreservation:
+    """Risk recomputation may strengthen, but never weaken, officer controls."""
+
+    def test_manual_edd_lane_and_status_survive_lower_model_recommendation(self, temp_db):
+        from rule_engine import recompute_risk
+
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, app_ref = _insert_scored_app(
+            db,
+            risk_score=99.9,
+            risk_level="VERY_HIGH",
+            country="Mauritius",
+            sector="Professional Services",
+            entity_type="Listed Company",
+            status="edd_required",
+        )
+        db.execute(
+            "UPDATE applications SET onboarding_lane='EDD' WHERE id=?",
+            (app_id,),
+        )
+        db.commit()
+        audits = []
+
+        def capture_audit(user, action, target, detail, **kwargs):
+            audits.append({"action": action, "target": target, "detail": detail, **kwargs})
+
+        result = recompute_risk(
+            db,
+            app_id,
+            "tier0c_manual_edd_regression",
+            user=_make_user(),
+            log_audit_fn=capture_audit,
+        )
+        db.commit()
+
+        stored = db.execute(
+            "SELECT risk_score, risk_level, risk_dimensions, onboarding_lane, status "
+            "FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+        assert result["recomputed"] is True
+        assert stored["risk_score"] == result["new_score"]
+        assert stored["risk_score"] != 99.9
+        assert json.loads(stored["risk_dimensions"])["factor_computation_evidence"]
+        assert stored["onboarding_lane"] == "EDD"
+        assert stored["status"] == "edd_required"
+        preservation = result["manual_workflow_preservation"]
+        assert preservation["recommended_lane"] != "EDD"
+        assert preservation["persisted_lane"] == "EDD"
+        assert "edd_lane" in preservation["controls"]
+        preserved_audits = [
+            entry for entry in audits
+            if entry["action"] == "Manual workflow preserved during recomputation"
+        ]
+        assert len(preserved_audits) == 1
+        assert preserved_audits[0]["target"] == app_ref
+        assert "Manual workflow preserved during recomputation" in preserved_audits[0]["detail"]
+        db.close()
+
+    def test_manual_approval_block_survives_score_recomputation(self, temp_db):
+        from rule_engine import recompute_risk
+
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, _ = _insert_scored_app(
+            db,
+            risk_score=99.9,
+            risk_level="VERY_HIGH",
+            country="Mauritius",
+            sector="Professional Services",
+            entity_type="Listed Company",
+            status="draft",
+        )
+        db.execute(
+            "UPDATE applications SET pre_approval_decision='REQUEST_INFO', "
+            "pre_approval_notes='Officer requires additional ownership evidence' WHERE id=?",
+            (app_id,),
+        )
+        db.commit()
+
+        result = recompute_risk(db, app_id, "manual_approval_block_regression")
+        db.commit()
+        stored = db.execute(
+            "SELECT risk_score, risk_level, status, pre_approval_decision, pre_approval_notes "
+            "FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+
+        assert result["recomputed"] is True
+        assert stored["risk_score"] == result["new_score"]
+        assert stored["risk_score"] != 99.9
+        assert stored["status"] == "draft"
+        assert stored["pre_approval_decision"] == "REQUEST_INFO"
+        assert stored["pre_approval_notes"] == "Officer requires additional ownership evidence"
+        assert "pre_approval_decision:REQUEST_INFO" in (
+            result["manual_workflow_preservation"]["controls"]
+        )
+        db.close()
+
+    def test_automatic_high_floor_can_still_strengthen_standard_workflow(self, temp_db):
+        from rule_engine import recompute_risk
+
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, _ = _insert_scored_app(
+            db,
+            risk_score=10.0,
+            risk_level="LOW",
+            country="United Kingdom",
+            sector="Crypto VASP exchange",
+            entity_type="Listed Company",
+        )
+
+        result = recompute_risk(db, app_id, "automatic_floor_strengthening")
+        db.commit()
+        stored = db.execute(
+            "SELECT risk_level, final_risk_level, onboarding_lane FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+
+        assert result["recomputed"] is True
+        assert stored["final_risk_level"] in {"HIGH", "VERY_HIGH"}
+        assert "floor_rule_high_risk_sector" in result["risk_escalations"]
+        assert result["manual_workflow_preservation"]["preserved"] is False
+        db.close()
+
     def test_audit_records_final_risk_floor_reason(self, temp_db):
         """Risk recomputation audit must explain when final risk is floored above raw LOW."""
         from rule_engine import recompute_risk
