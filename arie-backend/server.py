@@ -21225,6 +21225,18 @@ def _screening_provider_evidence(results):
             "discovered_via": result.get("discovered_via"),
             "authority": _first_non_empty(result.get("authority"), result.get("program"), source_ref.get("authority")),
             "list_name": _first_non_empty(result.get("list_name"), result.get("sanctions_list"), source_ref.get("list_name")),
+            # Phase G: pass through hydrated matched-profile attributes stored on
+            # the result (added on-demand by the hydrate endpoint). Additive and
+            # display/audit-only — the F9 reconciliation grid + watchlist card
+            # read these. Absent on non-hydrated hits (keys stay unset then).
+            "date_of_birth": result.get("date_of_birth"),
+            "nationality": result.get("nationality"),
+            "countries": result.get("countries"),
+            "places_of_birth": result.get("places_of_birth"),
+            "positions": result.get("positions"),
+            "aka_names": result.get("aka_names"),
+            "image_urls": result.get("image_urls"),
+            "watchlist_entries": result.get("watchlist_entries"),
         })
     return evidence
 
@@ -21646,6 +21658,36 @@ def _screening_evidence_dob_text(value):
     return _screening_evidence_text(value)
 
 
+def _screening_evidence_watchlist_entries(value):
+    """Phase G: sanitize stored hydrated watchlist_entries into a lean list of
+    {list_name, listed_date, removed_date, related_urls[]}. Only non-empty
+    fields survive; related_urls keeps http(s) links only. Nothing is invented —
+    entries with no usable field are dropped so absent detail stays absent."""
+    entries = []
+    for raw in value if isinstance(value, (list, tuple)) else []:
+        if not isinstance(raw, dict):
+            continue
+        entry = {}
+        list_name = _screening_evidence_text(_first_non_empty(raw.get("list_name"), raw.get("name"), raw.get("source_name")))
+        if list_name:
+            entry["list_name"] = list_name
+        listed_date = _screening_evidence_text(_first_non_empty(raw.get("listed_date"), raw.get("listed"), raw.get("date")))
+        if listed_date:
+            entry["listed_date"] = listed_date
+        removed_date = _screening_evidence_text(_first_non_empty(raw.get("removed_date"), raw.get("removed")))
+        if removed_date:
+            entry["removed_date"] = removed_date
+        urls = []
+        for candidate in _screening_evidence_value_list(_first_non_empty(raw.get("related_urls"), raw.get("urls"), raw.get("url"))):
+            if candidate.lower().startswith(("http://", "https://")):
+                urls.append(candidate)
+        if urls:
+            entry["related_urls"] = urls
+        if entry:
+            entries.append(entry)
+    return entries
+
+
 def _screening_evidence_matched_profile_fields(evidence):
     """F9 (additive passthrough): matched-profile facts already stored on the
     hit — matched name, provider match types, PEP classes, and the sparse
@@ -21709,6 +21751,17 @@ def _screening_evidence_matched_profile_fields(evidence):
             seen_aka.add(candidate.lower())
     if aka_names:
         fields["aka_names"] = aka_names
+    # Phase G: hydrated matched-profile extras. image_urls is a lean list of
+    # URLs; watchlist_entries is a list of {list_name, listed_date,
+    # removed_date, related_urls[]} extracted from the Mesh risks endpoint. Both
+    # are additive, non-empty-only, and display/audit-only — the F7 watchlist
+    # card renders watchlist_entries INSTEAD of the honest "no detail" copy.
+    image_urls = _screening_evidence_value_list(first_present("image_urls", "images"))
+    if image_urls:
+        fields["image_urls"] = image_urls
+    watchlist_entries = _screening_evidence_watchlist_entries(first_present("watchlist_entries"))
+    if watchlist_entries:
+        fields["watchlist_entries"] = watchlist_entries
     # F9r: lean COMPANY attributes for entity subjects — jurisdiction,
     # registration number, and company aliases from the matched profile's
     # ``company`` object (CA collection shapes or flat keys). Additive and
@@ -23616,6 +23669,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         "subject_rows": 0,
         # SRP-2a Phase D: gates the back-office Re-screen button render.
         "rescreen_enabled": _rescreen_ui_enabled(),
+        # Phase G: gates the back-office on-demand profile hydration call.
+        "hydration_enabled": _profile_hydration_ui_enabled(),
     }
 
     for app in apps:
@@ -24827,6 +24882,85 @@ def _rescreen_ui_enabled():
         return bool(is_ca_rescreen_enabled() and is_complyadvantage_active())
     except Exception:
         return False
+
+
+def _profile_hydration_ui_enabled():
+    """Phase G: server-sent flag gating the back-office on-demand profile
+    hydration call. True only when the flag is on AND CA Mesh is active — the
+    same both-conditions rule the hydrate endpoint enforces. Any failure keeps
+    hydration off (today's behaviour byte-identical)."""
+    try:
+        from screening_config import is_ca_profile_hydration_enabled, is_complyadvantage_active
+        return bool(is_ca_profile_hydration_enabled() and is_complyadvantage_active())
+    except Exception:
+        return False
+
+
+_HYDRATION_ATTRIBUTE_KEYS = (
+    "date_of_birth", "nationality", "countries", "places_of_birth",
+    "positions", "aka_names", "image_urls", "watchlist_entries",
+)
+
+
+def _profile_hydration_result_lists(report):
+    """Yield every stored screening ``results`` list in a report — company,
+    directors, UBOs, intermediaries. These lists hold the per-hit records the
+    hydrated attributes are merged onto (matched by profile identifier)."""
+    if not isinstance(report, dict):
+        return
+    company = report.get("company_screening")
+    for record in (company, report.get("company_sanctions"), report.get("company_adverse_media")):
+        if isinstance(record, dict) and isinstance(record.get("results"), list):
+            yield record["results"]
+    for collection_key in ("director_screenings", "ubo_screenings", "intermediary_screenings"):
+        for item in report.get(collection_key) or []:
+            if not isinstance(item, dict):
+                continue
+            screening = item.get("screening")
+            if isinstance(screening, dict) and isinstance(screening.get("results"), list):
+                yield screening["results"]
+            if isinstance(item.get("results"), list):
+                yield item["results"]
+
+
+def _result_profile_identifier(result):
+    if not isinstance(result, dict):
+        return ""
+    refs = result.get("provider_references") if isinstance(result.get("provider_references"), dict) else {}
+    pid = _first_non_empty(
+        result.get("provider_profile_identifier"),
+        result.get("profile_identifier"),
+        refs.get("profile_id"),
+        (refs.get("profile_ids") or [None])[0] if isinstance(refs.get("profile_ids"), list) else None,
+    )
+    return str(pid).strip() if pid not in (None, "") else ""
+
+
+def _merge_hydrated_attributes_into_report(report, attribute_map):
+    """ADDITIVE merge of hydrated attributes onto stored hits, matched by
+    profile identifier. Only sets attribute keys that are absent/empty on the
+    hit — never removes or alters existing values, never touches risk / triage /
+    disposition fields. Returns the count of hits enriched."""
+    if not isinstance(report, dict) or not isinstance(attribute_map, dict) or not attribute_map:
+        return 0
+    enriched = 0
+    for results in _profile_hydration_result_lists(report):
+        for result in results:
+            pid = _result_profile_identifier(result)
+            if not pid or pid not in attribute_map:
+                continue
+            attributes = attribute_map.get(pid) or {}
+            changed = False
+            for key in _HYDRATION_ATTRIBUTE_KEYS:
+                value = attributes.get(key)
+                if value in (None, "", [], {}):
+                    continue
+                if result.get(key) in (None, "", [], {}):
+                    result[key] = value
+                    changed = True
+            if changed:
+                enriched += 1
+    return enriched
 
 
 def _ca_rescreen_branch_active(db, application_id, previous_report):
@@ -28655,12 +28789,164 @@ class APIStatusHandler(BaseHandler):
             "complyadvantage": ca_status,
             # SRP-2a Phase D: gates the back-office Re-screen button render.
             "rescreen_enabled": _rescreen_ui_enabled(),
+            # Phase G: gates the back-office on-demand profile hydration call.
+            "hydration_enabled": _profile_hydration_ui_enabled(),
             "anthropic": {
                 "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
                 "status": "configured" if os.environ.get("ANTHROPIC_API_KEY") else "simulated",
                 "description": "Claude-backed document verification and optional analysis paths; the live compliance memo approval path remains deterministic"
             },
             "environment": ENVIRONMENT,
+        })
+
+
+_PROFILE_HYDRATION_MAX_ALERTS = 25
+
+
+class ProfileHydrationHandler(BaseHandler):
+    """POST /api/screening/hydrate-profiles — Phase G on-demand profile hydration.
+
+    Officer opens a subject's review → the UI sends the top-ranked hits' alert +
+    profile identifiers → for each distinct alert we page the Mesh risks endpoint
+    and merge the extracted DISPLAY/AUDIT attributes (DOB, nationality, countries,
+    places of birth, positions, aliases, images, watchlist entries) onto the
+    matching stored hits, ADDITIVELY. Nothing here touches risk, gates,
+    dispositions, or triage. Flag-gated and best-effort: off → 409 no-op; a
+    provider failure enriches nothing but never 500s the request.
+    """
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        if not self.check_rate_limit("hydrate_profiles", max_attempts=30, window_seconds=60):
+            return
+
+        # Both conditions required — flag on AND CA Mesh active. Off → a clear
+        # 409 the UI reads as "do not attempt hydration", never a 500.
+        from screening_config import is_ca_profile_hydration_enabled, is_complyadvantage_active
+        if not (is_ca_profile_hydration_enabled() and is_complyadvantage_active()):
+            self.set_status(409)
+            self.write(json.dumps({
+                "hydration_enabled": False,
+                "message": "Profile hydration is not enabled for this environment.",
+            }))
+            return
+
+        data = self.get_json()
+        app_id = data.get("application_id")
+        if not app_id:
+            return self.error("application_id required")
+
+        subject = data.get("subject") if isinstance(data.get("subject"), dict) else {}
+        subject_type = str(subject.get("subject_type") or data.get("subject_type") or "").strip()
+        subject_name = str(subject.get("subject_name") or data.get("subject_name") or "").strip()
+        person_key = str(subject.get("person_key") or data.get("person_key") or "").strip()
+
+        def _clean_id_list(raw):
+            out = []
+            for value in raw if isinstance(raw, (list, tuple)) else []:
+                text = str(value).strip()
+                if text and text not in out:
+                    out.append(text)
+            return out
+
+        alert_identifiers = _clean_id_list(data.get("alert_identifiers"))
+        profile_identifiers = _clean_id_list(data.get("profile_identifiers"))
+
+        alerts_capped = False
+        if len(alert_identifiers) > _PROFILE_HYDRATION_MAX_ALERTS:
+            logger.warning(
+                "profile_hydration_alerts_capped application=%s requested=%s cap=%s",
+                app_id, len(alert_identifiers), _PROFILE_HYDRATION_MAX_ALERTS,
+            )
+            alert_identifiers = alert_identifiers[:_PROFILE_HYDRATION_MAX_ALERTS]
+            alerts_capped = True
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        real_id = app["id"]
+        prescreening = safe_json_loads(app["prescreening_data"])
+        report = prescreening.get("screening_report")
+
+        attribute_map = {}
+        alerts_hydrated = 0
+        if isinstance(report, dict) and alert_identifiers:
+            try:
+                from screening_complyadvantage.client import ComplyAdvantageClient
+                from screening_complyadvantage.config import CAConfig
+                from screening_complyadvantage.profile_hydration import hydrate_alert_profiles
+                client = ComplyAdvantageClient(CAConfig.from_env())
+                wanted = profile_identifiers or None
+                for alert_identifier in alert_identifiers:
+                    alert_attrs = hydrate_alert_profiles(
+                        client, alert_identifier, wanted_profile_ids=wanted,
+                    )
+                    if alert_attrs:
+                        alerts_hydrated += 1
+                        for pid, attrs in alert_attrs.items():
+                            if pid in attribute_map:
+                                for key, value in attrs.items():
+                                    attribute_map[pid].setdefault(key, value)
+                            else:
+                                attribute_map[pid] = dict(attrs)
+            except Exception:
+                # Best-effort: log and return whatever (if anything) was gathered.
+                logger.warning("profile_hydration_failed application=%s", app_id, exc_info=True)
+
+        enriched_hits = 0
+        if attribute_map and isinstance(report, dict):
+            enriched_hits = _merge_hydrated_attributes_into_report(report, attribute_map)
+            if enriched_hits:
+                prescreening["screening_report"] = report
+                db.execute(
+                    "UPDATE applications SET prescreening_data=? WHERE id=?",
+                    (json.dumps(prescreening, default=str), real_id),
+                )
+                if _ca_screening_audit_enabled():
+                    self.log_audit(
+                        user,
+                        "ca_screening.profiles_hydrated",
+                        app["ref"],
+                        json.dumps({
+                            "event_type": "ca_profiles_hydrated",
+                            "provider": "complyadvantage",
+                            "provider_display_name": "ComplyAdvantage Mesh",
+                            "application_id": real_id,
+                            "application_ref": app["ref"],
+                            "subject_type": subject_type,
+                            "subject_name": subject_name,
+                            "person_key": person_key,
+                            "alerts_requested": len(alert_identifiers),
+                            "alerts_hydrated": alerts_hydrated,
+                            "alerts_capped": alerts_capped,
+                            "profiles_hydrated": len(attribute_map),
+                            "hits_enriched": enriched_hits,
+                        }, default=str, sort_keys=True),
+                        db=db,
+                        commit=False,
+                        before_state={"hydrated": False},
+                        after_state={"hits_enriched": enriched_hits, "profiles_hydrated": len(attribute_map)},
+                    )
+                db.commit()
+        db.close()
+
+        self.success({
+            "hydration_enabled": True,
+            "application_id": real_id,
+            "application_ref": app["ref"],
+            "subject_type": subject_type,
+            "subject_name": subject_name,
+            "attributes": attribute_map,
+            "profiles_hydrated": len(attribute_map),
+            "alerts_requested": len(alert_identifiers),
+            "alerts_hydrated": alerts_hydrated,
+            "alerts_capped": alerts_capped,
+            "hits_enriched": enriched_hits,
         })
 
 
@@ -41753,6 +42039,7 @@ def make_app():
         # Screening (Real API Integrations)
         (r"/api/screening/run", ScreeningHandler),
         (r"/api/screening/queue", ScreeningQueueHandler),
+        (r"/api/screening/hydrate-profiles", ProfileHydrationHandler),
         (r"/api/screening/review", ScreeningReviewHandler),
         (r"/api/screening/sanctions", SanctionsCheckHandler),
         (r"/api/screening/company", CompanyLookupHandler),
