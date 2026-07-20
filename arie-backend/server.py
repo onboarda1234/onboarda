@@ -12184,10 +12184,12 @@ class DocumentVerifyHandler(BaseHandler):
             return
         # R2-BSA-016: the authoritative persisted document-verify path is a
         # heavy AI-agent trigger and was previously unlimited. Fail-closed,
-        # DB-backed limit (mirrors the /ai-verify helper).
+        # DB-backed limit. 30/60s (matches doc_upload) is generous enough for an
+        # officer verifying a multi-document application in a burst while still
+        # capping runaway automated triggers.
         if not self.check_sensitive_rate_limit(
             "document_verify",
-            max_attempts=10,
+            max_attempts=30,
             window_seconds=60,
             error_message="Rate limit exceeded for document verification. Try again later.",
         ):
