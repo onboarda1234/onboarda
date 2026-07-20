@@ -17222,6 +17222,20 @@ function screeningTriageHitEvidenceBody(item) {
   // Source ↗) render above the source card when present; absent → nothing here
   // and the honest F7 copy stays in the rationale.
   html += screeningWatchlistEntriesCard(item);
+  // PR-821 flag-off validation fix: the honest F7 fallback copy for a
+  // watchlist/warning hit that carries NO list name or source detail lived only
+  // in the legacy provider-card path (evidenceReviewRationale). The modern
+  // triage hit card never emitted it, so on staging a detail-less watchlist hit
+  // (e.g. ARF-QAFIX-007) expanded with nothing said about the missing detail.
+  // Emit the same honest sentence here when the provider supplied no list name,
+  // source, snippet or hydrated watchlist_entries. Nothing is fabricated.
+  if (screeningTriageBucketKeyForCategory(item.category) === 'watchlist') {
+    var hasWatchlistDetail = !!(item.list_name || item.authority || item.source_title || item.source_url || item.snippet ||
+      (Array.isArray(item.watchlist_entries) && item.watchlist_entries.length));
+    if (!hasWatchlistDetail) {
+      html += '<div data-screening-watchlist-no-detail="true" style="font-size:12px;color:var(--text2);line-height:1.5;border:1px solid var(--border1);border-radius:8px;padding:9px 13px;background:var(--surface2);">The provider flagged a watchlist/warning match but supplied no list name or source detail. Review the provider record identifiers in Technical details.</div>';
+    }
+  }
   // Phase F (F4): the hit-card title already renders the matched name — the
   // fact row repeats it only when the raw value differs from that title
   // (e.g. the display name fell back to the article title over a UUID).
