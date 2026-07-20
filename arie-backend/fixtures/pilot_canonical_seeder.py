@@ -530,6 +530,20 @@ def _upsert_periodic_review(db, audit, row: Mapping[str, Any], alert_id: Optiona
     return review_id
 
 
+def _edd_workflow_provenance(row: Mapping[str, Any]) -> tuple[str, str]:
+    """Return persisted provenance for automatic or officer-imposed fixture EDD."""
+    expected = row.get("expected") or {}
+    officer_review = (row.get("scenario_evidence") or {}).get("officer_review")
+    manually_imposed = (
+        expected.get("lane") == "EDD"
+        and expected.get("scorer_lane") != "EDD"
+        and bool(officer_review)
+    )
+    if manually_imposed:
+        return "officer_escalate_edd", "manual_onboarding_escalation"
+    return "pilot_canonical_fixture", "pilot_canonical_dataset"
+
+
 def _upsert_edd(db, audit, row: Mapping[str, Any], alert_id: Optional[int], review_id: Optional[int]) -> Optional[int]:
     if not row["expected"]["edd_required"]:
         return None
@@ -537,7 +551,8 @@ def _upsert_edd(db, audit, row: Mapping[str, Any], alert_id: Optional[int], revi
     existing = db.execute("SELECT id FROM edd_cases WHERE trigger_notes LIKE ?", (f"{marker}%",)).fetchone()
     stage = "analysis" if row["workflow_state"]["monitoring"] in {"escalated", "open"} else "information_gathering"
     notes = marker + " " + _json({"dataset": DATASET_NAME, "reference": row["reference"], "synthetic": True, "source_alert_id": alert_id, "source_review_id": review_id})
-    values = (row["application_id"], row["company_name"], row["expected"]["tier"], row["expected"]["score"], stage, "co001", "pilot_canonical_fixture", notes, "pilot_canonical_dataset", alert_id, review_id, _iso(row, offset=5), _iso(row, offset=5), _iso(row, offset=6))
+    trigger_source, origin_context = _edd_workflow_provenance(row)
+    values = (row["application_id"], row["company_name"], row["expected"]["tier"], row["expected"]["score"], stage, "co001", trigger_source, notes, origin_context, alert_id, review_id, _iso(row, offset=5), _iso(row, offset=5), _iso(row, offset=6))
     columns = "application_id,client_name,risk_level,risk_score,stage,assigned_officer,trigger_source,trigger_notes,origin_context,linked_monitoring_alert_id,linked_periodic_review_id,assigned_at,triggered_at,updated_at"
     if existing:
         assignments = ",".join(f"{name}=?" for name in columns.split(","))
@@ -545,7 +560,7 @@ def _upsert_edd(db, audit, row: Mapping[str, Any], alert_id: Optional[int], revi
         edd_id = existing["id"]
     else:
         edd_id = _insert_returning_id(db, "edd_cases", columns, values)
-    audit(action="pilot_canonical_edd", target=f"edd_case:{edd_id}", detail=f"Converged canonical EDD state for {row['reference']}", after_state={"stage": stage})
+    audit(action="pilot_canonical_edd", target=f"edd_case:{edd_id}", detail=f"Converged canonical EDD state for {row['reference']}", after_state={"stage": stage, "trigger_source": trigger_source, "origin_context": origin_context})
     return edd_id
 
 
