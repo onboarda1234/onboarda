@@ -741,11 +741,12 @@ def _approval_gate_blocker(
     return blocker
 
 
-DIRECT_APPROVAL_RISK_LEVELS = {"LOW", "MEDIUM"}
+DIRECT_APPROVAL_RISK_LEVELS = {"LOW"}
 APPROVAL_ROUTE_DIRECT_LOW_MEDIUM = "direct_low_medium"
 APPROVAL_ROUTE_COMPLIANCE_REQUIRED = "compliance_required"
 APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED = "dual_control_required"
 APPROVAL_ROUTE_BLOCKED = "blocked"
+APPROVAL_ROUTE_REJECTED = "rejected"
 
 
 def _json_list_value(value: Any) -> List[Any]:
@@ -769,6 +770,53 @@ def _approval_route_risk_level(app: Mapping[str, Any]) -> Optional[str]:
 
 def _approval_text(value: Any) -> str:
     return str(value or "").strip().lower()
+
+
+_PENDING_SCREENING_STATES = {
+    "in_progress",
+    "pending",
+    "pending_provider",
+    "processing",
+    "queued",
+    "screening_pending",
+    "unresolved",
+}
+_SCREENING_STATE_KEYS = {
+    "api_status",
+    "provider_status",
+    "screening_state",
+    "status",
+}
+
+
+def _screening_report_has_pending_or_unresolved_state(value: Any) -> bool:
+    """Return true only for an explicit pending/unresolved screening state."""
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if (
+                _approval_text(key) in _SCREENING_STATE_KEYS
+                and _approval_text(item) in _PENDING_SCREENING_STATES
+            ):
+                return True
+            if (
+                isinstance(item, (Mapping, list))
+                and _screening_report_has_pending_or_unresolved_state(item)
+            ):
+                return True
+    elif isinstance(value, list):
+        return any(_screening_report_has_pending_or_unresolved_state(item) for item in value)
+    return False
+
+
+def _policy_approval_route(risk_level: Optional[str], escalation_reasons: Iterable[Any]) -> str:
+    """Return the underlying risk-policy route before operational blockers."""
+    if risk_level in HIGH_RISK_DECISION_LEVELS:
+        return APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED
+    if risk_level == "MEDIUM" or list(escalation_reasons or []):
+        return APPROVAL_ROUTE_COMPLIANCE_REQUIRED
+    if risk_level in DIRECT_APPROVAL_RISK_LEVELS:
+        return APPROVAL_ROUTE_DIRECT_LOW_MEDIUM
+    return APPROVAL_ROUTE_BLOCKED
 
 
 _APPROVAL_ROUTE_REASON_LABELS = {
@@ -1002,9 +1050,10 @@ def classify_approval_route(app: Mapping[str, Any], db=None) -> Dict[str, Any]:
     """Classify the approval path without deciding actor authority or mutating state.
 
     The route separates risk/escalation policy from operational readiness:
-    ``direct_low_medium`` may skip the compliance memo package; escalated routes keep
-    memo/supervisor/senior controls; ``blocked`` represents records that are not yet
-    in a decisionable state or do not have a trustworthy risk snapshot.
+    ``direct_low_medium`` is the retained constant for direct LOW approval;
+    escalated routes keep memo/supervisor/senior controls; ``blocked`` represents
+    records that are not yet in a decisionable state or do not have a trustworthy
+    risk snapshot.
     """
     app = dict(app or {})
     status = _approval_text(app.get("status"))
@@ -1035,7 +1084,7 @@ def classify_approval_route(app: Mapping[str, Any], db=None) -> Dict[str, Any]:
         "pre_approved",
         "kyc_documents",
     }
-    terminal_states = {"approved", "rejected", "withdrawn"}
+    terminal_states = {"approved", "withdrawn"}
     if status in terminal_states:
         reasons.append("terminal_state")
     elif status in pre_decision_states:
@@ -1068,6 +1117,8 @@ def classify_approval_route(app: Mapping[str, Any], db=None) -> Dict[str, Any]:
             )
         except Exception:
             screening_truth = {}
+    if _screening_report_has_pending_or_unresolved_state(screening_report):
+        reasons.append("screening_pending_or_unresolved")
     try:
         screening_adverse_truth = _screening_adverse_truth_for_app(
             app,
@@ -1093,17 +1144,16 @@ def classify_approval_route(app: Mapping[str, Any], db=None) -> Dict[str, Any]:
     if high_risk:
         escalation_reasons.append("high_or_very_high_risk")
 
-    if reasons:
+    policy_route = _policy_approval_route(risk_level, escalation_reasons)
+
+    if status == "rejected":
+        route = APPROVAL_ROUTE_REJECTED
+    elif reasons:
         route = APPROVAL_ROUTE_BLOCKED
-    elif high_risk:
-        route = APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED
-    elif escalation_reasons:
-        route = APPROVAL_ROUTE_COMPLIANCE_REQUIRED
-    elif risk_level in DIRECT_APPROVAL_RISK_LEVELS:
-        route = APPROVAL_ROUTE_DIRECT_LOW_MEDIUM
     else:
-        route = APPROVAL_ROUTE_BLOCKED
-        reasons.append("unsupported_risk_level")
+        route = policy_route
+        if route == APPROVAL_ROUTE_BLOCKED:
+            reasons.append("unsupported_risk_level")
 
     requires_compliance_package = route in {
         APPROVAL_ROUTE_COMPLIANCE_REQUIRED,
@@ -1134,7 +1184,7 @@ class ApprovalGateValidator:
         screening_report: Dict,
         prescreening_data: Dict,
     ) -> Tuple[bool, str]:
-        """Validate operational gates that still apply to direct LOW/MEDIUM approval."""
+        """Validate operational gates that still apply to direct LOW approval."""
         app_id = app.get("id")
         screening_evidence = _collect_screening_provider_evidence(screening_report)
         if screening_evidence:
@@ -1343,7 +1393,7 @@ class ApprovalGateValidator:
         )
 
         logger.info(
-            "Application %s passed direct LOW/MEDIUM operational approval gates",
+            "Application %s passed direct LOW operational approval gates",
             app_id,
         )
         return (True, "")
@@ -2206,9 +2256,10 @@ def can_decide_application(user, app, decision, *, risk_level=None, override_ai=
             meta,
         )
 
-    # 2b. Onboarding Officer direct authority is limited to clean LOW/MEDIUM.
-    # LOW/MEDIUM with PEP, adverse media, EDD, material screening concern, or an
-    # officer-submitted compliance handoff must route through compliance.
+    # 2b. Onboarding Officer direct authority is limited to clean LOW.
+    # LOW with PEP, adverse media, EDD, material screening concern, or an
+    # officer-submitted compliance handoff must route through compliance; MEDIUM
+    # always follows the founder-approved compliance route.
     route_name = meta.get("approval_route")
     if (
         decision == "approve"
@@ -2497,7 +2548,7 @@ def collect_approval_gate_blockers(app: Dict, db) -> List[Dict[str, Any]]:
             "risk_escalation_required",
             "Risk Route",
             "Compliance review is required",
-            "This case cannot use the direct LOW/MEDIUM approval route. "
+            "This case cannot use the direct LOW approval route. "
             + "Escalation reason(s): "
             + ", ".join(reason_labels)
             + ".",

@@ -4,7 +4,8 @@ E2E-AUTHORITY-MATRIX-1 — end-to-end authority regression lock.
 Proves PR1-PR4 compose correctly across the full authority matrix, asserting both
 behaviour AND the audit trail, including the success paths that no single PR covered:
 
-  * CO can APPROVE a clean LOW/MEDIUM file (decision recorded, not privileged).
+  * CO can APPROVE a clean LOW file (decision recorded, not privileged).
+  * MEDIUM files require the compliance route and package.
   * HIGH/VERY_HIGH dual approval: first senior -> 202, distinct second -> approved,
     with is_privileged_admin_action flagged for an admin approver.
   * CO cannot approve HIGH but CAN submit it to compliance (no decision written).
@@ -272,11 +273,12 @@ class E2EAuthorityMatrixTest(AsyncHTTPTestCase):
         # A CO LOW approval is a normal decision, not a privileged admin action.
         assert self._decision_notes(app_id).get("is_privileged_admin_action") in (False, None)
 
-    def test_co_approves_clean_medium(self):
+    def test_co_cannot_approve_clean_medium_routed_to_compliance(self):
         app_id, ref = self._seed_approvable("MEDIUM")
         resp = self._approve(app_id, self.co_token)
-        assert resp.code in (200, 201), resp.body.decode()
-        assert self._status_of(app_id)["status"] == "approved"
+        assert resp.code == 403, resp.body.decode()
+        assert "requires compliance/SCO review" in self._json(resp)["error"]
+        assert self._status_of(app_id)["status"] == "compliance_review"
 
     def test_co_approves_clean_low_without_compliance_memo(self):
         app_id, ref = self._seed_approvable("LOW", with_memo=False)
@@ -289,21 +291,28 @@ class E2EAuthorityMatrixTest(AsyncHTTPTestCase):
             "SELECT COUNT(*) AS c FROM compliance_memos WHERE application_id=?", (app_id,),
         ).fetchone()["c"] == 0
 
-    def test_co_approves_clean_medium_without_compliance_memo(self):
+    def test_co_cannot_approve_clean_medium_without_compliance_memo(self):
         app_id, ref = self._seed_approvable("MEDIUM", with_memo=False)
-        resp = self._approve(app_id, self.co_token, reason="Direct clean MEDIUM approval")
-        assert resp.code in (200, 201), resp.body.decode()
-        assert self._status_of(app_id)["status"] == "approved"
+        resp = self._approve(app_id, self.co_token, reason="MEDIUM compliance approval")
+        assert resp.code == 403, resp.body.decode()
+        assert "requires compliance/SCO review" in self._json(resp)["error"]
+        assert self._status_of(app_id)["status"] == "compliance_review"
         assert self.db.execute(
             "SELECT COUNT(*) AS c FROM compliance_memos WHERE application_id=?", (app_id,),
         ).fetchone()["c"] == 0
 
-    def test_senior_roles_approve_clean_low_medium_without_compliance_memo(self):
-        for risk_level, token in (("LOW", self.sco_token), ("MEDIUM", self.admin_token)):
-            app_id, _ref = self._seed_approvable(risk_level, with_memo=False)
-            resp = self._approve(app_id, token, reason=f"Direct clean {risk_level} senior approval")
-            assert resp.code in (200, 201), resp.body.decode()
-            assert self._status_of(app_id)["status"] == "approved"
+    def test_senior_role_approves_clean_low_without_compliance_memo(self):
+        app_id, _ref = self._seed_approvable("LOW", with_memo=False)
+        resp = self._approve(app_id, self.sco_token, reason="Direct clean LOW senior approval")
+        assert resp.code in (200, 201), resp.body.decode()
+        assert self._status_of(app_id)["status"] == "approved"
+
+    def test_medium_requires_compliance_memo_even_for_admin(self):
+        app_id, _ref = self._seed_approvable("MEDIUM", with_memo=False)
+        resp = self._approve(app_id, self.admin_token, reason="MEDIUM compliance approval")
+        assert resp.code == 400, resp.body.decode()
+        assert "memo" in self._json(resp)["error"].lower()
+        assert self._status_of(app_id)["status"] == "compliance_review"
 
     def test_low_missing_documents_returns_document_blocker_not_memo(self):
         app_id, _ref = self._seed_approvable("LOW", with_memo=False, documents_ready=False)
