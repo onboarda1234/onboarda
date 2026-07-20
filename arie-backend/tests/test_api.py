@@ -8099,3 +8099,137 @@ def test_h1_live_memo_route_is_deterministic(api_server, monkeypatch):
     assert row is not None
     persisted = json.loads(row["memo_data"])
     assert persisted["metadata"]["ai_source"] == "deterministic"
+
+
+class TestScreeningHitDisposition:
+    """Per-hit screening decision persistence (SRP per-hit redesign).
+
+    The endpoint stores granular per-hit decisions + materiality and NEVER
+    touches screening_reviews / risk / routing / four-eyes — the subject-level
+    signal the frozen approval gates consume stays owned by /screening/review.
+    """
+
+    def _make_app(self, app_id, app_ref):
+        from db import get_db
+        conn = get_db()
+        conn.execute("DELETE FROM screening_hit_dispositions WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            "INSERT INTO applications (id, ref, client_id, company_name, status) VALUES (?, ?, ?, ?, ?)",
+            (app_id, app_ref, "hitdisp_client", "Hit Disposition Ltd", "in_review"),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_persist_hydrate_bulk_undo_and_gate(self, api_server):
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_hitdisp_1"
+        app_ref = "ARF-2026-HITDISP-1"
+        self._make_app(app_id, app_ref)
+        admin = create_token("admin001", "admin", "Test Admin", "officer")
+        H = {"Authorization": f"Bearer {admin}"}
+        base = {"application_id": app_id, "subject_type": "entity", "subject_name": "Hit Disposition Ltd"}
+
+        # 1. Confirm true match with materiality on one hit.
+        r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
+                               json={**base, "hit_id": "hit-A", "disposition": "match", "materiality": "high"},
+                               headers=H, timeout=3)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["rollup"]["match"] == 1
+        assert any(d["hit_id"] == "hit-A" and d["disposition"] == "match" and d["materiality"] == "high"
+                   for d in body["dispositions"])
+
+        # 2. Materiality is dropped for a non-match disposition.
+        r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
+                               json={**base, "hit_id": "hit-B", "disposition": "cleared", "materiality": "high"},
+                               headers=H, timeout=3)
+        assert r.status_code == 200
+        conn = get_db()
+        row = conn.execute(
+            "SELECT disposition, materiality FROM screening_hit_dispositions WHERE application_id=? AND hit_id=?",
+            (app_id, "hit-B")).fetchone()
+        conn.close()
+        assert row["disposition"] == "cleared" and row["materiality"] is None
+
+        # 3. GET hydrates both.
+        r = http_requests.get(f"{api_server}/api/screening/hit-disposition",
+                              params={**base}, headers=H, timeout=3)
+        assert r.status_code == 200
+        hyd = {d["hit_id"]: d["disposition"] for d in r.json()["dispositions"]}
+        assert hyd.get("hit-A") == "match" and hyd.get("hit-B") == "cleared"
+
+        # 4. Bulk clear the remaining hits in one call.
+        r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
+                               json={**base, "hit_ids": ["hit-C", "hit-D", "hit-E"], "disposition": "cleared"},
+                               headers=H, timeout=3)
+        assert r.status_code == 200
+        assert r.json()["saved"] == 3
+        assert r.json()["rollup"]["cleared"] == 4  # B, C, D, E
+
+        # 5. Undo (pending) deletes the stored row.
+        r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
+                               json={**base, "hit_id": "hit-A", "disposition": "pending"},
+                               headers=H, timeout=3)
+        assert r.status_code == 200
+        assert r.json()["undo"] is True
+        conn = get_db()
+        gone = conn.execute(
+            "SELECT 1 FROM screening_hit_dispositions WHERE application_id=? AND hit_id=?",
+            (app_id, "hit-A")).fetchone()
+        conn.close()
+        assert gone is None
+
+        # 6. FREEZE SAFETY: no screening_reviews row was written by this endpoint.
+        conn = get_db()
+        sr = conn.execute("SELECT COUNT(*) c FROM screening_reviews WHERE application_id=?", (app_id,)).fetchone()
+        conn.close()
+        assert sr["c"] == 0
+
+        # 7. Audit row written for the per-hit decision.
+        conn = get_db()
+        audit = conn.execute(
+            "SELECT detail FROM audit_log WHERE target=? AND action='Screening Hit Disposition' ORDER BY id DESC LIMIT 1",
+            (app_ref,)).fetchone()
+        conn.close()
+        assert audit is not None
+        assert json.loads(audit["detail"])["subject_type"] == "entity"
+
+    def test_clear_requires_privileged_role(self, api_server):
+        from auth import create_token
+        app_id = "app_hitdisp_2"
+        app_ref = "ARF-2026-HITDISP-2"
+        self._make_app(app_id, app_ref)
+        analyst = create_token("analyst001", "analyst", "Test Analyst", "officer")
+        base = {"application_id": app_id, "subject_type": "entity", "subject_name": "Hit Disposition Ltd"}
+        # Analyst may confirm a true match but NOT clear a false positive.
+        r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
+                               json={**base, "hit_id": "hit-X", "disposition": "cleared"},
+                               headers={"Authorization": f"Bearer {analyst}"}, timeout=3)
+        assert r.status_code == 403
+        r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
+                               json={**base, "hit_id": "hit-X", "disposition": "match"},
+                               headers={"Authorization": f"Bearer {analyst}"}, timeout=3)
+        assert r.status_code == 200
+
+    def test_rejects_invalid_disposition_and_materiality(self, api_server):
+        from auth import create_token
+        app_id = "app_hitdisp_3"
+        app_ref = "ARF-2026-HITDISP-3"
+        self._make_app(app_id, app_ref)
+        admin = create_token("admin001", "admin", "Test Admin", "officer")
+        H = {"Authorization": f"Bearer {admin}"}
+        base = {"application_id": app_id, "subject_type": "entity", "subject_name": "Hit Disposition Ltd"}
+        r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
+                               json={**base, "hit_id": "h", "disposition": "banana"}, headers=H, timeout=3)
+        assert r.status_code == 400
+        r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
+                               json={**base, "hit_id": "h", "disposition": "match", "materiality": "extreme"},
+                               headers=H, timeout=3)
+        assert r.status_code == 400
+        r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
+                               json={**base, "disposition": "match"}, headers=H, timeout=3)
+        assert r.status_code == 400  # no hit_id(s)

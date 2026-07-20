@@ -24309,6 +24309,187 @@ class ScreeningQueueHandler(BaseHandler):
         self.success(payload)
 
 
+_SCREENING_HIT_DISPOSITIONS = ("match", "cleared", "escalated", "follow_up_required")
+_SCREENING_HIT_MATERIALITIES = ("high", "moderate", "nonmaterial", "insufficient")
+# Clearing a hit as a false positive mirrors the subject-level clear gate.
+_SCREENING_HIT_CLEAR_ROLES = ("admin", "sco", "co")
+
+
+def _screening_hit_rollup(db, app_id, subject_type, subject_name):
+    """Count recorded per-hit decisions for a subject. The authoritative subject
+    status the frozen approval gates consume is still the screening_reviews row;
+    this is a convenience summary for the per-hit review UI."""
+    rows = db.execute(
+        "SELECT disposition FROM screening_hit_dispositions "
+        "WHERE application_id=? AND subject_type=? AND subject_name=?",
+        (app_id, subject_type, subject_name),
+    ).fetchall()
+    match = cleared = other = 0
+    for row in rows:
+        disp = dict(row).get("disposition")
+        if disp == "match":
+            match += 1
+        elif disp == "cleared":
+            cleared += 1
+        else:
+            other += 1
+    return {"match": match, "cleared": cleared, "other": other, "recorded": len(rows)}
+
+
+class ScreeningHitDispositionHandler(BaseHandler):
+    """Per-hit screening decisions (SRP per-hit redesign).
+
+    POST /api/screening/hit-disposition — persist a decision for one hit (hit_id)
+      or a batch (hit_ids[]). disposition in {match, cleared, escalated,
+      follow_up_required}; 'pending' / '' is an undo that deletes the stored row.
+      A per-hit materiality is recorded only with a true match. This is the
+      granular per-hit record; the subject-level signal the frozen approval gates
+      consume is still submitted separately through /api/screening/review — this
+      endpoint never touches screening_reviews, risk, routing, or four-eyes.
+    GET  /api/screening/hit-disposition?application_id=&subject_type=&subject_name=
+      — hydrate stored per-hit decisions for the review UI.
+    """
+
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        app_id = (self.get_argument("application_id", "") or "").strip()
+        raw_subject_type = (self.get_argument("subject_type", "") or "").strip().lower()
+        subject_type = _SCREENING_SUBJECT_ALIASES.get(raw_subject_type, raw_subject_type)
+        subject_name = (self.get_argument("subject_name", "") or "").strip()
+        if not app_id:
+            return self.error("application_id is required")
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT id, ref FROM applications WHERE id=? OR ref=?", (app_id, app_id)
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app = dict(app)
+            query = (
+                "SELECT subject_type, subject_name, hit_id, disposition, materiality, "
+                "rationale, reviewer_name, updated_at FROM screening_hit_dispositions "
+                "WHERE application_id=?"
+            )
+            params = [app["id"]]
+            if subject_type:
+                query += " AND subject_type=?"
+                params.append(subject_type)
+            if subject_name:
+                query += " AND subject_name=?"
+                params.append(subject_name)
+            rows = [dict(row) for row in db.execute(query, tuple(params)).fetchall()]
+            self.write({"dispositions": rows})
+        finally:
+            db.close()
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        data = self.get_json()
+        app_id = (data.get("application_id") or "").strip()
+        raw_subject_type = (data.get("subject_type") or "").strip().lower()
+        subject_type = _SCREENING_SUBJECT_ALIASES.get(raw_subject_type, raw_subject_type)
+        subject_name = (data.get("subject_name") or "").strip()
+        disposition = (data.get("disposition") or "").strip().lower()
+        materiality = (data.get("materiality") or "").strip().lower() or None
+        rationale = (data.get("rationale") or "").strip()
+        hit_ids = data.get("hit_ids")
+        if not isinstance(hit_ids, list):
+            hit_ids = [data.get("hit_id")]
+        hit_ids = [str(h).strip() for h in hit_ids if str(h or "").strip()]
+
+        if not app_id or not subject_type or not subject_name or not hit_ids:
+            return self.error(
+                "application_id, subject_type, subject_name, and hit_id(s) are required"
+            )
+        if subject_type not in _SCREENING_SUBJECT_TYPES:
+            return self.error("Unsupported screening subject type", 400)
+        undo = disposition in ("", "pending")
+        if not undo and disposition not in _SCREENING_HIT_DISPOSITIONS:
+            return self.error("Unsupported per-hit disposition", 400)
+        if materiality and materiality not in _SCREENING_HIT_MATERIALITIES:
+            return self.error("Unsupported materiality", 400)
+        if disposition != "match":
+            materiality = None
+        if disposition == "cleared" and user.get("role") not in _SCREENING_HIT_CLEAR_ROLES:
+            return self.error(
+                "Clearing a screening hit as a false positive requires "
+                "Onboarding Officer, SCO, or admin role",
+                403,
+            )
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT id, ref FROM applications WHERE id=? OR ref=?", (app_id, app_id)
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app = dict(app)
+            reviewer_id = user.get("sub") or ""
+            reviewer_name = user.get("name") or reviewer_id
+            now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            for hit_id in hit_ids:
+                if undo:
+                    db.execute(
+                        "DELETE FROM screening_hit_dispositions WHERE application_id=? "
+                        "AND subject_type=? AND subject_name=? AND hit_id=?",
+                        (app["id"], subject_type, subject_name, hit_id),
+                    )
+                    continue
+                existing = db.execute(
+                    "SELECT id FROM screening_hit_dispositions WHERE application_id=? "
+                    "AND subject_type=? AND subject_name=? AND hit_id=?",
+                    (app["id"], subject_type, subject_name, hit_id),
+                ).fetchone()
+                if existing:
+                    db.execute(
+                        "UPDATE screening_hit_dispositions SET disposition=?, materiality=?, "
+                        "rationale=?, reviewer_id=?, reviewer_name=?, updated_at=? WHERE id=?",
+                        (disposition, materiality, rationale, reviewer_id, reviewer_name,
+                         now_utc, dict(existing)["id"]),
+                    )
+                else:
+                    db.execute(
+                        "INSERT INTO screening_hit_dispositions (application_id, subject_type, "
+                        "subject_name, hit_id, disposition, materiality, rationale, reviewer_id, "
+                        "reviewer_name) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (app["id"], subject_type, subject_name, hit_id, disposition, materiality,
+                         rationale, reviewer_id, reviewer_name),
+                    )
+            self.log_audit(
+                user, "Screening Hit Disposition", app["ref"],
+                json.dumps({
+                    "application_id": app["id"],
+                    "application_ref": app["ref"],
+                    "subject_type": subject_type,
+                    "subject_name": subject_name,
+                    "hit_ids": hit_ids,
+                    "hit_count": len(hit_ids),
+                    "disposition": "pending" if undo else disposition,
+                    "materiality": materiality,
+                    "actor": reviewer_id,
+                    "actor_role": user.get("role"),
+                    "timestamp": now_utc,
+                }, default=str, sort_keys=True),
+                db=db, commit=False, application_id=app["id"],
+            )
+            db.commit()
+            rows = [dict(row) for row in db.execute(
+                "SELECT hit_id, disposition, materiality FROM screening_hit_dispositions "
+                "WHERE application_id=? AND subject_type=? AND subject_name=?",
+                (app["id"], subject_type, subject_name),
+            ).fetchall()]
+            rollup = _screening_hit_rollup(db, app["id"], subject_type, subject_name)
+            self.write({"saved": len(hit_ids), "undo": undo, "dispositions": rows, "rollup": rollup})
+        finally:
+            db.close()
+
+
 class ScreeningReviewHandler(BaseHandler):
     """POST /api/screening/review — persist reviewer disposition for a screening queue row"""
     def post(self):
@@ -42041,6 +42222,7 @@ def make_app():
         (r"/api/screening/queue", ScreeningQueueHandler),
         (r"/api/screening/hydrate-profiles", ProfileHydrationHandler),
         (r"/api/screening/review", ScreeningReviewHandler),
+        (r"/api/screening/hit-disposition", ScreeningHitDispositionHandler),
         (r"/api/screening/sanctions", SanctionsCheckHandler),
         (r"/api/screening/company", CompanyLookupHandler),
         (r"/api/screening/ip", IPCheckHandler),

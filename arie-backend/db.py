@@ -1216,6 +1216,30 @@ def _get_postgres_schema() -> str:
         UNIQUE(application_id, subject_type, subject_name)
     );
 
+    -- SRP per-hit disposition: each individual screening hit is dispositioned on
+    -- its own (Confirm true match / Clear false positive / Escalate / Request
+    -- more information) with a per-hit materiality call recorded on a true match.
+    -- The subject-level rollup that feeds the frozen approval gates is still
+    -- written through screening_reviews (via the existing /screening/review
+    -- flow) — this table is the granular per-hit record backing the review UI and
+    -- the audit trail. hit_id is the stable provider record identifier. An "undo"
+    -- deletes the row, so 'pending' is never stored.
+    CREATE TABLE IF NOT EXISTS screening_hit_dispositions (
+        id SERIAL PRIMARY KEY,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        subject_type TEXT NOT NULL,
+        subject_name TEXT NOT NULL,
+        hit_id TEXT NOT NULL,
+        disposition TEXT NOT NULL CHECK(disposition IN ('match','cleared','escalated','follow_up_required')),
+        materiality TEXT CHECK(materiality IN ('high','moderate','nonmaterial','insufficient')),
+        rationale TEXT,
+        reviewer_id TEXT REFERENCES users(id),
+        reviewer_name TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(application_id, subject_type, subject_name, hit_id)
+    );
+
     -- SRP-2: superseded screening-report snapshots. A governed re-screen
     -- archives the outgoing report here before replacement — screening
     -- evidence is regulated and is never destroyed by a refresh.
@@ -2655,6 +2679,25 @@ def _get_sqlite_schema() -> str:
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')),
         UNIQUE(application_id, subject_type, subject_name)
+    );
+
+    -- SRP per-hit disposition (see the PostgreSQL schema for the full note).
+    -- Granular per-hit record backing the review UI + audit trail; the
+    -- subject-level rollup still feeds the frozen gates via screening_reviews.
+    CREATE TABLE IF NOT EXISTS screening_hit_dispositions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        subject_type TEXT NOT NULL,
+        subject_name TEXT NOT NULL,
+        hit_id TEXT NOT NULL,
+        disposition TEXT NOT NULL CHECK(disposition IN ('match','cleared','escalated','follow_up_required')),
+        materiality TEXT CHECK(materiality IN ('high','moderate','nonmaterial','insufficient')),
+        rationale TEXT,
+        reviewer_id TEXT REFERENCES users(id),
+        reviewer_name TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(application_id, subject_type, subject_name, hit_id)
     );
 
     -- SRP-2: superseded screening-report snapshots. A governed re-screen
