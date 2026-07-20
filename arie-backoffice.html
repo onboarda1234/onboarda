@@ -16446,8 +16446,28 @@ function agent3HitRowsTableHtml(rows) {
     '<th style="' + th + 'width:12%;">RegMind triage</th>' +
     '<th style="' + th + '">Status &amp; reason</th>' +
     '</tr></thead><tbody>';
+  // Founder review: the audit table used to dump one row per provider record,
+  // so a subject with 198 duplicate/syndicated adverse-media records rendered a
+  // 198-row wall of identical "matched name · category · triage · reason" lines
+  // (differing only by provider reference id). That old flat table contradicts
+  // the approved design, which groups near-identical records. Here, rows that
+  // share subject, matched entity, category, triage score, suggested status and
+  // reason are collapsed into ONE audit row carrying a "× N grouped" count and
+  // an expandable that still lists EVERY provider reference — the audit trail
+  // is preserved in full, only the wall disappears. Ordering is stable (first
+  // occurrence wins) and no count is re-derived: every reference is retained.
+  var groups = [];
+  var groupByKey = {};
   rows.forEach(function(r) {
     r = r || {};
+    var key = [r.subject_name, r.subject_type, r.matched_entity, r.list, r.type, r.triage_score, r.suggested_status, r.reason].join('|~|');
+    var g = groupByKey[key];
+    if (!g) { g = { rep: r, refs: [], count: 0 }; groupByKey[key] = g; groups.push(g); }
+    g.count += 1;
+    if (r.evidence_ref) g.refs.push(String(r.evidence_ref));
+  });
+  groups.forEach(function(g) {
+    var r = g.rep;
     var subjectBits = [r.subject_name, r.subject_type ? '(' + String(r.subject_type) + ')' : ''].filter(Boolean).join(' ');
     // Readable fallback when the stored provider result only carries an id.
     var matched;
@@ -16457,8 +16477,19 @@ function agent3HitRowsTableHtml(rows) {
     } else {
       matched = '<span style="font-weight:600;">' + escapeHtml(r.matched_entity || 'n/a') + '</span>';
     }
+    if (g.count > 1) {
+      matched += ' <span style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.03em;padding:1px 7px;border-radius:12px;background:var(--surface2);color:var(--text3);white-space:nowrap;" title="Near-identical provider records collapsed for review — every reference is retained below.">× ' + g.count + ' grouped</span>';
+    }
     var listCell = escapeHtml(r.list || (r.type ? String(r.type).replace(/_/g, ' ') : '') || 'n/a');
-    var evRef = r.evidence_ref ? ' <span style="color:var(--text3);font-size:10.5px;">[' + escapeHtml(String(r.evidence_ref)) + ']</span>' : '';
+    var evRef;
+    if (g.count > 1) {
+      var refItems = g.refs.map(function(ref) {
+        return '<span style="font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--text3);word-break:break-all;">[' + escapeHtml(ref) + ']</span>';
+      }).join(' ');
+      evRef = ' <details style="margin-top:5px;"><summary style="cursor:pointer;list-style:none;font-size:10.5px;font-weight:700;color:var(--text3);">' + g.count + ' near-identical records grouped' + (g.refs.length ? ' · show ' + g.refs.length + ' reference' + (g.refs.length === 1 ? '' : 's') : '') + '</summary>' + (refItems ? '<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;">' + refItems + '</div>' : '') + '</details>';
+    } else {
+      evRef = g.refs.length ? ' <span style="color:var(--text3);font-size:10.5px;">[' + escapeHtml(g.refs[0]) + ']</span>' : '';
+    }
     html += '<tr>' +
       '<td style="' + td + '">' + (subjectBits ? escapeHtml(subjectBits) : '<span style="color:var(--text3);">n/a</span>') + '</td>' +
       '<td style="' + td + '">' + matched + '</td>' +
@@ -16766,8 +16797,11 @@ var SCREENING_TRIAGE_BUCKET_META = [
   // exactly what the section contains.
   { key: 'sanctions', label: 'Sanctions', color: '#991b1b' },
   { key: 'pep', label: 'Politically exposed persons', color: '#92400e' },
+  // Founder review: watchlist / warning is more material than adverse media,
+  // so its section ranks ABOVE adverse media (Sanctions → PEP → Watchlist →
+  // Adverse media → Other). Triage score still orders hits within each bucket.
+  { key: 'watchlist', label: 'Watchlist', color: '#b45309' },
   { key: 'adverse_media', label: 'Adverse media', color: 'var(--text1)' },
-  { key: 'watchlist', label: 'Watchlist', color: 'var(--text1)' },
   { key: 'other', label: 'Other provider matches', color: 'var(--text1)' }
 ];
 
@@ -17188,6 +17222,20 @@ function screeningTriageHitEvidenceBody(item) {
   // Source ↗) render above the source card when present; absent → nothing here
   // and the honest F7 copy stays in the rationale.
   html += screeningWatchlistEntriesCard(item);
+  // PR-821 flag-off validation fix: the honest F7 fallback copy for a
+  // watchlist/warning hit that carries NO list name or source detail lived only
+  // in the legacy provider-card path (evidenceReviewRationale). The modern
+  // triage hit card never emitted it, so on staging a detail-less watchlist hit
+  // (e.g. ARF-QAFIX-007) expanded with nothing said about the missing detail.
+  // Emit the same honest sentence here when the provider supplied no list name,
+  // source, snippet or hydrated watchlist_entries. Nothing is fabricated.
+  if (screeningTriageBucketKeyForCategory(item.category) === 'watchlist') {
+    var hasWatchlistDetail = !!(item.list_name || item.authority || item.source_title || item.source_url || item.snippet ||
+      (Array.isArray(item.watchlist_entries) && item.watchlist_entries.length));
+    if (!hasWatchlistDetail) {
+      html += '<div data-screening-watchlist-no-detail="true" style="font-size:12px;color:var(--text2);line-height:1.5;border:1px solid var(--border1);border-radius:8px;padding:9px 13px;background:var(--surface2);">The provider flagged a watchlist/warning match but supplied no list name or source detail. Review the provider record identifiers in Technical details.</div>';
+    }
+  }
   // Phase F (F4): the hit-card title already renders the matched name — the
   // fact row repeats it only when the raw value differs from that title
   // (e.g. the display name fell back to the article title over a UUID).
