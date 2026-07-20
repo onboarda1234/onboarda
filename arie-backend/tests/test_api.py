@@ -8112,8 +8112,10 @@ class TestScreeningHitDisposition:
     def _make_app(self, app_id, app_ref):
         from db import get_db
         conn = get_db()
+        # NB: screening_reviews is a regulated table (governed deletion) and this
+        # endpoint never writes it — so we never delete it here; the freeze-safety
+        # assertion below relies on it staying empty for a fresh app_id.
         conn.execute("DELETE FROM screening_hit_dispositions WHERE application_id = ?", (app_id,))
-        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
         conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
         conn.execute(
             "INSERT INTO applications (id, ref, client_id, company_name, status) VALUES (?, ?, ?, ?, ?)",

@@ -178,6 +178,21 @@ def test_near_identical_hits_collapse_into_grouped_multiselect_block():
     assert "screeningPersistHitDisposition(reg.appRef, reg.subjType, reg.subjName, changed, 'cleared'" in bulk
 
 
+def test_resolved_subject_finalize_feeds_frozen_gate():
+    html = _html()
+    fin = _function_region(html, "screeningSubjectFinalizeSection", "screeningTriageHitActions")
+    # Appears ONLY once every hit is decided (no hit pending).
+    assert "if (!rollup.total || rollup.pending) return ''" in fin
+    # Aggregate: TRUE MATCH if any hit is a confirmed true match, else CLEAR.
+    assert "var aggregate = rollup.trueCount ? 'match' : 'cleared';" in fin
+    # The subject decision is recorded through the EXISTING gate flow — this is
+    # what writes screening_reviews / risk / routing / four-eyes (freeze-safe).
+    assert "renderInlineScreeningDispositionPanel(app, row, subjectType, subjectName)" in fin
+    assert "Record the subject decision." in fin
+    body = _function_region(html, "screeningSubjectWorkspaceBody", "buildEntityScreeningReviewCard")
+    assert "screeningSubjectFinalizeSection(app, row, config.subjectType, config.subjectName)" in body
+
+
 def test_per_hit_decisions_persist_and_hydrate():
     html = _html()
     # Each per-hit setter persists to the durable store.
