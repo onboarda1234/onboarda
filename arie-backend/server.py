@@ -5336,7 +5336,10 @@ class ApplicationsHandler(BaseHandler):
         status = self.get_argument("status", None)
         risk = self.get_argument("risk", None)
         assigned = self.get_argument("assigned", None)
-        query_text = (self.get_argument("q", "") or "").strip()
+        # APP-AUD-005: accept ?search= as an alias for ?q= (some callers/UI send
+        # `search`). `q` wins when both are present; mirrors the alias other
+        # search endpoints already accept.
+        query_text = (self.get_argument("q", None) or self.get_argument("search", "") or "").strip()
         # perf-applications-default-list-projection: the SLIM paginated list
         # projection is the default — the previous default returned a.* for
         # up to 5000 rows plus batched child records (documents, parties,
