@@ -92,6 +92,11 @@ def _remove_modern_backfills(db, keep_count):
     if "024" not in kept_versions:
         db.execute("DROP INDEX IF EXISTS idx_documents_current_slot")
         db.execute("DROP INDEX IF EXISTS idx_documents_one_current_slot")
+        # DCI-104: idx_documents_superseded_by covers documents(superseded_by_
+        # document_id). SQLite refuses to DROP a column that an index references,
+        # so this documents index must be dropped before the columns below (same
+        # reason as the two above), or migration 024's ADD COLUMN replay collides.
+        db.execute("DROP INDEX IF EXISTS idx_documents_superseded_by")
         for column in (
             "slot_key",
             "is_current",
