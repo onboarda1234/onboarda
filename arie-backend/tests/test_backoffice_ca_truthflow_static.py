@@ -98,7 +98,14 @@ def test_backoffice_screening_review_adds_declared_vs_provider_comparison():
 
     assert "Declared vs Provider Match" in html
     assert "Comparison shown only when provider profile attributes are available." in panel_region
-    assert "Provider profile attributes unavailable. Raw provider reference is retained in Audit trace." in panel_region
+    # Phase F (F6): when the provider payload carries no profile attributes to
+    # compare, the panel renders NOTHING — no shell, no explanation line, and
+    # nothing is fabricated for absent provider data. The truth invariant
+    # (never render a comparison without provider attributes) survives as an
+    # empty return instead of an explanatory shell.
+    assert "if (!screeningComparisonHasProviderProfileAttributes(primaryHit))" in panel_region
+    assert "return '';" in panel_region
+    assert "Provider profile attributes unavailable" not in html
     assert "Missing Declared Data" in comparison_region
     assert "Missing Provider Data" in comparison_region
     assert "Likely Match" in comparison_region
@@ -350,8 +357,12 @@ def test_backoffice_screening_evidence_groups_repeated_hits_before_rendering():
     assert "providerEvidenceRecordCard(record, context, index, recordIndex)" in provider_region
     assert "evidence records grouped for this provider profile/category" in provider_region
     # Grouped provider identifiers stay reachable in the group Audit trace.
-    assert "_grouped_alert_identifiers || []).join(', ')" in provider_region
-    assert "_grouped_risk_identifiers || []).join(', ')" in provider_region
+    # Phase F (F8): rendered as collapsed count + "Show IDs" disclosures (with
+    # copy-to-clipboard) instead of comma-joined UUID walls — every ID remains
+    # reachable and copyable.
+    assert "screeningProviderIdListHtml('Grouped alert IDs', hit._grouped_alert_identifiers" in provider_region
+    assert "screeningProviderIdListHtml('Grouped risk IDs', hit._grouped_risk_identifiers" in provider_region
+    assert "screeningProviderIdListHtml('Grouped profile IDs', hit._grouped_profile_identifiers" in provider_region
 
 
 def test_backoffice_screening_evidence_adds_officer_review_rationale():
@@ -372,7 +383,15 @@ def test_backoffice_screening_evidence_adds_officer_review_rationale():
     assert "found potential adverse media" in rationale_region
     assert "returned provider risk context" in rationale_region
     assert "evidenceReviewRationale(providerName, categories, hit, evidencePrimaryLabel(hit, context))" in provider_region
-    assert "evidenceReviewRationale(hit.provider || hit.source || (context || {}).provider, categories, hit, evidencePrimaryLabel(hit, context))" in record_region
+    # Phase F (F4): the record card computes the primary label once (title +
+    # conditional "Match name" fact) and passes it to the rationale.
+    assert "evidenceReviewRationale(hit.provider || hit.source || (context || {}).provider, categories, hit, primaryLabel)" in record_region
+    # Phase F (F7): a watchlist/warning hit with no list name, source or
+    # snippet states honestly what is missing instead of the circular
+    # "found a potential watchlist or warning match" sentence. Detail-carrying
+    # watchlist hits keep the original sentence; nothing is fabricated.
+    assert "The provider flagged a watchlist/warning match but supplied no list name or source detail. Review the provider record identifiers in Technical details." in rationale_region
+    assert "found a potential watchlist or warning match" in rationale_region
 
 
 def test_backoffice_screening_evidence_prioritizes_human_readable_fields():
@@ -650,3 +669,33 @@ def test_backoffice_legacy_match_without_api_status_remains_terminal_match_fallb
 
     assert "record.matched && Array.isArray(record.results) && record.results.length" in mode_region
     assert "return 'live_provider'" in mode_region
+
+
+def test_phase_f_stored_result_sentence_only_when_non_duplicate_nuance():
+    """Phase F (F5): the status-strip stored-result sentence renders ONLY when
+    it states something no badge on the page states. The generic 'matches
+    requiring officer review' variants are retired; the declared-PEP-with-no-
+    provider-hits sentence (declared-PEP truthfulness invariant) and the
+    missing person-level-record sentence survive."""
+    html = BACKOFFICE_HTML.read_text()
+
+    # Retired generic variants — duplicated the Review Required badge and the
+    # disposition bar.
+    assert "Provider recorded company/entity matches requiring officer review." not in html
+    assert "Provider recorded one or more potential matches that require officer review." not in html
+    assert "No company/entity provider matches recorded in the stored screening run." not in html
+    assert "No provider matches were recorded for this screening subject." not in html
+    assert "No screening run is recorded yet for this application." not in html
+
+    # Surviving nuance variants — stated nowhere else on the page.
+    person_region = _function_region(html, "buildPersonScreeningReviewCard", "renderScreeningReviewPanel")
+    assert (
+        "Self-declared PEP review is required even though no provider matches "
+        "were recorded for this screening subject." in person_region
+    )
+    assert (
+        "The stored screening report does not contain a person-level screening "
+        "record for this subject." in person_region
+    )
+    # The declared-PEP sentence renders only in the declared-PEP-no-match case.
+    assert "personDeclaredPep && !facts.matched" in person_region

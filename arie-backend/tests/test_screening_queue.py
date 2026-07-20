@@ -2103,3 +2103,364 @@ def test_evidence_batch_resolves_null_application_id_via_alert_join(db):
 
     capped = server._load_monitoring_evidence_batch(db, [app_id], per_app_cap=10)[app_id]
     assert "Orphan Article" in {item["source_title"] for item in capped}
+
+
+def _insert_f2_two_subject_app(db, *, app_id, ref, company="Wirecard AG", director="Jan Marsalek"):
+    """One application, two screened subjects (entity + director), each with
+    their own provider hits — the Phase F fairness shape."""
+
+    def hit(prefix, name, i):
+        return {
+            "name": name,
+            "is_adverse_media": True,
+            "match_category": "Adverse Media",
+            "match_categories": ["adverse_media"],
+            "provider": "complyadvantage",
+            "provider_case_identifier": f"case-{app_id}-{prefix}",
+            "provider_alert_identifier": f"alert-{prefix}-{app_id}-{i}",
+            "provider_risk_identifier": f"risk-{prefix}-{app_id}-{i}",
+            "provider_profile_identifier": f"profile-{prefix}-{app_id}",
+            "summary": f"{name} adverse media",
+        }
+
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app_id, ref, "client_f2", company, "Germany", "Payments", "SME", "pricing_review",
+            json.dumps({
+                "screening_report": {
+                    "screened_at": "2026-07-01T00:00:00Z",
+                    "screening_mode": "live",
+                    "company_screening": {
+                        "found": True,
+                        "source": "complyadvantage",
+                        "provider": "complyadvantage",
+                        "matched": True,
+                        "api_status": "live",
+                        "results": [hit("ent", company, i) for i in range(3)],
+                        "sanctions": {"matched": False, "results": [], "source": "complyadvantage", "api_status": "live"},
+                        "adverse_media": {"matched": True, "results": [], "source": "complyadvantage", "api_status": "live"},
+                    },
+                    "director_screenings": [
+                        {
+                            "person_name": director,
+                            "screening": {
+                                "matched": True,
+                                "source": "complyadvantage",
+                                "provider": "complyadvantage",
+                                "api_status": "live",
+                                "results": [hit("dir", director, i) for i in range(3)],
+                            },
+                        }
+                    ],
+                    "ubo_screenings": [],
+                    "ip_geolocation": {"risk_level": "LOW", "source": "ipapi"},
+                    "kyc_applicants": [],
+                    "overall_flags": [],
+                    "total_hits": 6,
+                }
+            }),
+        ),
+    )
+    db.execute(
+        "INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?)",
+        (app_id, director, "Austria", "No"),
+    )
+
+
+def _insert_f2_subject_evidence(db, *, monitoring_id, app_id, prefix, subject, relationship, count):
+    case_id = f"case-{app_id}-{prefix}"
+    db.execute(
+        """
+        INSERT INTO monitoring_alerts
+            (id, application_id, client_name, alert_type, severity, detected_by,
+             summary, source_reference, status, provider, case_identifier, discovered_via)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            monitoring_id, app_id, subject, "media", "High", "complyadvantage",
+            f"CA case {case_id} media matches for {subject}",
+            json.dumps({"provider": "complyadvantage", "case_identifier": case_id}),
+            "open", "complyadvantage", case_id, "manual",
+        ),
+    )
+    for i in range(count):
+        db.execute(
+            """
+            INSERT INTO monitoring_alert_evidence
+                (monitoring_alert_id, application_id, provider, case_identifier, alert_identifier,
+                 risk_identifier, profile_identifier, evidence_type, matched_subject_name,
+                 relationship_to_client, match_category, risk_indicator, match_confidence,
+                 source_title, source_name, source_url, source_url_available, publication_date,
+                 snippet, evidence_json, raw_provider_reference, evidence_status, evidence_hash, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                monitoring_id, app_id, "complyadvantage", case_id,
+                f"alert-{prefix}-{app_id}-{i}", f"risk-{prefix}-{app_id}-{i}", f"profile-{prefix}-{app_id}",
+                "adverse_media", subject, relationship,
+                "Adverse Media", "Adverse Media", "0.9",
+                f"Article {i} about {subject}", "Provider News", "", 0, "2026-05-01",
+                f"Snippet {i}", json.dumps({"title": f"Article {i} about {subject}"}),
+                json.dumps({"risk_identifier": f"risk-{prefix}-{app_id}-{i}"}),
+                "fetched", f"hash-{app_id}-{prefix}-{i}", "2026-06-09T00:00:00Z",
+            ),
+        )
+
+
+def test_evidence_cap_is_per_subject_fair_on_two_subject_application(db, temp_db):
+    """Phase F F2 regression: when a two-subject application's total evidence
+    exceeds the per-application cap, the cap must be shared fairly across
+    subjects — the subject with older evidence rows must NOT be starved to
+    zero enriched items while the other subject monopolises the budget.
+
+    Reproduction of the ARF-QAFIX-007 staging symptom: entity evidence rows
+    inserted after (newer than) the director's, entity volume alone near the
+    cap. Under the old per-application newest-first rank the director row got
+    almost nothing; under the per-subject-fair rank both rows get their own
+    items and the truncation is still reported via evidence_scan_capped.
+    """
+    import server
+    from server import _build_screening_queue_payload
+
+    cap = server._SCREENING_QUEUE_EVIDENCE_PER_APP_CAP
+    app_id, ref = "app_f2_fair", "ARF-F2-FAIR"
+    _insert_f2_two_subject_app(db, app_id=app_id, ref=ref)
+    # Director evidence first (older row ids), then a near-cap entity volume
+    # (newer row ids) — the starvation ordering observed on staging.
+    _insert_f2_subject_evidence(
+        db, monitoring_id=910601, app_id=app_id, prefix="dir",
+        subject="Jan Marsalek", relationship="Director", count=100,
+    )
+    _insert_f2_subject_evidence(
+        db, monitoring_id=910602, app_id=app_id, prefix="ent",
+        subject="Wirecard AG", relationship="Company", count=cap - 2,
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(
+        db, {"type": "officer", "sub": "admin001"},
+        filters={"search": ref}, include_evidence=True,
+    )
+    rows = {
+        (r["subject_type"], r["subject_name"]): r
+        for r in payload["rows"] if r["application_ref"] == ref
+    }
+    entity_row = rows[("entity", "Wirecard AG")]
+    director_row = rows[("director", "Jan Marsalek")]
+
+    # Truncation is still reported honestly.
+    assert payload["metrics"]["evidence_scan_capped"] is True
+    assert payload["metrics"]["evidence_items_loaded"] == cap
+
+    def linked_items(row):
+        return [
+            item for item in row["screening_evidence"]["items"]
+            if item.get("evidence_source") == "ca_1b_monitoring_evidence"
+        ]
+
+    entity_linked = linked_items(entity_row)
+    director_linked = linked_items(director_row)
+
+    # BOTH subjects get their own enriched evidence items.
+    assert len(director_linked) == 100, "director row must not be starved by the per-application cap"
+    assert len(entity_linked) >= cap - 100 - 2, "entity row keeps the remaining fair share of the cap"
+
+    # Never cross-attach: every linked item belongs to the row's own subject.
+    assert all("Jan Marsalek" in (i.get("source_title") or "") for i in director_linked)
+    assert all("Wirecard AG" in (i.get("source_title") or "") for i in entity_linked)
+
+
+def test_evidence_cap_single_subject_rank_unchanged(db, temp_db):
+    """Single-subject applications keep the old newest-first cap semantics."""
+    import server
+
+    app_id, ref = _seed_evidence_volume_app(
+        db, ref="ARF-QEVCAP-F2S", app_id="qevcap-f2-single",
+        alert_id=910603, evidence_count=12,
+    )
+    db.commit()
+
+    capped = server._load_monitoring_evidence_batch(db, [app_id], per_app_cap=5)[app_id]
+    full = server._load_monitoring_evidence_batch(db, [app_id])[app_id]
+    newest_five = sorted(item["evidence_row_id"] for item in full)[-5:]
+    assert sorted(item["evidence_row_id"] for item in capped) == newest_five
+    assert all((item.get("application_evidence_total") or 0) == 12 for item in capped)
+
+
+# ---------------------------------------------------------------------------
+# Phase F — F9 matched-profile passthrough on queue evidence items
+# ---------------------------------------------------------------------------
+
+_F9_ROW = {
+    "subject_name": "Gerard M. Murphy",
+    "subject_type": "director",
+    "application_id": "f9-app-1",
+    "application_ref": "ARF-F9-001",
+    "company_name": "Murphy Holdings Ltd",
+    "total_hits": 3,
+}
+
+_F9_PROFILE_FIELDS = (
+    "matched_name", "provider_match_types", "pep_classes", "date_of_birth",
+    "nationality", "countries", "places_of_birth", "positions", "aka_names",
+)
+
+
+def test_f9_evidence_item_passes_through_matched_profile_fields():
+    """F9: the stored hit's matched-profile facts (matched name, match types,
+    PEP classes, sparse person attributes) pass through to the queue evidence
+    item unmodified — CA collection shapes flatten to lean string lists."""
+    from server import _normalise_screening_evidence_item
+
+    evidence = {
+        "name": "MURPHY, Gerard Martin",
+        "provider_match_types": ["exact_match", "aka_exact"],
+        "pep_classes": ["PEP_CLASS_2"],
+        "date_of_birth": {"year": 1961, "month": None, "day": None, "date": None},
+        "nationality": "Ireland",
+        "countries": ["Ireland", "GB"],
+        "places_of_birth": [{"value": "Dublin", "source": "S:1"}],
+        "positions": {"values": [{"title": "Member of Parliament", "from_date": "2016", "to_date": "2024"}]},
+        "aka": ["Gerry Murphy"],
+        "provider_profile_identifier": "prof-f9-1",
+        "match_category": "pep",
+    }
+    item = _normalise_screening_evidence_item(dict(_F9_ROW), evidence, source="screening_result")
+
+    assert item["matched_name"] == "MURPHY, Gerard Martin"
+    assert item["provider_match_types"] == ["exact_match", "aka_exact"]
+    assert item["pep_classes"] == ["PEP_CLASS_2"]
+    assert item["date_of_birth"] == "1961"
+    assert item["nationality"] == "Ireland"
+    assert item["countries"] == ["Ireland", "GB"]
+    assert item["places_of_birth"] == ["Dublin"]
+    assert item["positions"] == ["Member of Parliament (2016-2024)"]
+    assert item["aka_names"] == ["Gerry Murphy"]
+
+
+def test_f9_evidence_item_omits_absent_profile_fields_payload_lean():
+    """F9: absent source data emits NO keys at all — the queue payload stays
+    lean and nothing renders provider-side without a stored value."""
+    from server import _normalise_screening_evidence_item
+
+    item = _normalise_screening_evidence_item(
+        dict(_F9_ROW), {"provider_profile_identifier": "prof-f9-2"}, source="screening_result"
+    )
+    for field in _F9_PROFILE_FIELDS:
+        assert field not in item, f"{field} must be absent when the stored hit carries no value"
+
+
+def test_f9_evidence_item_profile_person_shape_and_alias_names_beyond_primary():
+    """F9: raw CA match-profile person shapes are tolerated (names/positions
+    collections, structured DOB with a date), and stored name values beyond
+    the primary matched name surface as alias names."""
+    from server import _normalise_screening_evidence_item
+
+    evidence = {
+        "provider_profile_identifier": "prof-f9-3",
+        "profile": {
+            "person": {
+                "names": {"values": [{"name": "MURPHY, Gerard Martin"}, {"name": "Gerard Murphy"}]},
+                "date_of_birth": {"year": 1961, "date": "1961-05-04"},
+                "countries": ["IE"],
+                "places_of_birth": [{"value": "Dublin", "source": "S:1"}],
+                "positions": {"values": []},
+            }
+        },
+    }
+    item = _normalise_screening_evidence_item(dict(_F9_ROW), evidence, source="screening_result")
+
+    assert item["matched_name"] == "MURPHY, Gerard Martin"
+    assert item["aka_names"] == ["Gerard Murphy"]
+    assert item["date_of_birth"] == "1961-05-04"
+    assert item["countries"] == ["IE"]
+    assert item["places_of_birth"] == ["Dublin"]
+    # Empty collections emit nothing.
+    assert "positions" not in item
+    assert "nationality" not in item
+
+
+_F9R_ENTITY_ROW = {
+    "subject_name": "Wirecard AG",
+    "subject_type": "entity",
+    "application_id": "f9r-app-1",
+    "application_ref": "ARF-F9R-001",
+    "company_name": "Wirecard AG",
+    "total_hits": 2,
+}
+
+_F9R_COMPANY_FIELDS = (
+    "company_jurisdiction", "company_registration_number", "company_aka_names",
+)
+
+
+def test_f9r_company_profile_fields_pass_through_ca_collection_shapes():
+    """F9r: a company matched-profile passes through lean company attributes —
+    jurisdiction and registration number from the CA registration_numbers
+    collection, and company aliases from the company names collection (minus
+    the primary matched name)."""
+    from server import _normalise_screening_evidence_item
+
+    evidence = {
+        "name": "Wirecard AG",
+        "provider_match_types": ["name_exact"],
+        "match_category": "sanctions",
+        "provider_profile_identifier": "prof-f9r-1",
+        "company": {
+            "names": {"values": [{"name": "Wirecard AG"}, {"name": "Wirecard Technologies GmbH"}]},
+            "registration_numbers": {"values": [{"registration_number": "HRB 12345", "jurisdiction": "Germany"}]},
+            "locations": {"values": [{"country": "Germany"}]},
+        },
+    }
+    item = _normalise_screening_evidence_item(dict(_F9R_ENTITY_ROW), evidence, source="screening_result")
+
+    assert item["company_registration_number"] == "HRB 12345"
+    assert item["company_jurisdiction"] == "Germany"
+    assert item["company_aka_names"] == ["Wirecard Technologies GmbH"]
+    # Person fields are meaningless here and must stay absent.
+    for field in ("date_of_birth", "positions", "places_of_birth"):
+        assert field not in item
+
+
+def test_f9r_company_fields_absent_when_no_company_object_payload_lean():
+    """F9r: a name-only company hit (no company attributes) emits NO company
+    keys — the queue payload stays lean and the reconciliation grid stays
+    suppressed (nothing beyond the name to disambiguate)."""
+    from server import _normalise_screening_evidence_item
+
+    item = _normalise_screening_evidence_item(
+        dict(_F9R_ENTITY_ROW),
+        {"name": "Wirecard AG", "provider_profile_identifier": "prof-f9r-2"},
+        source="screening_result",
+    )
+    for field in _F9R_COMPANY_FIELDS:
+        assert field not in item, f"{field} must be absent when the hit carries no company attributes"
+
+
+def test_f9r_company_fields_tolerate_flat_shape_and_profile_company():
+    """F9r: flat company keys and the nested profile.company shape are both
+    tolerated; the primary matched name is never echoed as its own alias."""
+    from server import _normalise_screening_evidence_item
+
+    evidence = {
+        "name": "Wirecard AG",
+        "provider_profile_identifier": "prof-f9r-3",
+        "profile": {
+            "company": {
+                "registration_number": "HRB 12345",
+                "country": "Germany",
+                "names": {"values": [{"name": "Wirecard AG"}]},
+            }
+        },
+    }
+    item = _normalise_screening_evidence_item(dict(_F9R_ENTITY_ROW), evidence, source="screening_result")
+
+    assert item["company_registration_number"] == "HRB 12345"
+    assert item["company_jurisdiction"] == "Germany"
+    # Only the primary name present → no alias echoed.
+    assert "company_aka_names" not in item

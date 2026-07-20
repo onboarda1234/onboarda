@@ -21602,6 +21602,169 @@ def _screening_evidence_diagnostics(row, items, *, evidence_status, reason_code,
     }
 
 
+def _screening_evidence_value_list(value):
+    """F9: flatten provider list shapes to a lean list of display strings.
+
+    Accepts plain lists, CA ``{"values": [...]}`` collections, dict entries
+    carrying name/title/value keys (position entries append their stored
+    from/to dates), or a single string. Empty entries drop; order and raw
+    provider text are preserved."""
+    if isinstance(value, dict):
+        value = value.get("values")
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if not isinstance(value, (list, tuple)):
+        text = _screening_evidence_text(value)
+        return [text] if text else []
+    out = []
+    for entry in value:
+        if isinstance(entry, dict):
+            text = _screening_evidence_text(_first_non_empty(
+                entry.get("name"), entry.get("title"), entry.get("value")))
+            if text and _screening_evidence_text(entry.get("title")):
+                dates = "-".join(
+                    _screening_evidence_text(entry.get(key))
+                    for key in ("from_date", "to_date")
+                    if _screening_evidence_text(entry.get(key))
+                )
+                if dates:
+                    text = f"{text} ({dates})"
+        else:
+            text = _screening_evidence_text(entry)
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _screening_evidence_dob_text(value):
+    """F9: CA structured DOB ({'year':..,'date':..}) or a plain string/int."""
+    if isinstance(value, dict):
+        value = _first_non_empty(value.get("date"), value.get("year"))
+    return _screening_evidence_text(value)
+
+
+def _screening_evidence_matched_profile_fields(evidence):
+    """F9 (additive passthrough): matched-profile facts already stored on the
+    hit — matched name, provider match types, PEP classes, and the sparse
+    person attributes some payloads carry (date of birth / nationality /
+    countries / places of birth / positions / alias names; usually null in
+    sandbox payloads until profile hydration lands). Only non-empty fields
+    are emitted so the queue payload stays lean. Nothing is derived, scored,
+    or invented here — raw stored provider values only."""
+    evidence = evidence if isinstance(evidence, dict) else {}
+    person = evidence.get("person") if isinstance(evidence.get("person"), dict) else {}
+    profile = evidence.get("profile") if isinstance(evidence.get("profile"), dict) else {}
+    profile_person = profile.get("person") if isinstance(profile.get("person"), dict) else {}
+    sources = (evidence, person, profile_person)
+
+    def first_present(*keys):
+        for candidate_source in sources:
+            for key in keys:
+                value = candidate_source.get(key)
+                if value not in (None, "", [], {}):
+                    return value
+        return None
+
+    fields = {}
+    name_values = _screening_evidence_value_list(first_present("names"))
+    matched_name = _screening_evidence_text(_first_non_empty(
+        evidence.get("matched_name"),
+        evidence.get("profile_name"),
+        evidence.get("name"),
+        name_values[0] if name_values else None,
+    ))
+    if matched_name:
+        fields["matched_name"] = matched_name
+    match_types = _screening_evidence_value_list(evidence.get("provider_match_types"))
+    if match_types:
+        fields["provider_match_types"] = match_types
+    pep_classes = _screening_evidence_value_list(evidence.get("pep_classes"))
+    if pep_classes:
+        fields["pep_classes"] = pep_classes
+    dob = _screening_evidence_dob_text(first_present("date_of_birth", "dob", "birth_date", "year_of_birth"))
+    if dob:
+        fields["date_of_birth"] = dob
+    nationality = _screening_evidence_text(first_present("nationality"))
+    if nationality:
+        fields["nationality"] = nationality
+    countries = _screening_evidence_value_list(first_present("countries"))
+    if countries:
+        fields["countries"] = countries
+    places_of_birth = _screening_evidence_value_list(first_present("places_of_birth"))
+    if places_of_birth:
+        fields["places_of_birth"] = places_of_birth
+    positions = _screening_evidence_value_list(first_present("positions"))
+    if positions:
+        fields["positions"] = positions
+    aka_names = _screening_evidence_value_list(first_present("aka", "aliases", "alias_names", "alternative_names"))
+    seen_aka = {value.lower() for value in aka_names}
+    for candidate in name_values:
+        if matched_name and candidate.lower() == matched_name.lower():
+            continue
+        if candidate.lower() not in seen_aka:
+            aka_names.append(candidate)
+            seen_aka.add(candidate.lower())
+    if aka_names:
+        fields["aka_names"] = aka_names
+    # F9r: lean COMPANY attributes for entity subjects — jurisdiction,
+    # registration number, and company aliases from the matched profile's
+    # ``company`` object (CA collection shapes or flat keys). Additive and
+    # non-empty-only, so person hits stay lean. Nothing is derived or invented.
+    company = evidence.get("company") if isinstance(evidence.get("company"), dict) else {}
+    profile_company = profile.get("company") if isinstance(profile.get("company"), dict) else {}
+    company_sources = tuple(src for src in (company, profile_company) if src)
+
+    def company_entries(*keys):
+        for src in company_sources:
+            for key in keys:
+                raw = src.get(key)
+                if isinstance(raw, dict):
+                    raw = raw.get("values")
+                if isinstance(raw, (list, tuple)) and raw:
+                    return [entry for entry in raw if isinstance(entry, dict)]
+        return []
+
+    def company_flat(*keys):
+        for src in company_sources:
+            for key in keys:
+                value = src.get(key)
+                if value not in (None, "", [], {}):
+                    return value
+        return None
+
+    registration_number = ""
+    company_jurisdiction = ""
+    for entry in company_entries("registration_numbers"):
+        if not registration_number:
+            registration_number = _screening_evidence_text(entry.get("registration_number"))
+        if not company_jurisdiction:
+            company_jurisdiction = _screening_evidence_text(entry.get("jurisdiction"))
+    if not registration_number:
+        registration_number = _screening_evidence_text(company_flat("registration_number"))
+    if not company_jurisdiction:
+        for entry in company_entries("locations"):
+            company_jurisdiction = _screening_evidence_text(entry.get("country"))
+            if company_jurisdiction:
+                break
+    if not company_jurisdiction:
+        company_jurisdiction = _screening_evidence_text(company_flat("jurisdiction", "country"))
+    company_aka = _screening_evidence_value_list(company_flat("names", "aka", "aliases", "alias_names"))
+    company_aka = [
+        alias for alias in company_aka
+        if not (matched_name and alias.lower() == matched_name.lower())
+    ]
+    if registration_number:
+        fields["company_registration_number"] = registration_number
+    if company_jurisdiction:
+        fields["company_jurisdiction"] = company_jurisdiction
+    if company_aka:
+        fields["company_aka_names"] = company_aka
+    return fields
+
+
 def _normalise_screening_evidence_item(row, evidence, *, source, link_strategy=None):
     evidence = evidence if isinstance(evidence, dict) else {}
     ids = _screening_evidence_provider_ids(evidence)
@@ -21680,6 +21843,8 @@ def _normalise_screening_evidence_item(row, evidence, *, source, link_strategy=N
             if _screening_evidence_text(reason)
         ],
     }
+    # F9: additive matched-profile passthrough (lean — non-empty fields only).
+    item.update(_screening_evidence_matched_profile_fields(evidence))
     item["evidence_status"] = _screening_evidence_item_status(item)
     item["evidence_quality"] = _screening_evidence_canonical_quality(item["evidence_status"])
     if item["evidence_quality"] != "complete":
@@ -21955,26 +22120,43 @@ def _load_monitoring_evidence_batch(db, application_ids, *, per_app_cap=None):
     if per_app_cap:
         # Cap in SQL so oversized applications neither ship unbounded JSON
         # blobs over the wire nor get parsed in Python. Ranking runs over a
-        # slim (id, application_id) projection — never the JSON columns — and
-        # only the surviving rows are joined back for their full payload.
-        # Newest evidence wins; application_evidence_total lets callers report
-        # the truncation honestly. The targeted drawer path passes no cap and
-        # stays complete.
+        # slim (id, application_id, subject) projection — never the JSON
+        # columns — and only the surviving rows are joined back for their
+        # full payload.
+        #
+        # Per-subject fairness (Phase F, F2): the old rank partitioned by
+        # application_id only, newest-first, so on a two-subject application
+        # whose total evidence exceeded the cap the subject with the newer
+        # rows monopolised the whole budget and the other subject's queue row
+        # rendered with zero enriched evidence. The rank now interleaves
+        # subjects round-robin (each subject's newest rows first, ordered by
+        # per-subject recency rank, ties broken newest-first) so every
+        # subject gets a fair share of the cap. Single-subject applications
+        # rank identically to before. application_evidence_total lets
+        # callers report the truncation honestly (evidence_scan_capped). The
+        # targeted drawer path passes no cap and stays complete.
         query = f"""
             {select_columns}, ranked.application_evidence_total
               FROM (
                 SELECT slim.evidence_row_id,
-                       ROW_NUMBER() OVER (PARTITION BY slim.application_id ORDER BY slim.evidence_row_id DESC) AS app_evidence_rank,
+                       ROW_NUMBER() OVER (PARTITION BY slim.application_id ORDER BY slim.subject_recency_rank ASC, slim.evidence_row_id DESC) AS app_evidence_rank,
                        COUNT(*) OVER (PARTITION BY slim.application_id) AS application_evidence_total
                   FROM (
-                    SELECT e.id AS evidence_row_id, e.application_id AS application_id
-                      FROM monitoring_alert_evidence e
-                     WHERE e.application_id IN ({placeholders})
-                    UNION ALL
-                    SELECT e.id AS evidence_row_id, a.application_id AS application_id
-                      FROM monitoring_alert_evidence e
-                      JOIN monitoring_alerts a ON a.id = e.monitoring_alert_id
-                     WHERE e.application_id IS NULL AND a.application_id IN ({placeholders})
+                    SELECT pool.evidence_row_id,
+                           pool.application_id,
+                           ROW_NUMBER() OVER (PARTITION BY pool.application_id, pool.subject_key ORDER BY pool.evidence_row_id DESC) AS subject_recency_rank
+                      FROM (
+                        SELECT e.id AS evidence_row_id, e.application_id AS application_id,
+                               COALESCE(e.matched_subject_name, '') AS subject_key
+                          FROM monitoring_alert_evidence e
+                         WHERE e.application_id IN ({placeholders})
+                        UNION ALL
+                        SELECT e.id AS evidence_row_id, a.application_id AS application_id,
+                               COALESCE(e.matched_subject_name, '') AS subject_key
+                          FROM monitoring_alert_evidence e
+                          JOIN monitoring_alerts a ON a.id = e.monitoring_alert_id
+                         WHERE e.application_id IS NULL AND a.application_id IN ({placeholders})
+                      ) pool
                   ) slim
               ) ranked
               JOIN monitoring_alert_evidence e ON e.id = ranked.evidence_row_id
@@ -25805,55 +25987,159 @@ def _agent3_triage_narrative(hits):
     ranked_all = sorted(scored, key=lambda entry: -entry[0])
     version = _agent3_text(ranked_all[0][1].get("triage_score_version"), "rts-1.0")
 
+    def _flow_reason_text(reasons):
+        # Lowercase the leading letter for mid-sentence flow, but keep
+        # leading acronyms (e.g. "PEP class 1-2 match") verbatim.
+        return "; ".join(
+            reason[:1].lower() + reason[1:]
+            if len(reason) < 2 or reason[1].islower()
+            else reason
+            for reason in reasons
+        )
+
+    # priority_hits payload keeps its pre-Phase-F shape verbatim: the top
+    # listed individual hits, reasons capped at two. Grouping below changes
+    # narrative presentation only — no stored data is dropped.
     priority_hits = []
-    sentences = []
-    for position, (score, hit) in enumerate(listed, start=1):
-        band = _agent3_triage_band(score)
-        subject_name = _agent3_text(hit.get("subject_name"), "Unknown subject")
-        matched_name = _agent3_text(hit.get("matched_name"), "Stored hit")
-        reasons = _agent3_triage_reasons(hit.get("triage_score_reasons"))[:2]
+    for score, hit in listed:
         priority_hits.append({
-            "subject_name": subject_name,
-            "matched_name": matched_name,
+            "subject_name": _agent3_text(hit.get("subject_name"), "Unknown subject"),
+            "matched_name": _agent3_text(hit.get("matched_name"), "Stored hit"),
             "score": score,
-            "band": band,
+            "band": _agent3_triage_band(score),
             "categories": list(hit.get("categories") or []),
-            "reasons": reasons,
+            "reasons": _agent3_triage_reasons(hit.get("triage_score_reasons"))[:2],
             "surfaced_by_pass": hit.get("surfaced_by_pass") or "",
         })
-        band_prefix = f"{band}, " if band else ""
-        sentence = (
-            f"{position}. {subject_name} — matched '{matched_name}' "
-            f"({band_prefix}triage {score})"
-        )
-        if reasons:
-            # Lowercase the leading letter for mid-sentence flow, but keep
-            # leading acronyms (e.g. "PEP class 1-2 match") verbatim.
-            reason_text = "; ".join(
-                reason[:1].lower() + reason[1:]
-                if len(reason) < 2 or reason[1].islower()
-                else reason
-                for reason in reasons
-            )
-            sentence += f": {reason_text}."
+
+    # Phase F (F1): collapse near-identical priority hits — same matched
+    # name (lowercased), same score, same reason-set — into ONE narrative
+    # entry so a homogeneous 200-hit adverse-media mass reads as a single
+    # structural line instead of five identical sentences. Distinct hits
+    # stay individual. Grouping is deterministic: groups keep the order of
+    # their first occurrence in the score-descending priority list.
+    groups = []
+    group_index = {}
+    for score, hit in priority:
+        matched_name = _agent3_text(hit.get("matched_name"), "Stored hit")
+        reasons_all = _agent3_triage_reasons(hit.get("triage_score_reasons"))
+        key = (matched_name.strip().lower(), score, tuple(sorted(reasons_all)))
+        if key in group_index:
+            groups[group_index[key]]["members"].append(hit)
         else:
-            sentence += "."
+            group_index[key] = len(groups)
+            groups.append({
+                "matched_name_key": matched_name.strip().lower(),
+                "score": score,
+                "reasons_all": reasons_all,
+                "members": [hit],
+            })
+
+    # Standouts (distinct, singleton entries) lead; the homogeneous masses
+    # follow; weak tail and unscored close as before. Within each block the
+    # score-descending first-occurrence order is preserved.
+    singleton_groups = [group for group in groups if len(group["members"]) == 1]
+    mass_groups = [group for group in groups if len(group["members"]) > 1]
+    entries_ordered = singleton_groups + mass_groups
+    listed_entries = entries_ordered[:_AGENT3_TRIAGE_NARRATIVE_LISTED_CAP]
+
+    def _group_category_word(group):
+        buckets = {
+            _agent3_primary_count_bucket(hit.get("categories", []))
+            for hit in group["members"]
+        }
+        if len(buckets) == 1:
+            return {
+                "sanctions": "sanctions",
+                "pep": "PEP",
+                "adverse_media": "adverse-media",
+                "watchlist": "watchlist",
+            }.get(next(iter(buckets)), "screening")
+        return "screening"
+
+    sentences = []
+    entries = []
+    for position, group in enumerate(listed_entries, start=1):
+        head = group["members"][0]
+        score = group["score"]
+        band = _agent3_triage_band(score)
+        subject_name = _agent3_text(head.get("subject_name"), "Unknown subject")
+        matched_name = _agent3_text(head.get("matched_name"), "Stored hit")
+        if len(group["members"]) == 1:
+            reasons = group["reasons_all"][:2]
+            band_prefix = f"{band}, " if band else ""
+            sentence = (
+                f"{position}. {subject_name} — matched '{matched_name}' "
+                f"({band_prefix}triage {score})"
+            )
+            if reasons:
+                sentence += f": {_flow_reason_text(reasons)}."
+            else:
+                sentence += "."
+            entries.append({
+                "kind": "hit",
+                "subject_name": subject_name,
+                "matched_name": matched_name,
+                "score": score,
+                "band": band,
+                "count": 1,
+                "categories": list(head.get("categories") or []),
+                "reasons": reasons,
+                "surfaced_by_pass": head.get("surfaced_by_pass") or "",
+            })
+        else:
+            count = len(group["members"])
+            word = _group_category_word(group)
+            sentence = (
+                f"{position}. {subject_name} — {count} {word} matches on "
+                f"'{group['matched_name_key']}', all triage {score}"
+            )
+            if group["reasons_all"]:
+                sentence += f" ({_flow_reason_text(group['reasons_all'])})"
+            sentence += " — no single hit stands out."
+            entries.append({
+                "kind": "group",
+                "subject_name": subject_name,
+                "matched_name": group["matched_name_key"],
+                "score": score,
+                "band": band,
+                "count": count,
+                "categories": list(head.get("categories") or []),
+                "reasons": list(group["reasons_all"]),
+                "surfaced_by_pass": head.get("surfaced_by_pass") or "",
+            })
         sentences.append(sentence)
 
-    if priority_count == 1:
-        headline = "Review this 1 hit first, ranked by RegMind triage."
-    elif priority_count:
-        headline = f"Review these {priority_count} hits first, ranked by RegMind triage."
-    else:
+    standout_count = len(singleton_groups)
+    grouped_hit_count = sum(len(group["members"]) for group in mass_groups)
+    if not priority_count:
         headline = (
             f"No scored hits rank at or above the weak threshold ({threshold}); "
             "review the weak tail individually."
         )
+    elif not mass_groups:
+        # Fully heterogeneous list — pre-Phase-F headlines verbatim.
+        if priority_count == 1:
+            headline = "Review this 1 hit first, ranked by RegMind triage."
+        else:
+            headline = f"Review these {priority_count} hits first, ranked by RegMind triage."
+    elif standout_count:
+        headline = (
+            f"{standout_count} hit(s) stand out from {priority_count} priority "
+            f"hits; the remaining {grouped_hit_count} are near-identical — "
+            "start with what stands out."
+        )
+    else:
+        headline = (
+            f"All {priority_count} priority hits fall into "
+            f"{len(mass_groups)} near-identical group(s) — no single hit "
+            "stands out; review the group summary below."
+        )
 
     narrative_parts = list(sentences)
-    if priority_count > len(listed):
+    if len(entries_ordered) > len(listed_entries):
         narrative_parts.append(
-            f"Only the top {len(listed)} are listed here; all {priority_count} "
+            f"Only the top {len(listed_entries)} are listed here; all {priority_count} "
             "priority hits are counted."
         )
     if weak_tail_count:
@@ -25875,6 +26161,10 @@ def _agent3_triage_narrative(hits):
         "unscored_count": unscored_count,
         "headline": headline,
         "priority_hits": priority_hits,
+        # Phase F (F1): grouped display entries for the "Where to start"
+        # list — singleton hits first, then homogeneous masses. priority_hits
+        # above keeps the pre-grouping per-hit shape (data preserved).
+        "entries": entries,
         "narrative": " ".join(narrative_parts),
     }
 

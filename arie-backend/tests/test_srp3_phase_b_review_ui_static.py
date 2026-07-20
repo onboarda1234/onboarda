@@ -219,3 +219,259 @@ def test_application_tab_hydrates_evidence_without_queue_visit():
     panel_head = html[panel_start:panel_start + 1600]
     assert "ensureApplicationScreeningEvidenceRows(app.ref)" in panel_head
     assert "row.screening_evidence" in panel_head
+
+
+# ---------------------------------------------------------------------------
+# Phase F — polish batch pins (strip honesty, panel consolidation, ID lists)
+# ---------------------------------------------------------------------------
+
+def test_phase_f_first_strip_tile_never_excludes_what_it_names():
+    """F3: the first tile counts sanctions + watchlist/warning and is labelled
+    'Sanctions & watchlist' with an honest sub-caption breakdown — a watchlist
+    'warning' hit must never sit behind a tile showing 0."""
+    html = _html()
+    strip = _function_region(html, "screeningTriageStrip", "screeningTriageHitDisplayName")
+    assert "tile(sanctionsCount + watchlistCount, 'Sanctions & watchlist', sanctionsWatchlistSub" in strip
+    assert "Number(buckets.sanctions || 0)" in strip
+    assert "Number(buckets.watchlist || 0)" in strip
+    assert "' sanctions · '" in strip
+    assert "' watchlist/warning'" in strip
+    assert "'Screened against sanction lists'" in strip
+    # The dishonest label is retired from the strip.
+    assert "Sanctions & warnings" not in strip
+
+
+def test_phase_f_agent3_panel_consolidated_layout():
+    """F1: advisory line → grouped narrative → ONE compact status line →
+    summary (false-positive merged after) → key concerns → ONE collapsed
+    audit disclosure (hit-by-hit table + evidence used + audit trace). The
+    old stacked sub-section cards are retired; their content is folded, not
+    deleted."""
+    html = _html()
+    panel = _function_region(
+        html, "renderAgent3ScreeningInterpretationPanel", "generateAgent3ScreeningInterpretation"
+    )
+    assert panel.count("data-agent3-status-line") == 1
+    assert "Hit-by-hit review, evidence &amp; audit trace" in panel
+    # Retired stacked cards (their labels survive as folded section content).
+    assert "False-positive assessment &amp; context" not in panel
+    assert "sanctions · PEP · adverse media" not in panel
+    # Folded content still renders once each in the hit path.
+    assert "agent3EvidenceHtml(output.evidence_used)" in panel
+    assert "agent3AuditTraceHtml(output)" in panel
+    assert "False-positive assessment" in panel
+    assert "Adverse media relevance" in panel
+    # Order in the hit path: advisory line, narrative, status line, summary.
+    hit_path = panel[panel.index("Officer decision required. Agent 3 provides an advisory interpretation only."):]
+    assert hit_path.index("agent3TriageNarrativeHtml(output.triage_narrative)") \
+        < hit_path.index("statusLineHtml") \
+        < hit_path.index("Plain-English summary")
+
+
+def test_phase_f_narrative_helper_renders_grouped_entries():
+    """F1: the narrative helper renders server-grouped entries when present
+    (homogeneous masses collapse to one line), falling back to priority_hits
+    for older stored narratives. Counts are never recomputed client-side."""
+    html = _html()
+    helper = _function_region(
+        html, "agent3TriageNarrativeHtml", "renderAgent3ScreeningInterpretationPanel"
+    )
+    assert "narrative.entries" in helper
+    assert "narrative.priority_hits" in helper
+    assert "hit.kind === 'group'" in helper
+    assert "near-identical matches on" in helper
+    assert "No single hit stands out." in helper
+    assert "escapeHtml(String(hit.count))" in helper
+
+
+def test_phase_f_provider_id_walls_collapsed():
+    """F8: provider-reference ID lists render as count summary + native
+    <details> ('Show IDs') with a scrollable monospace block and a
+    copy-to-clipboard button — never comma-joined UUID walls. Audit
+    completeness preserved."""
+    html = _html()
+    helper = _function_region(html, "screeningProviderIdListHtml", "copyScreeningProviderIds")
+    assert "<details" in helper and "Show IDs" in helper
+    assert "escapeHtml(idText)" in helper
+    assert "data-copy-provider-ids" in helper
+    assert "overflow:auto" in helper
+    assert "ui-monospace" in helper
+    copy_fn = _function_region(html, "copyScreeningProviderIds", "screeningQueueEvidenceReadinessPanel")
+    assert "navigator.clipboard.writeText" in copy_fn
+    assert "showToast" in copy_fn
+    panel = _function_region(html, "screeningQueueEvidenceReadinessPanel", "providerIndicatorDetails")
+    assert "screeningProviderIdListHtml('Provider case IDs', summary.provider_case_ids" in panel
+    assert "screeningProviderIdListHtml('Provider alert IDs', summary.provider_alert_ids" in panel
+    assert "screeningProviderIdListHtml('Provider risk IDs', summary.provider_risk_ids" in panel
+    # The old comma-joined grid rows are retired.
+    assert "screeningEvidenceArrayText(summary.provider_case_ids)" not in panel
+    assert "screeningEvidenceArrayText(summary.provider_alert_ids)" not in panel
+    assert "screeningEvidenceArrayText(summary.provider_risk_ids)" not in panel
+
+
+# ---------------------------------------------------------------------------
+# Phase F — F9 per-hit applicant-vs-profile reconciliation (self-lighting)
+# ---------------------------------------------------------------------------
+
+def test_f9r_comparison_grid_relevance_gated_suppresses_name_only():
+    """F9r: the "Applicant vs matched profile" grid is relevance-gated — the
+    Name row alone never earns it (a lone name row merely restates the card
+    header). The grid renders ONLY when a DISAMBIGUATING (non-name) row carries
+    data; a name-only hit renders NOTHING (no shell, no placeholder rows).
+    Rows still self-light: each renders only when a side has stored data."""
+    html = _html()
+    grid = _function_region(
+        html, "screeningTriageHitApplicantComparison", "screeningTriageHitEvidenceBody"
+    )
+    assert "Applicant vs matched profile" in grid
+    # Per-row self-lighting (rowHtml returns '' when both sides empty).
+    assert "if (!applicantText && !providerText) return '';" in grid
+    # The Name row is built into nameRowHtml and NEVER pushed into `rows`,
+    # so it cannot satisfy the relevance gate on its own.
+    assert "nameRowHtml = rowHtml('Name'" in grid
+    assert "rows = [];" in grid
+    assert "the Name row never lands here" in grid
+    # Relevance gate: suppress unless a disambiguating (non-name) row exists.
+    assert "if (!rows.length) return '';" in grid
+    assert "applicant.name || provider.name" in grid
+    # When the grid DOES render, the name row heads it.
+    assert "nameRowHtml + rows.join('')" in grid
+    # One-sided data stays labelled honestly, never guessed into a verdict.
+    assert "['provider only', 'draft']" in grid
+    assert "'applicant only'" in grid
+    # F9r2: a disambiguating row requires the PROVIDER side — an applicant-only
+    # row (our own data, nothing to reconcile against) must not render or earn
+    # the grid, so every non-name row guards on a provider field, never on
+    # "applicant OR provider".
+    assert "if (provider.jurisdiction)" in grid
+    assert "if (providerDobShown)" in grid
+    assert "if (provider.country)" in grid
+    assert "if (applicant.country || provider.jurisdiction)" not in grid
+    assert "if (applicant.birth_year || providerDobShown)" not in grid
+    assert "if (applicant.country || provider.country)" not in grid
+
+
+def test_f9r_person_item_renders_disambiguating_rows():
+    """F9r pin (a): an individual subject shows the disambiguating person rows
+    (Year of birth, Country / nationality, Place of birth, Also known as,
+    Listed role) — so a person hit carrying DOB/country lights the grid."""
+    html = _html()
+    grid = _function_region(
+        html, "screeningTriageHitApplicantComparison", "screeningTriageHitEvidenceBody"
+    )
+    assert "pushRow('Year of birth'" in grid
+    assert "pushRow('Country / nationality'" in grid
+    assert "provider.places_of_birth.length" in grid
+    assert "provider.aka_names.length" in grid
+    assert "provider.positions.length" in grid
+
+
+def test_f9r_company_item_uses_company_rows_no_person_rows():
+    """F9r pins (c)+(d): a company subject shows company rows (Jurisdiction /
+    country, Registration number, Also known as) and NEVER the person-only
+    rows (Year of birth / Place of birth / Listed role) — those are gated to
+    the individual branch."""
+    html = _html()
+    grid = _function_region(
+        html, "screeningTriageHitApplicantComparison", "screeningTriageHitEvidenceBody"
+    )
+    assert "if (kind === 'company')" in grid
+    assert "pushRow('Jurisdiction / country'" in grid
+    assert "pushRow('Registration number'" in grid
+    assert "provider.registration_number" in grid
+    # Person-only rows live ONLY under the individual `else` branch — they must
+    # not appear inside the company branch. The company branch text ends at the
+    # `} else {` that opens the individual branch.
+    company_branch = grid[grid.index("if (kind === 'company')"):grid.index("} else {")]
+    assert "pushRow('Year of birth'" not in company_branch
+    assert "provider.places_of_birth.length" not in company_branch
+    assert "provider.positions.length" not in company_branch
+
+
+def test_f9r_entity_kind_resolver_type_aware():
+    """F9r pin (d): the entity-kind resolver drives row selection — an explicit
+    'entity'/'company' subject type resolves to company, any person role to
+    individual, and with no stored type it infers from the provider profile
+    shape (company attributes → company, person attributes → individual)."""
+    html = _html()
+    resolver = _function_region(
+        html, "screeningComparisonEntityKind", "screeningTriageHitApplicantComparison"
+    )
+    assert "subjectType === 'entity' || subjectType === 'company'" in resolver
+    assert "return 'company'" in resolver
+    assert "if (subjectType) return 'individual'" in resolver
+    assert "provider.jurisdiction || provider.registration_number" in resolver
+    assert "provider.birth_year || provider.dob" in resolver
+
+
+def test_f9_name_row_verdict_comes_from_stored_match_types():
+    """F9: the name-row verdict derives ONLY from the stored provider match
+    types — an exact token lights "exact", anything else stays "similar"."""
+    html = _html()
+    token = _function_region(
+        html, "screeningTriageHitExactNameToken", "screeningTriagePepClassChip"
+    )
+    assert "provider_match_types" in token
+    assert "'name_exact'" in token
+    assert "'exact_match'" in token
+    assert "'aka_exact'" in token
+    grid = _function_region(
+        html, "screeningTriageHitApplicantComparison", "screeningTriageHitEvidenceBody"
+    )
+    assert "screeningTriageHitExactNameToken(item) ? ['exact', 'approved'] : ['similar', 'draft']" in grid
+
+
+def test_f9_birth_year_chip_suffix_gated_on_both_sides_present_and_equal():
+    """F9: the match-quality chip lights only on a stored exact token, and its
+    " + birth year" / " + country" suffixes append ONLY when the stored
+    provider value exists AND equals the applicant's collected value."""
+    html = _html()
+    chip = _function_region(
+        html, "screeningTriageMatchQualityChip", "screeningTriageHitApplicantComparison"
+    )
+    assert "if (!screeningTriageHitExactNameToken(item)) return '';" in chip
+    assert "provider.birth_year && applicant.birth_year && provider.birth_year === applicant.birth_year" in chip
+    assert "' + birth year'" in chip
+    assert "provider.country && applicant.country && screeningApplicantProviderCountryMatch(applicant.country, provider.country)" in chip
+    assert "' + country'" in chip
+    assert "'Exact name'" in chip
+
+
+def test_f9_pep_class_chip_gated_on_stored_class_token():
+    """F9: "PEP class N" renders ONLY from a parsable stored pep_classes
+    token (strongest wins); with no stored class the existing risk-type chip
+    is the fallback — a class is never invented."""
+    html = _html()
+    chip = _function_region(
+        html, "screeningTriagePepClassChip", "screeningApplicantSubjectFacts"
+    )
+    assert "pep_classes" in chip
+    assert "if (strongest === null) return '';" in chip
+    assert "'PEP class ' + strongest" in chip
+    chips = _function_region(
+        html, "screeningTriageHitChips", "screeningTriageHitExactNameToken"
+    )
+    assert "screeningTriagePepClassChip(item)" in chips
+    assert "else if (item.category)" in chips
+
+
+def test_f9_matched_against_suffix_gated_on_known_applicant_facts():
+    """F9: the "Matched against" line appends "— <Role> · <Country>" from the
+    application data we already hold, each part only when known, with the
+    generic relationship label as the fallback."""
+    html = _html()
+    card = _function_region(
+        html, "screeningTriageHitCard", "screeningTriageWeakTailSection"
+    )
+    assert "[applicantFacts.role, applicantFacts.country].filter(Boolean).join(' · ')" in card
+    assert "applicantContext ? ' — ' + applicantContext : (item.relationship_to_application" in card
+    facts = _function_region(
+        html, "screeningApplicantSubjectFacts", "screeningProviderProfileFacts"
+    )
+    # Applicant facts come from the SAME party fields the Phase E surfaces
+    # read (app.country, party.nat / party.jurisdiction / party.dob) and are
+    # guarded to the row's application — never guessed across applications.
+    assert "app.country" in facts
+    assert "party.nat || party.jurisdiction" in facts
+    assert "screeningComparisonBirthYear(party.dob)" in facts
+    assert "String(currentApp.ref) === String(subject.application_ref)" in facts

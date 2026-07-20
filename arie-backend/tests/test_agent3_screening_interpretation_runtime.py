@@ -740,7 +740,10 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "agent3ProviderEvidenceCellHtml" not in html
     comparison_body = _extract_function(html, "buildScreeningComparisonPanel")
     assert "Declared vs Provider Match" in comparison_body
-    assert "Provider profile attributes unavailable. Raw provider reference is retained in Audit trace." in comparison_body
+    # Phase F (F6): no provider profile attributes → the comparison panel
+    # renders NOTHING (empty return) instead of an explanatory shell.
+    assert "if (!screeningComparisonHasProviderProfileAttributes(primaryHit))" in comparison_body
+    assert "Provider profile attributes unavailable" not in comparison_body
 
 
 def test_backoffice_agent3_provider_count_chip_reconciles_all_buckets():
