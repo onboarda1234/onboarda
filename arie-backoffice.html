@@ -17571,10 +17571,151 @@ function screeningTriageWeakTailSection(row, weakEntries, triage) {
   '</details>';
 }
 
+// ── Near-identical grouped tail (per-hit multi-select) ───────────────────
+// Within a bucket, provider records that share the same category, triage score
+// and matched name are duplicate / syndicated copies of one matter. Rather than
+// a wall of identical cards, one representative is shown and the rest collapse
+// into a grouped block: bulk-clear the ones not individually reviewed, or open
+// the block and clear several at once — every hit keeps its own per-hit
+// decision and confirming any one flips the subject to TRUE MATCH.
+var SCREENING_HIT_GROUP_UI = {};   // groupId -> { expanded, sel:{hitId:true} }
+var SCREENING_HIT_GROUP_REG = {};  // groupId -> { appRef, subjType, subjName, hitIds:[] }
+var SCREENING_HIT_GROUP_MIN = 4;
+
+function screeningStableId(str) {
+  var h = 0; str = String(str);
+  for (var i = 0; i < str.length; i++) { h = ((h << 5) - h + str.charCodeAt(i)) | 0; }
+  return 'g' + (h >>> 0).toString(36);
+}
+function screeningTriageEntrySignature(item) {
+  item = item || {};
+  var name = String(item.matched_name || item.name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  var score = typeof item.triage_score === 'number' ? item.triage_score : 'x';
+  return screeningTriageBucketKeyForCategory(item.category) + '|' + score + '|' + name;
+}
+function screeningHitGroupState(groupId) {
+  if (!SCREENING_HIT_GROUP_UI[groupId]) SCREENING_HIT_GROUP_UI[groupId] = { expanded: false, sel: {} };
+  return SCREENING_HIT_GROUP_UI[groupId];
+}
+function screeningHitGroupToggleExpand(groupId) {
+  var s = screeningHitGroupState(groupId); s.expanded = !s.expanded;
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+function screeningHitGroupBulkClear(groupId) {
+  var reg = SCREENING_HIT_GROUP_REG[groupId]; if (!reg) return;
+  reg.hitIds.forEach(function(hid) {
+    var st = screeningHitDispositionState(reg.appRef, reg.subjType, reg.subjName, hid);
+    if (st.status === 'pending') st.status = 'cleared';
+  });
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+function screeningHitGroupSelectAll(groupId) {
+  var reg = SCREENING_HIT_GROUP_REG[groupId], s = screeningHitGroupState(groupId); if (!reg) return;
+  reg.hitIds.forEach(function(hid) {
+    var st = screeningHitDispositionState(reg.appRef, reg.subjType, reg.subjName, hid);
+    if (st.status === 'pending') s.sel[hid] = true;
+  });
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+function screeningHitGroupToggleSel(groupId, hitId) {
+  var s = screeningHitGroupState(groupId);
+  if (s.sel[hitId]) delete s.sel[hitId]; else s.sel[hitId] = true;
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+function screeningHitGroupClearSelected(groupId) {
+  var reg = SCREENING_HIT_GROUP_REG[groupId], s = screeningHitGroupState(groupId); if (!reg) return;
+  Object.keys(s.sel).forEach(function(hid) {
+    if (!s.sel[hid]) return;
+    var st = screeningHitDispositionState(reg.appRef, reg.subjType, reg.subjName, hid);
+    st.status = 'cleared';
+  });
+  s.sel = {};
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+
+function screeningTriageGroupedBlock(row, meta, groupEntries) {
+  var appRef = row.application_ref || (currentApp && currentApp.ref) || '';
+  var subjType = row.subject_type || '', subjName = row.subject_name || '';
+  var subjectKey = screeningReviewSubjectKey(appRef, subjType, subjName);
+  var sig = screeningTriageEntrySignature(groupEntries[0].item);
+  var groupId = screeningStableId(subjectKey + '|' + sig);
+  var hitIds = groupEntries.map(function(e) { return screeningHitId(e.item, e.index); });
+  SCREENING_HIT_GROUP_REG[groupId] = { appRef: appRef, subjType: subjType, subjName: subjName, hitIds: hitIds };
+  var ui = screeningHitGroupState(groupId);
+  var pending = 0, cleared = 0, trueCount = 0;
+  hitIds.forEach(function(hid) {
+    var st = screeningHitDispositionState(appRef, subjType, subjName, hid);
+    if (st.status === 'match') trueCount++; else if (st.status === 'cleared') cleared++; else pending++;
+  });
+  var total = hitIds.length;
+  var score = typeof groupEntries[0].item.triage_score === 'number' ? groupEntries[0].item.triage_score : null;
+  var catLabel = String(meta.label || 'provider').toLowerCase();
+  var resolved = pending === 0;
+  var can = canDispositionScreeningDisposition();
+  var pill = function(txt, kind) {
+    var pc = kind === 'ok' ? '#15803d' : (kind === 'warn' ? '#b45309' : 'var(--text3)');
+    var pb = kind === 'ok' ? 'rgba(34,197,94,.14)' : (kind === 'warn' ? 'rgba(245,158,11,.14)' : 'var(--surface2)');
+    return '<span style="background:' + pb + ';color:' + pc + ';padding:2px 9px;border-radius:20px;font-weight:700;">' + escapeHtml(txt) + '</span>';
+  };
+  var pills = '';
+  if (trueCount) pills += pill('✓ ' + trueCount + ' true', 'ok');
+  if (cleared) pills += pill(cleared + ' cleared', 'mut');
+  if (pending) pills += pill(pending + ' undecided', 'warn');
+  var html = '<div data-screening-hit-group="' + escapeHtml(groupId) + '" style="margin-top:12px;border:1px solid ' + (resolved ? 'var(--green)' : 'var(--border1)') + ';border-radius:11px;background:' + (resolved ? 'rgba(34,197,94,.08)' : 'var(--surface2)') + ';padding:14px;">';
+  html += '<div style="font-size:13px;font-weight:800;">' + total + ' near-identical ' + escapeHtml(catLabel) + ' matches' + (score != null ? ' (all triage ' + score + ')' : '') + '</div>';
+  html += '<div style="font-size:12px;color:var(--text3);margin:3px 0 10px;line-height:1.5;">Duplicate or syndicated records of the same matter — no new facts across them. Review any individually, or clear the ones you have not reviewed in one action.</div>';
+  if (pills) html += '<div style="display:flex;gap:6px;flex-wrap:wrap;font-size:11px;margin-bottom:10px;">' + pills + '</div>';
+  if (can) {
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+    html += '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitGroupToggleExpand(\'' + groupId + '\')">' + (ui.expanded ? 'Hide individual review ▴' : 'Expand &amp; review individually ▾') + '</button>';
+    if (pending) html += '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitGroupBulkClear(\'' + groupId + '\')">Clear the remaining ' + pending + ' as false positive</button>';
+    html += '</div>';
+    html += '<div data-screening-hit-group-safe="true" style="font-size:11.5px;color:var(--green);background:rgba(34,197,94,.12);padding:6px 11px;border-radius:8px;margin-top:9px;display:inline-block;">✓ Confirming any one as a true match flips the subject to TRUE MATCH — the bulk action never overrides an individual decision.</div>';
+  }
+  if (ui.expanded && can) {
+    var selCount = 0; for (var k in ui.sel) { if (ui.sel[k]) selCount++; }
+    html += '<div style="margin-top:11px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--border2);border-radius:9px;background:#fff;">';
+    html += '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitGroupSelectAll(\'' + groupId + '\')">Select all undecided</button>';
+    html += '<span style="font-size:12px;color:var(--text3);">' + (selCount ? selCount + ' selected' : 'Tick hits to clear several at once') + '</span>';
+    if (selCount) html += '<button type="button" class="btn btn-primary btn-sm" style="margin-left:auto;" onclick="screeningHitGroupClearSelected(\'' + groupId + '\')">Clear ' + selCount + ' selected as false positive</button>';
+    html += '</div>';
+    html += '<div style="display:grid;gap:8px;margin-top:9px;">';
+    groupEntries.forEach(function(e) {
+      var hid = screeningHitId(e.item, e.index);
+      var st = screeningHitDispositionState(appRef, subjType, subjName, hid);
+      var checked = !!ui.sel[hid];
+      var badge = st.status === 'match'
+        ? '<span style="font-size:11px;font-weight:700;color:#15803d;background:rgba(34,197,94,.14);padding:2px 9px;border-radius:20px;">✓ True match</span>'
+        : (st.status === 'cleared'
+          ? '<span style="font-size:11px;font-weight:700;color:var(--text3);background:var(--surface2);padding:2px 9px;border-radius:20px;">✗ Cleared</span>'
+          : '<span style="font-size:11px;font-weight:700;color:#b45309;background:rgba(245,158,11,.14);padding:2px 9px;border-radius:20px;">● Undecided</span>');
+      var note = e.item.source_title || e.item.source_name || (e.item.publication_date || '');
+      var hargs = '\'' + escapeHtml(appRef) + '\',\'' + escapeHtml(subjType) + '\',\'' + escapeHtml(subjName) + '\',\'' + escapeHtml(hid) + '\'';
+      var ctrls = st.status === 'pending'
+        ? '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitDispositionSet(' + hargs + ',\'match\')">Confirm true match</button><button type="button" class="btn btn-outline btn-sm" onclick="screeningHitDispositionSet(' + hargs + ',\'cleared\')">Clear</button>'
+        : '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitDispositionSet(' + hargs + ',\'pending\')">↺ Undo</button>';
+      var box = st.status === 'pending'
+        ? '<input type="checkbox" aria-label="Select match" ' + (checked ? 'checked ' : '') + 'onclick="screeningHitGroupToggleSel(\'' + groupId + '\',\'' + escapeHtml(hid) + '\')" style="width:16px;height:16px;margin-top:2px;cursor:pointer;accent-color:var(--brand);">'
+        : '<span style="width:16px;display:inline-block;"></span>';
+      var srcLink = e.item.source_url ? '<a href="' + escapeHtml(e.item.source_url) + '" target="_blank" rel="noopener" style="font-size:11.5px;color:var(--brand);text-decoration:none;font-weight:600;">Source ↗</a>' : '';
+      html += '<div style="border:1px solid ' + (checked ? 'var(--brand)' : 'var(--border1)') + ';border-radius:9px;background:#fff;padding:10px 12px;display:flex;gap:10px;align-items:flex-start;">' +
+        box +
+        '<div style="flex:1;min-width:0;"><div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;"><strong style="font-size:13px;">' + escapeHtml(screeningTriageHitDisplayName(e.item)) + '</strong>' +
+        (note ? '<span style="font-size:11.5px;color:var(--text3);">' + escapeHtml(note) + '</span>' : '') + srcLink +
+        '<span style="margin-left:auto;">' + badge + '</span></div>' +
+        '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">' + ctrls + '</div></div></div>';
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
 function screeningTriageRankedHitSections(row) {
-  // Bucketed, ranked hit list: Sanctions → PEP → Adverse media → Watchlist,
+  // Bucketed, ranked hit list: Sanctions → PEP → Watchlist → Adverse media,
   // triage_score descending within each bucket; unscored hits sort last and
-  // are labelled "unscored". Renders only when the server-computed triage
+  // are labelled "unscored". Near-identical duplicate runs collapse into a
+  // grouped multi-select block. Renders only when the server-computed triage
   // block exists — legacy/simulated shapes keep the existing honest renderer.
   row = row || {};
   var triage = row.triage;
@@ -17627,13 +17768,31 @@ function screeningTriageRankedHitSections(row) {
       }
       html += '<div style="padding:11px 14px;font-size:12px;color:var(--text2);border:1px solid var(--border1);border-top:none;border-radius:0 0 10px 10px;background:#fff;">' + escapeHtml(emptyCopy) + '</div>';
     } else {
-      // SRP-2a mockup-gap 3: show at most SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT
-      // ranked hits per bucket by default. Header counts stay the full
-      // server-computed number, the expander states the exact overflow, and
-      // every hit remains reviewable after expanding — nothing is hidden
-      // permanently and nothing is re-ranked.
-      var visibleEntries = entries.slice(0, SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT);
-      var overflowEntries = entries.slice(SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT);
+      // Near-identical duplicate runs (same category + triage score + matched
+      // name, count >= SCREENING_HIT_GROUP_MIN) collapse into a grouped block:
+      // one representative is shown as a full card and the rest fold into a
+      // multi-select "clear the remaining N" block. Non-duplicate hits render
+      // as normal ranked cards (visible limit + honest overflow). Nothing is
+      // hidden permanently and nothing is re-ranked.
+      var sigMap = {}, sigOrder = [];
+      entries.forEach(function(entry) {
+        var sig = screeningTriageEntrySignature(entry.item);
+        if (!sigMap[sig]) { sigMap[sig] = []; sigOrder.push(sig); }
+        sigMap[sig].push(entry);
+      });
+      var normalCards = [], groupBlocks = [];
+      sigOrder.forEach(function(sig) {
+        var list = sigMap[sig];
+        if (list.length >= SCREENING_HIT_GROUP_MIN) {
+          normalCards.push(list[0]);          // representative shown as a full card
+          groupBlocks.push(list.slice(1));    // the rest fold into the grouped block
+        } else {
+          normalCards = normalCards.concat(list);
+        }
+      });
+      normalCards.sort(sortRanked);
+      var visibleEntries = normalCards.slice(0, SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT);
+      var overflowEntries = normalCards.slice(SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT);
       visibleEntries.forEach(function(entry) {
         html += screeningTriageHitCard(row, entry.item, entry.index, weakThreshold);
       });
@@ -17648,6 +17807,9 @@ function screeningTriageRankedHitSections(row) {
           }).join('') + '</div>' +
         '</details>';
       }
+      groupBlocks.forEach(function(g) {
+        if (g.length) html += screeningTriageGroupedBlock(row, meta, g);
+      });
     }
     html += '</section>';
   });

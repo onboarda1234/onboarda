@@ -150,6 +150,32 @@ def test_per_hit_actions_use_navy_hierarchy_with_more_menu():
     assert "requires Onboarding Officer, SCO, or Admin role." in actions
 
 
+def test_near_identical_hits_collapse_into_grouped_multiselect_block():
+    html = _html()
+    # Near-identical runs (same category + triage score + matched name) collapse.
+    assert "SCREENING_HIT_GROUP_MIN" in html
+    assert "screeningTriageEntrySignature" in html
+    sections = _function_region(
+        html, "screeningTriageRankedHitSections", "screeningHitProfileId"
+    )
+    assert "screeningTriageGroupedBlock(row, meta, g)" in sections
+    assert "list.length >= SCREENING_HIT_GROUP_MIN" in sections
+    block = _function_region(
+        html, "screeningTriageGroupedBlock", "screeningTriageRankedHitSections"
+    )
+    assert "near-identical" in block
+    # Bulk clear only the not-yet-reviewed remainder; multi-select clear; and the
+    # invariant that confirming any one flips the subject and bulk never overrides.
+    assert "Clear the remaining " in block
+    assert "screeningHitGroupBulkClear(" in block
+    assert "Select all undecided" in block
+    assert "screeningHitGroupClearSelected(" in block
+    assert "the bulk action never overrides an individual decision" in block
+    # Bulk clear only touches pending hits — a recorded true match is preserved.
+    bulk = _function_region(html, "screeningHitGroupBulkClear", "screeningHitGroupSelectAll")
+    assert "if (st.status === 'pending') st.status = 'cleared';" in bulk
+
+
 def test_subject_status_is_computed_from_per_hit_decisions():
     html = _html()
     rollup = _function_region(html, "screeningSubjectRollup", "screeningSubjectRollupStrip")
