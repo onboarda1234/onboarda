@@ -14083,16 +14083,16 @@ function screeningReviewFallbackRow(app, subjectType, subjectName, statusKey, st
 
 function getMergedScreeningReviewRow(app, queueRow, reviewRow, subjectType, subjectName) {
   if (!app) return queueRow || reviewRow || null;
-  var subjectKey = (subjectType || '') + '|' + (subjectName || '');
+  var subjectKey = screeningSubjectMatchKey(subjectType, subjectName);
   var reviews = (app.screeningReviews || app.screening_reviews || []);
   if (!reviewRow && Array.isArray(reviews)) {
     reviewRow = reviews.find(function(item) {
-      return (item.subject_type || '') + '|' + (item.subject_name || '') === subjectKey;
+      return String(item.subject_type || '') === String(subjectType || '') && screeningSubjectNamesMatch(item.subject_name, subjectName);
     }) || null;
   }
   if (!queueRow && SCREENING_QUEUE && Array.isArray(SCREENING_QUEUE.rows)) {
     queueRow = SCREENING_QUEUE.rows.find(function(item) {
-      return item.application_ref === app.ref && ((item.subject_type || '') + '|' + (item.subject_name || '')) === subjectKey;
+      return item.application_ref === app.ref && String(item.subject_type || '') === String(subjectType || '') && screeningSubjectNamesMatch(item.subject_name, subjectName);
     }) || null;
   }
   if (!queueRow && !reviewRow) return null;
@@ -15875,6 +15875,30 @@ function screeningSubjectJoinName(value) {
   return String(value == null ? '' : value).trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+// Subject-match fix: the application party name (e.g. "Jan Marsalek") and the
+// screening subject_name (e.g. "jan marsalek" / "MARSALEK, Jan") can differ in
+// case or word order. Exact-string keying dropped the scored queue row for a
+// mismatched subject, so its triage block never reached the render and it fell
+// back to the legacy unscored provider-record cards. These keys normalise the
+// name so the scored row is found. screeningSubjectTokenKey is order- and
+// punctuation-insensitive ("marsalek, jan" == "jan marsalek") for the
+// "Last, First" case; screeningSubjectMatchKey is the primary type+name key.
+function screeningSubjectTokenKey(value) {
+  return String(value == null ? '' : value).toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
+    .split(' ').filter(Boolean).sort().join(' ');
+}
+function screeningSubjectMatchKey(subjectType, name) {
+  return String(subjectType || '') + '|' + screeningSubjectJoinName(name);
+}
+function screeningSubjectNamesMatch(a, b) {
+  var na = screeningSubjectJoinName(a);
+  var nb = screeningSubjectJoinName(b);
+  if (na && na === nb) return true;
+  var ta = screeningSubjectTokenKey(a);
+  return !!ta && ta === screeningSubjectTokenKey(b);
+}
+
 function findScreeningRecordForSubject(report, person) {
   // Stored entries can carry the PROVIDER profile name (e.g. "thomas
   // roberts") while the application party holds "Miles Thomas ROBERTS".
@@ -16022,7 +16046,7 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
 
 function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap) {
   var subjects = [];
-  var entityReviewRow = getMergedScreeningReviewRow(app, queueMap['entity|' + app.company], reviewMap['entity|' + app.company], 'entity', app.company);
+  var entityReviewRow = getMergedScreeningReviewRow(app, queueMap[screeningSubjectMatchKey('entity', app.company)], reviewMap[screeningSubjectMatchKey('entity', app.company)], 'entity', app.company);
   var company = screeningSummary.company_screening || {};
   var companySanctions = company.sanctions || {};
   var companyAdverse = company.adverse_media || {};
@@ -16103,7 +16127,7 @@ function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap
   (app.intermediaries || []).forEach(function(i) { people.push({ subject_type:'intermediary', person_key:i.person_key || i.id || '', name:i.name || 'Unnamed intermediary', nat:i.jurisdiction || '', dob:'', pct:i.pct, pep:'No' }); });
 
   people.forEach(function(person) {
-    var reviewRow = getMergedScreeningReviewRow(app, queueMap[person.subject_type + '|' + person.name], reviewMap[person.subject_type + '|' + person.name], person.subject_type, person.name);
+    var reviewRow = getMergedScreeningReviewRow(app, queueMap[screeningSubjectMatchKey(person.subject_type, person.name)], reviewMap[screeningSubjectMatchKey(person.subject_type, person.name)], person.subject_type, person.name);
     var screeningRecord = findScreeningRecordForSubject(screeningSummary.report, person);
     var screening = (screeningRecord || {}).screening || null;
     var facts = screeningResultFacts(screening);
@@ -17467,11 +17491,11 @@ function renderScreeningReviewPanel(app, focus) {
   }
   var queueMap = {};
   queueRows.forEach(function(row) {
-    queueMap[(row.subject_type || '') + '|' + (row.subject_name || '')] = row;
+    queueMap[screeningSubjectMatchKey(row.subject_type, row.subject_name)] = row;
   });
   var reviewMap = {};
   (app.screeningReviews || app.screening_reviews || []).forEach(function(review) {
-    reviewMap[(review.subject_type || '') + '|' + (review.subject_name || '')] = review;
+    reviewMap[screeningSubjectMatchKey(review.subject_type, review.subject_name)] = review;
   });
 
   var html = '';
@@ -17560,7 +17584,7 @@ function screeningQueueRowsMatch(a, b) {
   b = b || {};
   return String(a.application_ref || '') === String(b.application_ref || '') &&
     String(a.subject_type || '') === String(b.subject_type || '') &&
-    String(a.subject_name || '') === String(b.subject_name || '');
+    screeningSubjectNamesMatch(a.subject_name, b.subject_name);
 }
 
 function mergeScreeningQueueRowState(rowKey, patch) {

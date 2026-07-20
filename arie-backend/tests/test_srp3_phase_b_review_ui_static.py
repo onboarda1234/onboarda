@@ -475,3 +475,26 @@ def test_f9_matched_against_suffix_gated_on_known_applicant_facts():
     assert "party.nat || party.jurisdiction" in facts
     assert "screeningComparisonBirthYear(party.dob)" in facts
     assert "String(currentApp.ref) === String(subject.application_ref)" in facts
+
+
+def test_subject_match_normalizes_name_case_and_order():
+    # Subject-match fix: application party name vs screening subject_name can
+    # differ in case ("Jan Marsalek"/"jan marsalek") or word order
+    # ("MARSALEK, Jan"). Exact-string keying dropped the scored queue row, so
+    # its triage block never reached the render and it fell to the legacy
+    # unscored provider-record cards (the Jan Marsalek staging symptom).
+    html = _html()
+    assert "function screeningSubjectMatchKey" in html
+    assert "function screeningSubjectNamesMatch" in html
+    assert "function screeningSubjectTokenKey" in html
+    # App-tab subject builder keys + looks up via the normalised helper.
+    assert "queueMap[screeningSubjectMatchKey(row.subject_type, row.subject_name)] = row;" in html
+    assert "queueMap[screeningSubjectMatchKey(person.subject_type, person.name)]" in html
+    assert "queueMap[screeningSubjectMatchKey('entity', app.company)]" in html
+    # The old exact-string keys are gone.
+    assert "queueMap[(row.subject_type || '') + '|' + (row.subject_name || '')]" not in html
+    assert "queueMap[person.subject_type + '|' + person.name]" not in html
+    # Row-match (E-1 merge) + review/queue fallback are case/order-insensitive.
+    assert "screeningSubjectNamesMatch(a.subject_name, b.subject_name)" in html
+    assert "String(a.subject_name || '') === String(b.subject_name || '')" not in html
+    assert "screeningSubjectNamesMatch(item.subject_name, subjectName)" in html
