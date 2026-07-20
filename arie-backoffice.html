@@ -16662,14 +16662,6 @@ function renderAgent3ScreeningInterpretationPanel(app) {
   html += '<div style="padding:12px 14px;border-radius:8px;background:#eef2ff;">';
   html += '<div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#4338ca;margin-bottom:5px;">Plain-English summary</div>';
   html += '<div style="font-size:13px;color:var(--text2);line-height:1.55;">' + escapeHtml(output.summary || 'Not available') + '</div>';
-  if (output.false_positive_assessment) {
-    html += '<div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#4338ca;margin:10px 0 5px;">False-positive assessment</div>';
-    html += '<div style="font-size:12.5px;color:var(--text2);line-height:1.55;">' + escapeHtml(output.false_positive_assessment) + '</div>';
-  }
-  if (output.adverse_media_relevance) {
-    html += '<div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#4338ca;margin:10px 0 5px;">Adverse media relevance</div>';
-    html += '<div style="font-size:12.5px;color:var(--text2);line-height:1.55;">' + escapeHtml(output.adverse_media_relevance) + '</div>';
-  }
   html += '</div>';
   html += agent3ScreeningFieldHtml('Key concerns', output.key_concerns || []);
   html += '</div>';
@@ -16681,6 +16673,18 @@ function renderAgent3ScreeningInterpretationPanel(app) {
   html += '<details style="margin-top:12px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
   html += '<summary style="' + expSummary + '"><span>Hit-by-hit review, evidence &amp; audit trace</span><span style="' + expCnt + '">' + escapeHtml(hitCountLabel + ' · ' + evidenceCount + ' source' + (evidenceCount === 1 ? '' : 's')) + '</span></summary>';
   html += '<div style="padding:12px 14px;">';
+  // Secondary advisory context — folded out of the always-visible view into
+  // the collapsed detail so the default panel leads with the narrative,
+  // summary and key concerns (founder review: the stacked "False-positive
+  // assessment" / "Adverse media relevance" labelled blocks read as clutter).
+  if (output.false_positive_assessment) {
+    html += '<div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text3);margin:0 0 6px;">False-positive assessment</div>';
+    html += '<div style="font-size:12.5px;color:var(--text2);line-height:1.55;margin-bottom:12px;">' + escapeHtml(output.false_positive_assessment) + '</div>';
+  }
+  if (output.adverse_media_relevance) {
+    html += '<div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text3);margin:0 0 6px;">Adverse media relevance</div>';
+    html += '<div style="font-size:12.5px;color:var(--text2);line-height:1.55;margin-bottom:12px;">' + escapeHtml(output.adverse_media_relevance) + '</div>';
+  }
   html += providerSummaryHtml;
   if (!Array.isArray(output.hit_rows) && totalHits > 0) {
     // Interpretation predates hit-level output — do not present it as "0 hits".
