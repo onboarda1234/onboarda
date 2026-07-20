@@ -339,6 +339,13 @@ class TestManualWorkflowPreservation:
             "UPDATE applications SET onboarding_lane='EDD' WHERE id=?",
             (app_id,),
         )
+        db.execute(
+            "INSERT INTO edd_cases "
+            "(application_id, client_name, stage, trigger_source, origin_context) "
+            "VALUES (?, 'Manual EDD Ltd', 'triggered', 'officer_escalate_edd', "
+            "'manual_onboarding_escalation')",
+            (app_id,),
+        )
         db.commit()
         audits = []
 
@@ -369,6 +376,9 @@ class TestManualWorkflowPreservation:
         assert preservation["recommended_lane"] != "EDD"
         assert preservation["persisted_lane"] == "EDD"
         assert "edd_lane" in preservation["controls"]
+        assert preservation["manual_evidence"] == [
+            "edd_case:manual_onboarding_escalation"
+        ]
         preserved_audits = [
             entry for entry in audits
             if entry["action"] == "Manual workflow preserved during recomputation"

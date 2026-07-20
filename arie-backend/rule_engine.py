@@ -2410,9 +2410,47 @@ _MANUAL_COMPLIANCE_WORKFLOW_STATUSES = {
     "rmi_sent",
 }
 _MANUAL_APPROVAL_BLOCK_DECISIONS = {"REJECT", "REQUEST_INFO"}
+_MANUAL_EDD_ORIGIN_CONTEXTS = {"manual", "manual_onboarding_escalation"}
+_MANUAL_EDD_TRIGGER_SOURCES = {"manual", "officer_decision", "officer_escalate_edd"}
 
 
-def _preserve_manual_compliance_workflow(app, recomputed_risk):
+def _manual_workflow_evidence(db, app):
+    """Return persisted evidence that a workflow was applied by an officer."""
+    existing = dict(app or {})
+    evidence = []
+    decision_notes = safe_json_loads(existing.get("decision_notes"))
+    if isinstance(decision_notes, dict):
+        decision = str(decision_notes.get("decision") or "").strip().lower()
+        if decision in {"escalate_edd", "request_documents"}:
+            evidence.append(f"application_decision:{decision}")
+
+    try:
+        rows = db.execute(
+            """
+            SELECT origin_context, trigger_source
+            FROM edd_cases
+            WHERE application_id = ?
+              AND stage NOT IN ('edd_approved', 'edd_rejected')
+            """,
+            (existing.get("id"),),
+        ).fetchall()
+    except Exception as exc:
+        logger.warning(
+            "manual_workflow_evidence_unavailable app_id=%s error=%s",
+            existing.get("id"),
+            exc,
+        )
+        rows = []
+    for row in rows:
+        origin = str((row or {}).get("origin_context") or "").strip().lower()
+        trigger = str((row or {}).get("trigger_source") or "").strip().lower()
+        if origin in _MANUAL_EDD_ORIGIN_CONTEXTS or trigger in _MANUAL_EDD_TRIGGER_SOURCES:
+            evidence.append(f"edd_case:{origin or trigger}")
+            break
+    return evidence
+
+
+def _preserve_manual_compliance_workflow(db, app, recomputed_risk):
     """Keep an existing stronger compliance workflow across recomputation.
 
     Risk computation remains authoritative for score/evidence. Workflow state
@@ -2425,10 +2463,12 @@ def _preserve_manual_compliance_workflow(app, recomputed_risk):
     recommended_lane = str(risk.get("lane") or "Standard Review").strip()
     status = str(existing.get("status") or "").strip().lower()
     approval_decision = str(existing.get("pre_approval_decision") or "").strip().upper()
+    manual_evidence = _manual_workflow_evidence(db, existing)
 
     preserved = []
     if (
         (existing_lane.upper() == "EDD" or status in {"edd_required", "edd_approved"})
+        and manual_evidence
         and recommended_lane.upper() != "EDD"
     ):
         risk["lane"] = "EDD"
@@ -2437,7 +2477,7 @@ def _preserve_manual_compliance_workflow(app, recomputed_risk):
     # These fields are not scorer outputs and recompute must leave them alone.
     # Recording them makes the preservation contract explicit in audit/result
     # evidence and protects against future broadening of the persistence query.
-    if status in _MANUAL_COMPLIANCE_WORKFLOW_STATUSES:
+    if status in _MANUAL_COMPLIANCE_WORKFLOW_STATUSES and manual_evidence:
         preserved.append(f"status:{status}")
     if approval_decision in _MANUAL_APPROVAL_BLOCK_DECISIONS:
         preserved.append(f"pre_approval_decision:{approval_decision}")
@@ -2450,6 +2490,7 @@ def _preserve_manual_compliance_workflow(app, recomputed_risk):
         "persisted_lane": str(risk.get("lane") or recommended_lane),
         "status": status,
         "pre_approval_decision": approval_decision,
+        "manual_evidence": manual_evidence,
     }
 
 
@@ -2541,7 +2582,7 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         new_risk = compute_risk_score(scoring_input)
         routing_floor = _apply_edd_routing_floor_for_recompute(db, app, new_risk)
         screening_floor = _apply_screening_disposition_floor_for_recompute(db, app, new_risk)
-        workflow_preservation = _preserve_manual_compliance_workflow(app, new_risk)
+        workflow_preservation = _preserve_manual_compliance_workflow(db, app, new_risk)
 
         new_score = new_risk["score"]
         new_level = new_risk["level"]
