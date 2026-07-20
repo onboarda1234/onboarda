@@ -17349,10 +17349,54 @@ function screeningClearanceNeedsSecondReviewer(row) {
 // sits on top and never changes that contract. Client-state only for now;
 // server persistence of per-hit decisions is a fast-follow.
 var SCREENING_HIT_DISPOSITION_STATE = {};
+var SCREENING_HIT_DISPOSITION_HYDRATED = {};  // appRef -> 'loading'|'done'|'error'
 var SCREENING_MATERIALITY_LABELS = {
   high: 'Material — High', moderate: 'Material — Moderate',
   nonmaterial: 'Non-material', insufficient: 'Insufficient info'
 };
+
+// Persist a per-hit decision (single or batch) to the durable store. The UI
+// updates optimistically (already re-rendered by the caller); on failure we
+// re-hydrate from the server so the client never drifts from the record of
+// truth. This endpoint only writes screening_hit_dispositions — the subject
+// signal the frozen gates consume is submitted separately at resolve time.
+function screeningPersistHitDisposition(appRef, subjectType, subjectName, hitIds, status, materiality) {
+  if (!appRef || !hitIds || !hitIds.length) return;
+  boApiCall('POST', '/screening/hit-disposition', {
+    application_id: appRef,
+    subject_type: subjectType,
+    subject_name: subjectName,
+    hit_ids: hitIds,
+    disposition: status || 'pending',
+    materiality: materiality || ''
+  }).catch(function(e) {
+    showToast((e && e.message) || 'Failed to save screening decision — refreshing', 'error');
+    SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = null;  // force re-hydrate to resync
+    ensureScreeningHitDispositionsHydrated(appRef, true);
+  });
+}
+
+// Hydrate stored per-hit decisions once per application so decisions survive a
+// refresh and are shared across reviewers. Single-flight; a re-render follows.
+function ensureScreeningHitDispositionsHydrated(appRef, force) {
+  if (!appRef) return;
+  var state = SCREENING_HIT_DISPOSITION_HYDRATED[appRef];
+  if (!force && (state === 'loading' || state === 'done')) return;
+  SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = 'loading';
+  boApiCall('GET', '/screening/hit-disposition?application_id=' + encodeURIComponent(appRef))
+    .then(function(resp) {
+      var list = (resp && resp.dispositions) || [];
+      list.forEach(function(d) {
+        if (!d || !d.hit_id) return;
+        var st = screeningHitDispositionState(appRef, d.subject_type || '', d.subject_name || '', String(d.hit_id));
+        st.status = d.disposition || 'pending';
+        st.materiality = d.materiality || null;
+      });
+      SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = 'done';
+      if (currentApp && currentApp.ref === appRef) renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    })
+    .catch(function() { SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = 'error'; });
+}
 
 function screeningHitId(item, index) {
   item = item || {};
@@ -17374,11 +17418,13 @@ function screeningHitDispositionSet(appRef, subjectType, subjectName, hitId, sta
   s.status = status;
   if (status !== 'match') s.materiality = null;
   renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  screeningPersistHitDisposition(appRef, subjectType, subjectName, [hitId], status, s.materiality);
 }
 function screeningHitMaterialitySet(appRef, subjectType, subjectName, hitId, materiality) {
   var s = screeningHitDispositionState(appRef, subjectType, subjectName, hitId);
   s.materiality = materiality;
   renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  screeningPersistHitDisposition(appRef, subjectType, subjectName, [hitId], 'match', materiality);
 }
 
 function screeningSubjectHitStates(row) {
@@ -17603,11 +17649,13 @@ function screeningHitGroupToggleExpand(groupId) {
 }
 function screeningHitGroupBulkClear(groupId) {
   var reg = SCREENING_HIT_GROUP_REG[groupId]; if (!reg) return;
+  var changed = [];
   reg.hitIds.forEach(function(hid) {
     var st = screeningHitDispositionState(reg.appRef, reg.subjType, reg.subjName, hid);
-    if (st.status === 'pending') st.status = 'cleared';
+    if (st.status === 'pending') { st.status = 'cleared'; changed.push(hid); }
   });
   renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  if (changed.length) screeningPersistHitDisposition(reg.appRef, reg.subjType, reg.subjName, changed, 'cleared', null);
 }
 function screeningHitGroupSelectAll(groupId) {
   var reg = SCREENING_HIT_GROUP_REG[groupId], s = screeningHitGroupState(groupId); if (!reg) return;
@@ -17624,13 +17672,15 @@ function screeningHitGroupToggleSel(groupId, hitId) {
 }
 function screeningHitGroupClearSelected(groupId) {
   var reg = SCREENING_HIT_GROUP_REG[groupId], s = screeningHitGroupState(groupId); if (!reg) return;
+  var changed = [];
   Object.keys(s.sel).forEach(function(hid) {
     if (!s.sel[hid]) return;
     var st = screeningHitDispositionState(reg.appRef, reg.subjType, reg.subjName, hid);
-    st.status = 'cleared';
+    st.status = 'cleared'; changed.push(hid);
   });
   s.sel = {};
   renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  if (changed.length) screeningPersistHitDisposition(reg.appRef, reg.subjType, reg.subjName, changed, 'cleared', null);
 }
 
 function screeningTriageGroupedBlock(row, meta, groupEntries) {
@@ -17986,6 +18036,9 @@ function renderScreeningReviewPanel(app, focus) {
   if (app.ref && !queueRows.some(function(row) { return row && row.screening_evidence; })) {
     ensureApplicationScreeningEvidenceRows(app.ref);
   }
+  // Per-hit redesign: hydrate stored per-hit decisions once so they survive a
+  // refresh and are shared across reviewers (single-flight; re-renders on load).
+  if (app.ref) ensureScreeningHitDispositionsHydrated(app.ref);
   var queueMap = {};
   queueRows.forEach(function(row) {
     queueMap[screeningSubjectMatchKey(row.subject_type, row.subject_name)] = row;

@@ -171,9 +171,29 @@ def test_near_identical_hits_collapse_into_grouped_multiselect_block():
     assert "Select all undecided" in block
     assert "screeningHitGroupClearSelected(" in block
     assert "the bulk action never overrides an individual decision" in block
-    # Bulk clear only touches pending hits — a recorded true match is preserved.
+    # Bulk clear only touches pending hits — a recorded true match is preserved —
+    # and it persists the change to the durable per-hit store.
     bulk = _function_region(html, "screeningHitGroupBulkClear", "screeningHitGroupSelectAll")
-    assert "if (st.status === 'pending') st.status = 'cleared';" in bulk
+    assert "if (st.status === 'pending') { st.status = 'cleared'; changed.push(hid); }" in bulk
+    assert "screeningPersistHitDisposition(reg.appRef, reg.subjType, reg.subjName, changed, 'cleared'" in bulk
+
+
+def test_per_hit_decisions_persist_and_hydrate():
+    html = _html()
+    # Each per-hit setter persists to the durable store.
+    setter = _function_region(html, "screeningHitDispositionSet", "screeningHitMaterialitySet")
+    assert "screeningPersistHitDisposition(appRef, subjectType, subjectName, [hitId], status" in setter
+    persist = _function_region(html, "screeningPersistHitDisposition", "ensureScreeningHitDispositionsHydrated")
+    assert "boApiCall('POST', '/screening/hit-disposition'" in persist
+    assert "hit_ids: hitIds" in persist
+    # On failure the client re-hydrates from the record of truth (never drifts).
+    assert "ensureScreeningHitDispositionsHydrated(appRef, true)" in persist
+    hydrate = _function_region(html, "ensureScreeningHitDispositionsHydrated", "screeningHitDispositionState")
+    assert "boApiCall('GET', '/screening/hit-disposition?application_id='" in hydrate
+    assert "SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = 'done'" in hydrate
+    # The review panel triggers hydration once per application.
+    panel = _function_region(html, "renderScreeningReviewPanel", "openScreeningReview")
+    assert "ensureScreeningHitDispositionsHydrated(app.ref)" in panel
 
 
 def test_subject_status_is_computed_from_per_hit_decisions():
