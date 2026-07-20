@@ -16797,8 +16797,11 @@ var SCREENING_TRIAGE_BUCKET_META = [
   // exactly what the section contains.
   { key: 'sanctions', label: 'Sanctions', color: '#991b1b' },
   { key: 'pep', label: 'Politically exposed persons', color: '#92400e' },
+  // Founder review: watchlist / warning is more material than adverse media,
+  // so its section ranks ABOVE adverse media (Sanctions → PEP → Watchlist →
+  // Adverse media → Other). Triage score still orders hits within each bucket.
+  { key: 'watchlist', label: 'Watchlist', color: '#b45309' },
   { key: 'adverse_media', label: 'Adverse media', color: 'var(--text1)' },
-  { key: 'watchlist', label: 'Watchlist', color: 'var(--text1)' },
   { key: 'other', label: 'Other provider matches', color: 'var(--text1)' }
 ];
 

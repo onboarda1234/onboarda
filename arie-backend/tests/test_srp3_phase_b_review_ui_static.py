@@ -168,10 +168,11 @@ def test_triage_strip_and_buckets_read_only_server_computed_triage():
     assert "buckets.adverse_media" in strip
     assert "triage.weak_count" in strip
     assert "triage.unscored_count" in strip
-    # Bucket order is Sanctions → PEP → Adverse media → Watchlist (then other).
+    # Bucket order is Sanctions → PEP → Watchlist → Adverse media (then other):
+    # watchlist/warning is more material than adverse media, so it ranks higher.
     meta_start = html.index("var SCREENING_TRIAGE_BUCKET_META")
-    meta = html[meta_start:meta_start + 600]
-    assert meta.index("'sanctions'") < meta.index("'pep'") < meta.index("'adverse_media'") < meta.index("'watchlist'")
+    meta = html[meta_start:meta_start + 900]
+    assert meta.index("'sanctions'") < meta.index("'pep'") < meta.index("'watchlist'") < meta.index("'adverse_media'")
     # Unscored hits sort last and are labelled "unscored", never called weak.
     band = _function_region(html, "screeningTriageScoreBand", "screeningTriageScoreBlock")
     assert "'unscored'" in band
