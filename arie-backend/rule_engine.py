@@ -2182,12 +2182,14 @@ def _apply_edd_routing_floor_for_recompute(db, app, risk):
 
 _SCREENING_DISPOSITION_FLOOR_CODES = {
     "true_match",
+    "confirmed_match",
     "material_concern",
     "escalated_to_edd",
     "needs_more_information",
 }
 _SCREENING_DISPOSITION_EDD_CODES = {
     "true_match",
+    "confirmed_match",
     "material_concern",
     "needs_more_information",
     "escalated_to_edd",

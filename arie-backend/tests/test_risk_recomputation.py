@@ -403,6 +403,53 @@ class TestRecomputeRiskAudit:
         assert "at least HIGH final risk" in app["elevation_reason_text"]
         db.close()
 
+    @pytest.mark.parametrize("disposition_code", ["true_match", "confirmed_match"])
+    def test_stored_match_disposition_independently_floors_and_routes_edd(
+        self, temp_db, monkeypatch, disposition_code
+    ):
+        """Officer-stored match decisions are equivalent without raw-provider fallback."""
+        import routing_actuator
+        from rule_engine import recompute_risk
+
+        captured_trigger_flags = []
+
+        def capture_routing_decision(**kwargs):
+            captured_trigger_flags.extend(kwargs.get("edd_trigger_flags") or [])
+            return {"lane": "EDD"}
+
+        monkeypatch.setattr(routing_actuator, "apply_routing_decision", capture_routing_decision)
+
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, _ = _insert_scored_app(
+            db,
+            risk_score=18.0,
+            risk_level="LOW",
+            country="United Kingdom",
+            sector="Technology",
+            entity_type="Listed Company",
+        )
+        _insert_screening_review(db, app_id, disposition_code)
+
+        result = recompute_risk(db, app_id, "stored_screening_match_disposition")
+        db.commit()
+
+        app = db.execute(
+            "SELECT final_risk_level, base_risk_level, onboarding_lane, risk_escalations "
+            "FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+        escalations = json.loads(app["risk_escalations"] or "[]")
+
+        assert result["base_risk_level"] == "LOW"
+        assert result["final_risk_level"] == "HIGH"
+        assert app["final_risk_level"] == "HIGH"
+        assert app["base_risk_level"] == "LOW"
+        assert app["onboarding_lane"] == "EDD"
+        assert "material_screening_disposition_floor" in escalations
+        assert captured_trigger_flags == ["material_screening_concern"]
+        db.close()
+
     def test_raw_unresolved_completed_match_cannot_persist_final_low(self, temp_db):
         """Raw live completed_match without formal clearance is an unresolved material concern."""
         from rule_engine import recompute_risk
