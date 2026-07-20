@@ -2399,6 +2399,101 @@ def _non_terminal_screening_blocks_lowering(prescreening, old_score, old_level, 
     return score_drops or level_drops
 
 
+_MANUAL_COMPLIANCE_WORKFLOW_STATUSES = {
+    "compliance_review",
+    "in_review",
+    "under_review",
+    "submitted_to_compliance",
+    "edd_required",
+    "edd_approved",
+    "pre_approval_review",
+    "rmi_sent",
+}
+_MANUAL_APPROVAL_BLOCK_DECISIONS = {"REJECT", "REQUEST_INFO"}
+_MANUAL_EDD_ORIGIN_CONTEXTS = {"manual", "manual_onboarding_escalation"}
+_MANUAL_EDD_TRIGGER_SOURCES = {"manual", "officer_decision", "officer_escalate_edd"}
+
+
+def _manual_workflow_evidence(db, app):
+    """Return persisted evidence that a workflow was applied by an officer."""
+    existing = dict(app or {})
+    evidence = []
+    decision_notes = safe_json_loads(existing.get("decision_notes"))
+    if isinstance(decision_notes, dict):
+        decision = str(decision_notes.get("decision") or "").strip().lower()
+        if decision in {"escalate_edd", "request_documents"}:
+            evidence.append(f"application_decision:{decision}")
+
+    try:
+        rows = db.execute(
+            """
+            SELECT origin_context, trigger_source
+            FROM edd_cases
+            WHERE application_id = ?
+              AND stage NOT IN ('edd_approved', 'edd_rejected')
+            """,
+            (existing.get("id"),),
+        ).fetchall()
+    except Exception as exc:
+        logger.warning(
+            "manual_workflow_evidence_unavailable app_id=%s error=%s",
+            existing.get("id"),
+            exc,
+        )
+        rows = []
+    for row in rows:
+        origin = str((row or {}).get("origin_context") or "").strip().lower()
+        trigger = str((row or {}).get("trigger_source") or "").strip().lower()
+        if origin in _MANUAL_EDD_ORIGIN_CONTEXTS or trigger in _MANUAL_EDD_TRIGGER_SOURCES:
+            evidence.append(f"edd_case:{origin or trigger}")
+            break
+    return evidence
+
+
+def _preserve_manual_compliance_workflow(db, app, recomputed_risk):
+    """Keep an existing stronger compliance workflow across recomputation.
+
+    Risk computation remains authoritative for score/evidence. Workflow state
+    is independently officer-controlled and may only be strengthened by this
+    path, never silently downgraded.
+    """
+    existing = dict(app or {})
+    risk = recomputed_risk if isinstance(recomputed_risk, dict) else {}
+    existing_lane = str(existing.get("onboarding_lane") or "").strip()
+    recommended_lane = str(risk.get("lane") or "Standard Review").strip()
+    status = str(existing.get("status") or "").strip().lower()
+    approval_decision = str(existing.get("pre_approval_decision") or "").strip().upper()
+    manual_evidence = _manual_workflow_evidence(db, existing)
+
+    preserved = []
+    if (
+        (existing_lane.upper() == "EDD" or status in {"edd_required", "edd_approved"})
+        and manual_evidence
+        and recommended_lane.upper() != "EDD"
+    ):
+        risk["lane"] = "EDD"
+        preserved.append("edd_lane")
+
+    # These fields are not scorer outputs and recompute must leave them alone.
+    # Recording them makes the preservation contract explicit in audit/result
+    # evidence and protects against future broadening of the persistence query.
+    if status in _MANUAL_COMPLIANCE_WORKFLOW_STATUSES and manual_evidence:
+        preserved.append(f"status:{status}")
+    if approval_decision in _MANUAL_APPROVAL_BLOCK_DECISIONS:
+        preserved.append(f"pre_approval_decision:{approval_decision}")
+
+    return {
+        "preserved": bool(preserved),
+        "controls": preserved,
+        "existing_lane": existing_lane,
+        "recommended_lane": recommended_lane,
+        "persisted_lane": str(risk.get("lane") or recommended_lane),
+        "status": status,
+        "pre_approval_decision": approval_decision,
+        "manual_evidence": manual_evidence,
+    }
+
+
 def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routing_policy=True):
     """Recompute risk score for a single application and persist the result.
 
@@ -2487,6 +2582,7 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         new_risk = compute_risk_score(scoring_input)
         routing_floor = _apply_edd_routing_floor_for_recompute(db, app, new_risk)
         screening_floor = _apply_screening_disposition_floor_for_recompute(db, app, new_risk)
+        workflow_preservation = _preserve_manual_compliance_workflow(db, app, new_risk)
 
         new_score = new_risk["score"]
         new_level = new_risk["level"]
@@ -2500,6 +2596,7 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         result["edd_routing_route"] = routing_floor.get("route")
         result["edd_routing_triggers"] = list(routing_floor.get("triggers") or [])
         result["screening_disposition_floor"] = screening_floor
+        result["manual_workflow_preservation"] = workflow_preservation
         # Fail-closed hold (SRP-2 batch-1 finding): never LOWER risk off a
         # non-terminal/degraded screening report. The recompute result is
         # discarded, the stored risk stands, and the hold is audited. Raises
@@ -2618,6 +2715,37 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
                              db=db, before_state=before_state, after_state=after_state)
             except Exception as e:
                 logger.warning("recompute_risk audit log failed: %s", e)
+
+            if workflow_preservation.get("preserved"):
+                preservation_detail = (
+                    "Manual workflow preserved during recomputation. "
+                    f"Controls: {', '.join(workflow_preservation['controls'])}. "
+                    f"Model-recommended lane: {workflow_preservation['recommended_lane']}; "
+                    f"persisted lane: {workflow_preservation['persisted_lane']}."
+                )
+                try:
+                    log_audit_fn(
+                        user,
+                        "Manual workflow preserved during recomputation",
+                        app.get("ref", app_id),
+                        preservation_detail,
+                        db=db,
+                        commit=False,
+                        before_state={
+                            "status": workflow_preservation.get("status"),
+                            "onboarding_lane": workflow_preservation.get("existing_lane"),
+                            "pre_approval_decision": workflow_preservation.get("pre_approval_decision"),
+                        },
+                        after_state={
+                            "status": workflow_preservation.get("status"),
+                            "onboarding_lane": workflow_preservation.get("persisted_lane"),
+                            "pre_approval_decision": workflow_preservation.get("pre_approval_decision"),
+                            "risk_score": new_score,
+                            "risk_level": new_level,
+                        },
+                    )
+                except Exception as e:
+                    logger.warning("manual workflow preservation audit failed: %s", e)
 
 
         # Priority E: re-run EDD routing policy after every recompute unless a
