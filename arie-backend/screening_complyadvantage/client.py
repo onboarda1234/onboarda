@@ -35,6 +35,20 @@ class ComplyAdvantageClient:
     def get(self, path, params=None, *, timeout=None, headers=None):
         return self.request("GET", path, params=params, timeout=timeout, headers=headers)
 
+    def get_alert_risks(self, alert_identifier, *, page_number=1, page_size=100):
+        """Phase G: fetch the matched profiles ("risks") within one alert.
+
+        Mesh endpoint: GET /v2/alerts/{alert_identifier}/risks ("Get risks
+        within an alert", permission "View alerts"). Each risk item carries the
+        matched profile inline at detail.profile. Reuses the shared GET path,
+        which already retries once on 429/5xx for idempotent reads. No change to
+        any existing behaviour.
+        """
+        return self.get(
+            f"/v2/alerts/{alert_identifier}/risks",
+            params={"page_number": page_number, "page_size": page_size},
+        )
+
     def post(self, path, json_body=None, *, params=None, timeout=None, headers=None):
         return self.request("POST", path, params=params, json_body=json_body, timeout=timeout, headers=headers)
 

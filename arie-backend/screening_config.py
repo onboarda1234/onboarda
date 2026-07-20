@@ -109,6 +109,20 @@ _CA_RESCREEN_DEFAULTS = {
     "production": False,
 }
 
+# Phase G: on-demand ComplyAdvantage profile hydration (the Mesh
+# GET /v2/alerts/{alert_identifier}/risks endpoint). OFF by default in ALL
+# environments; requires the "View alerts" permission on the CA account. When
+# off, no risks-endpoint reads occur and back-office behaviour is byte-identical
+# to today. Hydration is DISPLAY/AUDIT enrichment only — it never touches risk,
+# gates, triage, or dispositions.
+_CA_PROFILE_HYDRATION_DEFAULTS = {
+    "development": False,
+    "testing": False,
+    "demo": False,
+    "staging": False,
+    "production": False,
+}
+
 
 def is_abstraction_enabled() -> bool:
     """
@@ -146,6 +160,27 @@ def is_ca_rescreen_enabled() -> bool:
     from environment import canonicalize_environment
     env = canonicalize_environment(os.environ.get("ENVIRONMENT") or os.environ.get("ENV"))
     return _CA_RESCREEN_DEFAULTS.get(env, False)
+
+
+def is_ca_profile_hydration_enabled() -> bool:
+    """
+    Check if the Phase G on-demand CA profile hydration pathway is enabled.
+
+    Resolution order:
+    1. ENABLE_CA_PROFILE_HYDRATION environment variable
+    2. Default for current environment (always False)
+
+    Returns False in all environments unless explicitly overridden. When off,
+    the back office never calls the Mesh risks endpoint and no hydrated
+    attributes are added to stored reports.
+    """
+    env_val = os.environ.get("ENABLE_CA_PROFILE_HYDRATION")
+    if env_val is not None:
+        return env_val.lower() in ("true", "1", "yes", "on")
+    # Canonicalized (audit H8 / PR-13) so alias values hit the right defaults.
+    from environment import canonicalize_environment
+    env = canonicalize_environment(os.environ.get("ENVIRONMENT") or os.environ.get("ENV"))
+    return _CA_PROFILE_HYDRATION_DEFAULTS.get(env, False)
 
 
 def get_active_provider_name() -> str:

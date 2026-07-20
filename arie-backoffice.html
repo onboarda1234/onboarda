@@ -14604,7 +14604,7 @@ function evidenceReviewRationale(provider, categories, hit, matchedName) {
     // snippet, the old sentence was circular ("found a potential watchlist
     // or warning match") — say honestly what is missing instead. Never
     // fabricate list detail the provider did not return.
-    var hasWatchlistDetail = !!(hit && (hit.list_name || hit.authority || evidenceSourceTitle(hit || {}) || evidenceSourceUrl(hit || {}) || hit.media_snippet || hit.snippet));
+    var hasWatchlistDetail = !!(hit && (hit.list_name || hit.authority || evidenceSourceTitle(hit || {}) || evidenceSourceUrl(hit || {}) || hit.media_snippet || hit.snippet || (Array.isArray(hit.watchlist_entries) && hit.watchlist_entries.length)));
     if (!hasWatchlistDetail) {
       return 'The provider flagged a watchlist/warning match but supplied no list name or source detail. Review the provider record identifiers in Technical details.';
     }
@@ -15662,6 +15662,14 @@ function screeningReportDownloadButtonHtml() {
 // button, today's UI unchanged.
 function screeningRescreenEnabled() {
   return !!(SCREENING_QUEUE && SCREENING_QUEUE.metrics && SCREENING_QUEUE.metrics.rescreen_enabled === true);
+}
+
+// Phase G: on-demand profile hydration is offered only when the server says the
+// pathway is enabled (flag on AND CA Mesh active). The flag arrives on the
+// screening queue payload metrics — same plumbing as rescreen_enabled. Absent
+// or false → no hydration call, today's UI byte-identical.
+function screeningProfileHydrationEnabled() {
+  return !!(SCREENING_QUEUE && SCREENING_QUEUE.metrics && SCREENING_QUEUE.metrics.hydration_enabled === true);
 }
 
 function screeningRescreenButtonHtml(appRef) {
@@ -17139,11 +17147,47 @@ function screeningTriageHitApplicantComparison(item) {
   '</div>';
 }
 
+function screeningWatchlistEntriesCard(item) {
+  // Phase G (F7 fix): render hydrated watchlist_entries — the provider's list
+  // names, listed dates, and source links (Germany BKA / Interpol Red Notice /
+  // EU Most Wanted for the Marsalek case). Each entry: "list name · listed
+  // date"; a "Source ↗" link renders ONLY when the entry carries a real http(s)
+  // url. When no watchlist_entries are present, this returns '' and the honest
+  // F7 "no list name or source detail" copy stays. Nothing is fabricated.
+  item = item || {};
+  var entries = Array.isArray(item.watchlist_entries) ? item.watchlist_entries.filter(function(e) { return e && typeof e === 'object'; }) : [];
+  if (!entries.length) return '';
+  var rows = entries.map(function(entry) {
+    var listName = String(entry.list_name || '').trim();
+    var listedDate = String(entry.listed_date || '').trim();
+    var removedDate = String(entry.removed_date || '').trim();
+    var period = listedDate ? ('Listed ' + listedDate + (removedDate ? ' – ' + removedDate : ' – Present')) : (removedDate ? ('Removed ' + removedDate) : '');
+    var meta = [listName || 'Watchlist entry', period].filter(Boolean).join(' · ');
+    var urls = Array.isArray(entry.related_urls) ? entry.related_urls.filter(function(u) {
+      return String(u || '').trim().toLowerCase().indexOf('http') === 0;
+    }) : [];
+    var linkHtml = urls.length
+      ? '<a class="btn btn-outline btn-sm" href="' + escapeHtml(urls[0]) + '" target="_blank" rel="noopener" style="margin-left:8px;">Source ↗</a>'
+      : '';
+    return '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;font-size:12px;color:var(--text2);padding:5px 0;border-top:1px solid var(--border1);">' +
+      '<span style="font-weight:600;color:var(--text1);">' + escapeHtml(meta) + '</span>' + linkHtml +
+    '</div>';
+  }).join('');
+  return '<div data-screening-watchlist-entries="true" style="border:1px solid var(--border1);border-radius:8px;padding:9px 13px;background:#fff;">' +
+    '<div style="font-size:10.5px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:var(--text3);">Watchlist listings</div>' +
+    rows +
+  '</div>';
+}
+
 function screeningTriageHitEvidenceBody(item) {
   // Render-if-present: every row appears only when the stored provider data
   // carries the field — nothing is invented for absent data.
   item = item || {};
   var html = '';
+  // Phase G (F7 fix): hydrated watchlist listings (list name · listed date ·
+  // Source ↗) render above the source card when present; absent → nothing here
+  // and the honest F7 copy stays in the rationale.
+  html += screeningWatchlistEntriesCard(item);
   // Phase F (F4): the hit-card title already renders the matched name — the
   // fact row repeats it only when the raw value differs from that title
   // (e.g. the display name fell back to the article title over a UUID).
@@ -17481,6 +17525,111 @@ async function ensureApplicationScreeningEvidenceRows(appRef) {
   }
 }
 
+// Phase G: on-demand profile hydration. When an officer opens a subject's
+// review AND hydration is enabled AND the subject's top hits still lack
+// hydrated attributes, we ask the server to hydrate the top-ranked hits' CA
+// profiles (a few cheap reads) and merge the returned DISPLAY/AUDIT attributes
+// (DOB, nationality, place of birth, positions, aliases, watchlist entries)
+// into the displayed hits. Single-flight per subject — mirrors the
+// ensureApplicationScreeningEvidenceRows idiom. Best-effort: any failure keeps
+// the current display silently. Never called when the flag is off.
+var SCREENING_SUBJECT_HYDRATION_FETCHES = {};
+var SCREENING_PROFILE_HYDRATION_KEYS = ['date_of_birth', 'nationality', 'countries', 'places_of_birth', 'positions', 'aka_names', 'image_urls', 'watchlist_entries'];
+var SCREENING_PROFILE_HYDRATION_TOP_HITS = 10;
+
+function screeningHitProfileId(hit) {
+  return String((hit && (hit.provider_profile_id || hit.provider_profile_identifier)) || '').trim();
+}
+
+function screeningHitAlertId(hit) {
+  return String((hit && (hit.provider_alert_id || hit.provider_alert_identifier)) || '').trim();
+}
+
+function screeningHitHasHydratedAttributes(hit) {
+  hit = hit || {};
+  return !!(hit.date_of_birth || hit.nationality || hit.places_of_birth && hit.places_of_birth.length ||
+    hit.positions && hit.positions.length || hit.countries && hit.countries.length ||
+    hit.watchlist_entries && hit.watchlist_entries.length || hit.aka_names && hit.aka_names.length);
+}
+
+function screeningSubjectTopHits(selectedSubject) {
+  var reviewRow = selectedSubject && selectedSubject.reviewRow;
+  var hits = (reviewRow && Array.isArray(reviewRow.provider_evidence)) ? reviewRow.provider_evidence : [];
+  return hits.slice(0, SCREENING_PROFILE_HYDRATION_TOP_HITS);
+}
+
+function applyHydratedAttributesToHits(appRef, attributeMap) {
+  if (!attributeMap || typeof attributeMap !== 'object') return 0;
+  var applied = 0;
+  var isEmpty = function(val) {
+    return val === undefined || val === null || val === '' || (Array.isArray(val) && val.length === 0);
+  };
+  var mergeInto = function(hit) {
+    if (!hit || typeof hit !== 'object') return;
+    var pid = screeningHitProfileId(hit);
+    if (!pid || !attributeMap[pid]) return;
+    var attrs = attributeMap[pid];
+    SCREENING_PROFILE_HYDRATION_KEYS.forEach(function(key) {
+      if (!isEmpty(attrs[key]) && isEmpty(hit[key])) { hit[key] = attrs[key]; applied++; }
+    });
+  };
+  ((SCREENING_QUEUE && SCREENING_QUEUE.rows) || []).forEach(function(row) {
+    if (row.application_ref !== appRef) return;
+    (row.provider_evidence || []).forEach(mergeInto);
+    if (row.screening_evidence && Array.isArray(row.screening_evidence.items)) row.screening_evidence.items.forEach(mergeInto);
+  });
+  return applied;
+}
+
+async function ensureSubjectProfileHydration(app, selectedSubject) {
+  if (!app || !selectedSubject || !screeningProfileHydrationEnabled()) return;
+  var subjectKey = screeningSubjectMatchKey(selectedSubject.subject_type, selectedSubject.subject_name);
+  var flightKey = app.ref + '::' + subjectKey;
+  var state = SCREENING_SUBJECT_HYDRATION_FETCHES[flightKey];
+  if (state === 'loading' || state === 'done' || state === 'error') return;
+
+  var topHits = screeningSubjectTopHits(selectedSubject);
+  // Only hydrate hits that carry BOTH a profile and an alert identifier and do
+  // not already have hydrated attributes. Nothing to do → no network call.
+  var alertIds = [];
+  var profileIds = [];
+  var needsHydration = false;
+  topHits.forEach(function(hit) {
+    var pid = screeningHitProfileId(hit);
+    var aid = screeningHitAlertId(hit);
+    if (!pid || !aid) return;
+    if (alertIds.indexOf(aid) === -1) alertIds.push(aid);
+    if (profileIds.indexOf(pid) === -1) profileIds.push(pid);
+    if (!screeningHitHasHydratedAttributes(hit)) needsHydration = true;
+  });
+  if (!needsHydration || !alertIds.length || !profileIds.length) return;
+
+  SCREENING_SUBJECT_HYDRATION_FETCHES[flightKey] = 'loading';
+  try {
+    var body = {
+      application_id: app.id || app.ref,
+      subject: {
+        subject_type: selectedSubject.subject_type,
+        subject_name: selectedSubject.subject_name,
+        person_key: (selectedSubject.person && (selectedSubject.person.person_key || selectedSubject.person.id)) || ''
+      },
+      alert_identifiers: alertIds,
+      profile_identifiers: profileIds
+    };
+    var result = await boApiCall('POST', '/screening/hydrate-profiles', body, { suppressAuthReset: true, sessionId: getCurrentBoSessionId() });
+    SCREENING_SUBJECT_HYDRATION_FETCHES[flightKey] = 'done';
+    if (result && result.attributes && applyHydratedAttributesToHits(app.ref, result.attributes) > 0) {
+      if (typeof currentApp !== 'undefined' && currentApp && currentApp.ref === app.ref) {
+        renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+      }
+    }
+  } catch (e) {
+    // Best-effort — keep the current display silently.
+    console.warn('Profile hydration unavailable for subject:', subjectKey, e);
+    SCREENING_SUBJECT_HYDRATION_FETCHES[flightKey] = 'error';
+  }
+}
+
 function renderScreeningReviewPanel(app, focus) {
   var host = document.getElementById('detail-screening-review');
   if (!host || !app) return;
@@ -17538,6 +17687,9 @@ function renderScreeningReviewPanel(app, focus) {
       subject_name: selectedSubject.subject_name
     };
     focus = currentScreeningReviewFocus;
+    // Phase G: single-flight, flag-gated on-demand hydration of the selected
+    // subject's top hits. Inert (no call) when the flag is off.
+    ensureSubjectProfileHydration(app, selectedSubject);
   }
 
   html += '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;">';
