@@ -527,6 +527,12 @@ def test_enriched_workflows_persist_as_real_backend_evidence(temp_db, monkeypatc
         }
         assert "source_of_wealth_declaration" in sow_types
         assert "bank_statements" in sow_types
+        sow_edd = connection.execute(
+            "SELECT trigger_source, origin_context FROM edd_cases WHERE application_id=?",
+            ("pcdv100000000029",),
+        ).fetchone()
+        assert sow_edd["trigger_source"] == "officer_escalate_edd"
+        assert sow_edd["origin_context"] == "manual_onboarding_escalation"
 
         request = connection.execute(
             "SELECT status, reason, fulfilled_at FROM rmi_requests WHERE application_id=?",

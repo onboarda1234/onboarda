@@ -288,6 +288,70 @@ def test_complete_postgres_dry_run_is_repeatable_and_zero_residue(
     }
 
 
+def test_rm_pilot_029_persists_manual_edd_provenance_without_manifest_drift(
+    canonical_postgres,
+):
+    runtime = canonical_postgres
+    before = _public_table_counts(runtime.db)
+
+    dry_run = runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=True,
+        references=["RM-PILOT-029"],
+    )
+    assert [row["reference"] for row in dry_run] == ["RM-PILOT-029"]
+    assert _public_table_counts(runtime.db) == before
+
+    runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=False,
+        references=["RM-PILOT-029"],
+    )
+    connection = runtime.db.get_db()
+    try:
+        application = connection.execute(
+            "SELECT id,ref,risk_score,risk_level,onboarding_lane,risk_dimensions,"
+            "risk_escalations,risk_config_version "
+            "FROM applications WHERE ref=?",
+            ("RM-PILOT-029",),
+        ).fetchone()
+        edd_case = connection.execute(
+            "SELECT trigger_source,origin_context FROM edd_cases WHERE application_id=?",
+            (application["id"],),
+        ).fetchone()
+    finally:
+        connection.close()
+
+    expected = next(
+        row["expected"]
+        for row in runtime.canonical.scenarios()
+        if row["reference"] == "RM-PILOT-029"
+    )
+    assert application["id"] == "pcdv100000000029"
+    assert application["risk_score"] == expected["score"]
+    assert application["risk_level"] == expected["tier"]
+    assert application["onboarding_lane"] == expected["lane"]
+    assert edd_case["trigger_source"] == "officer_escalate_edd"
+    assert edd_case["origin_context"] == "manual_onboarding_escalation"
+
+    stored_snapshot = dict(application)
+    repeated_dry_run = runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=True,
+        references=["RM-PILOT-029"],
+    )
+    assert [row["reference"] for row in repeated_dry_run] == ["RM-PILOT-029"]
+    connection = runtime.db.get_db()
+    try:
+        after_dry_run = connection.execute(
+            "SELECT id,ref,risk_score,risk_level,onboarding_lane,risk_dimensions,"
+            "risk_escalations,risk_config_version "
+            "FROM applications WHERE ref=?",
+            ("RM-PILOT-029",),
+        ).fetchone()
+    finally:
+        connection.close()
+    assert dict(after_dry_run) == stored_snapshot
+    assert runtime.canonical.manifest_sha256() == EXPECTED_MANIFEST_SHA256
+
+
 def test_canonical_runtime_inputs_survive_persistence_and_dry_run(
     canonical_postgres,
 ):
