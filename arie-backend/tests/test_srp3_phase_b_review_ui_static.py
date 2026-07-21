@@ -181,8 +181,13 @@ def test_near_identical_hits_collapse_into_grouped_multiselect_block():
 def test_resolved_subject_finalize_feeds_frozen_gate():
     html = _html()
     fin = _function_region(html, "screeningSubjectFinalizeSection", "screeningTriageHitActions")
-    # Appears ONLY once every hit is decided (no hit pending).
-    assert "if (!rollup.total || rollup.pending) return ''" in fin
+    # PR-B / audit H2: finalize is gated on the SERVER's completeness — never
+    # offered while hits are unloaded (allLoaded) or still open (pending). An
+    # unloaded >cap subject gets a "load all hits" control instead.
+    assert "if (!rollup.total) return ''" in fin
+    assert "if (!rollup.allLoaded)" in fin
+    assert "loadAllScreeningHitsForSubject(" in fin
+    assert "if (rollup.pending) return ''" in fin
     # Aggregate: TRUE MATCH if any hit is a confirmed true match, else CLEAR.
     assert "var aggregate = rollup.trueCount ? 'match' : 'cleared';" in fin
     # The subject decision is recorded through the EXISTING gate flow — this is
@@ -191,6 +196,26 @@ def test_resolved_subject_finalize_feeds_frozen_gate():
     assert "Record the subject decision." in fin
     body = _function_region(html, "screeningSubjectWorkspaceBody", "buildEntityScreeningReviewCard")
     assert "screeningSubjectFinalizeSection(app, row, config.subjectType, config.subjectName)" in body
+
+
+def test_subject_rollup_and_finalize_use_server_authoritative_totals():
+    """PR-B / audit H2+H3: completeness and the denominator come from the
+    server rollup (uncapped), not the browser's loaded-items count."""
+    html = _html()
+    rollup = _function_region(html, "screeningSubjectRollup", "screeningSubjectRollupStrip")
+    # The server rollup is consulted and owns total + complete.
+    assert "SCREENING_HIT_ROLLUP[screeningReviewSubjectKey(" in rollup
+    assert "server && typeof server.total === 'number' ? server.total : loaded" in rollup
+    assert "server ? (!!server.complete && allLoaded)" in rollup
+    # POST and GET store the server rollup.
+    persist = _function_region(html, "screeningPersistHitDisposition", "ensureScreeningHitDispositionsHydrated")
+    assert "SCREENING_HIT_ROLLUP[screeningReviewSubjectKey(appRef, subjectType, subjectName)] = resp.rollup" in persist
+    hydrate = _function_region(html, "ensureScreeningHitDispositionsHydrated", "loadAllScreeningHitsForSubject")
+    assert "resp.rollups" in hydrate
+    # Load-all fetches the uncapped subject items so a >cap subject is finalizable.
+    loader = _function_region(html, "loadAllScreeningHitsForSubject", "screeningHitId")
+    assert "subject_name=" in loader
+    assert "SCREENING_HIT_ITEMS_FULL[subjectKey] = resp.items" in loader
 
 
 def test_per_hit_decisions_persist_and_hydrate():
@@ -215,10 +240,11 @@ def test_subject_status_is_computed_from_per_hit_decisions():
     html = _html()
     rollup = _function_region(html, "screeningSubjectRollup", "screeningSubjectRollupStrip")
     # TRUE MATCH if ANY hit is a confirmed true match (cannot be overridden by
-    # clearing the others); CLEAR only once every hit is resolved.
+    # clearing the others); CLEAR only once every hit is resolved. Post-PR-B the
+    # match/complete verdict is server-authoritative (hasMatch / complete).
     assert "if (s.status === 'match') trueCount++;" in rollup
-    assert "if (trueCount) { cls = 'match'" in rollup
-    assert "!pending && states.length" in rollup
+    assert "if (hasMatch) { cls = 'match'" in rollup
+    assert "else if (complete) { cls = 'clear'" in rollup
     strip = _function_region(html, "screeningSubjectRollupStrip", "screeningTriageHitActions")
     assert 'data-screening-subject-rollup="true"' in strip
     assert "Subject status: " in strip

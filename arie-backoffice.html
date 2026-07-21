@@ -15807,6 +15807,18 @@ function screeningSubjectWorkspaceBody(config) {
   config = config || {};
   var app = config.app;
   var row = config.reviewRow;
+  // Audit H2: if the officer has loaded the full (uncapped) hit set for this
+  // subject, render every hit — swap the full item list onto the row so all
+  // downstream consumers (cards, per-hit states, rollup) see it. Without this a
+  // subject with more hits than its share of the evidence cap could never
+  // disposition — and therefore never finalise — the hidden hits.
+  if (row) {
+    var _fullItems = SCREENING_HIT_ITEMS_FULL[screeningReviewSubjectKey(
+      row.application_ref || (app && app.ref) || '', row.subject_type || '', row.subject_name || '')];
+    if (Array.isArray(_fullItems) && _fullItems.length) {
+      row.screening_evidence = Object.assign({}, row.screening_evidence || {}, { items: _fullItems });
+    }
+  }
   var body = '';
   body += screeningReviewHonestyBanner(row, config.screeningSummary);
   body += screeningTriageStrip(row);
@@ -17070,6 +17082,15 @@ function screeningClearanceNeedsSecondReviewer(row) {
 // server persistence of per-hit decisions is a fast-follow.
 var SCREENING_HIT_DISPOSITION_STATE = {};
 var SCREENING_HIT_DISPOSITION_HYDRATED = {};  // appRef -> 'loading'|'done'|'error'
+// Server-authoritative per-subject rollup (audit H2/H3): keyed by
+// screeningReviewSubjectKey → { total, match, cleared, open, complete, verdict }.
+// The server computes this over the UNCAPPED hit set, so it — not the browser's
+// loaded-items count — decides completeness and the true denominator.
+var SCREENING_HIT_ROLLUP = {};
+// Uncapped evidence items fetched on demand for a single subject (>cap
+// subjects), keyed by screeningReviewSubjectKey → items[]. Lets a high-volume
+// subject load every hit and reach a finalizable state.
+var SCREENING_HIT_ITEMS_FULL = {};
 var SCREENING_MATERIALITY_LABELS = {
   high: 'Material — High', moderate: 'Material — Moderate',
   nonmaterial: 'Non-material', insufficient: 'Insufficient info'
@@ -17089,6 +17110,13 @@ function screeningPersistHitDisposition(appRef, subjectType, subjectName, hitIds
     hit_ids: hitIds,
     disposition: status || 'pending',
     materiality: materiality || ''
+  }).then(function(resp) {
+    // Store the server-authoritative rollup so completeness/finalize reflects
+    // the uncapped truth, not the browser's optimistic view.
+    if (resp && resp.rollup) {
+      SCREENING_HIT_ROLLUP[screeningReviewSubjectKey(appRef, subjectType, subjectName)] = resp.rollup;
+      if (currentApp && currentApp.ref === appRef) renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    }
   }).catch(function(e) {
     showToast((e && e.message) || 'Failed to save screening decision — refreshing', 'error');
     SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = null;  // force re-hydrate to resync
@@ -17112,20 +17140,58 @@ function ensureScreeningHitDispositionsHydrated(appRef, force) {
         st.status = d.disposition || 'pending';
         st.materiality = d.materiality || null;
       });
+      // Server-authoritative rollups (audit H2/H3): true uncapped totals so the
+      // client never reports 'complete' from its partial/loaded item view.
+      var rollups = (resp && resp.rollups) || {};
+      Object.keys(rollups).forEach(function(k) {
+        var parts = String(k).split('|');
+        SCREENING_HIT_ROLLUP[screeningReviewSubjectKey(appRef, parts[0] || '', parts.slice(1).join('|'))] = rollups[k];
+      });
       SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = 'done';
       if (currentApp && currentApp.ref === appRef) renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
     })
     .catch(function() { SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = 'error'; });
 }
 
+// Load every hit for one subject (uncapped) — for a >cap subject whose review
+// workspace shows only its share of the evidence cap. Fetches the subject-scoped
+// hit-disposition GET (which returns uncapped items + rollup), swaps the full
+// item set onto the in-memory row, and re-renders so all hits are dispositionable.
+var SCREENING_HIT_ITEMS_FETCH = {};  // subjectKey -> 'loading'|'done'|'error'
+function loadAllScreeningHitsForSubject(appRef, subjectType, subjectName) {
+  var subjectKey = screeningReviewSubjectKey(appRef, subjectType, subjectName);
+  if (SCREENING_HIT_ITEMS_FETCH[subjectKey] === 'loading') return;
+  SCREENING_HIT_ITEMS_FETCH[subjectKey] = 'loading';
+  if (currentApp && currentApp.ref === appRef) renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  var q = '/screening/hit-disposition?application_id=' + encodeURIComponent(appRef) +
+    '&subject_type=' + encodeURIComponent(subjectType) +
+    '&subject_name=' + encodeURIComponent(subjectName);
+  boApiCall('GET', q).then(function(resp) {
+    if (resp && Array.isArray(resp.items)) SCREENING_HIT_ITEMS_FULL[subjectKey] = resp.items;
+    var rollups = (resp && resp.rollups) || {};
+    Object.keys(rollups).forEach(function(k) {
+      var parts = String(k).split('|');
+      SCREENING_HIT_ROLLUP[screeningReviewSubjectKey(appRef, parts[0] || '', parts.slice(1).join('|'))] = rollups[k];
+    });
+    SCREENING_HIT_ITEMS_FETCH[subjectKey] = 'done';
+    if (currentApp && currentApp.ref === appRef) renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  }).catch(function() {
+    SCREENING_HIT_ITEMS_FETCH[subjectKey] = 'error';
+    showToast('Could not load all screening hits — please retry.', 'error');
+    if (currentApp && currentApp.ref === appRef) renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  });
+}
+
 function screeningHitId(item, index) {
+  // Audit H1: the SERVER stamps each evidence item with a canonical, unique
+  // hit_id (server.py _screening_hit_id) and is the sole deriver. The client
+  // reads it — it must never fall back to a single provider id (which collided
+  // across the many adverse-media articles that share one profile, so one click
+  // cleared them all). If a server id is somehow absent the hit is not
+  // dispositionable; return '' and the card renders read-only rather than
+  // fabricating an id the server would reject.
   item = item || {};
-  return String(
-    item.provider_profile_id || item.provider_profile_identifier ||
-    item.provider_alert_id || item.provider_alert_identifier ||
-    item.provider_case_id || item.provider_risk_id ||
-    ('idx-' + index)
-  );
+  return String(item.hit_id || '');
 }
 function screeningHitDispositionState(appRef, subjectType, subjectName, hitId) {
   var key = screeningReviewSubjectKey(appRef, subjectType, subjectName);
@@ -17166,11 +17232,31 @@ function screeningSubjectRollup(row) {
     else if (s.status === 'cleared') cleared++;
     else pending++;  // pending / escalated / follow_up_required keep the subject open
   });
+  var loaded = states.length;
+  // Audit H2/H3: the SERVER owns the true (uncapped) denominator and the
+  // completeness verdict. The browser's loaded-items view is used only as a
+  // fallback before the server rollup has arrived, and can never upgrade the
+  // subject to CLEAR on its own.
+  var appRef = row.application_ref || (currentApp && currentApp.ref) || '';
+  var server = SCREENING_HIT_ROLLUP[screeningReviewSubjectKey(appRef, row.subject_type || '', row.subject_name || '')] || null;
+  var total = server && typeof server.total === 'number' ? server.total : loaded;
+  var allLoaded = loaded >= total;
+  var hasMatch = server ? server.match > 0 : trueCount > 0;
+  // CLEAR requires the SERVER's complete flag (uncapped) AND every hit loaded
+  // locally — never the client's partial view alone.
+  var complete = server ? (!!server.complete && allLoaded) : (pending === 0 && loaded > 0);
   var cls, label;
-  if (trueCount) { cls = 'match'; label = 'TRUE MATCH — Enhanced Due Diligence required'; }
-  else if (!pending && states.length) { cls = 'clear'; label = 'CLEAR — every hit resolved'; }
+  if (hasMatch) { cls = 'match'; label = 'TRUE MATCH — Enhanced Due Diligence required'; }
+  else if (complete) { cls = 'clear'; label = 'CLEAR — every hit resolved'; }
   else { cls = 'progress'; label = 'REVIEW IN PROGRESS'; }
-  return { cls: cls, label: label, trueCount: trueCount, cleared: cleared, pending: pending, total: states.length };
+  return {
+    cls: cls, label: label,
+    trueCount: server ? server.match : trueCount,
+    cleared: server ? server.cleared : cleared,
+    pending: server ? server.open : pending,
+    total: total, loaded: loaded, allLoaded: allLoaded, complete: complete,
+    hasServer: !!server
+  };
 }
 function screeningSubjectRollupStrip(row) {
   if (!row || !row.review_required) return '';
@@ -17213,7 +17299,21 @@ function screeningSubjectRollupStrip(row) {
 // re-deciding (they retain authority to change it — recorded in the audit).
 function screeningSubjectFinalizeSection(app, row, subjectType, subjectName) {
   var rollup = screeningSubjectRollup(row);
-  if (!rollup.total || rollup.pending) return '';  // only when every hit is decided
+  if (!rollup.total) return '';
+  // Audit H2: never present a 'ready to finalise' state while the server knows
+  // of hits this browser has not loaded — offer to load them instead. Without
+  // this a >cap subject would look done after clearing only its loaded share.
+  if (!rollup.allLoaded) {
+    var appRef = row.application_ref || (currentApp && currentApp.ref) || '';
+    var subjectKey = screeningReviewSubjectKey(appRef, subjectType, subjectName);
+    var loadingAll = SCREENING_HIT_ITEMS_FETCH[subjectKey] === 'loading';
+    var args = '\'' + escapeJsAttr(appRef) + '\',\'' + escapeJsAttr(subjectType) + '\',\'' + escapeJsAttr(subjectName) + '\'';
+    return '<div data-screening-subject-finalize-blocked="true" style="margin-top:14px;padding:11px 14px;border:1px solid #fde68a;border-radius:10px;background:#fffbeb;font-size:12px;color:#92400e;line-height:1.55;">' +
+      '<strong>Not all hits are loaded.</strong> ' + rollup.loaded + ' of ' + rollup.total + ' hits are shown; the rest exceed the display limit and must be loaded before this subject can be finalised. ' +
+      '<button type="button" class="btn btn-outline btn-sm" style="margin-top:8px;" ' + (loadingAll ? 'disabled ' : '') + 'onclick="loadAllScreeningHitsForSubject(' + args + ')">' + (loadingAll ? 'Loading all hits…' : 'Load all ' + rollup.total + ' hits') + '</button>' +
+    '</div>';
+  }
+  if (rollup.pending) return '';  // hits loaded but not all decided
   var aggregate = rollup.trueCount ? 'match' : 'cleared';
   var state = getInlineScreeningDispositionState(app.ref, subjectType, subjectName, row);
   if (!state.disposition) state.disposition = aggregate;
@@ -17239,6 +17339,14 @@ function screeningTriageHitActions(row, item, itemIndex) {
   var appRef = row.application_ref || (currentApp && currentApp.ref) || '';
   var subjType = row.subject_type || '', subjName = row.subject_name || '';
   var hid = screeningHitId(item, itemIndex);
+  // Audit H1: a hit the server never stamped with an id cannot be dispositioned
+  // (the server would reject a fabricated/empty id). Render it read-only with an
+  // honest note rather than offering an action that can't be recorded. This is
+  // unreachable in normal operation — the shared enrichment chokepoint always
+  // stamps — but keeps a stale pre-deploy card safe.
+  if (!hid) {
+    return '<div style="border-top:1px solid var(--border1);padding-top:10px;font-size:11.5px;color:#92400e;">This hit cannot be identified for a per-hit decision. Refresh the screening review to load the latest evidence.</div>';
+  }
   var st = screeningHitDispositionState(appRef, subjType, subjName, hid);
   var args = '\'' + escapeJsAttr(appRef) + '\',\'' + escapeJsAttr(subjType) + '\',\'' + escapeJsAttr(subjName) + '\',\'' + escapeJsAttr(hid) + '\'';
   var clearBlocked = !canClearScreeningDisposition();
