@@ -1008,16 +1008,15 @@ class TestBackofficeStaticPins:
             "button push must be conditional — absent/false flag renders today's UI"
 
     def test_provider_score_surfaces_raw_never_percent(self, html):
-        # Phase E re-anchor: the per-row provider-evidence cell was retired
-        # with the dense audit table; the invariant (provider score is always
-        # a raw value, never a percentage) now lives in the Audit trace and
-        # the triage cell.
-        trace = _extract_js_function(html, "agent3AuditTraceHtml")
-        assert "provider score (raw)" in trace
-        assert "%" not in trace, "provider score must not be rendered as a percentage"
-        cell = _extract_js_function(html, "agent3TriageCellHtml")
-        assert "%" not in cell
-        assert "Not a provider score" in cell
+        # Compact Agent 3 re-anchor: the audit-trace/table helpers were retired
+        # with the approved one-paragraph callout; the invariant (scores render
+        # raw — never a percentage) now lives in the narrative prose and the
+        # ranked hit cards' score block.
+        narrative = _extract_js_function(html, "agent3TriageNarrativeHtml")
+        assert "%" not in narrative, "triage score must not be rendered as a percentage"
+        block = _extract_js_function(html, "screeningTriageScoreBlock")
+        assert "%" not in block
+        assert "Not a provider score" in block
 
 
 # ══════════════════════════════════════════════════════════
