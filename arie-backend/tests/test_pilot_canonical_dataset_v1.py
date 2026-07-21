@@ -32,6 +32,7 @@ from fixtures.pilot_canonical_cli import (
     _enforce_cleanup_gates,
 )
 from fixtures.pilot_canonical_seeder import (
+    APPROVED_MANIFEST_LINEAGE,
     PilotDatasetReferenceCollision,
     seed_pilot_canonical_dataset,
 )
@@ -427,6 +428,129 @@ def test_nonfixture_reference_collision_fails_before_writes(temp_db, monkeypatch
             with pytest.raises(PilotDatasetReferenceCollision, match="non-fixture"):
                 seed_pilot_canonical_dataset(dry_run=True)
         assert _count(temp_db, "applications", "ref LIKE 'RM-PILOT-%'") == 1
+    finally:
+        _cleanup(temp_db)
+
+
+def _mutate_canonical_identity(path: str, reference: str, **changes) -> None:
+    connection = sqlite3.connect(path)
+    raw = connection.execute(
+        "SELECT prescreening_data FROM applications WHERE ref=?", (reference,)
+    ).fetchone()[0]
+    identity = json.loads(raw)
+    identity.update(changes)
+    connection.execute(
+        "UPDATE applications SET prescreening_data=? WHERE ref=?",
+        (json.dumps(identity, sort_keys=True), reference),
+    )
+    connection.commit()
+    connection.close()
+
+
+def test_reviewed_manifest_lineage_converges_same_deterministic_dataset(
+    temp_db, monkeypatch
+):
+    _cleanup(temp_db)
+    previous_version, previous_hash = next(
+        identity
+        for identity, successor in APPROVED_MANIFEST_LINEAGE.items()
+        if successor == ("v1", manifest_sha256())
+    )
+    try:
+        with _tier0_contract_enabled(monkeypatch):
+            seed_pilot_canonical_dataset(
+                dry_run=False, references=["RM-PILOT-001"]
+            )
+            _mutate_canonical_identity(
+                temp_db,
+                "RM-PILOT-001",
+                dataset_version=previous_version,
+                dataset_hash=previous_hash,
+            )
+            seed_pilot_canonical_dataset(
+                dry_run=False, references=["RM-PILOT-001"]
+            )
+
+        connection = sqlite3.connect(temp_db)
+        raw = connection.execute(
+            "SELECT prescreening_data FROM applications WHERE ref='RM-PILOT-001'"
+        ).fetchone()[0]
+        connection.close()
+        assert json.loads(raw)["dataset_hash"] == manifest_sha256()
+    finally:
+        _cleanup(temp_db)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"dataset_version": "foreign-v1"},
+        {"source": "fixtures.some_other_dataset"},
+        {"dataset_name": "Another Canonical Dataset"},
+        {"synthetic": False},
+        {"dataset_hash": "0" * 64},
+    ],
+    ids=[
+        "different-dataset-lineage",
+        "different-fixture-source",
+        "different-dataset-name",
+        "different-synthetic-marker",
+        "unknown-manifest",
+    ],
+)
+def test_foreign_canonical_identity_still_fails_closed(
+    temp_db, monkeypatch, changes
+):
+    _cleanup(temp_db)
+    try:
+        with _tier0_contract_enabled(monkeypatch):
+            seed_pilot_canonical_dataset(
+                dry_run=False, references=["RM-PILOT-001"]
+            )
+            _mutate_canonical_identity(temp_db, "RM-PILOT-001", **changes)
+            with pytest.raises(
+                PilotDatasetReferenceCollision, match="another fixture identity"
+            ):
+                seed_pilot_canonical_dataset(
+                    dry_run=True, references=["RM-PILOT-001"]
+                )
+    finally:
+        _cleanup(temp_db)
+
+
+@pytest.mark.parametrize(
+    ("stored_id", "stored_reference"),
+    [
+        ("different-application-id", "RM-PILOT-001"),
+        ("pcdv100000000001", "RM-PILOT-999"),
+    ],
+)
+def test_deterministic_id_or_reference_difference_fails_closed(
+    temp_db, monkeypatch, stored_id, stored_reference
+):
+    _cleanup(temp_db)
+    connection = sqlite3.connect(temp_db)
+    connection.execute(
+        "INSERT INTO applications "
+        "(id,ref,company_name,status,is_fixture,prescreening_data) "
+        "VALUES (?,?,?,?,?,?)",
+        (
+            stored_id,
+            stored_reference,
+            "Foreign Fixture",
+            "draft",
+            True,
+            json.dumps({"fixture": True, "synthetic": True}),
+        ),
+    )
+    connection.commit()
+    connection.close()
+    try:
+        with _tier0_contract_enabled(monkeypatch):
+            with pytest.raises(PilotDatasetReferenceCollision):
+                seed_pilot_canonical_dataset(
+                    dry_run=True, references=["RM-PILOT-001"]
+                )
     finally:
         _cleanup(temp_db)
 

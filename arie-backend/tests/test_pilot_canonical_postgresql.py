@@ -288,6 +288,58 @@ def test_complete_postgres_dry_run_is_repeatable_and_zero_residue(
     }
 
 
+def test_postgres_converges_only_reviewed_prior_manifest_identity(
+    canonical_postgres,
+):
+    runtime = canonical_postgres
+    reference = "RM-PILOT-001"
+    runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=False, references=[reference]
+    )
+    prior_version, prior_hash = next(
+        identity
+        for identity, successor in runtime.seeder.APPROVED_MANIFEST_LINEAGE.items()
+        if successor == ("v1", EXPECTED_MANIFEST_SHA256)
+    )
+
+    connection = runtime.db.get_db()
+    try:
+        application = connection.execute(
+            "SELECT id,prescreening_data::text AS prescreening_data "
+            "FROM applications WHERE ref=?",
+            (reference,),
+        ).fetchone()
+        identity = json.loads(application["prescreening_data"])
+        original_id = application["id"]
+        identity["dataset_version"] = prior_version
+        identity["dataset_hash"] = prior_hash
+        connection.execute(
+            "UPDATE applications SET prescreening_data=? WHERE id=?",
+            (json.dumps(identity, sort_keys=True), original_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=False, references=[reference]
+    )
+    connection = runtime.db.get_db()
+    try:
+        converged = connection.execute(
+            "SELECT id,prescreening_data::text AS prescreening_data "
+            "FROM applications WHERE ref=?",
+            (reference,),
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert converged["id"] == original_id
+    assert json.loads(converged["prescreening_data"])["dataset_hash"] == (
+        EXPECTED_MANIFEST_SHA256
+    )
+
+
 def test_rm_pilot_029_persists_manual_edd_provenance_without_manifest_drift(
     canonical_postgres,
 ):
