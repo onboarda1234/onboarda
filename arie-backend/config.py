@@ -99,6 +99,17 @@ AI_CONFIDENCE_THRESHOLD = float(os.getenv("AI_CONFIDENCE_THRESHOLD", "0.70"))
 # unchanged until per-check evaluators are authored and approved (see
 # docs/compliance/P12_7_VERIFICATION_MATRIX_DECISION_MEMO.md).
 ENABLE_HYBRID_INCONCLUSIVE_GATE = os.getenv("ENABLE_HYBRID_INCONCLUSIVE_GATE", "false").lower() == "true"
+# P11-5 (BSA-012): cross-call circuit breaker for the Anthropic API. The
+# per-call retry loop already backs off, but nothing stops EVERY request
+# from re-hammering a failing provider. OFF by default: behaviour unchanged
+# until enabled.
+ENABLE_AI_CIRCUIT_BREAKER = os.getenv("ENABLE_AI_CIRCUIT_BREAKER", "false").lower() == "true"
+AI_CIRCUIT_BREAKER_THRESHOLD = int(os.getenv("AI_CIRCUIT_BREAKER_THRESHOLD", "5"))
+AI_CIRCUIT_BREAKER_COOLDOWN_SECONDS = int(os.getenv("AI_CIRCUIT_BREAKER_COOLDOWN_SECONDS", "60"))
+# P11-5 (BSA-011): prompt fencing — sanitize file_name/doc_type metadata into
+# prompts and add the anti-injection system directive. OFF by default: live
+# prompts stay byte-identical until activation is approved.
+ENABLE_AI_PROMPT_FENCING = os.getenv("ENABLE_AI_PROMPT_FENCING", "false").lower() == "true"
 ARIE_MODEL_FAST = os.getenv("ARIE_MODEL_FAST", "claude-sonnet-4-6")
 ARIE_MODEL_THOROUGH = os.getenv("ARIE_MODEL_THOROUGH", "claude-opus-4-6")
 
