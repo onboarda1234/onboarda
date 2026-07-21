@@ -532,4 +532,20 @@ def _reset_shared_rate_limiter():
         base_handler.rate_limiter._attempts.clear()
     except Exception:
         pass
+    # BSA-002 / R2-BSA-016: endpoints now route through the DB-backed shared
+    # limiter (shared_rate_limits) — doc_upload, ai_verify, document_verify,
+    # supervisor pipeline triggers, enhanced-requirement uploads, forgot/reset
+    # password. The in-memory clear above no longer covers them, so 127.0.0.1's
+    # cumulative budget would carry across files and reproduce the exact 429
+    # flake this fixture exists to prevent. Clear the DB-backed store too.
+    try:
+        from db import get_db
+        db = get_db()
+        try:
+            db.execute("DELETE FROM shared_rate_limits")
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        pass
     yield

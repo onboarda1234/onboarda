@@ -284,6 +284,15 @@ class PipelineRunHandler(SupervisorBaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+        # R2-BSA-016: supervisor pipeline runs are expensive (120s timeout).
+        # Fail-closed, DB-backed limit on this trigger too.
+        if not self.check_sensitive_rate_limit(
+            "supervisor_pipeline_run",
+            max_attempts=10,
+            window_seconds=60,
+            error_message="Rate limit exceeded for supervisor pipeline. Try again later.",
+        ):
+            return
         body = self.get_json_body()
         application_id = body.get("application_id")
         trigger_type = body.get("trigger_type", "onboarding")
