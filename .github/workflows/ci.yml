@@ -64,6 +64,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
+      - name: Verify hash-pinned lockfiles install (R2-BSA-019)
+        run: |
+          # The production image installs requirements.lock with --require-hashes.
+          # Prove both locks are complete and installable under hash enforcement,
+          # so a broken/incomplete lock fails CI here rather than at deploy time.
+          python -m venv /tmp/hashlock-runtime
+          /tmp/hashlock-runtime/bin/python -m pip install --upgrade pip
+          /tmp/hashlock-runtime/bin/pip install --require-hashes --no-cache-dir -r requirements.lock
+          python -m venv /tmp/hashlock-dev
+          /tmp/hashlock-dev/bin/python -m pip install --upgrade pip
+          /tmp/hashlock-dev/bin/pip install --require-hashes --no-cache-dir -r requirements-dev.lock
+
       - name: Enable SSL on PostgreSQL service container
         run: |
           # Generate a self-signed certificate on the runner (sslmode=require does not verify CA)

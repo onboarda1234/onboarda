@@ -1,5 +1,14 @@
 # ARIE Finance — Python Dependencies (pinned for reproducible builds)
 # ═══════════════════════════════════════════════════════════
+# R2-BSA-019: this file is the human-edited source of DIRECT dependencies.
+# The production image installs the hash-pinned lockfile requirements.lock
+# (full transitive tree + SHA-256 per package) with --require-hashes.
+# After changing a pin here, regenerate BOTH locks and commit them:
+#   pip install pip-tools
+#   pip-compile --generate-hashes --allow-unsafe --output-file=requirements.lock requirements.txt
+#   pip-compile --generate-hashes --allow-unsafe --output-file=requirements-dev.lock requirements.txt requirements-dev.txt
+# CI enforces that every pin below appears in the lock at the same version.
+# ═══════════════════════════════════════════════════════════
 # Core Framework
 tornado==6.5.7
 
