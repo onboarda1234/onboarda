@@ -6463,6 +6463,42 @@ def _run_migrations(db: DBConnection):
     except Exception as e:
         logger.debug(f"screening_report_archive may already exist: {e}")
 
+    # DCI-104: foreign-key index coverage, batch 2. These FK columns had no
+    # covering index, so joins and ON DELETE CASCADE integrity scans over them
+    # were full table scans that degrade as the referenced parents grow. Indexes
+    # are additive (never change query results) so they are P12-1-safe on
+    # regulated / change-controlled tables. Idempotent + dialect-neutral;
+    # migration_050 keeps the ADR-0008 ledger entry. The high-fan-in
+    # audit-actor *_by -> users FKs are deliberately excluded (write overhead,
+    # no hot reverse-lookup path). Deferred: four lower-value navigational FKs
+    # on change-management tables (change_requests.source_alert_id,
+    # change_request_documents.item_id, entity_profile_versions.change_request_id,
+    # application_enhanced_requirements.workflow_test_acceptance_document_id) —
+    # those tables/columns are created by an _ensure_* schema step that runs
+    # AFTER this migration on a fresh DB, so they need their index placed there.
+    for _idx_name, _idx_ddl in (
+        ("idx_screening_reviews_application_id",
+         "CREATE INDEX IF NOT EXISTS idx_screening_reviews_application_id ON screening_reviews(application_id)"),
+        ("idx_client_sessions_application_id",
+         "CREATE INDEX IF NOT EXISTS idx_client_sessions_application_id ON client_sessions(application_id)"),
+        ("idx_verification_jobs_application_id",
+         "CREATE INDEX IF NOT EXISTS idx_verification_jobs_application_id ON verification_jobs(application_id)"),
+        ("idx_sar_reports_alert_id",
+         "CREATE INDEX IF NOT EXISTS idx_sar_reports_alert_id ON sar_reports(alert_id)"),
+        ("idx_aer_linked_document_id",
+         "CREATE INDEX IF NOT EXISTS idx_aer_linked_document_id ON application_enhanced_requirements(linked_document_id)"),
+        ("idx_supervisor_human_reviews_escalation",
+         "CREATE INDEX IF NOT EXISTS idx_supervisor_human_reviews_escalation ON supervisor_human_reviews(escalation_id)"),
+        ("idx_data_purge_log_retention_policy",
+         "CREATE INDEX IF NOT EXISTS idx_data_purge_log_retention_policy ON data_purge_log(retention_policy_id)"),
+        ("idx_documents_superseded_by",
+         "CREATE INDEX IF NOT EXISTS idx_documents_superseded_by ON documents(superseded_by_document_id)"),
+    ):
+        try:
+            db.execute(_idx_ddl)
+        except Exception as e:
+            logger.debug(f"{_idx_name} may already exist or column/table absent: {e}")
+
     # Check if pre_approval columns exist on applications table
     if not _safe_column_exists(db, "applications", "pre_approval_decision"):
         logger.info("Migration v2.1: Adding pre-approval columns to applications table")
