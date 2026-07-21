@@ -1,0 +1,30 @@
+-- Migration 051: audit_log append-only DB triggers (RDI-013 non-SAR, P10-7 code half).
+--
+-- DOCUMENTARY PLACEHOLDER (migration_044 pattern): the real DDL is engine-
+-- branched and therefore lives inline in db._ensure_audit_log_append_only(),
+-- called from _run_migrations on every boot — fresh installs and long-lived
+-- databases both converge. This file keeps the ADR-0008 ledger entry.
+--
+-- What the inline DDL creates:
+--   * audit_maintenance_window table — presence of ANY row disarms the
+--     triggers. Deployed environments boot with it EMPTY (armed);
+--     ENVIRONMENT=test/testing auto-opens a standing row so existing
+--     fixture-cleanup and item-27 tamper-simulation suites keep working.
+--   * BEFORE UPDATE / BEFORE DELETE triggers on audit_log that abort with
+--     "audit_log is append-only (RDI-013)" unless a window row exists.
+--     INSERTs are untouched. PostgreSQL: plpgsql guard function +
+--     DROP/CREATE TRIGGER (idempotent). SQLite: CREATE TRIGGER IF NOT
+--     EXISTS with a WHEN clause on the window count.
+--
+-- Sanctioned production bypass: gdpr.purge_expired_data (retention_purge
+-- context) opens a transient window via
+-- regulated_deletion.audit_log_maintenance_window for the one legitimate
+-- audit_log deletion path (manual retention purge). GDPR/DSAR erasure never
+-- mutates audit_log (retained table) and needs no bypass.
+--
+-- Residual (ops half, tracked on the register): the app connects as table
+-- owner and could DROP/DISABLE the trigger — the RDS grants work (separate
+-- trigger-owner role; app role without UPDATE/DELETE/TRUNCATE/ALTER on
+-- audit_log) closes that. pg_restore --disable-triggers similarly bypasses;
+-- boot re-converges the triggers idempotently.
+SELECT 1;
