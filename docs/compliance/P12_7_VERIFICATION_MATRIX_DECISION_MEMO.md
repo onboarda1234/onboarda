@@ -29,8 +29,14 @@ anywhere at runtime.
   None-returning, or raising evaluator leaves the check INCONCLUSIVE → AI
   path, exactly as today. The pass can only *reduce* the AI set, never
   invent a silent pass.
-- `_aggregate` is now INCONCLUSIVE-aware: a surviving INCONCLUSIVE flags the
-  document for manual review instead of silently diluting confidence.
+- `_aggregate` is INCONCLUSIVE-aware **only when the gate is enabled** (audit
+  finding, deliberately gated): with the flag on, a surviving INCONCLUSIVE
+  flags the document for manual review instead of silently diluting
+  confidence. With the flag off, aggregation is byte-identical to legacy —
+  including the (pre-existing) edge where an off-schema AI result stating
+  `"inconclusive"` silently counts as a non-pass. **Flipping the flag
+  therefore also activates this aggregation fail-safe** — signing Part A
+  approves both the rules-first routing and the stricter aggregation.
 
 **What needs your sign-off (per evaluator, later):** each deterministic
 evaluator registered for a HYBRID check id changes which checks stop going

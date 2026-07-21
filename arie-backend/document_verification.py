@@ -1322,6 +1322,12 @@ def run_hybrid_deterministic_pass(hybrid_checks: List[dict], ctx: dict) -> Tuple
                     check_id,
                 )
                 outcome = None
+        if outcome is not None and not isinstance(outcome, dict):
+            logger.error(
+                "Hybrid evaluator for %s returned %s (non-dict) — treating as INCONCLUSIVE",
+                check_id, type(outcome).__name__,
+            )
+            outcome = None
         if outcome is None:
             inconclusive.append(chk)
         else:
@@ -1349,10 +1355,15 @@ def _aggregate(all_results: List[dict], confidence: float = None) -> dict:
     fail_results = [r for r in all_results if r.get("result") == CheckStatus.FAIL]
     warn_results = [r for r in all_results if r.get("result") == CheckStatus.WARN]
     pass_results = [r for r in all_results if r.get("result") == CheckStatus.PASS]
-    # DCI-014: an INCONCLUSIVE that survives to aggregation (e.g. the AI
-    # fallback was unavailable) must flag for manual review — it may never
-    # silently sit in the confidence denominator as an unexplained non-pass.
-    inconclusive_results = [r for r in all_results if r.get("result") == CheckStatus.INCONCLUSIVE]
+    # DCI-014 fail-safe — ACTIVATES WITH THE GATE: a surviving INCONCLUSIVE
+    # (e.g. AI fallback unavailable) flags for manual review instead of
+    # silently diluting confidence. Gated so flag-off aggregation stays
+    # byte-identical to the frozen legacy behaviour even for an off-schema
+    # AI result — disclosed in the P12-7 decision memo Part A.
+    inconclusive_results = []
+    if _hybrid_gate_enabled():
+        inconclusive_results = [r for r in all_results
+                                if r.get("result") == CheckStatus.INCONCLUSIVE]
 
     red_flags = [r["message"] for r in fail_results]
     warnings = [r["message"] for r in warn_results] + [
@@ -1593,9 +1604,7 @@ def verify_document_layered(
             hybrid_pass_started = time.perf_counter()
             hybrids = [c for c in ai_hybrid_checks
                        if c.get("classification") == CheckClassification.HYBRID]
-            pure_ai = [c for c in ai_hybrid_checks
-                       if c.get("classification") != CheckClassification.HYBRID]
-            resolved, still_inconclusive = run_hybrid_deterministic_pass(hybrids, {
+            resolved, _still_inconclusive = run_hybrid_deterministic_pass(hybrids, {
                 "doc_type": doc_type,
                 "category": category,
                 "extracted_fields": extracted_fields,
@@ -1608,7 +1617,15 @@ def verify_document_layered(
                     "[verify-layered] Hybrid deterministic pass resolved %d/%d checks for %s",
                     len(resolved), len(hybrids), doc_type,
                 )
-            ai_hybrid_checks = pure_ai + still_inconclusive
+                # Remove ONLY resolved checks, preserving the original list
+                # order — the numbered check list in the Claude prompt (and
+                # result/UI ordering) must not change when nothing resolves.
+                resolved_ids = {r.get("id") for r in resolved}
+                ai_hybrid_checks = [
+                    c for c in ai_hybrid_checks
+                    if not (c.get("classification") == CheckClassification.HYBRID
+                            and (c.get("id") or c.get("check_id") or "") in resolved_ids)
+                ]
             timing["hybrid_deterministic_pass_ms"] = _elapsed_ms(hybrid_pass_started)
         timing["ai_check_selection_ms"] = _elapsed_ms(ai_selection_started)
 
