@@ -13,6 +13,7 @@ from contextlib import contextmanager
 
 from regulated_deletion import (
     FIXTURE_CLEANUP_CONFIRMATION,
+    audit_log_maintenance_window,
     is_verified_isolated_test_database,
     sanctioned_delete_context,
 )
@@ -163,7 +164,15 @@ def cleanup_registered_fixture(
                         (manifest["synthetic_ref"], "fixture_seed", f"%{manifest['marker']}%"),
                     )
                 elif table == "audit_log":
-                    remove(table, "user_id='fixture_seed' AND detail LIKE ?", (f"%{manifest['scenario_code']}%",))
+                    # P10-7: audit_log carries append-only DB triggers on
+                    # staging; this sanctioned fixture cleanup opens a
+                    # transient window (commit happens after this block, so
+                    # the marker row never survives it).
+                    with audit_log_maintenance_window(
+                        db, actor_id=actor_id or "fixture_cleanup",
+                        reason=f"fixture cleanup {manifest['scenario_code']}",
+                    ):
+                        remove(table, "user_id='fixture_seed' AND detail LIKE ?", (f"%{manifest['scenario_code']}%",))
                 elif table == "directors":
                     full_name = {
                         "missing-idv": "FIX-SCEN15 Unverified Director",
@@ -343,21 +352,29 @@ def cleanup_pilot_canonical_dataset(
                     "id=? AND application_ref=?",
                     (f"{app_id}:decision", reference),
                 )
-                remove(
-                    "audit_log",
-                    "user_id='fixture_seed' AND action LIKE 'fixture.pilot_canonical_%' "
-                    "AND detail LIKE ?",
-                    (f"%{reference}%",),
-                )
-                if reference == roots[-1]["ref"]:
+                # P10-7: audit_log carries append-only DB triggers on staging;
+                # this staging-only sanctioned cleanup opens a transient
+                # window (commit happens after the loop, so the marker row
+                # never survives it).
+                with audit_log_maintenance_window(
+                    db, actor_id=actor_id or "fixture_cleanup",
+                    reason=f"pilot canonical cleanup {reference}",
+                ):
                     remove(
                         "audit_log",
-                        "user_id='fixture_seed' AND action='fixture.pilot_canonical_apply_complete' "
-                        "AND target='dataset:pilot-canonical-v1' AND detail LIKE ?",
-                        (
-                            f"Applied % canonical scenarios at manifest {current_hash}",
-                        ),
+                        "user_id='fixture_seed' AND action LIKE 'fixture.pilot_canonical_%' "
+                        "AND detail LIKE ?",
+                        (f"%{reference}%",),
                     )
+                    if reference == roots[-1]["ref"]:
+                        remove(
+                            "audit_log",
+                            "user_id='fixture_seed' AND action='fixture.pilot_canonical_apply_complete' "
+                            "AND target='dataset:pilot-canonical-v1' AND detail LIKE ?",
+                            (
+                                f"Applied % canonical scenarios at manifest {current_hash}",
+                            ),
+                        )
                 for table in ("documents", "intermediaries", "ubos", "directors"):
                     remove(table, "application_id=?", (app_id,))
                 remove(

@@ -480,39 +480,49 @@ def purge_expired_data(
         reason=f"approved retention policy {policy['id']} cutoff {cutoff}",
         allowed_tables=(table,),
         confirmed=True,
-    ), window:
-        cur = db.execute(f"DELETE FROM {table} WHERE {date_col} < ?", (cutoff,))
-        deleted = getattr(cur, "rowcount", None)
-        if deleted is None:
-            deleted = getattr(getattr(db, "_cursor", None), "rowcount", None)
-        if deleted is None or deleted < 0:
-            deleted = count  # engine did not report a rowcount — fall back to precount
+    ):
+        # Audit finding (P10-7): the window must CLOSE before the commit.
+        # Committing inside the window context durably persisted the marker
+        # row while its close-DELETE landed in a never-committed transaction —
+        # permanently disarming the append-only triggers after the first
+        # successful purge. Structure now: window wraps only the mutation +
+        # evidence write; its finally removes the marker in the SAME open
+        # transaction; the commit below then makes deletion + evidence +
+        # marker-removal durable atomically. The marker can never survive a
+        # commit, and a failed purge commits nothing (P12-8 contract intact).
+        with window:
+            cur = db.execute(f"DELETE FROM {table} WHERE {date_col} < ?", (cutoff,))
+            deleted = getattr(cur, "rowcount", None)
+            if deleted is None:
+                deleted = getattr(getattr(db, "_cursor", None), "rowcount", None)
+            if deleted is None or deleted < 0:
+                deleted = count  # engine did not report a rowcount — fall back to precount
 
-        evidence = {
-            "engine": "gdpr.purge_expired_data",
-            "sanctioned_context": "retention_purge",
-            "cutoff_date": cutoff,
-            "retention_days": retention_days,
-            "policy_id": policy["id"],
-            "auto_purge_policy": bool(policy["auto_purge"]),
-            "requires_review_policy": bool(policy["requires_review"]),
-            "precount": count,
-            "deleted_rowcount": deleted,
-            "oldest_record_date": oldest,
-            "newest_record_date": newest,
-        }
-        db.execute(
-            "INSERT INTO data_purge_log (data_category, record_count, oldest_record_date, "
-            "newest_record_date, retention_policy_id, purge_reason, purged_by, "
-            "subject_id, application_id, tables_affected, per_table_counts, "
-            "purge_batch_id, evidence_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (category, deleted, oldest, newest, policy["id"],
-             f"Retention policy enforcement: {retention_days} days exceeded (cutoff: {cutoff})",
-             purged_by or "system",
-             None, None,  # age-based bulk purge: not subject/application scoped
-             json.dumps([table]), json.dumps({table: deleted}),
-             batch_id, json.dumps(evidence, default=str))
-        )
+            evidence = {
+                "engine": "gdpr.purge_expired_data",
+                "sanctioned_context": "retention_purge",
+                "cutoff_date": cutoff,
+                "retention_days": retention_days,
+                "policy_id": policy["id"],
+                "auto_purge_policy": bool(policy["auto_purge"]),
+                "requires_review_policy": bool(policy["requires_review"]),
+                "precount": count,
+                "deleted_rowcount": deleted,
+                "oldest_record_date": oldest,
+                "newest_record_date": newest,
+            }
+            db.execute(
+                "INSERT INTO data_purge_log (data_category, record_count, oldest_record_date, "
+                "newest_record_date, retention_policy_id, purge_reason, purged_by, "
+                "subject_id, application_id, tables_affected, per_table_counts, "
+                "purge_batch_id, evidence_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (category, deleted, oldest, newest, policy["id"],
+                 f"Retention policy enforcement: {retention_days} days exceeded (cutoff: {cutoff})",
+                 purged_by or "system",
+                 None, None,  # age-based bulk purge: not subject/application scoped
+                 json.dumps([table]), json.dumps({table: deleted}),
+                 batch_id, json.dumps(evidence, default=str))
+            )
         db.commit()
 
     result["records_deleted"] = deleted

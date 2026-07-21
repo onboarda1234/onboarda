@@ -183,6 +183,100 @@ def test_manual_retention_purge_of_audit_log_survives_armed_triggers(armed_audit
     finally:
         db.close()
 
+    # Audit finding (blocker) regression: the marker must not survive on a
+    # SECOND connection either — a same-connection read sees its own
+    # uncommitted DELETE and cannot detect a committed leak that would leave
+    # the triggers permanently disarmed.
+    db2 = _open_db()
+    try:
+        assert _window_count(db2) == 0, (
+            "maintenance-window marker row leaked COMMITTED after the purge — "
+            "append-only triggers would be permanently disarmed"
+        )
+        # And the triggers must actually still be armed: an existing row's
+        # delete has to abort.
+        db2.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail) "
+            "VALUES (?,?,?,?,?,?)",
+            ("p107", "P10-7", "system", "p107_post_purge_probe", "t", "{}"),
+        )
+        db2.commit()
+        with pytest.raises(Exception, match="append-only"):
+            db2.execute("DELETE FROM audit_log WHERE action='p107_post_purge_probe'")
+        db2.rollback()
+    finally:
+        db2.close()
+
+
+def test_fixture_cleanup_audit_log_paths_use_window():
+    """Audit finding: the two staging-sanctioned fixture cleanups delete
+    audit_log rows and must open the window (they'd fail closed on staging
+    otherwise — invisible under the testing auto-open)."""
+    src = (BACKEND / "fixtures" / "cleanup.py").read_text(encoding="utf-8")
+    assert src.count("audit_log_maintenance_window(") >= 2
+    # Both audit_log removes must sit inside a window block.
+    assert "with audit_log_maintenance_window(" in src
+
+
+def test_pg_armed_triggers_block_and_window_permits():
+    """PG-armed enforcement (audit gap): the plpgsql trigger must RAISE on a
+    live PostgreSQL when the window is empty, and pass within a window —
+    including same-transaction visibility of the uncommitted marker row."""
+    import os
+    dsn = os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("DATABASE_URL_TEST")
+    if not dsn:
+        pytest.skip("Set TEST_POSTGRES_DSN or DATABASE_URL_TEST for live PostgreSQL validation.")
+
+    import psycopg2
+    import db as db_module
+    from regulated_deletion import audit_log_maintenance_window
+
+    raw = psycopg2.connect(dsn)
+    db = db_module.DBConnection(raw, is_postgres=True)
+    try:
+        db.executescript(
+            "DROP TABLE IF EXISTS audit_maintenance_window CASCADE;"
+            "DROP TABLE IF EXISTS audit_log CASCADE;"
+        )
+        db.execute(
+            "CREATE TABLE audit_log (id SERIAL PRIMARY KEY, timestamp TIMESTAMP DEFAULT NOW(), "
+            "user_id TEXT, user_name TEXT, user_role TEXT, action TEXT, target TEXT, "
+            "detail TEXT, ip_address TEXT, request_id TEXT, application_id TEXT)"
+        )
+        db.commit()
+        db_module._ensure_audit_log_append_only(db)
+        # The testing auto-open row must be removed to arm the triggers.
+        db.execute("DELETE FROM audit_maintenance_window")
+        db.commit()
+
+        db.execute(
+            "INSERT INTO audit_log (user_id, action, detail) VALUES ('p107','pg_probe','{}')"
+        )
+        db.commit()
+
+        with pytest.raises(Exception, match="append-only"):
+            db.execute("UPDATE audit_log SET detail='TAMPERED' WHERE action='pg_probe'")
+        db.rollback()
+
+        # Window permits — same-transaction visibility of the uncommitted row.
+        with audit_log_maintenance_window(db, actor_id="p107-pg", reason="pg unit probe"):
+            db.execute("DELETE FROM audit_log WHERE action='pg_probe'")
+        db.commit()
+        row = db.execute("SELECT COUNT(*) AS c FROM audit_log WHERE action='pg_probe'").fetchone()
+        assert row["c"] == 0
+        row = db.execute("SELECT COUNT(*) AS c FROM audit_maintenance_window").fetchone()
+        assert row["c"] == 0, "marker must not survive the commit"
+    finally:
+        try:
+            db.executescript(
+                "DROP TABLE IF EXISTS audit_maintenance_window CASCADE;"
+                "DROP TABLE IF EXISTS audit_log CASCADE;"
+            )
+            db.commit()
+        except Exception:
+            pass
+        db.close()
+
 
 def test_window_context_tolerates_missing_table():
     """Hand-built test schemas (no init_db) have neither the window table nor
