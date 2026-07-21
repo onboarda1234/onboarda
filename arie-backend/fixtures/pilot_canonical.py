@@ -259,7 +259,11 @@ def validate_manifest(manifest: Optional[Mapping[str, Any]] = None) -> Dict[str,
     if not (sow.get("scenario_evidence") or {}).get("officer_review"):
         errors.append("RM-PILOT-029 must include a source-of-wealth officer review")
 
-    for reference in ("RM-PILOT-008", "RM-PILOT-009"):
+    for reference in (
+        "RM-PILOT-006", "RM-PILOT-007", "RM-PILOT-008", "RM-PILOT-009",
+        "RM-PILOT-010", "RM-PILOT-011", "RM-PILOT-013", "RM-PILOT-039",
+        "RM-PILOT-040",
+    ):
         medium = by_ref.get(reference, {}).get("expected", {})
         if medium.get("tier") != "MEDIUM":
             errors.append(f"{reference} must remain MEDIUM")
@@ -392,6 +396,144 @@ def validate_runtime_alignment(
         "scenario_count": len(source["scenarios"]),
         "aligned": True,
         "manifest_sha256": manifest_sha256(),
+    }
+
+
+def validate_tier0c_b_approval_routes(
+    applications: Sequence[Mapping[str, Any]],
+    *,
+    db=None,
+    manifest: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Validate policy routes independently from current decision eligibility.
+
+    Canonical v1 negative-path rows use ``blocked`` to assert an active
+    approval block. For those rows the validator compares
+    ``decision_eligibility``; every policy-route value is compared with the
+    classifier's explicit ``approval_route``. Lifecycle state therefore
+    cannot overwrite the historical route, while every existing gate remains
+    enforced through the backwards-compatible effective ``route``.
+    """
+    from security_hardening import (
+        APPROVAL_ROUTE_BLOCKED,
+        APPROVAL_ROUTE_REJECTED,
+        DECISION_ELIGIBILITY_BLOCKED,
+        DECISION_ELIGIBILITY_ELIGIBLE,
+        classify_approval_route,
+    )
+
+    source = manifest or load_manifest()
+    if manifest is None:
+        validate_manifest(source)
+    rows = list(source.get("scenarios") or [])
+    expected_by_ref = {
+        row.get("reference"): row.get("expected") or {} for row in rows
+    }
+    application_rows = [dict(row) for row in applications]
+    application_refs = [str(row.get("ref") or "") for row in application_rows]
+    actual_by_ref = {
+        str(row.get("ref") or ""): row for row in application_rows
+    }
+    errors: List[str] = []
+    duplicate_refs = _duplicates(application_refs)
+    if duplicate_refs:
+        errors.append(f"duplicate canonical application references: {duplicate_refs}")
+    if "" in application_refs:
+        errors.append("canonical application reference must not be blank")
+    if len(application_rows) != len(rows):
+        errors.append(
+            f"canonical application count: expected {len(rows)}, got {len(application_rows)}"
+        )
+    if set(actual_by_ref) != set(expected_by_ref):
+        errors.append(
+            "canonical application scope differs from manifest: "
+            f"missing={sorted(set(expected_by_ref) - set(actual_by_ref))}, "
+            f"unexpected={sorted(set(actual_by_ref) - set(expected_by_ref))}"
+        )
+
+    results: List[Dict[str, Any]] = []
+    for reference in sorted(set(actual_by_ref) & set(expected_by_ref)):
+        classified = classify_approval_route(actual_by_ref[reference], db)
+        expected_route = expected_by_ref[reference].get("approval_route")
+        approval_route = classified.get("approval_route")
+        eligibility = classified.get("decision_eligibility")
+        effective_route = classified.get("route")
+        eligibility_reason = classified.get("eligibility_reason") or ""
+        expected_status = str(
+            expected_by_ref[reference].get("application_status") or ""
+        ).strip().lower()
+        nondecisionable_statuses = {
+            "approved", "withdrawn", "rejected", "draft", "submitted",
+            "prescreening_submitted", "pricing_review", "pricing_accepted",
+            "pre_approval_review", "pre_approved", "kyc_documents",
+        }
+        expected_eligibility = (
+            DECISION_ELIGIBILITY_BLOCKED
+            if expected_route in {APPROVAL_ROUTE_BLOCKED, APPROVAL_ROUTE_REJECTED}
+            or expected_status in nondecisionable_statuses
+            else DECISION_ELIGIBILITY_ELIGIBLE
+        )
+
+        if expected_route == APPROVAL_ROUTE_BLOCKED:
+            if eligibility != DECISION_ELIGIBILITY_BLOCKED:
+                errors.append(
+                    f"{reference}.decision_eligibility: expected blocked, "
+                    f"got {eligibility!r}"
+                )
+        elif approval_route != expected_route:
+            errors.append(
+                f"{reference}.approval_route: expected {expected_route!r}, "
+                f"got {approval_route!r}"
+            )
+
+        if eligibility != expected_eligibility:
+            errors.append(
+                f"{reference}.decision_eligibility: expected "
+                f"{expected_eligibility!r}, got {eligibility!r}"
+            )
+
+        if eligibility == DECISION_ELIGIBILITY_BLOCKED:
+            if not eligibility_reason:
+                errors.append(
+                    f"{reference}.eligibility_reason is required when blocked"
+                )
+            expected_effective = (
+                APPROVAL_ROUTE_REJECTED
+                if approval_route == APPROVAL_ROUTE_REJECTED
+                else APPROVAL_ROUTE_BLOCKED
+            )
+            if effective_route != expected_effective:
+                errors.append(
+                    f"{reference}.route: blocked eligibility requires "
+                    f"{expected_effective!r}, got {effective_route!r}"
+                )
+        elif eligibility == DECISION_ELIGIBILITY_ELIGIBLE:
+            if effective_route != approval_route:
+                errors.append(
+                    f"{reference}.route: eligible case must expose its policy route"
+                )
+        else:
+            errors.append(
+                f"{reference}.decision_eligibility: unsupported value {eligibility!r}"
+            )
+
+        results.append({
+            "reference": reference,
+            "approval_route": approval_route,
+            "decision_eligibility": eligibility,
+            "eligibility_reason": eligibility_reason,
+            "effective_route": effective_route,
+        })
+
+    if errors:
+        raise PilotDatasetValidationError(
+            "Tier 0C-B approval-route validation failed: " + "; ".join(errors)
+        )
+    return {
+        "scenario_count": len(results),
+        "approval_routes_valid": True,
+        "decision_eligibility_valid": True,
+        "results": results,
     }
 
 

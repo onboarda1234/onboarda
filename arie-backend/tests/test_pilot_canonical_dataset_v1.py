@@ -24,6 +24,7 @@ from fixtures.pilot_canonical import (
     stable_evidence,
     validate_manifest,
     validate_runtime_alignment,
+    validate_tier0c_b_approval_routes,
 )
 from fixtures.pilot_canonical_cli import (
     REQUIRED_CLEANUP_CONFIRM_TOKEN,
@@ -210,6 +211,92 @@ def test_runtime_validator_never_activates_flag(temp_db, monkeypatch):
     with pytest.raises(PilotDatasetValidationError, match="will not activate"):
         validate_runtime_alignment()
     assert risk_controlled_values.mapping_fidelity_enabled() is False
+
+
+def test_tier0c_b_validator_separates_policy_route_from_decision_eligibility():
+    manifest = {
+        "scenarios": [
+            {"reference": "RM-PILOT-A", "expected": {
+                "approval_route": "compliance_required", "application_status": "approved",
+            }},
+            {"reference": "RM-PILOT-B", "expected": {
+                "approval_route": "compliance_required", "application_status": "compliance_review",
+            }},
+            {"reference": "RM-PILOT-C", "expected": {
+                "approval_route": "blocked", "application_status": "compliance_review",
+            }},
+            {"reference": "RM-PILOT-D", "expected": {
+                "approval_route": "rejected", "application_status": "rejected",
+            }},
+        ]
+    }
+    applications = [
+        {
+            "id": "a", "ref": "RM-PILOT-A", "status": "approved",
+            "risk_level": "MEDIUM", "final_risk_level": "MEDIUM",
+            "risk_escalations": "[]",
+            "prescreening_data": json.dumps({"screening_report": {"status": "clear"}}),
+        },
+        {
+            "id": "b", "ref": "RM-PILOT-B", "status": "compliance_review",
+            "risk_level": "MEDIUM", "final_risk_level": "MEDIUM",
+            "risk_escalations": "[]",
+            "prescreening_data": json.dumps({"screening_report": {"status": "clear"}}),
+        },
+        {
+            "id": "c", "ref": "RM-PILOT-C", "status": "compliance_review",
+            "risk_level": "LOW", "final_risk_level": "LOW",
+            "risk_escalations": "[]",
+            "prescreening_data": json.dumps(
+                {"screening_report": {"screening_state": "pending"}}
+            ),
+        },
+        {
+            "id": "d", "ref": "RM-PILOT-D", "status": "rejected",
+            "risk_level": "LOW", "final_risk_level": "LOW",
+            "risk_escalations": "[]",
+            "prescreening_data": json.dumps({"screening_report": {"status": "clear"}}),
+        },
+    ]
+
+    result = validate_tier0c_b_approval_routes(
+        applications, manifest=manifest
+    )
+    by_ref = {row["reference"]: row for row in result["results"]}
+
+    assert result["approval_routes_valid"] is True
+    assert result["decision_eligibility_valid"] is True
+    assert by_ref["RM-PILOT-A"] == {
+        "reference": "RM-PILOT-A",
+        "approval_route": "compliance_required",
+        "decision_eligibility": "blocked",
+        "eligibility_reason": "terminal_state",
+        "effective_route": "blocked",
+    }
+    assert by_ref["RM-PILOT-B"]["decision_eligibility"] == "eligible"
+    assert by_ref["RM-PILOT-C"]["eligibility_reason"] == "screening_pending_or_unresolved"
+    assert by_ref["RM-PILOT-D"]["approval_route"] == "rejected"
+
+
+def test_tier0c_b_validator_rejects_policy_route_mismatch():
+    manifest = {
+        "scenarios": [{
+            "reference": "RM-PILOT-X",
+            "expected": {
+                "approval_route": "direct_low_medium",
+                "application_status": "compliance_review",
+            },
+        }]
+    }
+    application = {
+        "id": "x", "ref": "RM-PILOT-X", "status": "compliance_review",
+        "risk_level": "MEDIUM", "final_risk_level": "MEDIUM",
+        "risk_escalations": "[]",
+        "prescreening_data": json.dumps({"screening_report": {"status": "clear"}}),
+    }
+
+    with pytest.raises(PilotDatasetValidationError, match="approval_route"):
+        validate_tier0c_b_approval_routes([application], manifest=manifest)
 
 
 def test_dry_run_rolls_back_every_record(temp_db, monkeypatch):
@@ -616,6 +703,14 @@ def test_founder_refinements_are_explicit_and_not_labels_only():
             key: medium["dimensions"][key]
             for key in ("d1", "d2", "d3", "d4", "d5")
         } == {"d1": 2.0, "d2": 1.25, "d3": 3.25, "d4": 3, "d5": 2.5}
+
+    for reference in (
+        "RM-PILOT-006", "RM-PILOT-007", "RM-PILOT-008", "RM-PILOT-009",
+        "RM-PILOT-010", "RM-PILOT-011", "RM-PILOT-013", "RM-PILOT-039",
+        "RM-PILOT-040",
+    ):
+        medium = by_ref[reference]["expected"]
+        assert medium["tier"] == "MEDIUM"
         assert medium["approval_route"] == "compliance_required"
         # The route is the MEDIUM-risk policy outcome even with no escalation
         # reasons; generic score-4 evidence is not its policy basis.
@@ -628,6 +723,8 @@ def test_founder_refinements_are_explicit_and_not_labels_only():
         "d1": 2.25, "d2": 2.2, "d3": 3.6, "d4": 4, "d5": 1.0,
     }
     assert combined["approval_route"] == "dual_control_required"
+    for reference in ("RM-PILOT-014", "RM-PILOT-025", "RM-PILOT-026"):
+        assert by_ref[reference]["expected"]["approval_route"] == "dual_control_required"
 
     manual_review = by_ref["RM-PILOT-030"]
     manual_metadata = manual_review["scenario_evidence"][

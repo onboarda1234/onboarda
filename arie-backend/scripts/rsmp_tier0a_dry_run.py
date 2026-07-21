@@ -208,7 +208,10 @@ def _policy_routes(risk: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         "edd_route": edd.get("route"),
         "edd_triggers": edd.get("triggers") or [],
-        "approval_route": approval.get("route"),
+        "approval_route": approval.get("approval_route"),
+        "decision_eligibility": approval.get("decision_eligibility"),
+        "eligibility_reason": approval.get("eligibility_reason"),
+        "effective_approval_route": approval.get("route"),
         "approval_reasons": approval.get("reasons") or [],
         "approval_escalation_reasons": approval.get("escalation_reasons") or [],
     }

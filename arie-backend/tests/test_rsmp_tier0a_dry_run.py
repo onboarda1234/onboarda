@@ -54,6 +54,9 @@ def test_dry_run_is_offline_pseudonymized_and_restores_flag(monkeypatch):
     assert "approval_route_deltas" in report["summary"]
     assert report["applications"][0]["proposed_flag_enabled"]["edd_route"] in {"standard", "edd"}
     assert report["applications"][0]["proposed_flag_enabled"]["approval_route"]
+    assert report["applications"][0]["proposed_flag_enabled"]["decision_eligibility"] == "eligible"
+    assert report["applications"][0]["proposed_flag_enabled"]["eligibility_reason"] == ""
+    assert report["applications"][0]["proposed_flag_enabled"]["effective_approval_route"]
     assert report["applications"][0]["application_key"] != "app-1"
     assert "app-1" not in str(report)
     required_evidence_fields = {
