@@ -21988,6 +21988,37 @@ def _screening_evidence_item_key(item):
     return f"{provider}|{source_key}" if source_key else ""
 
 
+def _screening_hit_id(item):
+    """Canonical, deterministic, never-empty per-hit identity (SRP per-hit,
+    PR-B / audit H1). The server is the SOLE deriver of this id — the browser
+    reads the stamped ``item['hit_id']`` and never computes its own (which
+    previously preferred a single ``provider_profile_id`` and collided across
+    the many adverse-media articles that share one profile).
+
+    Built on ``_screening_evidence_item_key`` (which joins ALL provider ids,
+    then falls back to source_url/title/snippet, so it is unique per rendered
+    item). For an item with neither ids nor source fields that key is empty; we
+    fall back to a stable content hash — mirroring the ``or json.dumps(item)``
+    tiebreak ``_screening_evidence_dedup`` already uses — so two such items can
+    never collapse to a single id (which would undercount the denominator and
+    make the hit un-dispositionable)."""
+    key = _screening_evidence_item_key(item)
+    if key:
+        return key
+    blob = json.dumps(item, sort_keys=True, default=str)
+    return "sha:" + hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _screening_stamp_hit_ids(items):
+    """Stamp every evidence item with its canonical hit_id in place, at the
+    single enrichment chokepoint, so the SAME id reaches both the queue card
+    and the review workspace."""
+    for item in items:
+        if isinstance(item, dict):
+            item["hit_id"] = _screening_hit_id(item)
+    return items
+
+
 def _screening_evidence_dedup(items):
     deduped = []
     seen = {}
@@ -22445,6 +22476,11 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
 
     raw_evidence_item_count = len(evidence_items)
     evidence_items = _screening_evidence_dedup(evidence_items)
+    # PR-B / audit H1: stamp each surviving item with its canonical, unique
+    # hit_id here — the one enrichment path that feeds both the queue card and
+    # the review workspace — so the browser reads the id instead of deriving a
+    # colliding one.
+    _screening_stamp_hit_ids(evidence_items)
     risk_rollup = _screening_evidence_rollup(evidence_items, row, raw_count=raw_evidence_item_count)
     existing_provider_keys = {
         _screening_result_identity(item)
@@ -24342,25 +24378,71 @@ def _screening_hit_disposition_public_row(row):
     return rec
 
 
-def _screening_hit_rollup(db, app_id, subject_type, subject_name):
-    """Count recorded per-hit decisions for a subject. The authoritative subject
-    status the frozen approval gates consume is still the screening_reviews row;
-    this is a convenience summary for the per-hit review UI."""
+def _screening_context_hit_ids(row_context):
+    """Canonical hit_id set for a subject from an already-built review context
+    (PR-B / audit H3). The items are UNCAPPED (the review-context evidence path
+    loads with no per-app cap) and carry the server-stamped hit_id, so this is
+    the authoritative 'how many real hits exist' denominator — never the capped
+    queue-row items or row.triage.total."""
+    items = ((row_context or {}).get("screening_evidence") or {}).get("items") or []
+    return {
+        item.get("hit_id")
+        for item in items
+        if isinstance(item, dict) and item.get("hit_id")
+    }
+
+
+def _screening_subject_real_hit_ids(db, app, subject_type, subject_name):
+    """(hit_id_set, ok). Builds the subject's uncapped review context (the same
+    one the finalize handler uses) and returns its stamped hit_id set. ok=False
+    on context error so callers can FAIL CLOSED — a per-hit write or clearance
+    must never proceed against an unverifiable hit set."""
+    try:
+        row_context = _screening_review_subject_context(db, app, subject_type, subject_name)
+    except Exception as exc:  # noqa: BLE001 — transient context failure → fail closed
+        logger.warning(
+            "screening hit-id enumeration failed for %s/%s: %s",
+            app.get("ref"), subject_name, exc,
+        )
+        return set(), False
+    if not row_context:
+        return set(), False
+    return _screening_context_hit_ids(row_context), True
+
+
+def _screening_hit_rollup(db, app_id, subject_type, subject_name, real_hit_ids):
+    """Denominator-aware, self-healing per-hit rollup (PR-B / audit H3).
+
+    ``real_hit_ids`` is the authoritative set of hit_ids that actually exist for
+    the subject (uncapped). Stored dispositions whose hit_id is NOT in that set
+    are ignored — this self-heals old-scheme (H1) ids and stale re-screen ids
+    without a migration. Escalated / follow-up hits count as OPEN, so a subject
+    with any escalated hit is never 'complete' (pilot rule: escalated/follow-up
+    keeps the subject un-finalizable until resolved)."""
     rows = db.execute(
-        "SELECT disposition FROM screening_hit_dispositions "
+        "SELECT hit_id, disposition FROM screening_hit_dispositions "
         "WHERE application_id=? AND subject_type=? AND subject_name=?",
         (app_id, subject_type, subject_name),
     ).fetchall()
-    match = cleared = other = 0
+    by_id = {}
     for row in rows:
-        disp = dict(row).get("disposition")
-        if disp == "match":
-            match += 1
-        elif disp == "cleared":
-            cleared += 1
-        else:
-            other += 1
-    return {"match": match, "cleared": cleared, "other": other, "recorded": len(rows)}
+        row = dict(row)
+        if row.get("hit_id") in real_hit_ids:
+            by_id[row["hit_id"]] = row.get("disposition")
+    total = len(real_hit_ids)
+    match = sum(1 for hid in real_hit_ids if by_id.get(hid) == "match")
+    cleared = sum(1 for hid in real_hit_ids if by_id.get(hid) == "cleared")
+    open_hits = total - match - cleared
+    complete = total > 0 and open_hits == 0
+    verdict = "match" if match > 0 else ("clear" if complete else "in_progress")
+    return {
+        "total": total,
+        "match": match,
+        "cleared": cleared,
+        "open": open_hits,
+        "complete": complete,
+        "verdict": verdict,
+    }
 
 
 class ScreeningHitDispositionHandler(BaseHandler):
@@ -24390,7 +24472,7 @@ class ScreeningHitDispositionHandler(BaseHandler):
         db = get_db()
         try:
             app = db.execute(
-                "SELECT id, ref FROM applications WHERE id=? OR ref=?", (app_id, app_id)
+                "SELECT * FROM applications WHERE id=? OR ref=?", (app_id, app_id)
             ).fetchone()
             if not app:
                 return self.error("Application not found", 404)
@@ -24408,7 +24490,39 @@ class ScreeningHitDispositionHandler(BaseHandler):
                 query += " AND subject_name=?"
                 params.append(subject_name)
             rows = [_screening_hit_disposition_public_row(row) for row in db.execute(query, tuple(params)).fetchall()]
-            self.write({"dispositions": rows})
+            # PR-B / audit H2+H3: return the uncapped, denominator-aware rollup
+            # for every subject that carries dispositions (plus the specifically
+            # requested subject), so the browser has the TRUE total at first
+            # render and never recomputes 'complete' from its capped/loaded
+            # items. When a single subject is requested, also return its UNCAPPED
+            # evidence items so a >cap subject can load every hit and actually
+            # reach a finalizable state (no cap deadlock).
+            subjects_to_roll = {
+                (row.get("subject_type"), row.get("subject_name")) for row in rows
+            }
+            if subject_type and subject_name:
+                subjects_to_roll.add((subject_type, subject_name))
+            rollups = {}
+            requested_items = None
+            for subj_type, subj_name in subjects_to_roll:
+                if not subj_type or not subj_name:
+                    continue
+                try:
+                    ctx = _screening_review_subject_context(db, app, subj_type, subj_name)
+                except Exception:  # noqa: BLE001 — transient; skip, no false 'complete'
+                    ctx = None
+                if not ctx:
+                    continue
+                ids = _screening_context_hit_ids(ctx)
+                rollups["%s|%s" % (subj_type, subj_name)] = _screening_hit_rollup(
+                    db, app["id"], subj_type, subj_name, ids
+                )
+                if subject_type and subject_name and subj_type == subject_type and subj_name == subject_name:
+                    requested_items = ((ctx.get("screening_evidence") or {}).get("items")) or []
+            response = {"dispositions": rows, "rollups": rollups}
+            if requested_items is not None:
+                response["items"] = requested_items
+            self.write(response)
         finally:
             db.close()
 
@@ -24452,11 +24566,28 @@ class ScreeningHitDispositionHandler(BaseHandler):
         db = get_db()
         try:
             app = db.execute(
-                "SELECT id, ref FROM applications WHERE id=? OR ref=?", (app_id, app_id)
+                "SELECT * FROM applications WHERE id=? OR ref=?", (app_id, app_id)
             ).fetchone()
             if not app:
                 return self.error("Application not found", 404)
             app = dict(app)
+            # PR-B / audit H3: the server is the referee for hit identity. Build
+            # the subject's authoritative (uncapped) hit_id set and reject any
+            # fabricated/orphaned id before it can be recorded and inflate the
+            # rollup. Undo (delete) is exempt — removing a stale/orphaned row is
+            # always safe. Context error → fail closed (503 retry), never accept
+            # a write we cannot validate.
+            real_hit_ids, hit_ids_ok = _screening_subject_real_hit_ids(
+                db, app, subject_type, subject_name
+            )
+            if not undo:
+                if not hit_ids_ok:
+                    return self.error(
+                        "Screening evidence temporarily unavailable — retry", 503
+                    )
+                unknown = [hid for hid in hit_ids if hid not in real_hit_ids]
+                if unknown:
+                    return self.error("Unknown screening hit", 400)
             reviewer_id = user.get("sub") or ""
             reviewer_name = user.get("name") or reviewer_id
             now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -24511,7 +24642,9 @@ class ScreeningHitDispositionHandler(BaseHandler):
                 "WHERE application_id=? AND subject_type=? AND subject_name=?",
                 (app["id"], subject_type, subject_name),
             ).fetchall()]
-            rollup = _screening_hit_rollup(db, app["id"], subject_type, subject_name)
+            rollup = _screening_hit_rollup(
+                db, app["id"], subject_type, subject_name, real_hit_ids
+            )
             self.write({"saved": len(hit_ids), "undo": undo, "dispositions": rows, "rollup": rollup})
         finally:
             db.close()
@@ -24694,6 +24827,64 @@ class ScreeningReviewHandler(BaseHandler):
                 attempt_summary, db=db)
             db.close()
             return self.error(locked_message, 409)
+
+        # PR-B / audit H3c: fail-closed finalize gate. A subject-level
+        # false-positive CLEARANCE may only be recorded when EVERY real screening
+        # hit has been resolved as a cleared false positive and NONE is a
+        # confirmed true match. Gated on the subject actually carrying per-hit
+        # dispositions, so subjects reviewed only at the subject level (the
+        # entire existing /screening/review corpus) are unaffected — this only
+        # ADDS a rejection, never changes the clean path. Escalated / follow-up
+        # hits count as open (pilot rule), so they hold the clearance until
+        # resolved. Additive, backward-compatible, and the authoritative backstop
+        # behind the browser's H2 gate: even a wrong client cannot finalize a
+        # subject with unresolved or matched hits.
+        if disposition == "cleared":
+            per_hit_count = db.execute(
+                "SELECT COUNT(*) AS c FROM screening_hit_dispositions "
+                "WHERE application_id=? AND subject_type=? AND subject_name=?",
+                (app["id"], subject_type, subject_name),
+            ).fetchone()
+            has_per_hit = bool(per_hit_count and dict(per_hit_count).get("c"))
+            if has_per_hit:
+                if context_error or not row_context:
+                    unavailable = (
+                        "Screening evidence is temporarily unavailable, so this "
+                        "clearance cannot be verified against the individual hits. "
+                        "Please retry."
+                    )
+                    self.log_governance_attempt(
+                        user, "screening.review_disposition", app["ref"], "rejected", 503,
+                        unavailable, attempt_summary, db=db)
+                    db.close()
+                    return self.error(unavailable, 503)
+                hit_rollup = _screening_hit_rollup(
+                    db, app["id"], subject_type, subject_name,
+                    _screening_context_hit_ids(row_context),
+                )
+                if hit_rollup["match"] > 0:
+                    blocked = (
+                        "This subject has a confirmed true-match screening hit and "
+                        "cannot be cleared as a false positive. Escalate the subject "
+                        "for Enhanced Due Diligence instead."
+                    )
+                    self.log_governance_attempt(
+                        user, "screening.review_disposition", app["ref"], "rejected", 409,
+                        blocked, attempt_summary, db=db)
+                    db.close()
+                    return self.error(blocked, 409)
+                if not hit_rollup["complete"]:
+                    blocked = (
+                        "Resolve every screening hit before recording a "
+                        "false-positive clearance for this subject: "
+                        f"{hit_rollup['open']} of {hit_rollup['total']} hit(s) are "
+                        "still open."
+                    )
+                    self.log_governance_attempt(
+                        user, "screening.review_disposition", app["ref"], "rejected", 409,
+                        blocked, attempt_summary, db=db)
+                    db.close()
+                    return self.error(blocked, 409)
 
         sensitivity_flags = _screening_sensitive_flags(
             app,

@@ -8109,7 +8109,7 @@ class TestScreeningHitDisposition:
     signal the frozen approval gates consume stays owned by /screening/review.
     """
 
-    def _make_app(self, app_id, app_ref):
+    def _make_app(self, app_id, app_ref, num_hits=5):
         from db import get_db
         conn = get_db()
         # NB: screening_reviews is a regulated table (governed deletion) and this
@@ -8117,12 +8117,63 @@ class TestScreeningHitDisposition:
         # assertion below relies on it staying empty for a fresh app_id.
         conn.execute("DELETE FROM screening_hit_dispositions WHERE application_id = ?", (app_id,))
         conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        # PR-B / audit H3: the server now validates every submitted hit_id against
+        # the subject's REAL stored evidence and rejects fabricated ids. So the
+        # fixture seeds a real screening report with `num_hits` distinct sanctions
+        # results — each with distinct provider ids so it stamps a distinct
+        # hit_id — and the tests derive the ids from the server rather than
+        # inventing them.
+        results = [
+            {
+                "name": f"QA Hit {i}",
+                "matching_name": f"QA Hit {i}",
+                "is_sanctioned": True,
+                "match_categories": ["sanctions"],
+                "categories": ["sanctions"],
+                "provider_risk_identifier": f"hitdisp-risk-{app_id}-{i}",
+                "provider_profile_identifier": f"hitdisp-profile-{app_id}-{i}",
+                "provider_alert_identifier": f"hitdisp-alert-{app_id}-{i}",
+            }
+            for i in range(num_hits)
+        ]
+        company = {
+            "provider": "complyadvantage", "source": "complyadvantage", "api_status": "live",
+            "screened_at": "2026-07-01T00:00:00Z", "matched": True, "results": results,
+            "sanctions": {
+                "source": "complyadvantage", "api_status": "live",
+                "screened_at": "2026-07-01T00:00:00Z", "matched": True, "results": results,
+            },
+            "adverse_media": {
+                "source": "complyadvantage", "api_status": "live",
+                "screened_at": "2026-07-01T00:00:00Z", "matched": False, "results": [],
+            },
+        }
+        report = {
+            "provider": "complyadvantage", "screened_at": "2026-07-01T00:00:00Z",
+            "screening_mode": "live", "company_screening": company,
+            "company_screening_state": "completed_match", "has_company_screening_hit": True,
+            "director_screenings": [], "ubo_screenings": [], "intermediary_screenings": [],
+            "total_hits": num_hits,
+        }
         conn.execute(
-            "INSERT INTO applications (id, ref, client_id, company_name, status) VALUES (?, ?, ?, ?, ?)",
-            (app_id, app_ref, "hitdisp_client", "Hit Disposition Ltd", "in_review"),
+            "INSERT INTO applications (id, ref, client_id, company_name, status, prescreening_data) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (app_id, app_ref, "hitdisp_client", "Hit Disposition Ltd", "in_review",
+             json.dumps({"screening_report": report})),
         )
         conn.commit()
         conn.close()
+
+    def _real_hit_ids(self, api_server, headers, base):
+        """Ask the server for the subject's real (stamped) hit_ids — the client
+        never invents them."""
+        r = http_requests.get(f"{api_server}/api/screening/hit-disposition",
+                              params={**base}, headers=headers, timeout=5)
+        assert r.status_code == 200, r.text
+        items = r.json().get("items") or []
+        ids = [it["hit_id"] for it in items if it.get("hit_id")]
+        assert ids, f"expected stamped hit_ids in GET items, got {r.json()}"
+        return ids
 
     def test_persist_hydrate_bulk_undo_and_gate(self, api_server):
         from auth import create_token
@@ -8130,30 +8181,39 @@ class TestScreeningHitDisposition:
 
         app_id = "app_hitdisp_1"
         app_ref = "ARF-2026-HITDISP-1"
-        self._make_app(app_id, app_ref)
+        self._make_app(app_id, app_ref, num_hits=5)
         admin = create_token("admin001", "admin", "Test Admin", "officer")
         H = {"Authorization": f"Bearer {admin}"}
         base = {"application_id": app_id, "subject_type": "entity", "subject_name": "Hit Disposition Ltd"}
+        ids = self._real_hit_ids(api_server, H, base)
+        assert len(ids) >= 5
 
-        # 1. Confirm true match with materiality on one hit.
+        # 0. FABRICATED hit_id is rejected (audit H3 — closes the b1,b2,b3 hole).
         r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
-                               json={**base, "hit_id": "hit-A", "disposition": "match", "materiality": "high"},
+                               json={**base, "hit_id": "totally-made-up", "disposition": "cleared"},
+                               headers=H, timeout=3)
+        assert r.status_code == 400, r.text
+
+        # 1. Confirm true match with materiality on one real hit.
+        r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
+                               json={**base, "hit_id": ids[0], "disposition": "match", "materiality": "high"},
                                headers=H, timeout=3)
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["rollup"]["match"] == 1
-        assert any(d["hit_id"] == "hit-A" and d["disposition"] == "match" and d["materiality"] == "high"
+        assert body["rollup"]["total"] == len(ids)  # denominator is the REAL hit count
+        assert any(d["hit_id"] == ids[0] and d["disposition"] == "match" and d["materiality"] == "high"
                    for d in body["dispositions"])
 
         # 2. Materiality is dropped for a non-match disposition.
         r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
-                               json={**base, "hit_id": "hit-B", "disposition": "cleared", "materiality": "high"},
+                               json={**base, "hit_id": ids[1], "disposition": "cleared", "materiality": "high"},
                                headers=H, timeout=3)
         assert r.status_code == 200
         conn = get_db()
         row = conn.execute(
             "SELECT disposition, materiality FROM screening_hit_dispositions WHERE application_id=? AND hit_id=?",
-            (app_id, "hit-B")).fetchone()
+            (app_id, ids[1])).fetchone()
         conn.close()
         assert row["disposition"] == "cleared" and row["materiality"] is None
 
@@ -8162,26 +8222,26 @@ class TestScreeningHitDisposition:
                               params={**base}, headers=H, timeout=3)
         assert r.status_code == 200
         hyd = {d["hit_id"]: d["disposition"] for d in r.json()["dispositions"]}
-        assert hyd.get("hit-A") == "match" and hyd.get("hit-B") == "cleared"
+        assert hyd.get(ids[0]) == "match" and hyd.get(ids[1]) == "cleared"
 
-        # 4. Bulk clear the remaining hits in one call.
+        # 4. Bulk clear the remaining real hits in one call.
         r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
-                               json={**base, "hit_ids": ["hit-C", "hit-D", "hit-E"], "disposition": "cleared"},
+                               json={**base, "hit_ids": ids[2:5], "disposition": "cleared"},
                                headers=H, timeout=3)
         assert r.status_code == 200
         assert r.json()["saved"] == 3
-        assert r.json()["rollup"]["cleared"] == 4  # B, C, D, E
+        assert r.json()["rollup"]["cleared"] == 4  # ids[1..4]
 
         # 5. Undo (pending) deletes the stored row.
         r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
-                               json={**base, "hit_id": "hit-A", "disposition": "pending"},
+                               json={**base, "hit_id": ids[0], "disposition": "pending"},
                                headers=H, timeout=3)
         assert r.status_code == 200
         assert r.json()["undo"] is True
         conn = get_db()
         gone = conn.execute(
             "SELECT 1 FROM screening_hit_dispositions WHERE application_id=? AND hit_id=?",
-            (app_id, "hit-A")).fetchone()
+            (app_id, ids[0])).fetchone()
         conn.close()
         assert gone is None
 
@@ -8204,17 +8264,19 @@ class TestScreeningHitDisposition:
         from auth import create_token
         app_id = "app_hitdisp_2"
         app_ref = "ARF-2026-HITDISP-2"
-        self._make_app(app_id, app_ref)
+        self._make_app(app_id, app_ref, num_hits=2)
         analyst = create_token("analyst001", "analyst", "Test Analyst", "officer")
+        H = {"Authorization": f"Bearer {analyst}"}
         base = {"application_id": app_id, "subject_type": "entity", "subject_name": "Hit Disposition Ltd"}
+        hit_id = self._real_hit_ids(api_server, H, base)[0]
         # Analyst may confirm a true match but NOT clear a false positive.
         r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
-                               json={**base, "hit_id": "hit-X", "disposition": "cleared"},
-                               headers={"Authorization": f"Bearer {analyst}"}, timeout=3)
+                               json={**base, "hit_id": hit_id, "disposition": "cleared"},
+                               headers=H, timeout=3)
         assert r.status_code == 403
         r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
-                               json={**base, "hit_id": "hit-X", "disposition": "match"},
-                               headers={"Authorization": f"Bearer {analyst}"}, timeout=3)
+                               json={**base, "hit_id": hit_id, "disposition": "match"},
+                               headers=H, timeout=3)
         assert r.status_code == 200
 
     def test_rejects_invalid_disposition_and_materiality(self, api_server):
