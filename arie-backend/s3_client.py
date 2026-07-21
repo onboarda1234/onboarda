@@ -584,11 +584,15 @@ class S3Client:
                 'Key': key,
             }
 
-            if response_filename:
-                # H-04: Sanitize filename to prevent header injection
-                safe_filename = re.sub(r'[^\w\s\-.]', '_', response_filename)[:255]
-                disposition = "inline" if content_disposition == "inline" else "attachment"
-                params['ResponseContentDisposition'] = f'{disposition}; filename="{safe_filename}"'
+            # H-04: Sanitize filename to prevent header injection.
+            # P11-7 (BSA-008): ALWAYS emit a Content-Disposition override. A
+            # falsy response_filename previously skipped the override entirely,
+            # letting S3 serve the object without any disposition (inline-capable
+            # in browsers). Fall back to a neutral filename instead. The class
+            # allows plain spaces only — \s would readmit CR/LF (header injection).
+            safe_filename = re.sub(r'[^\w \-.]', '_', response_filename or "document")[:255] or "document"
+            disposition = "inline" if content_disposition == "inline" else "attachment"
+            params['ResponseContentDisposition'] = f'{disposition}; filename="{safe_filename}"'
 
             url = self.s3_client.generate_presigned_url(
                 'get_object',

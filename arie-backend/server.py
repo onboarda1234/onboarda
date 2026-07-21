@@ -13750,7 +13750,11 @@ class DocumentDownloadHandler(BaseHandler):
                 return self.error("Document file not found on server", 404)
 
             self.set_header("Content-Type", mime_type)
-            self.set_header("Content-Disposition", f'{disposition}; filename="{doc["doc_name"]}"')
+            # P11-7 (BSA-008): sanitize the stored name before header
+            # interpolation — parity with the S3 presign path (H-04). Plain
+            # spaces only: \s would readmit CR/LF.
+            safe_doc_name = re.sub(r'[^\w \-.]', '_', doc["doc_name"] or "document")[:255] or "document"
+            self.set_header("Content-Disposition", f'{disposition}; filename="{safe_doc_name}"')
             with open(file_path, "rb") as f:
                 self.write(f.read())
             action = "View" if inline_view else "Download"
@@ -13880,7 +13884,9 @@ class ComplianceResourceDownloadHandler(BaseHandler):
             return self.error("Resource file not found on server", 404)
 
         self.set_header("Content-Type", resource.get("mime_type") or "application/octet-stream")
-        self.set_header("Content-Disposition", f'attachment; filename="{resource["file_name"]}"')
+        # P11-7 (BSA-008): sanitize the stored name before header interpolation.
+        safe_resource_name = re.sub(r'[^\w \-.]', '_', resource["file_name"] or "document")[:255] or "document"
+        self.set_header("Content-Disposition", f'attachment; filename="{safe_resource_name}"')
         with open(file_path, "rb") as f:
             self.write(f.read())
         self.log_audit(user, "Download", "Resources", f"Compliance resource downloaded: {resource['file_name']}")
@@ -14323,7 +14329,9 @@ class RegulatoryIntelligenceDownloadHandler(BaseHandler):
             return self.error("Regulatory document file not found on server", 404)
 
         self.set_header("Content-Type", row.get("mime_type") or "application/octet-stream")
-        self.set_header("Content-Disposition", f'attachment; filename="{row.get("file_name") or (document_id + ".bin")}"')
+        # P11-7 (BSA-008): sanitize the stored name before header interpolation.
+        safe_reg_name = re.sub(r'[^\w \-.]', '_', row.get("file_name") or (document_id + ".bin"))[:255] or "document"
+        self.set_header("Content-Disposition", f'attachment; filename="{safe_reg_name}"')
         with open(file_path, "rb") as f:
             self.write(f.read())
         self.log_audit(user, "Download", "Regulatory Intelligence", f"Downloaded regulatory document locally: {row.get('title')}")
@@ -29741,7 +29749,9 @@ class SumsubWebhookHandler(BaseHandler):
             _header_names,
         )
         if signature:
-            logger.info("Sumsub webhook: received sig prefix=%s source=%s", signature[:8], _sig_source)
+            # P11-7 (BSA-010): log only the header source — no signature
+            # material (previously logged an 8-char signature prefix).
+            logger.info("Sumsub webhook: signature received source=%s", _sig_source)
 
         # Verify webhook signature — always verify, never skip (Finding S-16).
         # F-2: pass the advertised algorithm through to the verifier, which
