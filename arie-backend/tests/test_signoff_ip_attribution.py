@@ -75,3 +75,45 @@ class TestNoHeaders:
     def test_bare_peer_returned(self):
         assert _handler(PUBLIC_PEER).get_client_ip() == PUBLIC_PEER
         assert _handler(PROXY_PEER).get_client_ip() == PROXY_PEER
+
+
+# ── RDI-107: explicit trusted-proxy CIDR allowlist ──────────────────────────
+import ipaddress
+
+import base_handler
+
+
+def _set_allowlist(monkeypatch, cidrs):
+    nets = [ipaddress.ip_network(c) for c in cidrs]
+    monkeypatch.setattr(base_handler, "_TRUSTED_PROXY_CIDRS", nets)
+
+
+class TestTrustedProxyCidrAllowlist:
+    """When TRUSTED_PROXY_CIDRS is configured, only peers inside it are trusted."""
+
+    def test_peer_inside_allowlist_is_trusted(self, monkeypatch):
+        _set_allowlist(monkeypatch, ["10.0.4.0/24"])
+        h = _handler(PROXY_PEER, {"X-Real-IP": SPOOFED})  # 10.0.4.233 ∈ /24
+        assert h.get_client_ip() == SPOOFED
+
+    def test_private_peer_outside_allowlist_cannot_spoof(self, monkeypatch):
+        # A rogue host elsewhere in the private range is no longer trusted.
+        _set_allowlist(monkeypatch, ["10.0.4.0/24"])
+        h = _handler("10.99.0.5", {"X-Real-IP": SPOOFED})
+        assert h.get_client_ip() == "10.99.0.5"
+
+    def test_loopback_not_trusted_when_allowlist_set(self, monkeypatch):
+        _set_allowlist(monkeypatch, ["10.0.4.0/24"])
+        h = _handler("127.0.0.1", {"X-Forwarded-For": SPOOFED})
+        assert h.get_client_ip() == "127.0.0.1"
+
+    def test_xff_leftmost_honoured_for_allowlisted_peer(self, monkeypatch):
+        _set_allowlist(monkeypatch, ["10.0.4.0/24"])
+        h = _handler(PROXY_PEER, {"X-Forwarded-For": f"{SPOOFED}, 10.0.4.1"})
+        assert h.get_client_ip() == SPOOFED
+
+    def test_unset_allowlist_preserves_legacy_private_trust(self, monkeypatch):
+        # Empty allowlist → legacy behaviour (any private/loopback peer).
+        _set_allowlist(monkeypatch, [])
+        h = _handler(PROXY_PEER, {"X-Real-IP": SPOOFED})
+        assert h.get_client_ip() == SPOOFED
