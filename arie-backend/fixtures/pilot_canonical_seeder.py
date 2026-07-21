@@ -38,6 +38,20 @@ logger = logging.getLogger(__name__)
 DETERMINISTIC_EPOCH = datetime(2026, 7, 1, tzinfo=timezone.utc)
 IDENTITY_SOURCE = "fixtures.pilot_canonical_seeder"
 
+# A manifest change is not, by itself, permission to adopt an existing
+# RM-PILOT namespace.  Each accepted hash must be explicitly reviewed as part
+# of the same dataset-version lineage.  Unknown hashes and versions remain
+# foreign identities and fail closed in ``_preflight_references``.
+APPROVED_MANIFEST_LINEAGE = {
+    (
+        "v1",
+        "fee7436a6bf6ead1cc9a8090ceaa3de7071a9b745e43f2c69a445cf74efdf9c9",
+    ): (
+        "v1",
+        "825d267a6488545ee892789f09869362faabdf77fb23df8d1d63b99f6dc27951",
+    ),
+}
+
 # Keep fixture persistence on the same canonical document-type contract used
 # by backend startup normalization.  The manifest may retain human-facing
 # legacy labels for scenario evidence, but persisted ``documents.doc_type``
@@ -112,7 +126,24 @@ def _identity(row: Mapping[str, Any]) -> Dict[str, Any]:
 def _identity_matches(record: Mapping[str, Any], row: Mapping[str, Any]) -> bool:
     data = _json_object(record.get("prescreening_data"))
     expected = _identity(row)
-    return all(data.get(key) == value for key, value in expected.items())
+    immutable_keys = (
+        "dataset_name",
+        "fixture",
+        "synthetic",
+        "non_production",
+        "visible_in_back_office",
+        "source",
+        "scenario_reference",
+        "scenario_slug",
+    )
+    if any(data.get(key) != expected[key] for key in immutable_keys):
+        return False
+
+    stored_identity = (data.get("dataset_version"), data.get("dataset_hash"))
+    current_identity = (DATASET_VERSION, manifest_sha256())
+    return stored_identity == current_identity or (
+        APPROVED_MANIFEST_LINEAGE.get(stored_identity) == current_identity
+    )
 
 
 _RUNTIME_PRESCREENING_INPUT_KEYS = (
