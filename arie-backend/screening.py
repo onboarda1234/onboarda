@@ -701,17 +701,19 @@ def sumsub_verify_webhook(body_bytes, signature_header, digest_alg=None):
         _hash_ctor,
     ).hexdigest()
 
-    # Staging-safe diagnostic — partial values only, never full secrets
+    match = hmac.compare_digest(expected, signature_header or "")
+
+    # Staging-safe diagnostic — P11-7 (BSA-010): no signature material in
+    # logs (previously logged 8-char computed/received prefixes and evaluated
+    # a non-constant-time == purely for the log line).
     logger.info(
-        "Sumsub webhook HMAC: body_len=%d alg=%s computed_prefix=%s received_prefix=%s match=%s",
+        "Sumsub webhook HMAC: body_len=%d alg=%s match=%s",
         len(body_bytes),
         _alg_key,
-        expected[:8],
-        (signature_header or "")[:8],
-        expected == (signature_header or ""),
+        match,
     )
 
-    return hmac.compare_digest(expected, signature_header or "")
+    return match
 
 
 # ── Sumsub simulation fallbacks ──────────────────────────
