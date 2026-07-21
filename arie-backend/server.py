@@ -4166,6 +4166,38 @@ class AdminResetDBHandler(BaseHandler):
             _reset_lease.release()
 
 
+def _admin_reauth_ok(handler, user, admin_password, source):
+    """BSA-003 (P11-6): destructive admin actions require the acting admin to
+    re-authenticate with their OWN password — a stolen or idle admin session
+    alone must not be able to rotate credentials. Fail-closed: a missing body
+    field, missing users row, empty stored hash, or malformed hash all deny."""
+    if not admin_password:
+        handler.error("admin_password is required (re-authentication)", 401)
+        return False
+    db = get_db()
+    try:
+        row = db.execute(
+            "SELECT password_hash FROM users WHERE id = ?", (user.get("sub"),)
+        ).fetchone()
+    finally:
+        db.close()
+    stored = (row.get("password_hash") or "") if row else ""
+    import bcrypt
+    try:
+        # AttributeError: non-string admin_password (e.g. JSON number) must
+        # deny with the audited 401, not escape as a 500 with no audit row.
+        ok = bool(stored) and bcrypt.checkpw(admin_password.encode(), stored.encode())
+    except (ValueError, TypeError, AttributeError):
+        ok = False
+    if not ok:
+        handler.log_authz_denial(user, "authz_denied_reauth", user.get("sub"), {
+            "source": source,
+        })
+        handler.error("Re-authentication failed: admin password incorrect", 401)
+        return False
+    return True
+
+
 class AdminResetPasswordHandler(BaseHandler):
     """POST /api/admin/reset-password — reset a client's password (staging only)."""
     def post(self):
@@ -4176,6 +4208,12 @@ class AdminResetPasswordHandler(BaseHandler):
         if IS_PRODUCTION:
             self.error("Not available in production", 403)
             return
+        # BSA-003 (P11-6): brute-force guard on the re-auth password check.
+        if not self.check_sensitive_rate_limit(
+            "admin_client_reset", max_attempts=5, window_seconds=600,
+            error_message="Too many admin reset attempts. Try again later.",
+        ):
+            return
         data = self.get_json()
         confirm = data.get("confirm", "")
         email = data.get("email", "").strip().lower()
@@ -4185,6 +4223,12 @@ class AdminResetPasswordHandler(BaseHandler):
         if not required_confirm:
             logger.error("ADMIN_CLIENT_RESET_CONFIRMATION is not set; refusing client reset request")
             self.error("Reset control is not configured", 503)
+            return
+
+        # BSA-003 (P11-6): re-auth precedes the confirmation-token COMPARISON
+        # so a session-only attacker gains no oracle on the ops token value.
+        # (The is-configured 503 above is config state, not a secret.)
+        if not _admin_reauth_ok(self, user, data.get("admin_password", ""), "admin_client_reset"):
             return
 
         if confirm != required_confirm:
@@ -4251,6 +4295,12 @@ class AdminOfficerPasswordResetHandler(BaseHandler):
         if IS_PRODUCTION:
             return self.error("Not available in production", 403)
 
+        # BSA-003 (P11-6): brute-force guard on the re-auth password check.
+        if not self.check_sensitive_rate_limit(
+            "admin_officer_reset", max_attempts=5, window_seconds=600,
+            error_message="Too many admin reset attempts. Try again later.",
+        ):
+            return
         data = self.get_json()
         confirm = data.get("confirm", "")
         email = data.get("email", "").strip().lower()
@@ -4260,6 +4310,12 @@ class AdminOfficerPasswordResetHandler(BaseHandler):
         if not required_confirm:
             logger.error("ADMIN_OFFICER_RESET_CONFIRMATION is not set; refusing officer reset request")
             return self.error("Reset control is not configured", 503)
+
+        # BSA-003 (P11-6): re-auth precedes the confirmation-token COMPARISON
+        # so a session-only attacker gains no oracle on the ops token value.
+        # (The is-configured 503 above is config state, not a secret.)
+        if not _admin_reauth_ok(self, user, data.get("admin_password", ""), "admin_officer_reset"):
+            return
 
         if confirm != required_confirm:
             return self.error("Invalid confirmation token", 403)
@@ -7778,6 +7834,10 @@ class ApplicationIdentityVerificationResolutionHandler(BaseHandler):
                 return
             role_error = _idv_resolution_role_error(dict(app), user, outcome, reason)
             if role_error:
+                # BSA-009 (P11-6): audit the denial; response unchanged.
+                self.log_authz_denial(user, "authz_denied_role", app["id"], {
+                    "source": "idv_resolution", "outcome": outcome,
+                })
                 return self.error(role_error, 403)
 
             idv_payload = _build_application_sumsub_idv_payload(
@@ -8461,6 +8521,10 @@ class ApplicationDetailHandler(BaseHandler):
         # Only officers can change status and assignment
         if user.get("type") == "client":
             if "status" in data or "assigned_to" in data or "decision_by" in data:
+                # BSA-009 (P11-6): audit the denial; response unchanged.
+                self.log_authz_denial(user, "authz_denied_role", real_id, {
+                    "source": "application_update_status", "required": "officer",
+                })
                 db.close()
                 return self.error("Only officers can change application status", 403)
 
@@ -8731,6 +8795,10 @@ class ApplicationDetailHandler(BaseHandler):
             return
 
         if user.get("type") != "client":
+            # BSA-009 (P11-6): audit the denial; response unchanged.
+            self.log_authz_denial(user, "authz_denied_role", app["id"], {
+                "source": "application_delete", "required": "client",
+            })
             db.close()
             return self.error("Only portal clients can delete applications.", 403)
 
@@ -13026,6 +13094,10 @@ class DocumentReviewHandler(BaseHandler):
         is_flagged = verification_status == STATE_FLAGGED
         if requires_governed_acceptance and review_status == "accepted":
             if user_role not in ("admin", "sco"):
+                # BSA-009 (P11-6): audit the denial; response unchanged.
+                self.log_authz_denial(user, "authz_denied_role", doc.get("id"), {
+                    "source": "document_manual_accept", "required": "admin/sco",
+                })
                 db.close()
                 return self.error(
                     "Only senior compliance officers (admin/sco) may manually accept unverified documents", 403
@@ -13709,6 +13781,12 @@ class DocumentDownloadHandler(BaseHandler):
             if not app:
                 return self.error("Application not found", 404)
             if user.get("type") == "client" and app["client_id"] != user["sub"]:
+                # BSA-009 (P11-6): audit the denial; response unchanged.
+                self.log_authz_denial(user, "authz_denied_not_owner", doc_id, {
+                    "source": "document_download",
+                    "application_id": app["id"],
+                    "actual_owner": app["client_id"],
+                })
                 return self.error("Access denied", 403)
 
             mime_type = doc.get("mime_type") or "application/octet-stream"
@@ -19627,6 +19705,10 @@ class SaveResumeHandler(BaseHandler):
         if not user:
             return None
         if user.get("type") != "client":
+            # BSA-009 (P11-6): audit the denial; response unchanged.
+            self.log_authz_denial(user, "authz_denied_role", None, {
+                "source": "draft_persistence", "required": "client",
+            })
             self.error("Draft persistence is only available to portal clients.", 403)
             return None
         return user
@@ -19965,6 +20047,10 @@ class ActiveDraftsHandler(BaseHandler):
         if not user:
             return
         if user.get("type") != "client":
+            # BSA-009 (P11-6): audit the denial; response unchanged.
+            self.log_authz_denial(user, "authz_denied_role", None, {
+                "source": "draft_persistence", "required": "client",
+            })
             return self.error("Draft persistence is only available to portal clients.", 403)
         client_id = user["sub"]
         db = get_db()
@@ -27540,6 +27626,11 @@ def _company_intake_user_id(user):
 
 def _company_intake_require_client(handler, user):
     if str((user or {}).get("type") or "").lower() != "client" or not _company_intake_user_id(user):
+        # BSA-009 (P11-6): audit the denial; response unchanged.
+        if user:
+            handler.log_authz_denial(user, "authz_denied_role", None, {
+                "source": "company_intake", "required": "client",
+            })
         handler.error("Company intake is available to authenticated client users only.", 403)
         return False
     return True
@@ -34865,6 +34956,10 @@ class GetClientNotificationsHandler(BaseHandler):
 
         # Only clients can retrieve their notifications
         if user.get("type") != "client":
+            # BSA-009 (P11-6): audit the denial; response unchanged.
+            self.log_authz_denial(user, "authz_denied_role", None, {
+                "source": "client_notifications", "required": "client",
+            })
             return self.error("Only clients can retrieve notifications", 403)
 
         db = get_db()
@@ -34901,6 +34996,11 @@ class MarkNotificationReadHandler(BaseHandler):
             return self.error("Notification not found", 404)
 
         if notif["client_id"] != user["sub"]:
+            # BSA-009 (P11-6): audit the denial; response unchanged.
+            self.log_authz_denial(user, "authz_denied_not_owner", notif_id, {
+                "source": "notification_mark_read",
+                "actual_owner": notif["client_id"],
+            })
             db.close()
             return self.error("Unauthorized", 403)
 

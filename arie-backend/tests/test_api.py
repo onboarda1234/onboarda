@@ -766,8 +766,12 @@ class TestAuthenticatedAccess:
         client_id = "phase5_client_reset"
         email = "phase5-client-reset@example.com"
         old_hash = bcrypt.hashpw("OldStrong123!".encode(), bcrypt.gensalt()).decode()
+        # BSA-003 (P11-6): the endpoint now requires acting-admin re-auth.
+        admin_reauth = "AdminReauth123!"
+        admin_reauth_hash = bcrypt.hashpw(admin_reauth.encode(), bcrypt.gensalt()).decode()
 
         conn = get_db()
+        conn.execute("UPDATE users SET password_hash=? WHERE id='admin001'", (admin_reauth_hash,))
         conn.execute("DELETE FROM audit_log WHERE target = ?", (f"client:{email}",))
         conn.execute("DELETE FROM clients WHERE id = ? OR LOWER(email) = ?", (client_id, email))
         conn.execute(
@@ -783,7 +787,7 @@ class TestAuthenticatedAccess:
         missing_confirm = http_requests.post(
             f"{api_server}/api/admin/reset-password",
             headers={"Authorization": f"Bearer {admin_token}"},
-            json={"email": email, "new_password": "StrongPass123!"},
+            json={"email": email, "new_password": "StrongPass123!", "admin_password": admin_reauth},
             timeout=3,
         )
         assert missing_confirm.status_code == 403
@@ -791,7 +795,8 @@ class TestAuthenticatedAccess:
         weak = http_requests.post(
             f"{api_server}/api/admin/reset-password",
             headers={"Authorization": f"Bearer {admin_token}"},
-            json={"email": email, "new_password": "short", "confirm": "phase5-confirm"},
+            json={"email": email, "new_password": "short", "confirm": "phase5-confirm",
+                  "admin_password": admin_reauth},
             timeout=3,
         )
         assert weak.status_code == 400
@@ -800,7 +805,8 @@ class TestAuthenticatedAccess:
         ok = http_requests.post(
             f"{api_server}/api/admin/reset-password",
             headers={"Authorization": f"Bearer {admin_token}"},
-            json={"email": email, "new_password": "StrongPass123!", "confirm": "phase5-confirm"},
+            json={"email": email, "new_password": "StrongPass123!", "confirm": "phase5-confirm",
+                  "admin_password": admin_reauth},
             timeout=3,
         )
         assert ok.status_code == 200, ok.text
@@ -826,8 +832,12 @@ class TestAuthenticatedAccess:
         officer_id = "phase5_sco_reset"
         officer_email = "phase5-sco-reset@example.com"
         old_hash = bcrypt.hashpw("OldStrong123!".encode(), bcrypt.gensalt()).decode()
+        # BSA-003 (P11-6): the endpoint now requires acting-admin re-auth.
+        admin_reauth = "AdminReauth123!"
+        admin_reauth_hash = bcrypt.hashpw(admin_reauth.encode(), bcrypt.gensalt()).decode()
 
         conn = get_db()
+        conn.execute("UPDATE users SET password_hash=? WHERE id='admin001'", (admin_reauth_hash,))
         conn.execute("DELETE FROM audit_log WHERE target = ?", (f"officer:{officer_email}",))
         conn.execute("DELETE FROM users WHERE id = ? OR LOWER(email) = ?", (officer_id, officer_email))
         conn.execute(
@@ -843,7 +853,8 @@ class TestAuthenticatedAccess:
         weak = http_requests.post(
             f"{api_server}/api/admin/officer-reset-password",
             headers={"Authorization": f"Bearer {admin_token}"},
-            json={"email": officer_email, "new_password": "short", "confirm": "phase5-officer-confirm"},
+            json={"email": officer_email, "new_password": "short", "confirm": "phase5-officer-confirm",
+                  "admin_password": admin_reauth},
             timeout=3,
         )
         assert weak.status_code == 400
@@ -852,7 +863,8 @@ class TestAuthenticatedAccess:
         ok = http_requests.post(
             f"{api_server}/api/admin/officer-reset-password",
             headers={"Authorization": f"Bearer {admin_token}"},
-            json={"email": officer_email, "new_password": "StrongPass123!", "confirm": "phase5-officer-confirm"},
+            json={"email": officer_email, "new_password": "StrongPass123!", "confirm": "phase5-officer-confirm",
+                  "admin_password": admin_reauth},
             timeout=3,
         )
         assert ok.status_code == 200, ok.text
