@@ -3697,6 +3697,49 @@ function escapeHtml(str) {
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
 
+// Safe interpolation of a value into a single-quoted JS string that itself
+// lives inside a double-quoted HTML attribute, e.g. onclick="fn('<value>')".
+// escapeHtml is WRONG here: the value passes through HTML-attribute entity
+// decoding FIRST (so &#039; becomes a real ' that closes the JS string) and
+// THEN JS parsing — the classic breakout that lets an applicant-supplied name
+// like  x'),evil(),('  run code, and a benign name like O'Brien break the
+// handler. So: JS-escape the chars that must survive entity-decoding as valid
+// JS escapes (backslash, quote, newlines — the backslash is not an entity, so
+// \' stays \' after decoding), and entity-encode the HTML-structural chars
+// (" & < >) so they cannot close the attribute or start a tag — they decode
+// back to harmless literals inside the single-quoted JS string. Output is
+// byte-identical to escapeHtml for alphanumeric values (no special chars).
+function escapeJsAttr(value) {
+  return String(value == null ? '' : value)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// Sanitise a URL before it goes into an href/src. Provider- and applicant-
+// supplied links are untrusted: a value like "javascript:evil()" executes on
+// click. Allow only http(s)/mailto and same-document relative/anchor targets;
+// anything else (javascript:, data:, vbscript:, unknown schemes) returns ''
+// so the caller renders no live link. Still pass the result through escapeHtml
+// for the attribute context.
+function safeUrl(value) {
+  var s = String(value == null ? '' : value).trim();
+  if (!s) return '';
+  // Reject control chars that browsers strip when resolving the scheme
+  // (e.g. "java\tscript:") before they can smuggle a dangerous protocol.
+  var stripped = s.replace(/[\x00-\x20]/g, '');
+  if (/^(?:https?:|mailto:)/i.test(stripped)) return s;
+  if (/^(?:[/#?]|\.\.?\/)/.test(stripped)) return s;  // relative path / anchor / query
+  return '';
+}
+
 function normalizedEnumKey(value) {
   return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
@@ -14401,14 +14444,14 @@ function renderInlineScreeningDispositionPanel(app, row, subjectType, subjectNam
   var html = '<div style="margin-top:12px;padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);">';
   html += '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;"><strong>' + escapeHtml(explanation) + '</strong></div>';
   html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center;">';
-  html += '<button type="button" title="Removes this hit as an approval blocker if no other blockers remain." style="' + primaryBase + (clearSelected ? selectedRing : '') + (clearDisabled ? 'opacity:0.6;cursor:not-allowed;' : '') + '" ' + (clearDisabled ? 'disabled ' : '') + 'onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'cleared\')">Clear as False Positive</button>';
+  html += '<button type="button" title="Removes this hit as an approval blocker if no other blockers remain." style="' + primaryBase + (clearSelected ? selectedRing : '') + (clearDisabled ? 'opacity:0.6;cursor:not-allowed;' : '') + '" ' + (clearDisabled ? 'disabled ' : '') + 'onclick="setInlineScreeningDispositionChoice(\'' + escapeJsAttr(app.ref) + '\',\'' + escapeJsAttr(subjectType) + '\',\'' + escapeJsAttr(subjectName) + '\',\'cleared\')">Clear as False Positive</button>';
   if (!pendingSecondReview) {
-    html += '<button type="button" title="Keeps approval blocked and may require escalation or EDD." style="' + outlineBase + (matchSelected ? outlineSelected : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'match\')">Confirm True Match</button>';
+    html += '<button type="button" title="Keeps approval blocked and may require escalation or EDD." style="' + outlineBase + (matchSelected ? outlineSelected : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeJsAttr(app.ref) + '\',\'' + escapeJsAttr(subjectType) + '\',\'' + escapeJsAttr(subjectName) + '\',\'match\')">Confirm True Match</button>';
     html += '<details style="position:relative;display:inline-block;" onkeydown="if(event.key===\'Escape\'){this.removeAttribute(\'open\');}">';
     html += '<summary style="' + outlineBase + ((escalateSelected || followUpSelected) ? outlineSelected : '') + 'list-style:none;user-select:none;display:inline-flex;align-items:center;gap:4px;">More ▾</summary>';
     html += '<div style="position:absolute;top:calc(100% + 4px);left:0;z-index:40;min-width:225px;background:#fff;border:1px solid var(--border2);border-radius:8px;box-shadow:0 6px 20px rgba(26,26,46,0.15);padding:5px;">';
-    html += '<button type="button" title="Routes this case for senior compliance review or EDD where configured." style="' + menuItemBase + (escalateSelected ? 'color:var(--brand);font-weight:700;' : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'escalated\')">Escalate</button>';
-    html += '<button type="button" title="Keeps this result under review while missing information is requested." style="' + menuItemBase + (followUpSelected ? 'color:var(--brand);font-weight:700;' : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'follow_up_required\')">Request More Information</button>';
+    html += '<button type="button" title="Routes this case for senior compliance review or EDD where configured." style="' + menuItemBase + (escalateSelected ? 'color:var(--brand);font-weight:700;' : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeJsAttr(app.ref) + '\',\'' + escapeJsAttr(subjectType) + '\',\'' + escapeJsAttr(subjectName) + '\',\'escalated\')">Escalate</button>';
+    html += '<button type="button" title="Keeps this result under review while missing information is requested." style="' + menuItemBase + (followUpSelected ? 'color:var(--brand);font-weight:700;' : '') + '" onclick="setInlineScreeningDispositionChoice(\'' + escapeJsAttr(app.ref) + '\',\'' + escapeJsAttr(subjectType) + '\',\'' + escapeJsAttr(subjectName) + '\',\'follow_up_required\')">Request More Information</button>';
     html += '</div></details>';
     if (escalateSelected) html += '<span class="badge pending">Selected: Escalate</span>';
     if (followUpSelected) html += '<span class="badge pending">Selected: Request More Information</span>';
@@ -14422,11 +14465,11 @@ function renderInlineScreeningDispositionPanel(app, row, subjectType, subjectNam
     html += '</div>';
     return html;
   }
-  html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Upload supporting evidence (optional)</div><input class="form-input" type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" ' + (submitting ? 'disabled ' : '') + ' onchange="setInlineScreeningEvidenceFile(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',this)" />' +
-    (state.evidenceFile ? '<div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:var(--text2);"><span>' + escapeHtml(state.evidenceFile.name) + '</span><button type="button" class="btn btn-outline btn-sm" ' + (submitting ? 'disabled ' : '') + ' onclick="removeInlineScreeningEvidenceFile(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\')">Remove</button></div>' : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Accepted file types follow the secure document upload policy.</div>') +
+  html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Upload supporting evidence (optional)</div><input class="form-input" type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" ' + (submitting ? 'disabled ' : '') + ' onchange="setInlineScreeningEvidenceFile(\'' + escapeJsAttr(app.ref) + '\',\'' + escapeJsAttr(subjectType) + '\',\'' + escapeJsAttr(subjectName) + '\',this)" />' +
+    (state.evidenceFile ? '<div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:var(--text2);"><span>' + escapeHtml(state.evidenceFile.name) + '</span><button type="button" class="btn btn-outline btn-sm" ' + (submitting ? 'disabled ' : '') + ' onclick="removeInlineScreeningEvidenceFile(\'' + escapeJsAttr(app.ref) + '\',\'' + escapeJsAttr(subjectType) + '\',\'' + escapeJsAttr(subjectName) + '\')">Remove</button></div>' : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Accepted file types follow the secure document upload policy.</div>') +
     '</div>';
   if (disposition === 'escalated') {
-    html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Escalation outcome</div><select class="form-select" ' + (submitting ? 'disabled ' : '') + 'onchange="updateInlineScreeningDispositionField(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'dispositionCode\',this.value)">';
+    html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Escalation outcome</div><select class="form-select" ' + (submitting ? 'disabled ' : '') + 'onchange="updateInlineScreeningDispositionField(\'' + escapeJsAttr(app.ref) + '\',\'' + escapeJsAttr(subjectType) + '\',\'' + escapeJsAttr(subjectName) + '\',\'dispositionCode\',this.value)">';
     html += '<option value="">Select escalation reason</option>';
     dispositionOptions.forEach(function(option) {
       html += '<option value="' + escapeHtml(option.value) + '"' + (selectedCode === option.value ? ' selected' : '') + '>' + escapeHtml(option.label) + '</option>';
@@ -14434,12 +14477,12 @@ function renderInlineScreeningDispositionPanel(app, row, subjectType, subjectNam
     html += '</select></div>';
   }
   if (disposition === 'cleared' || disposition === 'match' || disposition === 'escalated' || disposition === 'follow_up_required') {
-    html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Evidence / Provider Reference (optional)</div><input class="form-input" ' + (submitting ? 'disabled ' : '') + ' value="' + escapeHtml(state.evidenceReference || '') + '" oninput="updateInlineScreeningDispositionField(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'evidenceReference\',this.value)" placeholder="Provider case ID, registry extract, or review-pack reference..." /><div style="font-size:11px;color:var(--text3);margin-top:6px;">Optional. Stored with the audit event; do not paste raw PII.</div></div>';
+    html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Evidence / Provider Reference (optional)</div><input class="form-input" ' + (submitting ? 'disabled ' : '') + ' value="' + escapeHtml(state.evidenceReference || '') + '" oninput="updateInlineScreeningDispositionField(\'' + escapeJsAttr(app.ref) + '\',\'' + escapeJsAttr(subjectType) + '\',\'' + escapeJsAttr(subjectName) + '\',\'evidenceReference\',this.value)" placeholder="Provider case ID, registry extract, or review-pack reference..." /><div style="font-size:11px;color:var(--text3);margin-top:6px;">Optional. Stored with the audit event; do not paste raw PII.</div></div>';
   }
-  html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Rationale</div><textarea class="form-input" rows="4" ' + (submitting ? 'disabled ' : '') + ' oninput="updateInlineScreeningDispositionField(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\',\'rationale\',this.value)" placeholder="Record the evidence reviewed and why this disposition is appropriate..." style="resize:vertical;">' + escapeHtml(state.rationale || '') + '</textarea><div id="screening-inline-rationale-counter-' + escapeHtml(subjectDomKey) + '" style="font-size:11px;color:var(--text2);margin-top:4px;">' + escapeHtml(screeningDispositionRationaleCounterText(disposition || 'escalated', state.rationale || '')) + '</div></div>';
+  html += '<div class="form-group" style="margin-bottom:12px;"><div class="form-label">Rationale</div><textarea class="form-input" rows="4" ' + (submitting ? 'disabled ' : '') + ' oninput="updateInlineScreeningDispositionField(\'' + escapeJsAttr(app.ref) + '\',\'' + escapeJsAttr(subjectType) + '\',\'' + escapeJsAttr(subjectName) + '\',\'rationale\',this.value)" placeholder="Record the evidence reviewed and why this disposition is appropriate..." style="resize:vertical;">' + escapeHtml(state.rationale || '') + '</textarea><div id="screening-inline-rationale-counter-' + escapeHtml(subjectDomKey) + '" style="font-size:11px;color:var(--text2);margin-top:4px;">' + escapeHtml(screeningDispositionRationaleCounterText(disposition || 'escalated', state.rationale || '')) + '</div></div>';
   html += '<div id="screening-inline-error-' + escapeHtml(subjectDomKey) + '" style="margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;font-size:12px;font-weight:600;line-height:1.5;' + (state.error ? '' : 'display:none;') + '">' + escapeHtml(state.error || '') + '</div>';
   html += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">';
-  html += '<button type="button" id="screening-inline-save-' + escapeHtml(subjectDomKey) + '" class="btn btn-primary" ' + (submitting || !validity.valid ? 'disabled ' : '') + ' onclick="submitInlineScreeningDisposition(\'' + escapeHtml(app.ref) + '\',\'' + escapeHtml(subjectType) + '\',\'' + escapeHtml(subjectName) + '\')">' + (submitting ? 'Saving…' : 'Save disposition') + '</button>';
+  html += '<button type="button" id="screening-inline-save-' + escapeHtml(subjectDomKey) + '" class="btn btn-primary" ' + (submitting || !validity.valid ? 'disabled ' : '') + ' onclick="submitInlineScreeningDisposition(\'' + escapeJsAttr(app.ref) + '\',\'' + escapeJsAttr(subjectType) + '\',\'' + escapeJsAttr(subjectName) + '\')">' + (submitting ? 'Saving…' : 'Save disposition') + '</button>';
   html += '<span style="font-size:11px;color:var(--text3);">Backend screening gates remain authoritative.</span>';
   html += '<div id="screening-inline-validation-' + escapeHtml(subjectDomKey) + '" style="margin-top:8px;font-size:11px;color:#92400e;' + (!state.error && !validity.valid ? '' : 'display:none;') + '">' + escapeHtml(!state.error && !validity.valid ? validity.message : '') + '</div>';
   html += '</div></div>';
@@ -15082,7 +15125,7 @@ function providerEvidenceRecordCard(hit, context, groupIndex, recordIndex) {
     (rows ? '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;margin-top:8px;font-size:11px;color:var(--text2);">' + rows + '</div>' : '') +
     (riskLabels ? '<div style="font-size:11px;color:var(--text3);margin-top:6px;"><strong>Risk labels:</strong> ' + escapeHtml(riskLabels) + '</div>' : '') +
     (summary ? '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(summary) + '</div>' : '') +
-    (mediaUrl ? '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(mediaUrl) + '" target="_blank" rel="noopener">Open source ↗</a></div>' : '') +
+    (safeUrl(mediaUrl) ? '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(safeUrl(mediaUrl)) + '" target="_blank" rel="noopener">Open source ↗</a></div>' : '') +
   '</div>';
 }
 
@@ -15289,7 +15332,7 @@ function screeningQueueEvidenceItemCard(item, index) {
     '</div>' +
     (rows ? '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;margin-top:8px;font-size:11px;color:var(--text2);">' + rows + '</div>' : '') +
     (snippet ? '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:8px;">' + escapeHtml(snippet) + '</div>' : '') +
-    (sourceUrl ? '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(sourceUrl) + '" target="_blank" rel="noopener">Open source ↗</a></div>' : '<div style="font-size:11px;color:var(--text3);margin-top:8px;">' + escapeHtml(sourceMessage) + '</div>') +
+    (safeUrl(sourceUrl) ? '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(safeUrl(sourceUrl)) + '" target="_blank" rel="noopener">Open source ↗</a></div>' : '<div style="font-size:11px;color:var(--text3);margin-top:8px;">' + escapeHtml(sourceMessage) + '</div>') +
   '</div>';
 }
 
@@ -15419,7 +15462,7 @@ function providerIndicatorDetails(indicators) {
     var text = label + (title ? ': ' + title : '') + (snippet ? ' — ' + snippet : '');
     return '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' +
       escapeHtml(text) +
-      (url ? ' <a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">source</a>' : '') +
+      (safeUrl(url) ? ' <a href="' + escapeHtml(safeUrl(url)) + '" target="_blank" rel="noopener">source</a>' : '') +
       '</div>';
   });
   return rows.join('');
@@ -15627,7 +15670,7 @@ function screeningTriageSubjectListItem(subject, isSelected) {
   var selectedStyles = isSelected
     ? 'border-color:var(--brand);background:rgba(43,47,143,0.06);box-shadow:0 0 0 2px rgba(43,47,143,0.08);'
     : (isClear ? 'border-color:var(--border1);background:var(--surface2);opacity:0.72;' : 'border-color:var(--border1);background:#fff;');
-  return '<button type="button" data-screening-subject-card="' + (isClear ? 'clear' : 'review') + '" onclick="setScreeningReviewFocus(\'' + escapeHtml(subject.subject_type) + '\',\'' + escapeHtml(subject.subject_name) + '\')" style="display:block;width:100%;text-align:left;padding:12px;border:1px solid transparent;border-radius:10px;cursor:pointer;' + selectedStyles + '">' +
+  return '<button type="button" data-screening-subject-card="' + (isClear ? 'clear' : 'review') + '" onclick="setScreeningReviewFocus(\'' + escapeJsAttr(subject.subject_type) + '\',\'' + escapeJsAttr(subject.subject_name) + '\')" style="display:block;width:100%;text-align:left;padding:12px;border:1px solid transparent;border-radius:10px;cursor:pointer;' + selectedStyles + '">' +
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">' +
       '<div style="min-width:0;">' +
         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;font-weight:700;color:var(--text1);line-height:1.4;">' + screeningSubjectRoleBadge(subject.subject_type) + '<span>' + escapeHtml(subject.subject_name) + '</span></div>' +
@@ -15684,7 +15727,7 @@ function screeningProfileHydrationEnabled() {
 
 function screeningRescreenButtonHtml(appRef) {
   return '<button class="btn btn-outline btn-sm" ' +
-    'onclick="confirmReScreenApplication(\'' + escapeHtml(appRef) + '\')" ' +
+    'onclick="confirmReScreenApplication(\'' + escapeJsAttr(appRef) + '\')" ' +
     'title="Re-screen this application against the provider. Existing results are archived first and never reduced by a re-screen.">' +
     '↻ Re-screen</button>';
 }
@@ -16888,8 +16931,8 @@ function screeningWatchlistEntriesCard(item) {
     var urls = Array.isArray(entry.related_urls) ? entry.related_urls.filter(function(u) {
       return String(u || '').trim().toLowerCase().indexOf('http') === 0;
     }) : [];
-    var linkHtml = urls.length
-      ? '<a class="btn btn-outline btn-sm" href="' + escapeHtml(urls[0]) + '" target="_blank" rel="noopener" style="margin-left:8px;">Source ↗</a>'
+    var linkHtml = urls.length && safeUrl(urls[0])
+      ? '<a class="btn btn-outline btn-sm" href="' + escapeHtml(safeUrl(urls[0])) + '" target="_blank" rel="noopener" style="margin-left:8px;">Source ↗</a>'
       : '';
     return '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;font-size:12px;color:var(--text2);padding:5px 0;border-top:1px solid var(--border1);">' +
       '<span style="font-weight:600;color:var(--text1);">' + escapeHtml(meta) + '</span>' + linkHtml +
@@ -16945,8 +16988,8 @@ function screeningTriageHitEvidenceBody(item) {
       (item.source_title ? '<div style="font-weight:600;font-size:12.5px;color:var(--text1);word-break:break-word;">' + escapeHtml(item.source_title) + '</div>' : '') +
       (item.source_name || item.publication_date ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml([item.source_name, item.publication_date].filter(Boolean).join(' · ')) + '</div>' : '') +
       (item.snippet ? '<div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:5px;">' + escapeHtml(item.snippet) + '</div>' : '') +
-      (item.source_url
-        ? '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(item.source_url) + '" target="_blank" rel="noopener">Open source ↗</a></div>'
+      (safeUrl(item.source_url)
+        ? '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(safeUrl(item.source_url)) + '" target="_blank" rel="noopener">Open source ↗</a></div>'
         : '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(item.source_url_unavailable_message || SCREENING_SOURCE_UNAVAILABLE_MESSAGE) + '</div>') +
     '</div>';
   }
@@ -16992,8 +17035,8 @@ function screeningTriageHitTechnicalDetails(item) {
   var body = rows.map(function(rowPair) {
     return '<div style="font-size:11px;color:var(--text2);"><span style="color:var(--text3);">' + escapeHtml(rowPair[0]) + ':</span> <span style="font-family:ui-monospace,Menlo,monospace;word-break:break-all;">' + escapeHtml(evidenceDisplayValue(rowPair[1])) + '</span></div>';
   }).join('');
-  if (caseUrl) {
-    body += '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(caseUrl) + '" target="_blank" rel="noopener">Open in ComplyAdvantage ↗</a></div>';
+  if (safeUrl(caseUrl)) {
+    body += '<div style="margin-top:8px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(safeUrl(caseUrl)) + '" target="_blank" rel="noopener">Open in ComplyAdvantage ↗</a></div>';
   }
   return '<details data-screening-hit-technical-details="true" style="border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
     '<summary style="cursor:pointer;padding:7px 12px;font-size:11.5px;font-weight:700;color:var(--text3);list-style:none;">Technical details</summary>' +
@@ -17197,7 +17240,7 @@ function screeningTriageHitActions(row, item, itemIndex) {
   var subjType = row.subject_type || '', subjName = row.subject_name || '';
   var hid = screeningHitId(item, itemIndex);
   var st = screeningHitDispositionState(appRef, subjType, subjName, hid);
-  var args = '\'' + escapeHtml(appRef) + '\',\'' + escapeHtml(subjType) + '\',\'' + escapeHtml(subjName) + '\',\'' + escapeHtml(hid) + '\'';
+  var args = '\'' + escapeJsAttr(appRef) + '\',\'' + escapeJsAttr(subjType) + '\',\'' + escapeJsAttr(subjName) + '\',\'' + escapeJsAttr(hid) + '\'';
   var clearBlocked = !canClearScreeningDisposition();
   var menuItemStyle = 'display:block;width:100%;text-align:left;background:none;border:none;padding:8px 10px;border-radius:6px;font-size:12px;color:var(--text1);cursor:pointer;';
   var html = '<div data-screening-hit-actions="true" style="border-top:1px solid var(--border1);padding-top:10px;">';
@@ -17474,14 +17517,14 @@ function screeningTriageGroupedBlock(row, meta, groupEntries) {
           ? '<span style="font-size:11px;font-weight:700;color:var(--text3);background:var(--surface2);padding:2px 9px;border-radius:20px;">✗ Cleared</span>'
           : '<span style="font-size:11px;font-weight:700;color:#b45309;background:rgba(245,158,11,.14);padding:2px 9px;border-radius:20px;">● Undecided</span>');
       var note = e.item.source_title || e.item.source_name || (e.item.publication_date || '');
-      var hargs = '\'' + escapeHtml(appRef) + '\',\'' + escapeHtml(subjType) + '\',\'' + escapeHtml(subjName) + '\',\'' + escapeHtml(hid) + '\'';
+      var hargs = '\'' + escapeJsAttr(appRef) + '\',\'' + escapeJsAttr(subjType) + '\',\'' + escapeJsAttr(subjName) + '\',\'' + escapeJsAttr(hid) + '\'';
       var ctrls = st.status === 'pending'
         ? '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitDispositionSet(' + hargs + ',\'match\')">Confirm true match</button><button type="button" class="btn btn-outline btn-sm" onclick="screeningHitDispositionSet(' + hargs + ',\'cleared\')">Clear</button>'
         : '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitDispositionSet(' + hargs + ',\'pending\')">↺ Undo</button>';
       var box = st.status === 'pending'
-        ? '<input type="checkbox" aria-label="Select match" ' + (checked ? 'checked ' : '') + 'onclick="screeningHitGroupToggleSel(\'' + groupId + '\',\'' + escapeHtml(hid) + '\')" style="width:16px;height:16px;margin-top:2px;cursor:pointer;accent-color:var(--brand);">'
+        ? '<input type="checkbox" aria-label="Select match" ' + (checked ? 'checked ' : '') + 'onclick="screeningHitGroupToggleSel(\'' + groupId + '\',\'' + escapeJsAttr(hid) + '\')" style="width:16px;height:16px;margin-top:2px;cursor:pointer;accent-color:var(--brand);">'
         : '<span style="width:16px;display:inline-block;"></span>';
-      var srcLink = e.item.source_url ? '<a href="' + escapeHtml(e.item.source_url) + '" target="_blank" rel="noopener" style="font-size:11.5px;color:var(--brand);text-decoration:none;font-weight:600;">Source ↗</a>' : '';
+      var srcLink = safeUrl(e.item.source_url) ? '<a href="' + escapeHtml(safeUrl(e.item.source_url)) + '" target="_blank" rel="noopener" style="font-size:11.5px;color:var(--brand);text-decoration:none;font-weight:600;">Source ↗</a>' : '';
       html += '<div style="border:1px solid ' + (checked ? 'var(--brand)' : 'var(--border1)') + ';border-radius:9px;background:#fff;padding:10px 12px;display:flex;gap:10px;align-items:flex-start;">' +
         box +
         '<div style="flex:1;min-width:0;"><div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;"><strong style="font-size:13px;">' + escapeHtml(screeningTriageHitDisplayName(e.item)) + '</strong>' +

@@ -233,8 +233,11 @@ def test_provider_case_url_link_is_gated_on_the_stored_field():
     # The link renders only when the stored hit carries the field — the code
     # reads provider_case_url and checks it before emitting the anchor.
     assert "String(item.provider_case_url || '').trim()" in tech
-    assert tech.index("if (caseUrl)") < tech.index("Open in ComplyAdvantage ↗</a>")
-    assert "escapeHtml(caseUrl)" in tech
+    # PR-A (audit C2): the anchor is gated on safeUrl(caseUrl) — a stored but
+    # dangerous scheme (javascript:/data:) yields no link — and the href value
+    # is the sanitised URL.
+    assert tech.index("if (safeUrl(caseUrl))") < tech.index("Open in ComplyAdvantage ↗</a>")
+    assert "escapeHtml(safeUrl(caseUrl))" in tech
     # Provider raw score is surfaced as a raw value, never a percentage.
     assert "Provider raw score" in tech
     assert "'%'" not in tech

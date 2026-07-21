@@ -988,7 +988,11 @@ class TestBackofficeStaticPins:
         assert "btn btn-outline btn-sm" in button  # canonical header button idiom
         assert "↻ Re-screen" in button
         assert "confirmReScreenApplication" in button
-        assert "escapeHtml(appRef)" in button
+        # PR-A (audit C1): appRef is interpolated into a single-quoted JS string
+        # inside the onclick, so it must go through escapeJsAttr (JS-string safe),
+        # not escapeHtml (which is decoded back to a breakout quote at click time).
+        assert "escapeJsAttr(appRef)" in button
+        assert "escapeHtml(appRef)" not in button
 
         guard = _extract_js_function(html, "confirmReScreenApplication")
         assert "confirm('Re-screen this application against the provider now? " \
