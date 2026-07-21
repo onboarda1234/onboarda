@@ -1221,7 +1221,16 @@ UPLOAD_DIR = _CFG_UPLOAD_DIR
 RESOURCE_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "resources")
 REGULATORY_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "regulatory_intelligence")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..")  # Serves from arie-backend parent
-MAX_UPLOAD_MB = 10
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "10"))
+# DCI-016 / P12-10: connection-level request-body ceiling. Tornado rejects any
+# request body larger than this BEFORE buffering it into memory — the only
+# genuine pre-buffer guard in non-streaming mode. Kept >= MAX_UPLOAD_MB to
+# allow multipart/form overhead, and configurable so an operator can tighten
+# the pre-buffer memory exposure toward the real per-file limit. Default (20MB)
+# preserves prior behaviour. The per-file MAX_UPLOAD_MB check in each upload
+# handler remains the second line. (Deeper per-request streaming rejection via
+# @stream_request_body is a separate, larger change.)
+MAX_REQUEST_BODY_MB = int(os.getenv("MAX_REQUEST_BODY_MB", "20"))
 TOKEN_EXPIRY_HOURS = 24
 
 # ── External API Keys (from unified config module) ────────
@@ -42227,7 +42236,7 @@ def make_app():
         debug=_CFG_DEBUG,
         xsrf_cookies=False,  # CSRF handled by custom check_xsrf_cookie() on BaseHandler (double-submit cookie pattern)
         cookie_secret=SECRET_KEY,
-        max_body_size=20 * 1024 * 1024,  # 20MB max request body
+        max_body_size=MAX_REQUEST_BODY_MB * 1024 * 1024,  # DCI-016: configurable pre-buffer request-body ceiling (default 20MB)
         default_handler_class=HardenedNotFoundHandler,
         # Gzip JSON responses for clients that send Accept-Encoding: gzip.
         # PR #778 attribution: evidence-mode screening-queue payloads reach
