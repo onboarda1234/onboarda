@@ -6,7 +6,7 @@ Dataset: **Pilot Canonical Dataset**
 
 Version: **v1**
 
-Manifest SHA-256: `fee7436a6bf6ead1cc9a8090ceaa3de7071a9b745e43f2c69a445cf74efdf9c9`
+Manifest SHA-256: `825d267a6488545ee892789f09869362faabdf77fb23df8d1d63b99f6dc27951`
 Permanent application namespace: `RM-PILOT-001` through `RM-PILOT-041`
 
 This is a deterministic, synthetic, non-production fixture dataset for staging demonstrations and regression validation. All 41 permanent records are present on AWS staging. The demo-completion PR does not reseed staging, activate RSMP, recompute an application, alter Gate 0, change a score or workflow policy, or run a provider. AI Supervisor is excluded from the controlled pilot; retained synthetic evidence is for future development and testing only.
@@ -57,7 +57,7 @@ Expected scores were generated from `rule_engine.compute_risk_score` using the r
 | `RM-PILOT-023` | Opaque ownership | 55.0 | HIGH | EDD / dual control | Opaque-ownership High floor and EDD | Ownership workspace, risk breakdown, EDD |
 | `RM-PILOT-024` | Sanctions hit escalated from monitoring | 70.0 | VERY_HIGH | EDD / blocked | Post-onboarding sanctions alert escalated to EDD | Monitoring queue, screening detail, EDD |
 | `RM-PILOT-025` | Material adverse-media monitoring alert | 70.0 | VERY_HIGH | EDD / dual control | Open monitoring alert requiring officer review | Monitoring queue, screening detail, EDD |
-| `RM-PILOT-026` | Combined severe risk factors | 70.0 | VERY_HIGH | EDD / blocked | Combined-risk EDD with approval block | Risk breakdown, screening detail, EDD |
+| `RM-PILOT-026` | Combined severe risk factors | 70.0 | VERY_HIGH | EDD / dual control required | Combined-risk EDD; dual-control route with separate decision-eligibility block | Risk breakdown, screening detail, EDD |
 | `RM-PILOT-027` | EDD for complex ownership | 55.0 | HIGH | EDD / dual control | Ownership evidence collection in EDD | Ownership workspace, EDD |
 | `RM-PILOT-028` | EDD for trust structure | 55.0 | HIGH | EDD / dual control | Verified trust deed, trustee, settlor, beneficiaries and relationship chart | Ownership workspace, EDD, KYC documents, evidence export |
 | `RM-PILOT-029` | Source-of-wealth review | 40.4 | MEDIUM | EDD / compliance required | SOW declaration corroborated by audited, banking and transaction evidence; officer-reviewed | EDD, KYC documents, memo, evidence export |

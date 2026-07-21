@@ -242,6 +242,15 @@ def _application_payload(
         "expected_approval_route": expected["approval_route"],
         "expected_edd_required": expected["edd_required"],
     }
+    manual_compliance = (row.get("scenario_evidence") or {}).get(
+        "manual_compliance_escalation"
+    ) or {}
+    submitted_to_compliance_at = (
+        _iso(row, offset=3) if manual_compliance else None
+    )
+    submitted_to_compliance_by = (
+        manual_compliance.get("submitted_by") if manual_compliance else None
+    )
     decided = expected["application_status"] in {"approved", "rejected"}
     return (
         row["reference"],
@@ -257,6 +266,8 @@ def _application_payload(
         _json(risk_dimensions),
         expected["lane"],
         expected["application_status"],
+        submitted_to_compliance_at,
+        submitted_to_compliance_by,
         "co001",
         _iso(row, offset=1),
         _iso(row, offset=8) if decided else None,
@@ -289,7 +300,8 @@ def _upsert_application(
     common_columns = (
         "ref, company_name, brn, country, sector, entity_type, ownership_structure, "
         "prescreening_data, risk_score, risk_level, risk_dimensions, onboarding_lane, "
-        "status, assigned_to, submitted_at, decided_at, decision_by, decision_notes, "
+        "status, submitted_to_compliance_at, submitted_to_compliance_by, assigned_to, "
+        "submitted_at, decided_at, decision_by, decision_notes, "
         "screening_mode, is_fixture, created_at, updated_at, inputs_updated_at, "
         "risk_computed_at, risk_config_version, risk_escalations, base_risk_level, "
         "final_risk_level, elevation_reason_text"

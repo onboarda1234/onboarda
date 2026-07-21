@@ -9148,7 +9148,7 @@
       "demo_step": 4,
       "expected": {
         "application_status": "edd_required",
-        "approval_route": "blocked",
+        "approval_route": "dual_control_required",
         "base_score": 54.8,
         "base_tier": "MEDIUM",
         "controlled_mapping_evidence": [
@@ -11049,6 +11049,14 @@
       "number": 30,
       "purpose": "Manual compliance review and officer escalation",
       "reference": "RM-PILOT-030",
+      "scenario_evidence": {
+        "manual_compliance_escalation": {
+          "origin_context": "manual_onboarding_escalation",
+          "reason": "Officer submitted the application for manual Compliance review",
+          "submitted_by": "co001",
+          "trigger_source": "officer_submitted_to_compliance"
+        }
+      },
       "risk_inputs": {
         "adverse_media": "clear",
         "application_id": "RM-PILOT-030",
