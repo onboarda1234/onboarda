@@ -1274,6 +1274,63 @@ def run_rule_checks(doc_type: str, category: str,
     return results
 
 
+# ── Layer 2: Hybrid deterministic-first pass (DCI-014, flag-gated) ─
+#
+# verification_matrix.py has always DOCUMENTED hybrid checks as "rules
+# first, AI fallback only on INCONCLUSIVE", but no deterministic first pass
+# ever existed — every HYBRID check went straight to Claude. This registry +
+# runner make the documented contract real, gated OFF by default
+# (config.ENABLE_HYBRID_INCONCLUSIVE_GATE) so live behaviour is unchanged
+# until per-check evaluators are authored and approved under change control.
+#
+# Evaluator contract: fn(check: dict, ctx: dict) -> dict | None
+#   - return a result dict (built with _pass/_warn/_fail) to resolve the
+#     check deterministically, or
+#   - return None to declare it INCONCLUSIVE — it falls through to the AI
+#     layer exactly as today.
+# Registering an evaluator is a compliance-logic change and requires founder
+# sign-off (docs/compliance/P12_7_VERIFICATION_MATRIX_DECISION_MEMO.md).
+HYBRID_DETERMINISTIC_EVALUATORS: Dict[str, Any] = {}
+
+
+def _hybrid_gate_enabled() -> bool:
+    import config
+    return bool(getattr(config, "ENABLE_HYBRID_INCONCLUSIVE_GATE", False))
+
+
+def run_hybrid_deterministic_pass(hybrid_checks: List[dict], ctx: dict) -> Tuple[List[dict], List[dict]]:
+    """Deterministic first pass over HYBRID checks.
+
+    Returns (resolved_results, inconclusive_checks). A check with no
+    registered evaluator, or whose evaluator returns None or raises, is
+    INCONCLUSIVE and stays on the AI path — fail-safe: this pass can only
+    ever REDUCE the AI set, never invent a silent pass for an unevaluated
+    check.
+    """
+    resolved = []
+    inconclusive = []
+    for chk in hybrid_checks:
+        check_id = chk.get("id") or chk.get("check_id") or ""
+        fn = HYBRID_DETERMINISTIC_EVALUATORS.get(check_id)
+        outcome = None
+        if fn is not None:
+            try:
+                outcome = fn(chk, ctx)
+            except Exception:
+                logger.exception(
+                    "Hybrid deterministic evaluator failed for %s — falling through to AI",
+                    check_id,
+                )
+                outcome = None
+        if outcome is None:
+            inconclusive.append(chk)
+        else:
+            outcome.setdefault("source", "rule")
+            outcome.setdefault("classification", CheckClassification.HYBRID)
+            resolved.append(outcome)
+    return resolved, inconclusive
+
+
 # ── Aggregation ────────────────────────────────────────────────────
 
 def _aggregate(all_results: List[dict], confidence: float = None) -> dict:
@@ -1292,13 +1349,20 @@ def _aggregate(all_results: List[dict], confidence: float = None) -> dict:
     fail_results = [r for r in all_results if r.get("result") == CheckStatus.FAIL]
     warn_results = [r for r in all_results if r.get("result") == CheckStatus.WARN]
     pass_results = [r for r in all_results if r.get("result") == CheckStatus.PASS]
+    # DCI-014: an INCONCLUSIVE that survives to aggregation (e.g. the AI
+    # fallback was unavailable) must flag for manual review — it may never
+    # silently sit in the confidence denominator as an unexplained non-pass.
+    inconclusive_results = [r for r in all_results if r.get("result") == CheckStatus.INCONCLUSIVE]
 
     red_flags = [r["message"] for r in fail_results]
-    warnings   = [r["message"] for r in warn_results]
+    warnings = [r["message"] for r in warn_results] + [
+        r.get("message", "Check inconclusive — manual review required")
+        for r in inconclusive_results
+    ]
 
     if fail_results:
         overall = "flagged"
-    elif warn_results:
+    elif warn_results or inconclusive_results:
         overall = "flagged"
     else:
         overall = "verified"
@@ -1519,6 +1583,33 @@ def verify_document_layered(
                 )
         else:
             ai_hybrid_checks = get_ai_checks_for_doc_type(doc_type, category)
+
+        # ── Layer 2 (DCI-014, flag-gated OFF by default): rules-first pass
+        # for HYBRID checks. Resolved checks are recorded and removed from
+        # the AI set; INCONCLUSIVE ones continue to Claude exactly as today.
+        # With the flag off (or no evaluators registered) the AI set is
+        # byte-identical to the legacy behaviour.
+        if _hybrid_gate_enabled() and ai_hybrid_checks:
+            hybrid_pass_started = time.perf_counter()
+            hybrids = [c for c in ai_hybrid_checks
+                       if c.get("classification") == CheckClassification.HYBRID]
+            pure_ai = [c for c in ai_hybrid_checks
+                       if c.get("classification") != CheckClassification.HYBRID]
+            resolved, still_inconclusive = run_hybrid_deterministic_pass(hybrids, {
+                "doc_type": doc_type,
+                "category": category,
+                "extracted_fields": extracted_fields,
+                "prescreening_data": prescreening_data,
+                "risk_level": risk_level,
+            })
+            if resolved:
+                all_results.extend(resolved)
+                logger.info(
+                    "[verify-layered] Hybrid deterministic pass resolved %d/%d checks for %s",
+                    len(resolved), len(hybrids), doc_type,
+                )
+            ai_hybrid_checks = pure_ai + still_inconclusive
+            timing["hybrid_deterministic_pass_ms"] = _elapsed_ms(hybrid_pass_started)
         timing["ai_check_selection_ms"] = _elapsed_ms(ai_selection_started)
 
         if ai_hybrid_checks:
