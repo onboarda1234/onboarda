@@ -747,6 +747,8 @@ APPROVAL_ROUTE_COMPLIANCE_REQUIRED = "compliance_required"
 APPROVAL_ROUTE_DUAL_CONTROL_REQUIRED = "dual_control_required"
 APPROVAL_ROUTE_BLOCKED = "blocked"
 APPROVAL_ROUTE_REJECTED = "rejected"
+DECISION_ELIGIBILITY_ELIGIBLE = "eligible"
+DECISION_ELIGIBILITY_BLOCKED = "blocked"
 
 
 def _json_list_value(value: Any) -> List[Any]:
@@ -1049,11 +1051,12 @@ def _approval_escalation_reasons(
 def classify_approval_route(app: Mapping[str, Any], db=None) -> Dict[str, Any]:
     """Classify the approval path without deciding actor authority or mutating state.
 
-    The route separates risk/escalation policy from operational readiness:
-    ``direct_low_medium`` is the retained constant for direct LOW approval;
-    escalated routes keep memo/supervisor/senior controls; ``blocked`` represents
-    records that are not yet in a decisionable state or do not have a trustworthy
-    risk snapshot.
+    ``approval_route`` is the underlying risk-policy route and remains available
+    for historical/reporting reconciliation even when the current lifecycle is
+    not decisionable. ``decision_eligibility`` and ``eligibility_reason`` expose
+    that operational state independently. The legacy ``route`` key remains the
+    effective gate result so existing approval authority and workflow behaviour
+    are unchanged.
     """
     app = dict(app or {})
     status = _approval_text(app.get("status"))
@@ -1147,13 +1150,25 @@ def classify_approval_route(app: Mapping[str, Any], db=None) -> Dict[str, Any]:
     policy_route = _policy_approval_route(risk_level, escalation_reasons)
 
     if status == "rejected":
+        approval_route = APPROVAL_ROUTE_REJECTED
         route = APPROVAL_ROUTE_REJECTED
     elif reasons:
+        approval_route = policy_route
         route = APPROVAL_ROUTE_BLOCKED
     else:
+        approval_route = policy_route
         route = policy_route
         if route == APPROVAL_ROUTE_BLOCKED:
             reasons.append("unsupported_risk_level")
+
+    eligibility_reasons = list(reasons)
+    if status == "rejected":
+        eligibility_reasons = ["rejected"]
+    decision_eligibility = (
+        DECISION_ELIGIBILITY_BLOCKED
+        if eligibility_reasons
+        else DECISION_ELIGIBILITY_ELIGIBLE
+    )
 
     requires_compliance_package = route in {
         APPROVAL_ROUTE_COMPLIANCE_REQUIRED,
@@ -1161,6 +1176,10 @@ def classify_approval_route(app: Mapping[str, Any], db=None) -> Dict[str, Any]:
     }
     return {
         "route": route,
+        "approval_route": approval_route,
+        "decision_eligibility": decision_eligibility,
+        "eligibility_reason": eligibility_reasons[0] if eligibility_reasons else "",
+        "eligibility_reasons": eligibility_reasons,
         "risk_level": risk_level,
         "status": status,
         "reasons": reasons,

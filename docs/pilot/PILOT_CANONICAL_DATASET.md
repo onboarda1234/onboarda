@@ -6,7 +6,7 @@ Dataset: **Pilot Canonical Dataset**
 
 Version: **v1**
 
-Manifest SHA-256: `825d267a6488545ee892789f09869362faabdf77fb23df8d1d63b99f6dc27951`
+Manifest SHA-256: `45ceaa32d592f754289fb888bbb6d6a863349cf9bde406e7d7055b6c7dc23d25`
 Permanent application namespace: `RM-PILOT-001` through `RM-PILOT-041`
 
 This is a deterministic, synthetic, non-production fixture dataset for staging demonstrations and regression validation. All 41 permanent records are present on AWS staging. The demo-completion PR does not reseed staging, activate RSMP, recompute an application, alter Gate 0, change a score or workflow policy, or run a provider. AI Supervisor is excluded from the controlled pilot; retained synthetic evidence is for future development and testing only.
@@ -37,14 +37,14 @@ Expected scores were generated from `rule_engine.compute_risk_score` using the r
 | `RM-PILOT-003` | Domestic trading company | 12.0 | LOW | Fast Lane / direct low-medium | Approved trading-company control | Application overview, compliance memo |
 | `RM-PILOT-004` | Simple manufacturer monitoring false positive | 7.0 | LOW | Fast Lane / direct low-medium | Monitoring alert dismissed as false positive | Monitoring queue, alert detail |
 | `RM-PILOT-005` | Low-risk completed periodic review | 12.0 | LOW | Fast Lane / direct low-medium | Periodic review completed; risk unchanged | Periodic-review queue/workspace, memo |
-| `RM-PILOT-006` | International trading | 43.3 | MEDIUM | Standard Review / direct low-medium | Standard compliance review | Application overview, risk breakdown |
-| `RM-PILOT-007` | Investment management | 43.3 | MEDIUM | Standard Review / direct low-medium | Compliance review for investment-management profile | Application overview, risk breakdown, compliance queue |
+| `RM-PILOT-006` | International trading | 43.3 | MEDIUM | Standard Review / compliance required | Standard compliance review | Application overview, risk breakdown |
+| `RM-PILOT-007` | Investment management | 43.3 | MEDIUM | Standard Review / compliance required | Compliance review for investment-management profile | Application overview, risk breakdown, compliance queue |
 | `RM-PILOT-008` | Family office with open periodic review | 42.1 | MEDIUM | Standard Review / compliance required | Open medium-risk periodic review | Periodic-review queue/workspace |
 | `RM-PILOT-009` | Cross-border payments | 42.1 | MEDIUM | Standard Review / compliance required | Compliance review for cross-border payments | Application overview, risk breakdown |
-| `RM-PILOT-010` | Corporate shareholders | 40.1 | MEDIUM | Standard Review / direct low-medium | Corporate-shareholder evidence review | Ownership workspace, risk breakdown |
-| `RM-PILOT-011` | Multiple selected services | 40.4 | MEDIUM | Standard Review / direct low-medium | Maximum selected-service risk used | Application overview, risk breakdown, risk-model page |
+| `RM-PILOT-010` | Corporate shareholders | 40.1 | MEDIUM | Standard Review / compliance required | Corporate-shareholder evidence review | Ownership workspace, risk breakdown |
+| `RM-PILOT-011` | Multiple selected services | 40.4 | MEDIUM | Standard Review / compliance required | Maximum selected-service risk used | Application overview, risk breakdown, risk-model page |
 | `RM-PILOT-012` | Higher transaction volume without High floor | 50.3 | MEDIUM | Standard Review / compliance required | `monthly_volume_score_4`; compliance review; no High floor | Risk breakdown, approval route |
-| `RM-PILOT-013` | E-money cross-border services | 40.4 | MEDIUM | Standard Review / direct low-medium | Compliance review for e-money service | Application overview, risk breakdown |
+| `RM-PILOT-013` | E-money cross-border services | 40.4 | MEDIUM | Standard Review / compliance required | Compliance review for e-money service | Application overview, risk breakdown |
 | `RM-PILOT-014` | Private Banking with open high-risk review | 55.0 | HIGH | EDD / dual control | Sector score 4 High floor; open high-risk periodic review | Risk breakdown, EDD, periodic-review workspace |
 | `RM-PILOT-015` | Declared Domestic PEP | 55.0 | HIGH | EDD / dual control | Declared-PEP High floor and EDD | PEP evidence, risk breakdown, EDD |
 | `RM-PILOT-016` | Declared Foreign PEP | 55.0 | HIGH | EDD / dual control | Foreign-PEP High floor and EDD | PEP evidence, risk breakdown, EDD |
@@ -70,8 +70,8 @@ Expected scores were generated from `rule_engine.compute_risk_score` using the r
 | `RM-PILOT-036` | Screening pending | 7.0 | LOW | Fast Lane / blocked | Approval blocked until screening is terminal | Screening queue, approval blockers |
 | `RM-PILOT-037` | Officer correction workflow | 12.0 | LOW | Fast Lane / direct low-medium | Request, applicant correction, officer verification, audit history and final approval | Application overview, officer corrections, audit timeline, memo |
 | `RM-PILOT-038` | Rejected application | 7.0 | LOW | Fast Lane / rejected | Rejected with retained rationale | Application overview, audit timeline |
-| `RM-PILOT-039` | Authoritative evidence export | 43.3 | MEDIUM | Standard Review / direct low-medium | Backend-authoritative PDF/CSV pack with risk, screening, memo and audit evidence | Evidence export, risk breakdown, screening, memo, audit timeline |
-| `RM-PILOT-040` | Retained AI Supervisor evidence — excluded from controlled pilot | 43.3 | MEDIUM | Standard Review / direct low-medium | Stored future-development evidence; not presented as a validated active workflow | Memo scope notice, approval route, audit timeline |
+| `RM-PILOT-039` | Authoritative evidence export | 43.3 | MEDIUM | Standard Review / compliance required | Backend-authoritative PDF/CSV pack with risk, screening, memo and audit evidence | Evidence export, risk breakdown, screening, memo, audit timeline |
+| `RM-PILOT-040` | Retained AI Supervisor evidence — excluded from controlled pilot | 43.3 | MEDIUM | Standard Review / compliance required | Stored future-development evidence; not presented as a validated active workflow | Memo scope notice, approval route, audit timeline |
 | `RM-PILOT-041` | End-to-End Happy Path | 12.0 | LOW | Fast Lane / direct low-medium | Complete onboarding-to-monitoring lifecycle with no unresolved controls | Primary onboarding, memo, approval, export, periodic-review and monitoring screens |
 
 The score/tier fields above are model outputs, while the workflow/approval fields also reflect documentary, screening, and officer controls. A Low score therefore does not override a failed IDV, missing document, unresolved mapping, or pending-screening block.

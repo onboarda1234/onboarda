@@ -13,7 +13,7 @@ import pytest
 
 
 EXPECTED_MANIFEST_SHA256 = (
-    "825d267a6488545ee892789f09869362faabdf77fb23df8d1d63b99f6dc27951"
+    "45ceaa32d592f754289fb888bbb6d6a863349cf9bde406e7d7055b6c7dc23d25"
 )
 
 
@@ -285,6 +285,61 @@ def test_complete_postgres_dry_run_is_repeatable_and_zero_residue(
         "scenario_count": 41,
         "aligned": True,
         "manifest_sha256": EXPECTED_MANIFEST_SHA256,
+    }
+
+
+def test_tier0c_b_routes_and_decision_eligibility_reconcile_on_postgres(
+    canonical_postgres,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+
+    connection = runtime.db.get_db()
+    try:
+        applications = connection.execute(
+            "SELECT * FROM applications WHERE ref LIKE ? ORDER BY ref",
+            ("RM-PILOT-%",),
+        ).fetchall()
+        result = runtime.canonical.validate_tier0c_b_approval_routes(
+            applications,
+            db=connection,
+        )
+    finally:
+        connection.close()
+
+    assert result["scenario_count"] == 41
+    assert result["approval_routes_valid"] is True
+    assert result["decision_eligibility_valid"] is True
+    by_ref = {row["reference"]: row for row in result["results"]}
+    for reference in (
+        "RM-PILOT-006", "RM-PILOT-007", "RM-PILOT-008", "RM-PILOT-009",
+        "RM-PILOT-010", "RM-PILOT-011", "RM-PILOT-013", "RM-PILOT-039",
+        "RM-PILOT-040",
+    ):
+        assert by_ref[reference]["approval_route"] == "compliance_required"
+    for reference in ("RM-PILOT-014", "RM-PILOT-025", "RM-PILOT-026"):
+        assert by_ref[reference]["approval_route"] == "dual_control_required"
+    for reference in (
+        "RM-PILOT-024", "RM-PILOT-031", "RM-PILOT-032", "RM-PILOT-033",
+        "RM-PILOT-034", "RM-PILOT-035", "RM-PILOT-036",
+    ):
+        assert by_ref[reference]["decision_eligibility"] == "blocked"
+    assert {
+        reference: by_ref[reference]["eligibility_reason"]
+        for reference in (
+            "RM-PILOT-024", "RM-PILOT-031", "RM-PILOT-032",
+            "RM-PILOT-033", "RM-PILOT-034", "RM-PILOT-035",
+            "RM-PILOT-036", "RM-PILOT-038",
+        )
+    } == {
+        "RM-PILOT-024": "terminal_state",
+        "RM-PILOT-031": "case_stage_not_decisionable",
+        "RM-PILOT-032": "case_stage_not_decisionable",
+        "RM-PILOT-033": "unresolved_risk_mapping",
+        "RM-PILOT-034": "unresolved_risk_mapping",
+        "RM-PILOT-035": "unresolved_risk_mapping",
+        "RM-PILOT-036": "screening_pending_or_unresolved",
+        "RM-PILOT-038": "rejected",
     }
 
 

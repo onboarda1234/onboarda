@@ -1780,7 +1780,7 @@
       "demo_step": 6,
       "expected": {
         "application_status": "compliance_review",
-        "approval_route": "direct_low_medium",
+        "approval_route": "compliance_required",
         "base_score": 43.3,
         "base_tier": "MEDIUM",
         "controlled_mapping_evidence": [
@@ -2163,7 +2163,7 @@
       "demo_step": 7,
       "expected": {
         "application_status": "compliance_review",
-        "approval_route": "direct_low_medium",
+        "approval_route": "compliance_required",
         "base_score": 43.3,
         "base_tier": "MEDIUM",
         "controlled_mapping_evidence": [
@@ -3315,7 +3315,7 @@
       "demo_step": 9,
       "expected": {
         "application_status": "compliance_review",
-        "approval_route": "direct_low_medium",
+        "approval_route": "compliance_required",
         "base_score": 40.1,
         "base_tier": "MEDIUM",
         "controlled_mapping_evidence": [
@@ -3703,7 +3703,7 @@
       "demo_step": 10,
       "expected": {
         "application_status": "compliance_review",
-        "approval_route": "direct_low_medium",
+        "approval_route": "compliance_required",
         "base_score": 40.4,
         "base_tier": "MEDIUM",
         "controlled_mapping_evidence": [
@@ -4470,7 +4470,7 @@
       "demo_step": 12,
       "expected": {
         "application_status": "compliance_review",
-        "approval_route": "direct_low_medium",
+        "approval_route": "compliance_required",
         "base_score": 40.4,
         "base_tier": "MEDIUM",
         "controlled_mapping_evidence": [
@@ -14056,7 +14056,7 @@
       },
       "expected": {
         "application_status": "approved",
-        "approval_route": "direct_low_medium",
+        "approval_route": "compliance_required",
         "base_score": 43.3,
         "base_tier": "MEDIUM",
         "controlled_mapping_evidence": [
@@ -14456,7 +14456,7 @@
       "demo_step": 7,
       "expected": {
         "application_status": "approved",
-        "approval_route": "direct_low_medium",
+        "approval_route": "compliance_required",
         "base_score": 43.3,
         "base_tier": "MEDIUM",
         "controlled_mapping_evidence": [

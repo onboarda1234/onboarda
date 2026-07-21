@@ -50,6 +50,13 @@ APPROVED_MANIFEST_LINEAGE = {
         "v1",
         "825d267a6488545ee892789f09869362faabdf77fb23df8d1d63b99f6dc27951",
     ),
+    (
+        "v1",
+        "825d267a6488545ee892789f09869362faabdf77fb23df8d1d63b99f6dc27951",
+    ): (
+        "v1",
+        "45ceaa32d592f754289fb888bbb6d6a863349cf9bde406e7d7055b6c7dc23d25",
+    ),
 }
 
 # Keep fixture persistence on the same canonical document-type contract used
