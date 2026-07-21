@@ -504,7 +504,12 @@ def test_backoffice_screening_queue_source_links_are_conditional():
 
     assert "var sourceUrl = item.source_url || ''" in card_region
     assert "Open source" in card_region
-    assert "sourceUrl ? '<div" in card_region
+    # PR-A (audit C2): the source link is gated on safeUrl(), so a provider
+    # javascript:/data: URL falls through to the unavailable message instead of
+    # rendering a clickable payload. Still conditional — an absent URL shows the
+    # unavailable copy exactly as before.
+    assert "safeUrl(sourceUrl) ? '<div" in card_region
+    assert "escapeHtml(safeUrl(sourceUrl))" in card_region
     assert "SCREENING_SOURCE_UNAVAILABLE_MESSAGE" in card_region
     assert "Source unavailable from provider payload" in html
     assert "raw JSON" not in card_region.lower()

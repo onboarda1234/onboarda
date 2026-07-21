@@ -59,6 +59,8 @@ def _runtime_js(html, config):
                     .replace(/"/g, '&quot;')
                     .replace(/'/g, '&#39;');
                 }}
+                function escapeJsAttr(value) {{ return escapeHtml(value); }}
+                function safeUrl(value) {{ var s = String(value == null ? '' : value).trim(); return /^(?:https?:|mailto:|[/#?])/i.test(s) ? s : ''; }}
 
                 function classifyScreeningHits(results) {{
                   var rows = Array.isArray(results) ? results : [];
@@ -639,6 +641,8 @@ def _queue_runtime_js(html):
                     .replace(/"/g, '&quot;')
                     .replace(/'/g, '&#39;');
                 }
+                function escapeJsAttr(value) { return escapeHtml(value); }
+                function safeUrl(value) { var s = String(value == null ? '' : value).trim(); return /^(?:https?:|mailto:|[/#?])/i.test(s) ? s : ''; }
                 function showToast() {}
                 function openScreeningReviewByRow() {}
                 function openScreeningDispositionModalByRow() {}
@@ -868,6 +872,8 @@ def _activity_log_runtime_js(html):
                     .replace(/"/g, '&quot;')
                     .replace(/'/g, '&#39;');
                 }
+                function escapeJsAttr(value) { return escapeHtml(value); }
+                function safeUrl(value) { var s = String(value == null ? '' : value).trim(); return /^(?:https?:|mailto:|[/#?])/i.test(s) ? s : ''; }
                 function firstMeaningfulDetailValue() {
                   for (let i = 0; i < arguments.length; i++) {
                     const value = arguments[i];
@@ -1455,6 +1461,8 @@ def _queue_row_template_runtime_js(html):
                     .replace(/"/g, '&quot;')
                     .replace(/'/g, '&#39;');
                 }
+                function escapeJsAttr(value) { return escapeHtml(value); }
+                function safeUrl(value) { var s = String(value == null ? '' : value).trim(); return /^(?:https?:|mailto:|[/#?])/i.test(s) ? s : ''; }
                 function showToast() {}
                 function openScreeningReviewByRow() {}
                 function openScreeningDispositionModalByRow() {}
@@ -1647,6 +1655,8 @@ def _queue_error_state_runtime_js(html):
                     .replace(/"/g, '&quot;')
                     .replace(/'/g, '&#39;');
                 }
+                function escapeJsAttr(value) { return escapeHtml(value); }
+                function safeUrl(value) { var s = String(value == null ? '' : value).trim(); return /^(?:https?:|mailto:|[/#?])/i.test(s) ? s : ''; }
                 function showToast() {}
                 function openScreeningReviewByRow() {}
                 function openScreeningDispositionModalByRow() {}
