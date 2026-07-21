@@ -82,8 +82,8 @@ def api_server():
 
     yield f"http://127.0.0.1:{port}"
 
-    if "loop" in server_ref:
-        server_ref["loop"].add_callback(server_ref["loop"].stop)
+    from tests.conftest import shutdown_test_http_server
+    shutdown_test_http_server(thread, server_ref)
 
 # Every denial site this PR routed through log_authz_denial, by its
 # machine-readable source tag.
@@ -146,7 +146,9 @@ def test_reauth_helper_is_fail_closed():
     assert '"authz_denied_reauth"' in helper
     # Empty stored hash, missing row, and malformed hash all deny.
     assert "if row else" in helper
-    assert "except (ValueError, TypeError)" in helper
+    # AttributeError included: non-string admin_password (JSON number) must
+    # deny via the audited 401, not escape as a 500.
+    assert "except (ValueError, TypeError, AttributeError)" in helper
     assert helper.count("return False") >= 2
 
 
@@ -193,15 +195,57 @@ def test_admin_reset_rejects_missing_and_wrong_reauth_password(api_server, monke
     assert wrong.status_code == 401
     assert "incorrect" in wrong.text
 
+    # Audit finding: a non-string admin_password (JSON number) must deny with
+    # the audited 401, not escape as an unhandled 500.
+    nonstring = http_requests.post(
+        f"{api_server}/api/admin/reset-password",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={**base, "admin_password": 12345}, timeout=3,
+    )
+    assert nonstring.status_code == 401
+
     conn = get_db()
     rows = conn.execute(
         "SELECT detail FROM audit_log WHERE id > ? AND action='authz_denied_reauth'",
         (watermark,),
     ).fetchall()
     conn.close()
-    assert len(rows) == 1, "wrong re-auth password must write exactly one denial audit row"
+    assert len(rows) == 2, (
+        "wrong and non-string re-auth passwords must each write a denial audit row"
+    )
     detail = json.loads(rows[0]["detail"])
     assert detail["source"] == "admin_client_reset"
+
+
+def test_admin_reset_rate_limit_trips_after_five_attempts(api_server, monkeypatch):
+    """Audit follow-up: the 5/600s shared limit must actually return 429."""
+    import bcrypt
+    from auth import create_token
+    from db import get_db
+
+    monkeypatch.setenv("ADMIN_CLIENT_RESET_CONFIRMATION", "p116-confirm")
+    admin_token = create_token("admin001", "admin", "Test Admin", "officer")
+
+    conn = get_db()
+    conn.execute(
+        "UPDATE users SET password_hash=? WHERE id='admin001'",
+        (bcrypt.hashpw(b"CorrectAdmin123!", bcrypt.gensalt()).decode(),),
+    )
+    conn.commit()
+    conn.close()
+
+    body = {"email": "nobody@example.com", "new_password": "StrongPass123!",
+            "confirm": "p116-confirm", "admin_password": "WrongPassword1!"}
+    codes = []
+    for _ in range(6):
+        r = http_requests.post(
+            f"{api_server}/api/admin/reset-password",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json=body, timeout=3,
+        )
+        codes.append(r.status_code)
+    assert codes[:5] == [401] * 5
+    assert codes[5] == 429
 
 
 def test_officer_reset_rejects_wrong_reauth_password(api_server, monkeypatch):
@@ -275,8 +319,10 @@ def test_all_new_denial_sites_route_through_log_authz_denial():
         assert f'"source": "{source}"' in src, (
             f"denial site '{source}' lost its log_authz_denial routing (P11-6 / BSA-009)"
         )
-    # Each source tag must sit in a log_authz_denial call, not a stray dict.
-    assert src.count("log_authz_denial(") >= len(NEW_DENIAL_SOURCES)
+    # draft_persistence covers TWO sites under one tag — both must stay routed.
+    assert src.count('"source": "draft_persistence"') == 2
+    # 9 denial sites + the re-auth helper = at least 10 routing calls.
+    assert src.count("log_authz_denial(") >= 10
 
 
 def test_denial_response_bodies_unchanged():

@@ -4184,8 +4184,10 @@ def _admin_reauth_ok(handler, user, admin_password, source):
     stored = (row.get("password_hash") or "") if row else ""
     import bcrypt
     try:
+        # AttributeError: non-string admin_password (e.g. JSON number) must
+        # deny with the audited 401, not escape as a 500 with no audit row.
         ok = bool(stored) and bcrypt.checkpw(admin_password.encode(), stored.encode())
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError):
         ok = False
     if not ok:
         handler.log_authz_denial(user, "authz_denied_reauth", user.get("sub"), {
