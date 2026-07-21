@@ -93,9 +93,11 @@ def _ai_breaker_settings():
 def _ai_breaker_preflight(operation: str = "claude_call"):
     """Raise a taxonomy-consistent provider error while the breaker is open.
 
-    Half-open: once the cooldown elapses, one caller is let through as the
-    probe (open_until cleared, failure count kept) — success resets fully,
-    another failure re-opens immediately at the threshold."""
+    Half-open: once the cooldown elapses, the first preflight clears
+    open_until (failure count kept) — callers already queued at that boundary
+    may pass together as a bounded burst, not a strict single probe. A probe
+    success resets fully; a probe failure re-opens immediately (count is
+    already at/over the threshold)."""
     enabled, _threshold, _cooldown = _ai_breaker_settings()
     if not enabled:
         return
@@ -2374,7 +2376,11 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
                     failure.get("provider_status_code"),
                 )
                 if not failure.get("retryable"):
-                    _ai_breaker_record_failure()
+                    # Audit finding: a terminal_invalid_request (e.g. corrupt
+                    # PDF) is a DOCUMENT problem, not provider unhealth — it
+                    # must not push a provider-health breaker toward open.
+                    if failure.get("classification") != "terminal_invalid_request":
+                        _ai_breaker_record_failure()
                     raise VerificationProviderError(failure) from e
                 if attempt == self.max_retries - 1:
                     _ai_breaker_record_failure()
