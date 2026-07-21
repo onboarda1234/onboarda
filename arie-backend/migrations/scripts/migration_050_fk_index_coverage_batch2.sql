@@ -1,4 +1,4 @@
--- Migration 049: foreign-key index coverage, batch 2 (DCI-104).
+-- Migration 050: foreign-key index coverage, batch 2 (DCI-104).
 -- ==========================================================================
 -- DCI-104 flagged foreign-key columns with no covering index: joins and
 -- ON DELETE CASCADE integrity scans over them were full table scans that

@@ -6468,7 +6468,7 @@ def _run_migrations(db: DBConnection):
     # were full table scans that degrade as the referenced parents grow. Indexes
     # are additive (never change query results) so they are P12-1-safe on
     # regulated / change-controlled tables. Idempotent + dialect-neutral;
-    # migration_049 keeps the ADR-0008 ledger entry. The high-fan-in
+    # migration_050 keeps the ADR-0008 ledger entry. The high-fan-in
     # audit-actor *_by -> users FKs are deliberately excluded (write overhead,
     # no hot reverse-lookup path). Deferred: four lower-value navigational FKs
     # on change-management tables (change_requests.source_alert_id,

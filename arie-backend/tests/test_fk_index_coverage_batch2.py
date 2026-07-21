@@ -27,16 +27,16 @@ def test_all_batch2_fk_indexes_exist(db):
     assert not missing, f"missing FK indexes: {missing}"
 
 
-def test_migration_049_ledger_file_present():
+def test_migration_050_ledger_file_present():
     from pathlib import Path
 
     p = (
         Path(__file__).resolve().parents[1]
         / "migrations"
         / "scripts"
-        / "migration_049_fk_index_coverage_batch2.sql"
+        / "migration_050_fk_index_coverage_batch2.sql"
     )
     assert p.exists()
     text = p.read_text(encoding="utf-8")
     for idx in EXPECTED_INDEXES:
-        assert idx in text, f"{idx} not in migration_049 ledger"
+        assert idx in text, f"{idx} not in migration_050 ledger"
