@@ -1259,7 +1259,11 @@ class TestInlineScreeningRuntime:
         assert "DIR" in result["triageCockpitHtml"]
         assert "UBO" in result["triageCockpitHtml"]
         assert "ENT" in result["triageCockpitHtml"]
-        assert "Declared vs Provider Match" in result["triageCockpitHtml"]
+        # The legacy "Declared vs Provider Match" subject-level comparison table
+        # is retired (founder review flagged it as competing old UI) — the per-hit
+        # "Applicant vs matched profile" reconciliation on each hit card replaces
+        # it; the comparison panel is no longer rendered on any path.
+        assert "Declared vs Provider Match" not in result["triageCockpitHtml"]
         assert "Agent 3 Screening Interpretation" in result["triageCockpitHtml"]
         # Unresolved focused subject shows the disposition action buttons + hint (form
         # reveals after an action is chosen); resolved shows read-only, no form.

@@ -15356,9 +15356,17 @@ function screeningQueueEvidenceReadinessPanel(row, legacyResults, legacyContext)
     evidenceCards = screeningTriageRankedHitSections(row) || items.map(screeningQueueEvidenceItemCard).join('');
   } else if (evidenceDetailError) {
     evidenceCards = '<div data-screening-evidence-error="true" style="font-size:12px;color:#991b1b;line-height:1.5;margin-top:8px;padding:10px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;">Detailed provider evidence could not be loaded. Summary evidence remains available.</div>';
+  } else if (row.triage && row.triage.buckets) {
+    // Per-hit (triaged) subject whose detailed evidence has not hydrated yet.
+    // NEVER fall to the legacy "Provider match records (stored report)" stacked
+    // blocks here — that is the "old UI" competing with the per-hit design. Show
+    // a clean loading state and trigger the lazy evidence fetch; the ranked hit
+    // cards render once evidence lands.
+    if (row.application_ref) ensureApplicationScreeningEvidenceRows(row.application_ref);
+    evidenceCards = '<div data-screening-evidence-loading="true" style="font-size:12px;color:var(--text3);line-height:1.5;margin-top:8px;padding:10px;border:1px dashed var(--border1);border-radius:8px;background:#fff;">Loading ranked screening hits…</div>';
   } else if (Array.isArray(legacyResults) && legacyResults.length) {
-    // Stored report predates the enriched evidence payload: render the raw
-    // provider results inline (grouped, no modal chain).
+    // Genuinely pre-triage stored report (no server-computed triage): render the
+    // raw provider results inline (grouped, no modal chain).
     evidenceCards = providerResultHighlights(legacyResults, legacyContext || {});
   } else {
     evidenceCards = '<div style="font-size:12px;color:var(--text3);line-height:1.5;margin-top:8px;">Detailed provider evidence is unavailable for this screening result.</div>';
@@ -15759,22 +15767,29 @@ function screeningSubjectWorkspaceBody(config) {
   body += screeningTriageStrip(row);
   body += screeningWorkspaceStatusStrip(config.statusFacts);
   body += renderAgent3ScreeningInterpretationPanel(app);
-  // Per-hit path only exists when the server-computed triage block + evidence
-  // items are present (the ranked hit cards carry the per-hit disposition). For
-  // those subjects the computed rollup replaces the old subject-level bar. For
-  // legacy / no-triage subjects there are no per-hit cards, so the subject-level
-  // disposition bar stays — it is still the only way to record their decision.
-  var hasPerHitDisposition = !!(row && row.triage && row.triage.buckets && (((row.screening_evidence || {}).items) || []).length);
+  // Per-hit path: the SOLE review surface for any triaged subject. It activates
+  // on the server-computed triage block alone — NOT on evidence items being
+  // loaded — because evidence hydrates lazily (deferred until the row is opened)
+  // and keying on items dropped the subject to the legacy subject bar +
+  // "Provider match records" stacked blocks whenever hydration hadn't landed
+  // yet (the "old UI still showing" reports). The rollup + ranked hit cards +
+  // resolve-time finalize replace the legacy subject-level bar entirely; while
+  // evidence is still loading the ranked sections show their own loading state.
+  // Only a genuinely pre-triage (legacy/simulated) subject keeps the old bar.
+  var hasPerHitDisposition = !!(row && row.review_required && row.triage && row.triage.buckets);
   if (hasPerHitDisposition) body += screeningSubjectRollupStrip(row);
   body += screeningQueueEvidenceReadinessPanel(row, config.legacyResults, config.legacyContext);
   if (hasPerHitDisposition) {
-    // Per-hit path: the subject-level disposition form appears only once every
-    // hit is decided (resolve-time finalize), feeding the frozen gates.
+    // Subject-level disposition form appears only once every hit is decided
+    // (resolve-time finalize), feeding the frozen gates.
     body += screeningSubjectFinalizeSection(app, row, config.subjectType, config.subjectName);
   } else {
     body += renderInlineScreeningDispositionPanel(app, row, config.subjectType, config.subjectName);
   }
-  body += config.comparisonHtml || '';
+  // The legacy "Declared vs Provider Match" subject-level comparison table is
+  // retired: on the per-hit path it duplicates the per-hit "Applicant vs matched
+  // profile" reconciliation on each hit card (founder review flagged it as
+  // competing "old UI"). config.comparisonHtml is no longer rendered.
   body += screeningReviewHistory(row);
   return body;
 }
@@ -15851,8 +15866,13 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
     screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : companyFallbackStatusKey, primaryEntityLabel),
     screeningModeBadge((reviewRow && reviewRow.provider_mode) || (screeningSummary.screening_truth_summary && screeningSummary.screening_truth_summary.provider_mode) || screeningSummary.screening_mode)
   ];
-  if (companyHits.sanctions_hits > 0) badges.push(screeningTagBadge('Sanctions', 'high'));
-  if (companyHits.adverse_media_hits > 0) badges.push(screeningTagBadge('Adverse Media', 'pending'));
+  // Dedup: on the per-hit path the 4-tile triage strip already shows the
+  // Sanctions / Watchlist / Adverse-media counts, so the header category tags
+  // are repetitive (founder review). Show them only for legacy / no-triage
+  // subjects that have no strip.
+  var entityTriaged = !!(reviewRow && reviewRow.triage && reviewRow.triage.buckets);
+  if (companyHits.sanctions_hits > 0 && !entityTriaged) badges.push(screeningTagBadge('Sanctions', 'high'));
+  if (companyHits.adverse_media_hits > 0 && !entityTriaged) badges.push(screeningTagBadge('Adverse Media', 'pending'));
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow, { suppressChip: screeningReviewDisplayLabel(reviewRow) === String(primaryEntityLabel || '') }));
   if (screeningRescreenEnabled()) badges.push(screeningRescreenButtonHtml(app.ref));
   badges.push(screeningEntityHeaderMenuHtml());
@@ -16006,11 +16026,15 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
     screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : personFallbackStatusKey, primaryPersonLabel),
     screeningModeBadge((reviewRow && reviewRow.provider_mode) || screeningSummary.screening_mode)
   ];
+  // Declared / Undeclared PEP stay (a truthfulness signal the strip does not
+  // carry); Sanctions / Adverse-media category tags are deduped against the
+  // triage strip on the per-hit path (see the entity card for the rationale).
+  var personTriaged = !!(reviewRow && reviewRow.triage && reviewRow.triage.buckets);
   if (personDeclaredPep) badges.push(screeningTagBadge('Declared PEP', 'pending'));
-  if (providerPep) badges.push(screeningTagBadge('PEP', 'high'));
+  if (providerPep && !personTriaged) badges.push(screeningTagBadge('PEP', 'high'));
   if (undeclaredPep) badges.push(screeningTagBadge('Undeclared PEP', 'high'));
-  if (facts.sanctions_hits > 0) badges.push(screeningTagBadge('Sanctions', 'high'));
-  if (facts.adverse_media_hits > 0) badges.push(screeningTagBadge('Adverse Media', 'pending'));
+  if (facts.sanctions_hits > 0 && !personTriaged) badges.push(screeningTagBadge('Sanctions', 'high'));
+  if (facts.adverse_media_hits > 0 && !personTriaged) badges.push(screeningTagBadge('Adverse Media', 'pending'));
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow, { suppressChip: screeningReviewDisplayLabel(reviewRow) === String(primaryPersonLabel || '') }));
 
   var personProviderResults = [].concat((screening && screening.results) || []).concat((reviewRow && reviewRow.provider_evidence) || []);
@@ -16348,7 +16372,12 @@ function agent3ScreeningInterpretationAppKey(app) {
 }
 
 function isAgent3ScreeningInterpretationCollapsed(app) {
-  return !!AGENT3_SCREENING_INTERPRETATION_COLLAPSED[agent3ScreeningInterpretationAppKey(app)];
+  // Founder review: the Agent 3 advisory panel dominated the screening-review
+  // page. Default it COLLAPSED to a compact status line so the ranked per-hit
+  // cards lead; the officer expands for the full advisory. Only an explicit
+  // stored value (from the Collapse/Expand toggle) overrides the default.
+  var value = AGENT3_SCREENING_INTERPRETATION_COLLAPSED[agent3ScreeningInterpretationAppKey(app)];
+  return value === undefined ? true : !!value;
 }
 
 function toggleAgent3ScreeningInterpretation(event) {
@@ -17587,12 +17616,32 @@ function screeningTriageHitActions(row, item, itemIndex) {
   return html;
 }
 
+// Persist which hit cards are expanded ACROSS re-renders. Every per-hit action
+// (confirm/clear/materiality) re-renders the whole panel; without this the open
+// <details> collapsed on every click and the officer had to re-expand each time
+// (founder-reported). Keyed by subject + hit id.
+var SCREENING_HIT_OPEN = {};
+function screeningHitOpenKey(row, item, itemIndex) {
+  var appRef = (row && row.application_ref) || (currentApp && currentApp.ref) || '';
+  return screeningReviewSubjectKey(appRef, (row && row.subject_type) || '', (row && row.subject_name) || '') + '|' + screeningHitId(item, itemIndex);
+}
 function screeningTriageHitToggled(el) {
-  // Accordion: one expanded hit at a time within a bucket section.
-  if (!el || !el.open || !el.parentElement || !el.parentElement.querySelectorAll) return;
-  var siblings = el.parentElement.querySelectorAll('details[data-screening-triage-hit]');
-  for (var i = 0; i < siblings.length; i++) {
-    if (siblings[i] !== el && siblings[i].open) siblings[i].open = false;
+  if (!el || !el.parentElement || !el.parentElement.querySelectorAll) return;
+  var key = el.getAttribute('data-hit-open-key');
+  if (el.open) {
+    // Accordion: one expanded hit per bucket. Close siblings AND clear their
+    // persisted open state so only the active hit re-opens after a re-render.
+    var siblings = el.parentElement.querySelectorAll('details[data-screening-triage-hit]');
+    for (var i = 0; i < siblings.length; i++) {
+      if (siblings[i] !== el && siblings[i].open) {
+        siblings[i].open = false;
+        var sk = siblings[i].getAttribute('data-hit-open-key');
+        if (sk) delete SCREENING_HIT_OPEN[sk];
+      }
+    }
+    if (key) SCREENING_HIT_OPEN[key] = true;
+  } else if (key) {
+    delete SCREENING_HIT_OPEN[key];
   }
 }
 
@@ -17609,7 +17658,9 @@ function screeningTriageHitCard(row, item, itemIndex, weakThreshold) {
     ? 'Matched against: ' + item.subject_name +
       (applicantContext ? ' — ' + applicantContext : (item.relationship_to_application ? ' — ' + item.relationship_to_application : ''))
     : '';
-  return '<details data-screening-triage-hit="true" ontoggle="screeningTriageHitToggled(this)" style="border:1px solid var(--border1);border-top:none;background:#fff;">' +
+  var openKey = screeningHitOpenKey(row, item, itemIndex);
+  var isOpen = !!SCREENING_HIT_OPEN[openKey];
+  return '<details data-screening-triage-hit="true" data-hit-open-key="' + escapeHtml(openKey) + '"' + (isOpen ? ' open' : '') + ' ontoggle="screeningTriageHitToggled(this)" style="border:1px solid var(--border1);border-top:none;background:#fff;">' +
     '<summary style="list-style:none;display:flex;align-items:center;gap:13px;padding:10px 14px;cursor:pointer;">' +
       screeningTriageScoreBlock(item, weakThreshold) +
       '<div style="min-width:0;flex:1;">' +
@@ -17685,6 +17736,18 @@ function screeningHitGroupBulkClear(groupId) {
   renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
   if (changed.length) screeningPersistHitDisposition(reg.appRef, reg.subjType, reg.subjName, changed, 'cleared', null);
 }
+function screeningHitGroupUndoAll(groupId) {
+  // One-click undo of every decision in the group (founder-reported: bulk-clear
+  // had no matching bulk-undo). Resets each decided hit back to pending.
+  var reg = SCREENING_HIT_GROUP_REG[groupId]; if (!reg) return;
+  var changed = [];
+  reg.hitIds.forEach(function(hid) {
+    var st = screeningHitDispositionState(reg.appRef, reg.subjType, reg.subjName, hid);
+    if (st.status !== 'pending') { st.status = 'pending'; st.materiality = null; changed.push(hid); }
+  });
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  if (changed.length) screeningPersistHitDisposition(reg.appRef, reg.subjType, reg.subjName, changed, 'pending', null);
+}
 function screeningHitGroupSelectAll(groupId) {
   var reg = SCREENING_HIT_GROUP_REG[groupId], s = screeningHitGroupState(groupId); if (!reg) return;
   reg.hitIds.forEach(function(hid) {
@@ -17747,6 +17810,7 @@ function screeningTriageGroupedBlock(row, meta, groupEntries) {
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
     html += '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitGroupToggleExpand(\'' + groupId + '\')">' + (ui.expanded ? 'Hide individual review ▴' : 'Expand &amp; review individually ▾') + '</button>';
     if (pending) html += '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitGroupBulkClear(\'' + groupId + '\')">Clear the remaining ' + pending + ' as false positive</button>';
+    if (cleared + trueCount > 0) html += '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitGroupUndoAll(\'' + groupId + '\')">↺ Undo all ' + (cleared + trueCount) + ' decision' + ((cleared + trueCount) > 1 ? 's' : '') + '</button>';
     html += '</div>';
     html += '<div data-screening-hit-group-safe="true" style="font-size:11.5px;color:var(--green);background:rgba(34,197,94,.12);padding:6px 11px;border-radius:8px;margin-top:9px;display:inline-block;">✓ Confirming any one as a true match flips the subject to TRUE MATCH — the bulk action never overrides an individual decision.</div>';
   }
