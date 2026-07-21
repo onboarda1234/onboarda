@@ -609,6 +609,32 @@ fix) · **#796** (memo detail rendering compatibility). Manifest SHA-256
 `fixtures.pilot_canonical_cli` as a one-off Fargate task on the deployed
 image (post-#791 image required for the converged fixture format).
 
+## Eight remediation PRs 808-815
+
+Controlled-pilot staging closure, 2026-07-20 through 2026-07-21. This is a
+scoped union update alongside register PR #780 (now merged), not a replacement
+or duplicate of that register stream. No production action, RSMP activation,
+Tier 0C recomputation, or production-readiness claim was made.
+
+| PR / finding | Merge SHA | Deploy run | Staging evidence |
+|---|---|---|---|
+| #813 / R2-PROC-1 | `a58449e0218da5aa3c1960c41c3a4b0a09083aee` | `29757828706` success | Docs-only warm-up; backend `:902`, worker `:350`; health, SHA alignment, ALB and logs clean. |
+| #814 / APP-AUD-005 | `99d897ad743c0afdf36198060011b1d33df2b503` | `29762747996` success | Backend `:903`, worker `:351`; `search=Wirecard` exactly matched existing `q=Wirecard`; logs clean. |
+| #812 / P12-10 | `f6ac90138558c869833504be66d8be7c028ca3bd` | `29794512855` success | Normal upload 201; 11 MB rejected 400 at unchanged 10 MB default. Earlier shared-window FAIL reconciled PASS-with-note: unrelated #823 datetime error, fixed and live-PG verified by #825/`563cc2b`; corrected window clean. |
+| #809 / RDI-107 | `b2f93b6f7ed50939f770f784d67bd386e484d5ab` | `29806818643` success | Backend `:909`, worker `:357`; allowlist unset/default-off; real public client IP preserved through ALB; no CIDR parse warnings; logs clean. |
+| #810 / DCI-104 batch 2 | `35ebaf0240424559b9ceb3f186d24e5f32e706da` | `29815802356` success | Backend `:912`, worker `:360`; ADR-0008 ledger `050`, no 049 FK collision; all eight batch indexes present; zero migration errors. |
+| #815 / APP-AUD-gov-dup-1 | `3389d4eb16a3b9850b782d07f8c8c1fa8f53efa9` | `29821015477` success | Backend `:914`, worker `:362`; controlled approval 200 and exactly one approval audit row; logs clean. |
+| #808 / R2-BSA-016 | `16e502659bc597e6a7065d210f555ffce6ec5b12` | `29837370259` success | Backend `:916`, worker `:364`; normal verification 200; document/supervisor/enhanced-upload limits returned 429 only over threshold with `retry_after`; logs clean. |
+| #811 / R2-BSA-019 | `78f235215bfe8d79ac59c9502b7431c8efa63670` | `29843617583` success | Backend `:917`, worker `:365`; hash-enforced Docker build/push and container smoke passed; ECS/SHA/ALB health and logs clean. |
+
+Every deploy reported exact `/api/version` `git_sha`/`image_tag` alignment,
+HTTP 200 liveness/health/authenticated readiness (`ready=true`), completed
+backend and verification-worker rollouts with zero failed tasks, healthy ALB
+targets, and zero ERROR/CRITICAL/Exception/Traceback/unexpected-5xx matches in
+its accepted validation window. DCI-104 remains split because batch 2 does not
+claim closure of the full 54-index backlog; P12-10 remains split because the
+deploy-timeout half remains open.
+
 ## Appendix — de-flake backlog and CI-infra notes
 
 Test de-flake backlog (not remediation items):
