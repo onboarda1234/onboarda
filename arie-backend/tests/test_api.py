@@ -8235,3 +8235,26 @@ class TestScreeningHitDisposition:
         r = http_requests.post(f"{api_server}/api/screening/hit-disposition",
                                json={**base, "disposition": "match"}, headers=H, timeout=3)
         assert r.status_code == 400  # no hit_id(s)
+
+    def test_get_response_is_json_safe_for_datetime_timestamps(self):
+        # Regression: on PostgreSQL created_at/updated_at come back as datetime
+        # objects (SQLite returns TEXT), and Tornado's JSON encoder cannot
+        # serialize datetime — so the hydration GET 500'd on staging once rows
+        # existed ("Object of type datetime is not JSON serializable"). The GET
+        # coerces any non-string timestamp to an ISO string. This path is only
+        # exercised on PG in production, so guard the coercion directly.
+        from server import _screening_hit_disposition_public_row
+        import datetime as _dt
+
+        row = {
+            "hit_id": "h1", "disposition": "match", "materiality": "high",
+            "created_at": _dt.datetime(2026, 7, 21, 2, 0, 0),
+            "updated_at": _dt.datetime(2026, 7, 21, 2, 54, 29),
+        }
+        safe = _screening_hit_disposition_public_row(row)
+        assert isinstance(safe["updated_at"], str) and safe["updated_at"].startswith("2026-07-21")
+        assert isinstance(safe["created_at"], str)
+        # Whole response shape must serialize with no custom encoder (as Tornado does).
+        json.dumps({"dispositions": [safe]})
+        # A string timestamp (the SQLite shape) passes through untouched.
+        assert _screening_hit_disposition_public_row({"updated_at": "2026-07-21T02:54:29Z"})["updated_at"] == "2026-07-21T02:54:29Z"

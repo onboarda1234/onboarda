@@ -24327,6 +24327,21 @@ _SCREENING_HIT_MATERIALITIES = ("high", "moderate", "nonmaterial", "insufficient
 _SCREENING_HIT_CLEAR_ROLES = ("admin", "sco", "co")
 
 
+def _screening_hit_disposition_public_row(row):
+    """JSON-safe dict for a stored per-hit decision. PostgreSQL returns the
+    created_at / updated_at TIMESTAMP columns as datetime objects (SQLite returns
+    TEXT), and Tornado's JSON encoder cannot serialize datetime — so coerce any
+    non-string timestamp to an ISO string. Without this the hydration GET 500s on
+    PostgreSQL once rows exist ("Object of type datetime is not JSON serializable").
+    """
+    rec = dict(row)
+    for key in ("created_at", "updated_at"):
+        val = rec.get(key)
+        if val is not None and not isinstance(val, str):
+            rec[key] = val.isoformat() if hasattr(val, "isoformat") else str(val)
+    return rec
+
+
 def _screening_hit_rollup(db, app_id, subject_type, subject_name):
     """Count recorded per-hit decisions for a subject. The authoritative subject
     status the frozen approval gates consume is still the screening_reviews row;
@@ -24392,7 +24407,7 @@ class ScreeningHitDispositionHandler(BaseHandler):
             if subject_name:
                 query += " AND subject_name=?"
                 params.append(subject_name)
-            rows = [dict(row) for row in db.execute(query, tuple(params)).fetchall()]
+            rows = [_screening_hit_disposition_public_row(row) for row in db.execute(query, tuple(params)).fetchall()]
             self.write({"dispositions": rows})
         finally:
             db.close()
