@@ -6481,7 +6481,12 @@ END;
 """)
 
     env = (_CFG_ENVIRONMENT or "").strip().lower()
-    if env in ("test", "testing"):
+    # PYTEST_CURRENT_TEST: some tests monkeypatch ENVIRONMENT (staging/prod
+    # behaviour tests) and then init fresh databases — those DBs must still
+    # get the standing test window or unrelated suites' audit fixture
+    # cleanups abort mid-run (seen on the CI full-suite lane). pytest sets
+    # this variable for every test; deployed environments never have it.
+    if env in ("test", "testing") or os.environ.get("PYTEST_CURRENT_TEST"):
         row = db.execute(
             "SELECT COUNT(*) AS c FROM audit_maintenance_window WHERE reason = ?",
             ("nonprod_test_default",),

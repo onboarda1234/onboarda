@@ -229,49 +229,60 @@ def test_pg_armed_triggers_block_and_window_permits():
 
     import psycopg2
     import db as db_module
-    from regulated_deletion import audit_log_maintenance_window
+    from regulated_deletion import audit_log_maintenance_window, sanctioned_delete_context
 
+    # NON-DESTRUCTIVE by design: this runs against the shared CI PostgreSQL
+    # database mid-suite — no DDL drops, real audit_log table, window rows
+    # saved and restored. (An earlier version DROPped audit_log and broke
+    # every later PG test in the run.)
     raw = psycopg2.connect(dsn)
     db = db_module.DBConnection(raw, is_postgres=True)
+    saved_windows = []
     try:
-        db.executescript(
-            "DROP TABLE IF EXISTS audit_maintenance_window CASCADE;"
-            "DROP TABLE IF EXISTS audit_log CASCADE;"
-        )
-        db.execute(
-            "CREATE TABLE audit_log (id SERIAL PRIMARY KEY, timestamp TIMESTAMP DEFAULT NOW(), "
-            "user_id TEXT, user_name TEXT, user_role TEXT, action TEXT, target TEXT, "
-            "detail TEXT, ip_address TEXT, request_id TEXT, application_id TEXT)"
-        )
+        db_module._ensure_audit_log_append_only(db)  # idempotent, no drops
         db.commit()
-        db_module._ensure_audit_log_append_only(db)
-        # The testing auto-open row must be removed to arm the triggers.
-        db.execute("DELETE FROM audit_maintenance_window")
+        saved_windows = [dict(r) for r in db.execute(
+            "SELECT reason, opened_by FROM audit_maintenance_window"
+        ).fetchall()]
+        db.execute("DELETE FROM audit_maintenance_window")  # arm
         db.commit()
 
         db.execute(
-            "INSERT INTO audit_log (user_id, action, detail) VALUES ('p107','pg_probe','{}')"
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail) "
+            "VALUES ('p107','P10-7','system','p107_pg_probe','t','{}')"
         )
         db.commit()
 
+        # Armed: the plpgsql trigger must RAISE. (UPDATE is not covered by the
+        # P12-1 Python guard, so this exercises the DB trigger specifically.)
         with pytest.raises(Exception, match="append-only"):
-            db.execute("UPDATE audit_log SET detail='TAMPERED' WHERE action='pg_probe'")
+            db.execute("UPDATE audit_log SET detail='TAMPERED' WHERE action='p107_pg_probe'")
         db.rollback()
 
-        # Window permits — same-transaction visibility of the uncommitted row.
-        with audit_log_maintenance_window(db, actor_id="p107-pg", reason="pg unit probe"):
-            db.execute("DELETE FROM audit_log WHERE action='pg_probe'")
+        # Window permits — the DELETE needs BOTH layers opened: the P12-1
+        # Python guard (sanctioned context) AND the DB trigger (maintenance
+        # window, uncommitted same-transaction visibility).
+        with sanctioned_delete_context(
+            "fixture_cleanup_nonprod", actor_id="p107-pg", role="system",
+            reason="P10-7 PG probe cleanup", allowed_tables=("audit_log",),
+            is_fixture=True, confirmed=True,
+        ):
+            with audit_log_maintenance_window(db, actor_id="p107-pg", reason="pg unit probe"):
+                db.execute("DELETE FROM audit_log WHERE action='p107_pg_probe'")
         db.commit()
-        row = db.execute("SELECT COUNT(*) AS c FROM audit_log WHERE action='pg_probe'").fetchone()
+        row = db.execute(
+            "SELECT COUNT(*) AS c FROM audit_log WHERE action='p107_pg_probe'"
+        ).fetchone()
         assert row["c"] == 0
         row = db.execute("SELECT COUNT(*) AS c FROM audit_maintenance_window").fetchone()
         assert row["c"] == 0, "marker must not survive the commit"
     finally:
         try:
-            db.executescript(
-                "DROP TABLE IF EXISTS audit_maintenance_window CASCADE;"
-                "DROP TABLE IF EXISTS audit_log CASCADE;"
-            )
+            for r in saved_windows:
+                db.execute(
+                    "INSERT INTO audit_maintenance_window (reason, opened_by) VALUES (?, ?)",
+                    (r["reason"], r["opened_by"]),
+                )
             db.commit()
         except Exception:
             pass
