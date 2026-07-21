@@ -13,7 +13,7 @@ import pytest
 
 
 EXPECTED_MANIFEST_SHA256 = (
-    "fee7436a6bf6ead1cc9a8090ceaa3de7071a9b745e43f2c69a445cf74efdf9c9"
+    "825d267a6488545ee892789f09869362faabdf77fb23df8d1d63b99f6dc27951"
 )
 
 
@@ -345,6 +345,71 @@ def test_rm_pilot_029_persists_manual_edd_provenance_without_manifest_drift(
             "risk_escalations,risk_config_version "
             "FROM applications WHERE ref=?",
             ("RM-PILOT-029",),
+        ).fetchone()
+    finally:
+        connection.close()
+    assert dict(after_dry_run) == stored_snapshot
+
+
+def test_rm_pilot_030_persists_manual_compliance_handoff(canonical_postgres):
+    runtime = canonical_postgres
+    before = _public_table_counts(runtime.db)
+
+    dry_run = runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=True,
+        references=["RM-PILOT-030"],
+    )
+    assert [row["reference"] for row in dry_run] == ["RM-PILOT-030"]
+    assert _public_table_counts(runtime.db) == before
+
+    runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=False,
+        references=["RM-PILOT-030"],
+    )
+    connection = runtime.db.get_db()
+    try:
+        application = connection.execute(
+            "SELECT id,ref,status,risk_score,risk_level,onboarding_lane,"
+            "submitted_to_compliance_at,submitted_to_compliance_by,"
+            "prescreening_data::text AS prescreening_data "
+            "FROM applications WHERE ref=?",
+            ("RM-PILOT-030",),
+        ).fetchone()
+    finally:
+        connection.close()
+
+    scenario = next(
+        row
+        for row in runtime.canonical.scenarios()
+        if row["reference"] == "RM-PILOT-030"
+    )
+    manual_metadata = json.loads(application["prescreening_data"])[
+        "scenario_evidence"
+    ]["manual_compliance_escalation"]
+    assert application["id"] == "pcdv100000000030"
+    assert application["status"] == scenario["expected"]["application_status"]
+    assert application["risk_score"] == scenario["expected"]["score"]
+    assert application["risk_level"] == scenario["expected"]["tier"]
+    assert application["onboarding_lane"] == scenario["expected"]["lane"]
+    assert application["submitted_to_compliance_at"]
+    assert application["submitted_to_compliance_by"] == "co001"
+    assert manual_metadata["trigger_source"] == "officer_submitted_to_compliance"
+    assert manual_metadata["origin_context"] == "manual_onboarding_escalation"
+
+    stored_snapshot = dict(application)
+    repeated = runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=True,
+        references=["RM-PILOT-030"],
+    )
+    assert [row["reference"] for row in repeated] == ["RM-PILOT-030"]
+    connection = runtime.db.get_db()
+    try:
+        after_dry_run = connection.execute(
+            "SELECT id,ref,status,risk_score,risk_level,onboarding_lane,"
+            "submitted_to_compliance_at,submitted_to_compliance_by,"
+            "prescreening_data::text AS prescreening_data "
+            "FROM applications WHERE ref=?",
+            ("RM-PILOT-030",),
         ).fetchone()
     finally:
         connection.close()

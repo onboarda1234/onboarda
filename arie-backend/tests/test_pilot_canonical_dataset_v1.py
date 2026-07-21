@@ -14,6 +14,7 @@ import pytest
 
 import environment
 import risk_controlled_values
+from security_hardening import _policy_approval_route
 from fixtures.pilot_canonical import (
     EXPECTED_SCENARIO_COUNT,
     REQUIRED_COVERAGE,
@@ -483,6 +484,45 @@ def test_founder_refinements_are_explicit_and_not_labels_only():
     } <= {item["type"] for item in sow["evidence_documents"]}
     assert sow["scenario_evidence"]["officer_review"]["disposition"]
 
+    for reference in ("RM-PILOT-008", "RM-PILOT-009"):
+        medium = by_ref[reference]["expected"]
+        assert medium["tier"] == "MEDIUM"
+        assert medium["score"] == 42.1
+        assert {
+            key: medium["dimensions"][key]
+            for key in ("d1", "d2", "d3", "d4", "d5")
+        } == {"d1": 2.0, "d2": 1.25, "d3": 3.25, "d4": 3, "d5": 2.5}
+        assert medium["approval_route"] == "compliance_required"
+        # The route is the MEDIUM-risk policy outcome even with no escalation
+        # reasons; generic score-4 evidence is not its policy basis.
+        assert _policy_approval_route(medium["tier"], []) == medium["approval_route"]
+
+    combined = by_ref["RM-PILOT-026"]["expected"]
+    assert combined["tier"] == "VERY_HIGH"
+    assert combined["score"] == 70.0
+    assert {key: combined["dimensions"][key] for key in ("d1", "d2", "d3", "d4", "d5")} == {
+        "d1": 2.25, "d2": 2.2, "d3": 3.6, "d4": 4, "d5": 1.0,
+    }
+    assert combined["approval_route"] == "dual_control_required"
+
+    manual_review = by_ref["RM-PILOT-030"]
+    manual_metadata = manual_review["scenario_evidence"][
+        "manual_compliance_escalation"
+    ]
+    assert manual_review["expected"]["approval_route"] == "compliance_required"
+    assert manual_review["expected"]["score"] == 42.1
+    assert manual_review["expected"]["tier"] == "MEDIUM"
+    assert {
+        key: manual_review["expected"]["dimensions"][key]
+        for key in ("d1", "d2", "d3", "d4", "d5")
+    } == {"d1": 2.0, "d2": 1.25, "d3": 3.0, "d4": 3, "d5": 3.0}
+    assert manual_metadata == {
+        "origin_context": "manual_onboarding_escalation",
+        "reason": "Officer submitted the application for manual Compliance review",
+        "submitted_by": "co001",
+        "trigger_source": "officer_submitted_to_compliance",
+    }
+
     correction = by_ref["RM-PILOT-037"]
     assert correction["expected"]["application_status"] == "approved"
     assert correction["correction_workflow"]["steps"][-1] == "final_approval"
@@ -533,6 +573,20 @@ def test_enriched_workflows_persist_as_real_backend_evidence(temp_db, monkeypatc
         ).fetchone()
         assert sow_edd["trigger_source"] == "officer_escalate_edd"
         assert sow_edd["origin_context"] == "manual_onboarding_escalation"
+
+        manual_review = connection.execute(
+            "SELECT status,submitted_to_compliance_at,submitted_to_compliance_by,"
+            "prescreening_data FROM applications WHERE id=?",
+            ("pcdv100000000030",),
+        ).fetchone()
+        stored_manual_metadata = json.loads(manual_review["prescreening_data"])[
+            "scenario_evidence"
+        ]["manual_compliance_escalation"]
+        assert manual_review["status"] == "compliance_review"
+        assert manual_review["submitted_to_compliance_at"]
+        assert manual_review["submitted_to_compliance_by"] == "co001"
+        assert stored_manual_metadata["trigger_source"] == "officer_submitted_to_compliance"
+        assert stored_manual_metadata["origin_context"] == "manual_onboarding_escalation"
 
         request = connection.execute(
             "SELECT status, reason, fulfilled_at FROM rmi_requests WHERE application_id=?",

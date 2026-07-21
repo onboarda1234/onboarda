@@ -259,6 +259,36 @@ def validate_manifest(manifest: Optional[Mapping[str, Any]] = None) -> Dict[str,
     if not (sow.get("scenario_evidence") or {}).get("officer_review"):
         errors.append("RM-PILOT-029 must include a source-of-wealth officer review")
 
+    for reference in ("RM-PILOT-008", "RM-PILOT-009"):
+        medium = by_ref.get(reference, {}).get("expected", {})
+        if medium.get("tier") != "MEDIUM":
+            errors.append(f"{reference} must remain MEDIUM")
+        if medium.get("approval_route") != "compliance_required":
+            errors.append(
+                f"{reference} must require compliance under the MEDIUM-risk policy"
+            )
+
+    combined = by_ref.get("RM-PILOT-026", {}).get("expected", {})
+    if combined.get("tier") != "VERY_HIGH":
+        errors.append("RM-PILOT-026 must remain VERY_HIGH")
+    if combined.get("approval_route") != "dual_control_required":
+        errors.append("RM-PILOT-026 must retain the VERY_HIGH dual-control route")
+
+    manual_review = by_ref.get("RM-PILOT-030", {})
+    manual_metadata = (manual_review.get("scenario_evidence") or {}).get(
+        "manual_compliance_escalation"
+    ) or {}
+    if manual_review.get("expected", {}).get("approval_route") != "compliance_required":
+        errors.append("RM-PILOT-030 must retain its Compliance approval route")
+    if manual_review.get("expected", {}).get("application_status") != "compliance_review":
+        errors.append("RM-PILOT-030 must retain its current Compliance-review status")
+    if manual_metadata.get("trigger_source") != "officer_submitted_to_compliance":
+        errors.append("RM-PILOT-030 must record officer compliance-escalation provenance")
+    if manual_metadata.get("origin_context") != "manual_onboarding_escalation":
+        errors.append("RM-PILOT-030 must record manual onboarding origin context")
+    if manual_metadata.get("submitted_by") != "co001":
+        errors.append("RM-PILOT-030 must identify the canonical submitting officer")
+
     correction = by_ref.get("RM-PILOT-037", {})
     correction_steps = (correction.get("correction_workflow") or {}).get("steps") or []
     if correction.get("expected", {}).get("application_status") != "approved":
