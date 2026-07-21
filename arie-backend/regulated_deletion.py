@@ -507,3 +507,51 @@ def assert_sql_delete_allowed(
             tables.append(raw_table.strip().split(".")[-1])
     for table in tables:
         assert_regulated_delete_allowed(table)
+
+
+@contextmanager
+def audit_log_maintenance_window(db, actor_id, reason):
+    """RDI-013 (P10-7): transiently disarm the audit_log append-only DB
+    triggers by opening a maintenance-window row. The ONLY sanctioned
+    production caller is gdpr.purge_expired_data's retention_purge path.
+
+    Tolerates a database without the window table (hand-built test schemas —
+    those have no triggers either); on a real database a failed open simply
+    leaves the triggers armed, so the subsequent mutation fails closed.
+    """
+    from uuid import uuid4
+
+    marker = f"{reason} [{uuid4().hex[:8]}]"
+    opened = False
+    try:
+        db.execute(
+            "INSERT INTO audit_maintenance_window (reason, opened_by) VALUES (?, ?)",
+            (marker, actor_id),
+        )
+        opened = True
+        logger.warning(
+            "audit_log maintenance window OPENED by %s: %s", actor_id, marker
+        )
+    except Exception:
+        logger.debug(
+            "audit_maintenance_window table unavailable — proceeding without "
+            "a window row (triggers, if present, stay armed)"
+        )
+    try:
+        yield
+    finally:
+        if opened:
+            try:
+                db.execute(
+                    "DELETE FROM audit_maintenance_window WHERE reason = ?",
+                    (marker,),
+                )
+                logger.warning(
+                    "audit_log maintenance window CLOSED by %s: %s", actor_id, marker
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to close audit maintenance window %s — audit_log "
+                    "append-only triggers remain DISARMED until it is removed",
+                    marker,
+                )

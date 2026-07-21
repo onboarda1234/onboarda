@@ -6414,6 +6414,85 @@ def _ensure_agent_executions_document_index(db: DBConnection) -> bool:
     return present
 
 
+def _ensure_audit_log_append_only(db: 'DBConnection'):
+    """RDI-013 non-SAR (P10-7, code half): DB-level append-only enforcement
+    for audit_log — UPDATE/DELETE are blocked by engine triggers, INSERT is
+    untouched.
+
+    Bypass design (the load-bearing decision): the triggers consult the
+    audit_maintenance_window table — the presence of ANY row disarms them.
+    - Deployed environments boot with the window EMPTY (armed).
+    - The sanctioned manual retention purge of audit_log (gdpr.purge_expired_data,
+      P12-1 retention_purge context) opens a transient window via
+      regulated_deletion.audit_log_maintenance_window — the one legitimate
+      production deletion path is preserved.
+    - Test environments (ENVIRONMENT=test/testing) auto-open a standing
+      window at init so the existing fixture-cleanup and item-27
+      tamper-simulation suites keep working; the dedicated P10-7 tests close
+      it explicitly to exercise the armed state.
+
+    Residual (the register's ops half, deliberately out of scope here): the
+    app connects as the table owner, which could DROP/DISABLE the trigger —
+    the RDS grants work (separate trigger-owner role, app role without
+    UPDATE/DELETE/TRUNCATE/ALTER on audit_log) closes that.
+    """
+    if db.is_postgres:
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS audit_maintenance_window ("
+            "id SERIAL PRIMARY KEY, reason TEXT NOT NULL, opened_by TEXT, "
+            "opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        db.executescript("""
+CREATE OR REPLACE FUNCTION audit_log_append_only_guard() RETURNS TRIGGER AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM audit_maintenance_window) THEN
+        RAISE EXCEPTION 'audit_log is append-only (RDI-013): open a sanctioned audit maintenance window';
+    END IF;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_audit_log_append_only_upd ON audit_log;
+CREATE TRIGGER trg_audit_log_append_only_upd BEFORE UPDATE ON audit_log
+FOR EACH ROW EXECUTE FUNCTION audit_log_append_only_guard();
+DROP TRIGGER IF EXISTS trg_audit_log_append_only_del ON audit_log;
+CREATE TRIGGER trg_audit_log_append_only_del BEFORE DELETE ON audit_log
+FOR EACH ROW EXECUTE FUNCTION audit_log_append_only_guard();
+""")
+    else:
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS audit_maintenance_window ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, reason TEXT NOT NULL, opened_by TEXT, "
+            "opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        db.executescript("""
+CREATE TRIGGER IF NOT EXISTS trg_audit_log_append_only_upd
+BEFORE UPDATE ON audit_log
+WHEN (SELECT COUNT(*) FROM audit_maintenance_window) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'audit_log is append-only (RDI-013): open a sanctioned audit maintenance window');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_audit_log_append_only_del
+BEFORE DELETE ON audit_log
+WHEN (SELECT COUNT(*) FROM audit_maintenance_window) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'audit_log is append-only (RDI-013): open a sanctioned audit maintenance window');
+END;
+""")
+
+    env = (_CFG_ENVIRONMENT or "").strip().lower()
+    if env in ("test", "testing"):
+        row = db.execute(
+            "SELECT COUNT(*) AS c FROM audit_maintenance_window WHERE reason = ?",
+            ("nonprod_test_default",),
+        ).fetchone()
+        if not (row and row["c"]):
+            db.execute(
+                "INSERT INTO audit_maintenance_window (reason, opened_by) VALUES (?, ?)",
+                ("nonprod_test_default", "init_db"),
+            )
+
+
 def _run_migrations(db: DBConnection):
     """Run incremental schema migrations for existing databases."""
     _ensure_country_risk_governance(db)
@@ -6498,6 +6577,10 @@ def _run_migrations(db: DBConnection):
             db.execute(_idx_ddl)
         except Exception as e:
             logger.debug(f"{_idx_name} may already exist or column/table absent: {e}")
+
+    # RDI-013 (P10-7): audit_log append-only triggers + maintenance window.
+    # Idempotent on both engines; migration_051 keeps the ADR-0008 ledger.
+    _ensure_audit_log_append_only(db)
 
     # Check if pre_approval columns exist on applications table
     if not _safe_column_exists(db, "applications", "pre_approval_decision"):

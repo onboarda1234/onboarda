@@ -461,7 +461,18 @@ def purge_expired_data(
     # counts and structured evidence so a regulator can reconstruct the
     # purge from the log alone.
     batch_id = purge_batch_id or f"purge-{uuid4().hex[:12]}"
-    from regulated_deletion import sanctioned_delete_context
+    from contextlib import nullcontext
+    from regulated_deletion import audit_log_maintenance_window, sanctioned_delete_context
+    # RDI-013 (P10-7): audit_log carries DB-level append-only triggers; the
+    # sanctioned retention purge opens a transient maintenance window so this
+    # one legitimate deletion path keeps working. Other tables need no window.
+    window = (
+        audit_log_maintenance_window(
+            db, actor_id=purged_by or "system",
+            reason=f"retention_purge policy {policy['id']}",
+        )
+        if table == "audit_log" else nullcontext()
+    )
     with sanctioned_delete_context(
         "retention_purge",
         actor_id=purged_by or "system",
@@ -469,7 +480,7 @@ def purge_expired_data(
         reason=f"approved retention policy {policy['id']} cutoff {cutoff}",
         allowed_tables=(table,),
         confirmed=True,
-    ):
+    ), window:
         cur = db.execute(f"DELETE FROM {table} WHERE {date_col} < ?", (cutoff,))
         deleted = getattr(cur, "rowcount", None)
         if deleted is None:
