@@ -131,15 +131,97 @@ def test_per_hit_actions_use_navy_hierarchy_with_more_menu():
     assert more_idx < actions.index("Escalate</button>")
     assert more_idx < actions.index("Request more information</button>")
     assert "data-screening-hit-more-menu" in actions
-    # All four route into the existing inline disposition flow (same endpoint,
-    # validation, and four-eyes behavior).
-    assert actions.count("screeningTriageHitAction(") == 4
-    hit_action = _function_region(
-        html, "screeningTriageHitAction", "screeningTriageHitActions"
-    )
-    assert "setInlineScreeningDispositionChoice(applicationRef, subjectType, subjectName, disposition)" in hit_action
+    # Per-hit redesign: each action records a decision for THIS hit (hit id
+    # threaded through screeningHitDispositionSet) — NOT a subject-level facade.
+    # The four disposition verbs all route through the per-hit setter, and the
+    # old subject-level facade (setInlineScreeningDispositionChoice) is gone.
+    assert "setInlineScreeningDispositionChoice" not in actions
+    assert "function screeningTriageHitAction(" not in html
+    for verb in ("'cleared'", "'match'", "'escalated'", "'follow_up_required'", "'pending'"):
+        assert "screeningHitDispositionSet(" in actions
+        assert verb in actions
+    # A confirmed true match records a per-hit materiality call.
+    assert 'data-screening-hit-materiality="true"' in actions
+    assert "screeningHitMaterialitySet(" in actions
+    # The four materiality tiers are defined in the shared label map.
+    for tier in ("Material — High", "Material — Moderate", "Non-material", "Insufficient info"):
+        assert tier in html
     # Role gate preserved: clearing stays gated with an explanatory title.
-    assert "Clear as False Positive requires Onboarding Officer, SCO, or Admin role." in actions
+    assert "requires Onboarding Officer, SCO, or Admin role." in actions
+
+
+def test_near_identical_hits_collapse_into_grouped_multiselect_block():
+    html = _html()
+    # Near-identical runs (same category + triage score + matched name) collapse.
+    assert "SCREENING_HIT_GROUP_MIN" in html
+    assert "screeningTriageEntrySignature" in html
+    sections = _function_region(
+        html, "screeningTriageRankedHitSections", "screeningHitProfileId"
+    )
+    assert "screeningTriageGroupedBlock(row, meta, g)" in sections
+    assert "list.length >= SCREENING_HIT_GROUP_MIN" in sections
+    block = _function_region(
+        html, "screeningTriageGroupedBlock", "screeningTriageRankedHitSections"
+    )
+    assert "near-identical" in block
+    # Bulk clear only the not-yet-reviewed remainder; multi-select clear; and the
+    # invariant that confirming any one flips the subject and bulk never overrides.
+    assert "Clear the remaining " in block
+    assert "screeningHitGroupBulkClear(" in block
+    assert "Select all undecided" in block
+    assert "screeningHitGroupClearSelected(" in block
+    assert "the bulk action never overrides an individual decision" in block
+    # Bulk clear only touches pending hits — a recorded true match is preserved —
+    # and it persists the change to the durable per-hit store.
+    bulk = _function_region(html, "screeningHitGroupBulkClear", "screeningHitGroupSelectAll")
+    assert "if (st.status === 'pending') { st.status = 'cleared'; changed.push(hid); }" in bulk
+    assert "screeningPersistHitDisposition(reg.appRef, reg.subjType, reg.subjName, changed, 'cleared'" in bulk
+
+
+def test_resolved_subject_finalize_feeds_frozen_gate():
+    html = _html()
+    fin = _function_region(html, "screeningSubjectFinalizeSection", "screeningTriageHitActions")
+    # Appears ONLY once every hit is decided (no hit pending).
+    assert "if (!rollup.total || rollup.pending) return ''" in fin
+    # Aggregate: TRUE MATCH if any hit is a confirmed true match, else CLEAR.
+    assert "var aggregate = rollup.trueCount ? 'match' : 'cleared';" in fin
+    # The subject decision is recorded through the EXISTING gate flow — this is
+    # what writes screening_reviews / risk / routing / four-eyes (freeze-safe).
+    assert "renderInlineScreeningDispositionPanel(app, row, subjectType, subjectName)" in fin
+    assert "Record the subject decision." in fin
+    body = _function_region(html, "screeningSubjectWorkspaceBody", "buildEntityScreeningReviewCard")
+    assert "screeningSubjectFinalizeSection(app, row, config.subjectType, config.subjectName)" in body
+
+
+def test_per_hit_decisions_persist_and_hydrate():
+    html = _html()
+    # Each per-hit setter persists to the durable store.
+    setter = _function_region(html, "screeningHitDispositionSet", "screeningHitMaterialitySet")
+    assert "screeningPersistHitDisposition(appRef, subjectType, subjectName, [hitId], status" in setter
+    persist = _function_region(html, "screeningPersistHitDisposition", "ensureScreeningHitDispositionsHydrated")
+    assert "boApiCall('POST', '/screening/hit-disposition'" in persist
+    assert "hit_ids: hitIds" in persist
+    # On failure the client re-hydrates from the record of truth (never drifts).
+    assert "ensureScreeningHitDispositionsHydrated(appRef, true)" in persist
+    hydrate = _function_region(html, "ensureScreeningHitDispositionsHydrated", "screeningHitDispositionState")
+    assert "boApiCall('GET', '/screening/hit-disposition?application_id='" in hydrate
+    assert "SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = 'done'" in hydrate
+    # The review panel triggers hydration once per application.
+    panel = _function_region(html, "renderScreeningReviewPanel", "openScreeningReview")
+    assert "ensureScreeningHitDispositionsHydrated(app.ref)" in panel
+
+
+def test_subject_status_is_computed_from_per_hit_decisions():
+    html = _html()
+    rollup = _function_region(html, "screeningSubjectRollup", "screeningSubjectRollupStrip")
+    # TRUE MATCH if ANY hit is a confirmed true match (cannot be overridden by
+    # clearing the others); CLEAR only once every hit is resolved.
+    assert "if (s.status === 'match') trueCount++;" in rollup
+    assert "if (trueCount) { cls = 'match'" in rollup
+    assert "!pending && states.length" in rollup
+    strip = _function_region(html, "screeningSubjectRollupStrip", "screeningTriageHitActions")
+    assert 'data-screening-subject-rollup="true"' in strip
+    assert "Subject status: " in strip
 
 
 def test_provider_case_url_link_is_gated_on_the_stored_field():

@@ -15742,11 +15742,15 @@ function screeningWorkspaceStatusStrip(facts) {
 }
 
 function screeningSubjectWorkspaceBody(config) {
-  // The single Phase E workspace body: honesty banner → triage strip → status
-  // strip → Agent 3 guidance (advisory) → ranked evidence (inline, weak tail,
-  // rts caption) → officer disposition bar → declared-vs-provider comparison
-  // → disposition history. Wiring, validation and four-eyes flows are the
-  // pre-existing ones — presentation only.
+  // The single workspace body: honesty banner → triage strip → status strip →
+  // Agent 3 guidance (advisory) → computed subject rollup (per-hit redesign) →
+  // ranked evidence with per-hit disposition (inline, grouped tail, rts caption)
+  // → declared-vs-provider comparison → disposition history.
+  // SRP per-hit redesign: each hit is dispositioned on its own card and the
+  // subject status is COMPUTED from those decisions (the rollup strip) — the
+  // old always-visible subject-level disposition bar is retired for the per-hit
+  // path; the subject-level signal the frozen approval gates consume is
+  // submitted from the resolved rollup (server persistence is a fast-follow).
   config = config || {};
   var app = config.app;
   var row = config.reviewRow;
@@ -15755,8 +15759,21 @@ function screeningSubjectWorkspaceBody(config) {
   body += screeningTriageStrip(row);
   body += screeningWorkspaceStatusStrip(config.statusFacts);
   body += renderAgent3ScreeningInterpretationPanel(app);
+  // Per-hit path only exists when the server-computed triage block + evidence
+  // items are present (the ranked hit cards carry the per-hit disposition). For
+  // those subjects the computed rollup replaces the old subject-level bar. For
+  // legacy / no-triage subjects there are no per-hit cards, so the subject-level
+  // disposition bar stays — it is still the only way to record their decision.
+  var hasPerHitDisposition = !!(row && row.triage && row.triage.buckets && (((row.screening_evidence || {}).items) || []).length);
+  if (hasPerHitDisposition) body += screeningSubjectRollupStrip(row);
   body += screeningQueueEvidenceReadinessPanel(row, config.legacyResults, config.legacyContext);
-  body += renderInlineScreeningDispositionPanel(app, row, config.subjectType, config.subjectName);
+  if (hasPerHitDisposition) {
+    // Per-hit path: the subject-level disposition form appears only once every
+    // hit is decided (resolve-time finalize), feeding the frozen gates.
+    body += screeningSubjectFinalizeSection(app, row, config.subjectType, config.subjectName);
+  } else {
+    body += renderInlineScreeningDispositionPanel(app, row, config.subjectType, config.subjectName);
+  }
   body += config.comparisonHtml || '';
   body += screeningReviewHistory(row);
   return body;
@@ -17326,22 +17343,176 @@ function screeningClearanceNeedsSecondReviewer(row) {
     (row.total_hits || 0) > 0);
 }
 
-function screeningTriageHitAction(applicationRef, subjectType, subjectName, disposition) {
-  // Per-hit actions route into the existing inline disposition flow — same
-  // state, validation, endpoint, and four-eyes behavior; presentation only.
-  setInlineScreeningDispositionChoice(applicationRef, subjectType, subjectName, disposition);
-  var target = document.getElementById('screening-inline-save-' + screeningReviewSubjectDomKey(applicationRef, subjectType, subjectName));
-  if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+// ── Per-hit disposition (SRP per-hit redesign) ───────────────────────────
+// Each screening hit is dispositioned on its own — Clear as false positive /
+// Confirm true match, plus a per-hit materiality call recorded with a true
+// match. Decisions are held per (subject, hit) in SCREENING_HIT_DISPOSITION_
+// STATE; the subject-level rollup (screeningSubjectRollup) aggregates them:
+// TRUE MATCH if ANY hit is confirmed true (clearing the others can never
+// override it), CLEAR only once every hit is resolved. The subject-level
+// signal the (frozen) approval gates consume is still submitted through the
+// existing /screening/review flow when the rollup is recorded — this layer
+// sits on top and never changes that contract. Client-state only for now;
+// server persistence of per-hit decisions is a fast-follow.
+var SCREENING_HIT_DISPOSITION_STATE = {};
+var SCREENING_HIT_DISPOSITION_HYDRATED = {};  // appRef -> 'loading'|'done'|'error'
+var SCREENING_MATERIALITY_LABELS = {
+  high: 'Material — High', moderate: 'Material — Moderate',
+  nonmaterial: 'Non-material', insufficient: 'Insufficient info'
+};
+
+// Persist a per-hit decision (single or batch) to the durable store. The UI
+// updates optimistically (already re-rendered by the caller); on failure we
+// re-hydrate from the server so the client never drifts from the record of
+// truth. This endpoint only writes screening_hit_dispositions — the subject
+// signal the frozen gates consume is submitted separately at resolve time.
+function screeningPersistHitDisposition(appRef, subjectType, subjectName, hitIds, status, materiality) {
+  if (!appRef || !hitIds || !hitIds.length) return;
+  boApiCall('POST', '/screening/hit-disposition', {
+    application_id: appRef,
+    subject_type: subjectType,
+    subject_name: subjectName,
+    hit_ids: hitIds,
+    disposition: status || 'pending',
+    materiality: materiality || ''
+  }).catch(function(e) {
+    showToast((e && e.message) || 'Failed to save screening decision — refreshing', 'error');
+    SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = null;  // force re-hydrate to resync
+    ensureScreeningHitDispositionsHydrated(appRef, true);
+  });
 }
 
-function screeningTriageHitActions(row) {
+// Hydrate stored per-hit decisions once per application so decisions survive a
+// refresh and are shared across reviewers. Single-flight; a re-render follows.
+function ensureScreeningHitDispositionsHydrated(appRef, force) {
+  if (!appRef) return;
+  var state = SCREENING_HIT_DISPOSITION_HYDRATED[appRef];
+  if (!force && (state === 'loading' || state === 'done')) return;
+  SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = 'loading';
+  boApiCall('GET', '/screening/hit-disposition?application_id=' + encodeURIComponent(appRef))
+    .then(function(resp) {
+      var list = (resp && resp.dispositions) || [];
+      list.forEach(function(d) {
+        if (!d || !d.hit_id) return;
+        var st = screeningHitDispositionState(appRef, d.subject_type || '', d.subject_name || '', String(d.hit_id));
+        st.status = d.disposition || 'pending';
+        st.materiality = d.materiality || null;
+      });
+      SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = 'done';
+      if (currentApp && currentApp.ref === appRef) renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    })
+    .catch(function() { SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = 'error'; });
+}
+
+function screeningHitId(item, index) {
+  item = item || {};
+  return String(
+    item.provider_profile_id || item.provider_profile_identifier ||
+    item.provider_alert_id || item.provider_alert_identifier ||
+    item.provider_case_id || item.provider_risk_id ||
+    ('idx-' + index)
+  );
+}
+function screeningHitDispositionState(appRef, subjectType, subjectName, hitId) {
+  var key = screeningReviewSubjectKey(appRef, subjectType, subjectName);
+  if (!SCREENING_HIT_DISPOSITION_STATE[key]) SCREENING_HIT_DISPOSITION_STATE[key] = {};
+  if (!SCREENING_HIT_DISPOSITION_STATE[key][hitId]) SCREENING_HIT_DISPOSITION_STATE[key][hitId] = { status: 'pending', materiality: null };
+  return SCREENING_HIT_DISPOSITION_STATE[key][hitId];
+}
+function screeningHitDispositionSet(appRef, subjectType, subjectName, hitId, status) {
+  var s = screeningHitDispositionState(appRef, subjectType, subjectName, hitId);
+  s.status = status;
+  if (status !== 'match') s.materiality = null;
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  screeningPersistHitDisposition(appRef, subjectType, subjectName, [hitId], status, s.materiality);
+}
+function screeningHitMaterialitySet(appRef, subjectType, subjectName, hitId, materiality) {
+  var s = screeningHitDispositionState(appRef, subjectType, subjectName, hitId);
+  s.materiality = materiality;
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  screeningPersistHitDisposition(appRef, subjectType, subjectName, [hitId], 'match', materiality);
+}
+
+function screeningSubjectHitStates(row) {
+  row = row || {};
+  var items = ((row.screening_evidence || {}).items) || [];
+  var appRef = row.application_ref || (currentApp && currentApp.ref) || '';
+  var out = [];
+  items.forEach(function(item, index) {
+    if (!item || typeof item !== 'object') return;
+    out.push(screeningHitDispositionState(appRef, row.subject_type || '', row.subject_name || '', screeningHitId(item, index)));
+  });
+  return out;
+}
+function screeningSubjectRollup(row) {
+  var states = screeningSubjectHitStates(row);
+  var trueCount = 0, cleared = 0, pending = 0;
+  states.forEach(function(s) {
+    if (s.status === 'match') trueCount++;
+    else if (s.status === 'cleared') cleared++;
+    else pending++;  // pending / escalated / follow_up_required keep the subject open
+  });
+  var cls, label;
+  if (trueCount) { cls = 'match'; label = 'TRUE MATCH — Enhanced Due Diligence required'; }
+  else if (!pending && states.length) { cls = 'clear'; label = 'CLEAR — every hit resolved'; }
+  else { cls = 'progress'; label = 'REVIEW IN PROGRESS'; }
+  return { cls: cls, label: label, trueCount: trueCount, cleared: cleared, pending: pending, total: states.length };
+}
+function screeningSubjectRollupStrip(row) {
+  if (!row || !row.review_required) return '';
+  var triage = row.triage;
+  var items = ((row.screening_evidence || {}).items) || [];
+  if (!triage || !items.length) return '';
+  var r = screeningSubjectRollup(row);
+  if (!r.total) return '';
+  var accent = r.cls === 'match' ? '#dc2626' : (r.cls === 'clear' ? '#15803d' : '#b45309');
+  var bg = r.cls === 'match' ? 'rgba(220,38,38,.07)' : (r.cls === 'clear' ? 'rgba(34,197,94,.10)' : 'rgba(245,158,11,.08)');
+  var pill = function(txt, kind) {
+    var pc = kind === 'ok' ? '#15803d' : (kind === 'warn' ? '#b45309' : 'var(--text3)');
+    var pb = kind === 'ok' ? 'rgba(34,197,94,.14)' : (kind === 'warn' ? 'rgba(245,158,11,.14)' : 'var(--surface2)');
+    return '<span style="background:' + pb + ';color:' + pc + ';padding:3px 10px;border-radius:20px;font-weight:700;">' + escapeHtml(txt) + '</span>';
+  };
+  var pills = '';
+  if (r.trueCount) pills += pill('✓ ' + r.trueCount + ' true match' + (r.trueCount > 1 ? 'es' : ''), 'ok');
+  if (r.cleared) pills += pill(r.cleared + ' cleared', 'mut');
+  if (r.pending) pills += pill(r.pending + ' need decision', 'warn');
+  var adverse = Number(((triage.buckets || {}).adverse_media) || 0);
+  var honesty = adverse >= 10
+    ? '<div style="margin-top:9px;border-top:1px dashed var(--border2);padding-top:8px;font-size:11.5px;color:var(--text2);line-height:1.5;">⚖️ <strong style="color:var(--text1);">' + adverse + ' adverse-media hits</strong>, but near-identical copies of one story — grouped so a single decision covers the set, not counted as ' + adverse + ' independent risks.</div>'
+    : '';
+  return '<div data-screening-subject-rollup="true" style="margin:0 0 14px;border:1px solid ' + accent + ';background:' + bg + ';border-radius:10px;padding:11px 14px;">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
+      '<span style="font-size:13px;font-weight:800;color:' + accent + ';">● Subject status: ' + escapeHtml(r.label) + '</span>' +
+      '<span style="display:inline-flex;gap:8px;font-size:11.5px;flex-wrap:wrap;">' + pills + '</span>' +
+    '</div>' + honesty +
+  '</div>';
+}
+
+// Resolve-time subject finalize (feeds the frozen approval gates). Once EVERY
+// hit on a subject is dispositioned (no hit pending), the per-hit decisions
+// compute to a subject aggregate — TRUE MATCH if any hit is a confirmed true
+// match, otherwise CLEAR. The officer confirms that subject decision through
+// the EXISTING /screening/review flow (renderInlineScreeningDispositionPanel),
+// which is what writes screening_reviews and drives risk / routing / four-eyes.
+// The per-hit layer never writes that path; it only pre-orients the form to the
+// computed aggregate so the officer completes the code + rationale rather than
+// re-deciding (they retain authority to change it — recorded in the audit).
+function screeningSubjectFinalizeSection(app, row, subjectType, subjectName) {
+  var rollup = screeningSubjectRollup(row);
+  if (!rollup.total || rollup.pending) return '';  // only when every hit is decided
+  var aggregate = rollup.trueCount ? 'match' : 'cleared';
+  var state = getInlineScreeningDispositionState(app.ref, subjectType, subjectName, row);
+  if (!state.disposition) state.disposition = aggregate;
+  var label = rollup.trueCount ? 'TRUE MATCH — Enhanced Due Diligence' : 'CLEAR — no true match';
+  var intro = '<div data-screening-subject-finalize="true" style="margin-top:14px;padding:11px 14px;border:1px solid var(--brand);border-bottom:none;border-radius:10px 10px 0 0;background:rgba(43,47,143,.05);font-size:12px;color:var(--text2);line-height:1.55;">' +
+    '<strong style="color:var(--brand);">Record the subject decision.</strong> Every hit has been dispositioned — the per-hit decisions compute to <strong>' + escapeHtml(label) + '</strong>. Confirm below to update the case and its approval blockers. This records the officer decision to the audit trail; a second reviewer may be required for sensitive clearances.' +
+  '</div>';
+  return intro + renderInlineScreeningDispositionPanel(app, row, subjectType, subjectName);
+}
+
+function screeningTriageHitActions(row, item, itemIndex) {
   if (!row) return '';
-  // ARF-QAFIX Secondary B: review_actionable === false with NO recorded
-  // review means "no review exists yet" (the server's actionability check is
-  // about an EXISTING review needing action, e.g. pending second review).
-  // Acting is what CREATES the review, so actions must be offered then.
-  // Suppress only when review is not required, or a recorded review exists
-  // and is not actionable (resolved/locked — governed via the audit trail).
+  // A recorded, locked subject review stays read-only (governed via audit).
   if (!row.review_required || (row.review_disposition && row.review_actionable === false)) {
     if (row.review_disposition) {
       return '<div style="border-top:1px solid var(--border1);padding-top:10px;font-size:11.5px;color:var(--text2);">Review recorded: <strong>' + escapeHtml(screeningReviewDisplayLabel(row) || String(row.review_disposition).replace(/_/g, ' ')) + '</strong>. Changes are governed through the audit trail.</div>';
@@ -17352,28 +17523,65 @@ function screeningTriageHitActions(row) {
     return '<div style="border-top:1px solid var(--border1);padding-top:10px;font-size:11.5px;color:#92400e;">You do not have permission to disposition screening results.</div>';
   }
   var appRef = row.application_ref || (currentApp && currentApp.ref) || '';
-  var args = '\'' + escapeHtml(appRef) + '\',\'' + escapeHtml(row.subject_type || '') + '\',\'' + escapeHtml(row.subject_name || '') + '\'';
-  var pendingSecondReview = row.review_four_eyes_status === 'pending_second_review';
+  var subjType = row.subject_type || '', subjName = row.subject_name || '';
+  var hid = screeningHitId(item, itemIndex);
+  var st = screeningHitDispositionState(appRef, subjType, subjName, hid);
+  var args = '\'' + escapeHtml(appRef) + '\',\'' + escapeHtml(subjType) + '\',\'' + escapeHtml(subjName) + '\',\'' + escapeHtml(hid) + '\'';
   var clearBlocked = !canClearScreeningDisposition();
   var menuItemStyle = 'display:block;width:100%;text-align:left;background:none;border:none;padding:8px 10px;border-radius:6px;font-size:12px;color:var(--text1);cursor:pointer;';
-  var html = '<div data-screening-hit-actions="true" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--border1);padding-top:10px;">';
-  html += '<button type="button" class="btn btn-primary btn-sm" ' +
-    (clearBlocked
-      ? 'disabled title="Clear as False Positive requires Onboarding Officer, SCO, or Admin role." '
-      : 'title="Opens the clearance form below — validation, rationale, and audit rules are unchanged." ') +
-    'onclick="screeningTriageHitAction(' + args + ',\'cleared\')">Clear as false positive</button>';
-  if (!pendingSecondReview) {
-    html += '<button type="button" class="btn btn-outline btn-sm" title="Keeps approval blocked and may require escalation or EDD." onclick="screeningTriageHitAction(' + args + ',\'match\')">Confirm true match</button>';
+  var html = '<div data-screening-hit-actions="true" style="border-top:1px solid var(--border1);padding-top:10px;">';
+  html += '<div style="font-size:11.5px;color:var(--text3);margin-bottom:7px;">This decision affects <strong style="color:var(--brand);">this hit only</strong>.</div>';
+  // Per-hit status line.
+  var statusPill = function(text, fg, bg2) {
+    return '<div style="display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:800;padding:5px 11px;border-radius:8px;background:' + bg2 + ';color:' + fg + ';margin-bottom:9px;">' + escapeHtml(text) + '</div>';
+  };
+  if (st.status === 'match') {
+    html += statusPill('✓ Confirmed true match' + (st.materiality ? ' · ' + SCREENING_MATERIALITY_LABELS[st.materiality] : ' · choose materiality'), '#15803d', 'rgba(34,197,94,.12)');
+  } else if (st.status === 'cleared') {
+    html += statusPill('✗ Cleared as false positive', 'var(--text3)', 'var(--surface2)');
+  } else if (st.status === 'escalated') {
+    html += statusPill('↑ Escalated for senior review', '#b45309', '#fffbeb');
+  } else if (st.status === 'follow_up_required') {
+    html += statusPill('… Information requested', '#b45309', '#fffbeb');
+  } else {
+    html += statusPill('● Needs decision', '#b45309', '#fffbeb');
+  }
+  // Buttons.
+  html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">';
+  if (st.status === 'pending') {
+    html += '<button type="button" class="btn btn-primary btn-sm" ' +
+      (clearBlocked ? 'disabled title="Clear as false positive requires Onboarding Officer, SCO, or Admin role." ' : 'title="Clears THIS hit as a false positive; removes it as an approval blocker unless another hit is a true match." ') +
+      'onclick="screeningHitDispositionSet(' + args + ',\'cleared\')">Clear as false positive</button>';
+    html += '<button type="button" class="btn btn-outline btn-sm" title="Confirms THIS hit as a true match — sets the subject to TRUE MATCH regardless of the other hits." onclick="screeningHitDispositionSet(' + args + ',\'match\')">Confirm true match</button>';
     html += '<details data-screening-hit-more-menu="true" style="position:relative;display:inline-block;" onkeydown="if(event.key===\'Escape\'){this.removeAttribute(\'open\');}">' +
       '<summary class="btn btn-outline btn-sm" style="list-style:none;cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:4px;">More ▾</summary>' +
       '<div style="position:absolute;top:calc(100% + 4px);left:0;z-index:40;min-width:225px;background:#fff;border:1px solid var(--border2);border-radius:8px;box-shadow:0 6px 20px rgba(26,26,46,0.15);padding:5px;">' +
-        '<button type="button" style="' + menuItemStyle + '" title="Routes this case for senior compliance review or EDD where configured." onclick="screeningTriageHitAction(' + args + ',\'escalated\')">Escalate</button>' +
-        '<button type="button" style="' + menuItemStyle + '" title="Keeps this result under review while missing information is requested." onclick="screeningTriageHitAction(' + args + ',\'follow_up_required\')">Request more information</button>' +
+        '<button type="button" style="' + menuItemStyle + '" title="Routes this hit for senior compliance review or EDD where configured." onclick="screeningHitDispositionSet(' + args + ',\'escalated\')">Escalate</button>' +
+        '<button type="button" style="' + menuItemStyle + '" title="Keeps this hit under review while missing information is requested." onclick="screeningHitDispositionSet(' + args + ',\'follow_up_required\')">Request more information</button>' +
       '</div>' +
     '</details>';
+  } else {
+    html += '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitDispositionSet(' + args + ',\'pending\')">↺ Undo decision</button>';
   }
-  if (screeningClearanceNeedsSecondReviewer(row)) {
-    html += '<span style="font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:3px 9px;">' + escapeHtml(pendingSecondReview ? 'First review recorded — awaiting second reviewer' : 'Clearing this match as a false positive requires a second reviewer') + '</span>';
+  html += '</div>';
+  // Materiality picker — recorded with a true match; drives the risk outcome.
+  if (st.status === 'match') {
+    var opts = ['high', 'moderate', 'nonmaterial', 'insufficient'].map(function(m) {
+      var on = st.materiality === m;
+      var oc = m === 'high' ? '#dc2626' : (m === 'moderate' ? '#b45309' : (m === 'nonmaterial' ? '#15803d' : 'var(--text2)'));
+      var ob = m === 'high' ? 'rgba(220,38,38,.08)' : (m === 'moderate' ? 'rgba(245,158,11,.12)' : (m === 'nonmaterial' ? 'rgba(34,197,94,.12)' : 'var(--surface2)'));
+      return '<button type="button" onclick="screeningHitMaterialitySet(' + args + ',\'' + m + '\')" style="font-size:12px;font-weight:700;padding:6px 12px;border-radius:8px;cursor:pointer;border:1px solid ' + (on ? oc : 'var(--border2)') + ';background:' + (on ? ob : '#fff') + ';color:' + (on ? oc : 'var(--text2)') + ';">' + escapeHtml(SCREENING_MATERIALITY_LABELS[m]) + '</button>';
+    }).join('');
+    html += '<div data-screening-hit-materiality="true" style="margin-top:11px;border:1px solid var(--brand);border-radius:9px;background:rgba(43,47,143,.06);padding:11px 13px;">' +
+      '<div style="font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--brand);margin-bottom:7px;">Materiality — recorded with this decision</div>' +
+      '<div style="display:flex;gap:7px;flex-wrap:wrap;">' + opts + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:8px;">The per-hit materiality call is the authoritative “how serious is it” — it drives the risk outcome.' +
+      (screeningClearanceNeedsSecondReviewer(row) ? ' <strong style="color:#b45309;">Serious hit: requires a second reviewer before it is final.</strong>' : '') + '</div>' +
+    '</div>';
+  }
+  // Four-eyes note when clearing a sensitive match is still pending.
+  if (st.status === 'pending' && screeningClearanceNeedsSecondReviewer(row)) {
+    html += '<div style="margin-top:9px;"><span style="font-size:11px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:3px 9px;">Clearing this match as a false positive requires a second reviewer</span></div>';
   }
   html += '</div>';
   return html;
@@ -17414,7 +17622,7 @@ function screeningTriageHitCard(row, item, itemIndex, weakThreshold) {
     '<div style="border-top:1px solid var(--border1);padding:12px 14px;display:grid;gap:12px;">' +
       screeningTriageHitEvidenceBody(item) +
       screeningTriageHitTechnicalDetails(item) +
-      screeningTriageHitActions(row) +
+      screeningTriageHitActions(row, item, itemIndex) +
     '</div>' +
   '</details>';
 }
@@ -17437,10 +17645,155 @@ function screeningTriageWeakTailSection(row, weakEntries, triage) {
   '</details>';
 }
 
+// ── Near-identical grouped tail (per-hit multi-select) ───────────────────
+// Within a bucket, provider records that share the same category, triage score
+// and matched name are duplicate / syndicated copies of one matter. Rather than
+// a wall of identical cards, one representative is shown and the rest collapse
+// into a grouped block: bulk-clear the ones not individually reviewed, or open
+// the block and clear several at once — every hit keeps its own per-hit
+// decision and confirming any one flips the subject to TRUE MATCH.
+var SCREENING_HIT_GROUP_UI = {};   // groupId -> { expanded, sel:{hitId:true} }
+var SCREENING_HIT_GROUP_REG = {};  // groupId -> { appRef, subjType, subjName, hitIds:[] }
+var SCREENING_HIT_GROUP_MIN = 4;
+
+function screeningStableId(str) {
+  var h = 0; str = String(str);
+  for (var i = 0; i < str.length; i++) { h = ((h << 5) - h + str.charCodeAt(i)) | 0; }
+  return 'g' + (h >>> 0).toString(36);
+}
+function screeningTriageEntrySignature(item) {
+  item = item || {};
+  var name = String(item.matched_name || item.name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  var score = typeof item.triage_score === 'number' ? item.triage_score : 'x';
+  return screeningTriageBucketKeyForCategory(item.category) + '|' + score + '|' + name;
+}
+function screeningHitGroupState(groupId) {
+  if (!SCREENING_HIT_GROUP_UI[groupId]) SCREENING_HIT_GROUP_UI[groupId] = { expanded: false, sel: {} };
+  return SCREENING_HIT_GROUP_UI[groupId];
+}
+function screeningHitGroupToggleExpand(groupId) {
+  var s = screeningHitGroupState(groupId); s.expanded = !s.expanded;
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+function screeningHitGroupBulkClear(groupId) {
+  var reg = SCREENING_HIT_GROUP_REG[groupId]; if (!reg) return;
+  var changed = [];
+  reg.hitIds.forEach(function(hid) {
+    var st = screeningHitDispositionState(reg.appRef, reg.subjType, reg.subjName, hid);
+    if (st.status === 'pending') { st.status = 'cleared'; changed.push(hid); }
+  });
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  if (changed.length) screeningPersistHitDisposition(reg.appRef, reg.subjType, reg.subjName, changed, 'cleared', null);
+}
+function screeningHitGroupSelectAll(groupId) {
+  var reg = SCREENING_HIT_GROUP_REG[groupId], s = screeningHitGroupState(groupId); if (!reg) return;
+  reg.hitIds.forEach(function(hid) {
+    var st = screeningHitDispositionState(reg.appRef, reg.subjType, reg.subjName, hid);
+    if (st.status === 'pending') s.sel[hid] = true;
+  });
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+function screeningHitGroupToggleSel(groupId, hitId) {
+  var s = screeningHitGroupState(groupId);
+  if (s.sel[hitId]) delete s.sel[hitId]; else s.sel[hitId] = true;
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+function screeningHitGroupClearSelected(groupId) {
+  var reg = SCREENING_HIT_GROUP_REG[groupId], s = screeningHitGroupState(groupId); if (!reg) return;
+  var changed = [];
+  Object.keys(s.sel).forEach(function(hid) {
+    if (!s.sel[hid]) return;
+    var st = screeningHitDispositionState(reg.appRef, reg.subjType, reg.subjName, hid);
+    st.status = 'cleared'; changed.push(hid);
+  });
+  s.sel = {};
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  if (changed.length) screeningPersistHitDisposition(reg.appRef, reg.subjType, reg.subjName, changed, 'cleared', null);
+}
+
+function screeningTriageGroupedBlock(row, meta, groupEntries) {
+  var appRef = row.application_ref || (currentApp && currentApp.ref) || '';
+  var subjType = row.subject_type || '', subjName = row.subject_name || '';
+  var subjectKey = screeningReviewSubjectKey(appRef, subjType, subjName);
+  var sig = screeningTriageEntrySignature(groupEntries[0].item);
+  var groupId = screeningStableId(subjectKey + '|' + sig);
+  var hitIds = groupEntries.map(function(e) { return screeningHitId(e.item, e.index); });
+  SCREENING_HIT_GROUP_REG[groupId] = { appRef: appRef, subjType: subjType, subjName: subjName, hitIds: hitIds };
+  var ui = screeningHitGroupState(groupId);
+  var pending = 0, cleared = 0, trueCount = 0;
+  hitIds.forEach(function(hid) {
+    var st = screeningHitDispositionState(appRef, subjType, subjName, hid);
+    if (st.status === 'match') trueCount++; else if (st.status === 'cleared') cleared++; else pending++;
+  });
+  var total = hitIds.length;
+  var score = typeof groupEntries[0].item.triage_score === 'number' ? groupEntries[0].item.triage_score : null;
+  var catLabel = String(meta.label || 'provider').toLowerCase();
+  var resolved = pending === 0;
+  var can = canDispositionScreeningDisposition();
+  var pill = function(txt, kind) {
+    var pc = kind === 'ok' ? '#15803d' : (kind === 'warn' ? '#b45309' : 'var(--text3)');
+    var pb = kind === 'ok' ? 'rgba(34,197,94,.14)' : (kind === 'warn' ? 'rgba(245,158,11,.14)' : 'var(--surface2)');
+    return '<span style="background:' + pb + ';color:' + pc + ';padding:2px 9px;border-radius:20px;font-weight:700;">' + escapeHtml(txt) + '</span>';
+  };
+  var pills = '';
+  if (trueCount) pills += pill('✓ ' + trueCount + ' true', 'ok');
+  if (cleared) pills += pill(cleared + ' cleared', 'mut');
+  if (pending) pills += pill(pending + ' undecided', 'warn');
+  var html = '<div data-screening-hit-group="' + escapeHtml(groupId) + '" style="margin-top:12px;border:1px solid ' + (resolved ? 'var(--green)' : 'var(--border1)') + ';border-radius:11px;background:' + (resolved ? 'rgba(34,197,94,.08)' : 'var(--surface2)') + ';padding:14px;">';
+  html += '<div style="font-size:13px;font-weight:800;">' + total + ' near-identical ' + escapeHtml(catLabel) + ' matches' + (score != null ? ' (all triage ' + score + ')' : '') + '</div>';
+  html += '<div style="font-size:12px;color:var(--text3);margin:3px 0 10px;line-height:1.5;">Duplicate or syndicated records of the same matter — no new facts across them. Review any individually, or clear the ones you have not reviewed in one action.</div>';
+  if (pills) html += '<div style="display:flex;gap:6px;flex-wrap:wrap;font-size:11px;margin-bottom:10px;">' + pills + '</div>';
+  if (can) {
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+    html += '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitGroupToggleExpand(\'' + groupId + '\')">' + (ui.expanded ? 'Hide individual review ▴' : 'Expand &amp; review individually ▾') + '</button>';
+    if (pending) html += '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitGroupBulkClear(\'' + groupId + '\')">Clear the remaining ' + pending + ' as false positive</button>';
+    html += '</div>';
+    html += '<div data-screening-hit-group-safe="true" style="font-size:11.5px;color:var(--green);background:rgba(34,197,94,.12);padding:6px 11px;border-radius:8px;margin-top:9px;display:inline-block;">✓ Confirming any one as a true match flips the subject to TRUE MATCH — the bulk action never overrides an individual decision.</div>';
+  }
+  if (ui.expanded && can) {
+    var selCount = 0; for (var k in ui.sel) { if (ui.sel[k]) selCount++; }
+    html += '<div style="margin-top:11px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--border2);border-radius:9px;background:#fff;">';
+    html += '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitGroupSelectAll(\'' + groupId + '\')">Select all undecided</button>';
+    html += '<span style="font-size:12px;color:var(--text3);">' + (selCount ? selCount + ' selected' : 'Tick hits to clear several at once') + '</span>';
+    if (selCount) html += '<button type="button" class="btn btn-primary btn-sm" style="margin-left:auto;" onclick="screeningHitGroupClearSelected(\'' + groupId + '\')">Clear ' + selCount + ' selected as false positive</button>';
+    html += '</div>';
+    html += '<div style="display:grid;gap:8px;margin-top:9px;">';
+    groupEntries.forEach(function(e) {
+      var hid = screeningHitId(e.item, e.index);
+      var st = screeningHitDispositionState(appRef, subjType, subjName, hid);
+      var checked = !!ui.sel[hid];
+      var badge = st.status === 'match'
+        ? '<span style="font-size:11px;font-weight:700;color:#15803d;background:rgba(34,197,94,.14);padding:2px 9px;border-radius:20px;">✓ True match</span>'
+        : (st.status === 'cleared'
+          ? '<span style="font-size:11px;font-weight:700;color:var(--text3);background:var(--surface2);padding:2px 9px;border-radius:20px;">✗ Cleared</span>'
+          : '<span style="font-size:11px;font-weight:700;color:#b45309;background:rgba(245,158,11,.14);padding:2px 9px;border-radius:20px;">● Undecided</span>');
+      var note = e.item.source_title || e.item.source_name || (e.item.publication_date || '');
+      var hargs = '\'' + escapeHtml(appRef) + '\',\'' + escapeHtml(subjType) + '\',\'' + escapeHtml(subjName) + '\',\'' + escapeHtml(hid) + '\'';
+      var ctrls = st.status === 'pending'
+        ? '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitDispositionSet(' + hargs + ',\'match\')">Confirm true match</button><button type="button" class="btn btn-outline btn-sm" onclick="screeningHitDispositionSet(' + hargs + ',\'cleared\')">Clear</button>'
+        : '<button type="button" class="btn btn-outline btn-sm" onclick="screeningHitDispositionSet(' + hargs + ',\'pending\')">↺ Undo</button>';
+      var box = st.status === 'pending'
+        ? '<input type="checkbox" aria-label="Select match" ' + (checked ? 'checked ' : '') + 'onclick="screeningHitGroupToggleSel(\'' + groupId + '\',\'' + escapeHtml(hid) + '\')" style="width:16px;height:16px;margin-top:2px;cursor:pointer;accent-color:var(--brand);">'
+        : '<span style="width:16px;display:inline-block;"></span>';
+      var srcLink = e.item.source_url ? '<a href="' + escapeHtml(e.item.source_url) + '" target="_blank" rel="noopener" style="font-size:11.5px;color:var(--brand);text-decoration:none;font-weight:600;">Source ↗</a>' : '';
+      html += '<div style="border:1px solid ' + (checked ? 'var(--brand)' : 'var(--border1)') + ';border-radius:9px;background:#fff;padding:10px 12px;display:flex;gap:10px;align-items:flex-start;">' +
+        box +
+        '<div style="flex:1;min-width:0;"><div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;"><strong style="font-size:13px;">' + escapeHtml(screeningTriageHitDisplayName(e.item)) + '</strong>' +
+        (note ? '<span style="font-size:11.5px;color:var(--text3);">' + escapeHtml(note) + '</span>' : '') + srcLink +
+        '<span style="margin-left:auto;">' + badge + '</span></div>' +
+        '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">' + ctrls + '</div></div></div>';
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
 function screeningTriageRankedHitSections(row) {
-  // Bucketed, ranked hit list: Sanctions → PEP → Adverse media → Watchlist,
+  // Bucketed, ranked hit list: Sanctions → PEP → Watchlist → Adverse media,
   // triage_score descending within each bucket; unscored hits sort last and
-  // are labelled "unscored". Renders only when the server-computed triage
+  // are labelled "unscored". Near-identical duplicate runs collapse into a
+  // grouped multi-select block. Renders only when the server-computed triage
   // block exists — legacy/simulated shapes keep the existing honest renderer.
   row = row || {};
   var triage = row.triage;
@@ -17493,13 +17846,31 @@ function screeningTriageRankedHitSections(row) {
       }
       html += '<div style="padding:11px 14px;font-size:12px;color:var(--text2);border:1px solid var(--border1);border-top:none;border-radius:0 0 10px 10px;background:#fff;">' + escapeHtml(emptyCopy) + '</div>';
     } else {
-      // SRP-2a mockup-gap 3: show at most SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT
-      // ranked hits per bucket by default. Header counts stay the full
-      // server-computed number, the expander states the exact overflow, and
-      // every hit remains reviewable after expanding — nothing is hidden
-      // permanently and nothing is re-ranked.
-      var visibleEntries = entries.slice(0, SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT);
-      var overflowEntries = entries.slice(SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT);
+      // Near-identical duplicate runs (same category + triage score + matched
+      // name, count >= SCREENING_HIT_GROUP_MIN) collapse into a grouped block:
+      // one representative is shown as a full card and the rest fold into a
+      // multi-select "clear the remaining N" block. Non-duplicate hits render
+      // as normal ranked cards (visible limit + honest overflow). Nothing is
+      // hidden permanently and nothing is re-ranked.
+      var sigMap = {}, sigOrder = [];
+      entries.forEach(function(entry) {
+        var sig = screeningTriageEntrySignature(entry.item);
+        if (!sigMap[sig]) { sigMap[sig] = []; sigOrder.push(sig); }
+        sigMap[sig].push(entry);
+      });
+      var normalCards = [], groupBlocks = [];
+      sigOrder.forEach(function(sig) {
+        var list = sigMap[sig];
+        if (list.length >= SCREENING_HIT_GROUP_MIN) {
+          normalCards.push(list[0]);          // representative shown as a full card
+          groupBlocks.push(list.slice(1));    // the rest fold into the grouped block
+        } else {
+          normalCards = normalCards.concat(list);
+        }
+      });
+      normalCards.sort(sortRanked);
+      var visibleEntries = normalCards.slice(0, SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT);
+      var overflowEntries = normalCards.slice(SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT);
       visibleEntries.forEach(function(entry) {
         html += screeningTriageHitCard(row, entry.item, entry.index, weakThreshold);
       });
@@ -17514,6 +17885,9 @@ function screeningTriageRankedHitSections(row) {
           }).join('') + '</div>' +
         '</details>';
       }
+      groupBlocks.forEach(function(g) {
+        if (g.length) html += screeningTriageGroupedBlock(row, meta, g);
+      });
     }
     html += '</section>';
   });
@@ -17690,6 +18064,9 @@ function renderScreeningReviewPanel(app, focus) {
   if (app.ref && !queueRows.some(function(row) { return row && row.screening_evidence; })) {
     ensureApplicationScreeningEvidenceRows(app.ref);
   }
+  // Per-hit redesign: hydrate stored per-hit decisions once so they survive a
+  // refresh and are shared across reviewers (single-flight; re-renders on load).
+  if (app.ref) ensureScreeningHitDispositionsHydrated(app.ref);
   var queueMap = {};
   queueRows.forEach(function(row) {
     queueMap[screeningSubjectMatchKey(row.subject_type, row.subject_name)] = row;

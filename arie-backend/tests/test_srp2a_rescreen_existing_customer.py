@@ -1293,8 +1293,12 @@ class TestMockupGapStaticPins:
     def test_bucket_cap_with_honest_expander(self, html):
         assert "var SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT = 5;" in html
         sections = _extract_js_function(html, "screeningTriageRankedHitSections")
-        assert "entries.slice(0, SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT)" in sections
-        assert "entries.slice(SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT)" in sections
+        # Per-hit redesign: near-identical duplicate runs fold into a grouped
+        # block first (one representative kept); the remaining non-grouped cards
+        # (normalCards) are then capped at the visible limit with the same honest
+        # overflow expander — nothing hidden permanently, nothing re-ranked.
+        assert "normalCards.slice(0, SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT)" in sections
+        assert "normalCards.slice(SCREENING_TRIAGE_BUCKET_VISIBLE_LIMIT)" in sections
         assert 'data-screening-triage-bucket-overflow="' in sections
         assert "' more — show all (ranked)'" in sections, "expander must state the exact overflow"
         # Native <details> idiom (same as the weak tail) — every hit stays

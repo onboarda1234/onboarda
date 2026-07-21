@@ -43,6 +43,13 @@ def test_screening_review_workspace_orders_triage_before_evidence_and_actions():
     assert body.index("screeningTriageStrip") < body.index("screeningWorkspaceStatusStrip")
     assert body.index("screeningWorkspaceStatusStrip") < body.index("renderAgent3ScreeningInterpretationPanel")
     assert body.index("renderAgent3ScreeningInterpretationPanel") < body.index("screeningQueueEvidenceReadinessPanel")
+    # Per-hit redesign: for the triage (per-hit) path the computed subject rollup
+    # replaces the old always-visible subject-level disposition bar and sits
+    # above the ranked evidence; the legacy subject bar stays ONLY for the
+    # no-triage path (rendered after the evidence panel when there are no per-hit
+    # cards). Both come before the disposition history.
+    assert body.index("screeningSubjectRollupStrip") < body.index("screeningQueueEvidenceReadinessPanel")
+    assert "hasPerHitDisposition" in body
     assert body.index("screeningQueueEvidenceReadinessPanel") < body.index("renderInlineScreeningDispositionPanel")
     assert body.index("renderInlineScreeningDispositionPanel") < body.index("screeningReviewHistory")
 
