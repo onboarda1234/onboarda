@@ -15356,8 +15356,10 @@ function screeningQueueEvidenceReadinessPanel(row, legacyResults, legacyContext)
     evidenceCards = screeningTriageRankedHitSections(row) || items.map(screeningQueueEvidenceItemCard).join('');
   } else if (evidenceDetailError) {
     evidenceCards = '<div data-screening-evidence-error="true" style="font-size:12px;color:#991b1b;line-height:1.5;margin-top:8px;padding:10px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;">Detailed provider evidence could not be loaded. Summary evidence remains available.</div>';
-  } else if (row.triage && row.triage.buckets) {
-    // Per-hit (triaged) subject whose detailed evidence has not hydrated yet.
+  } else if ((row.triage && row.triage.buckets) || row.evidence_detail_available) {
+    // Per-hit (triaged) subject whose detailed evidence has not hydrated yet,
+    // OR a summary-mode queue row (include_evidence=false marks hydratable
+    // rows with evidence_detail_available and strips items + triage).
     // NEVER fall to the legacy "Provider match records (stored report)" stacked
     // blocks here — that is the "old UI" competing with the per-hit design. Show
     // a clean loading state and trigger the lazy evidence fetch; the ranked hit
@@ -15766,7 +15768,7 @@ function screeningSubjectWorkspaceBody(config) {
   body += screeningReviewHonestyBanner(row, config.screeningSummary);
   body += screeningTriageStrip(row);
   body += screeningWorkspaceStatusStrip(config.statusFacts);
-  body += renderAgent3ScreeningInterpretationPanel(app);
+  body += renderAgent3ScreeningInterpretationPanel(app, config.subjectName);
   // Per-hit path: the SOLE review surface for any triaged subject. It activates
   // on the server-computed triage block alone — NOT on evidence items being
   // loaded — because evidence hydrates lazily (deferred until the row is opened)
@@ -16256,296 +16258,15 @@ function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap
 }
 
 var AGENT3_SCREENING_INTERPRETATION_BUSY = false;
-var AGENT3_SCREENING_INTERPRETATION_COLLAPSED = {};
 
 function getAgent3ScreeningInterpretation(app) {
   app = app || currentApp || {};
   return app.agent3ScreeningInterpretation || app.agent3_screening_interpretation || null;
 }
 
-function agent3ScreeningListHtml(items, emptyText) {
-  items = Array.isArray(items) ? items.filter(function(item) { return item != null && String(item).trim() !== ''; }) : [];
-  if (!items.length) return '<div style="font-size:12px;color:var(--text3);">' + escapeHtml(emptyText || 'Not available') + '</div>';
-  return '<ul style="margin:0;padding-left:18px;font-size:12px;color:var(--text2);line-height:1.6;">' +
-    items.map(function(item) { return '<li>' + escapeHtml(String(item)) + '</li>'; }).join('') +
-    '</ul>';
-}
-
-function agent3ScreeningFieldHtml(label, value) {
-  var body = '';
-  if (Array.isArray(value)) {
-    body = agent3ScreeningListHtml(value, 'No items reported.');
-  } else {
-    body = '<div style="font-size:12px;color:var(--text2);line-height:1.6;">' + escapeHtml(value || 'Not available') + '</div>';
-  }
-  return '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface1);">' +
-    '<div style="font-size:11px;color:var(--text3);font-weight:800;text-transform:uppercase;letter-spacing:0;margin-bottom:6px;">' + escapeHtml(label) + '</div>' +
-    body +
-    '</div>';
-}
-
-function agent3EvidenceText(item) {
-  if (item == null) return '';
-  if (typeof item === 'string') return item;
-  if (typeof item !== 'object') return String(item);
-  var parts = [];
-  if (item.source) parts.push(item.source);
-  if (item.subject_type || item.subject_name) parts.push([item.subject_type, item.subject_name].filter(Boolean).join(': '));
-  if (item.matched_name) parts.push('matched ' + item.matched_name);
-  if (Array.isArray(item.categories) && item.categories.length) parts.push(item.categories.join(', '));
-  if (item.match_score != null && item.match_score !== '') parts.push('score ' + item.match_score);
-  if (item.total_hits != null) parts.push(item.total_hits + ' hit(s)');
-  if (item.screened_at) parts.push('screened ' + String(item.screened_at).replace('T', ' ').slice(0, 19));
-  if (item.review_count != null) parts.push(item.review_count + ' review row(s)');
-  return parts.join(' | ') || JSON.stringify(item);
-}
-
-function agent3EvidenceHtml(evidence) {
-  evidence = Array.isArray(evidence) ? evidence.map(agent3EvidenceText).filter(Boolean) : [];
-  return agent3ScreeningListHtml(evidence, 'No evidence references available.');
-}
-
-function agent3SeverityBadge(severity) {
-  var s = String(severity || '').toLowerCase();
-  var c = { bg: '#f1f5f9', border: 'var(--border1)', text: 'var(--text2)' };
-  if (s === 'critical') c = { bg: '#fef2f2', border: '#fecaca', text: '#b91c1c' };
-  else if (s === 'high') c = { bg: '#fff7ed', border: '#fed7aa', text: '#c2410c' };
-  else if (s === 'medium') c = { bg: '#fffbeb', border: '#fde68a', text: '#92400e' };
-  else if (s === 'low') c = { bg: '#ecfdf5', border: '#a7f3d0', text: '#047857' };
-  return '<span style="display:inline-flex;align-items:center;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:4px 10px;border-radius:14px;background:' + c.bg + ';border:1px solid ' + c.border + ';color:' + c.text + ';">Severity: ' + escapeHtml(severity || 'Not available') + '</span>';
-}
-
 function agent3DisplayRecommendation(recommendation) {
   var text = String(recommendation || '').trim();
   return text.toLowerCase() === 'clear' ? 'No reportable provider hit recorded' : text;
-}
-
-function agent3RecommendationBadge(recommendation) {
-  var display = agent3DisplayRecommendation(recommendation);
-  var r = String(display || '').toLowerCase();
-  var c = { bg: '#f1f5f9', border: 'var(--border1)', text: 'var(--text2)' }; // neutral fallback
-  if (r === 'false positive likely') {
-    c = { bg: '#ecfdf5', border: '#a7f3d0', text: '#047857' }; // green
-  } else if (r === 'officer review required' || r === 'review required') {
-    c = { bg: '#fffbeb', border: '#fde68a', text: '#92400e' }; // amber
-  } else if (r === 'edd recommended' || r === 'escalate' || r === 'reject recommended') {
-    c = { bg: '#fef2f2', border: '#fecaca', text: '#b91c1c' }; // red / high-warning
-  }
-  return '<span style="display:inline-flex;align-items:center;font-size:12px;font-weight:800;padding:4px 12px;border-radius:14px;background:' + c.bg + ';border:1px solid ' + c.border + ';color:' + c.text + ';">Agent recommendation: ' + escapeHtml(display || 'Not available') + '</span>';
-}
-
-function agent3IsDeclaredPepYes(value) {
-  if (value === true) return true;
-  if (typeof value === 'number') return value > 0;
-  var s = String(value == null ? '' : value).trim().toLowerCase();
-  if (s === 'yes' || s === 'true' || s === '1') return true;
-  var n = parseFloat(s);
-  return !isNaN(n) && n > 0;
-}
-
-function agent3ProviderHitsHtml(output) {
-  var hc = (output && output.hit_counts) || {};
-  var total = Number(hc.total != null ? hc.total : 0) || 0;
-  var sanctions = Number(hc.sanctions || 0) || 0;
-  var pep = Number(hc.pep || 0) || 0;
-  var adverseMedia = Number(hc.adverse_media || 0) || 0;
-  var watchlist = Number(hc.watchlist || 0) || 0;
-  var other = hc.other != null ? Number(hc.other || 0) : Math.max(0, total - sanctions - pep - adverseMedia - watchlist);
-  if (!isFinite(other) || other < 0) other = 0;
-  var line = 'Provider result rows: ' + total + ' total — ' + sanctions + ' sanctions · ' + pep + ' PEP · ' + adverseMedia + ' provider screening adverse-media row(s) · ' + watchlist + ' watchlist · ' + other + ' other/uncategorized provider result row(s)';
-  var html = '<span class="explain-data-source" style="font-weight:700;">' + escapeHtml(line) + '</span>';
-  var declaredPepYes = agent3IsDeclaredPepYes(hc.declared_pep);
-  if (declaredPepYes) {
-    html += '<span class="explain-data-source" style="background:#fffbeb;border-color:#fde68a;color:#92400e;">Declared PEP: Yes — officer review required</span>';
-  } else {
-    html += '<span class="explain-data-source">Declared PEP: No</span>';
-  }
-  if (hc.unresolved_screening_reviews) {
-    html += '<span class="explain-data-source" style="background:#fffbeb;border-color:#fde68a;color:#92400e;">Unresolved review items: ' + escapeHtml(String(hc.unresolved_screening_reviews)) + '</span>';
-  }
-  return html;
-}
-
-function agent3ScreeningInterpretationAppKey(app) {
-  app = app || currentApp || {};
-  return String(app.id || app.ref || 'current');
-}
-
-function isAgent3ScreeningInterpretationCollapsed(app) {
-  // Founder review: the Agent 3 advisory panel dominated the screening-review
-  // page. Default it COLLAPSED to a compact status line so the ranked per-hit
-  // cards lead; the officer expands for the full advisory. Only an explicit
-  // stored value (from the Collapse/Expand toggle) overrides the default.
-  var value = AGENT3_SCREENING_INTERPRETATION_COLLAPSED[agent3ScreeningInterpretationAppKey(app)];
-  return value === undefined ? true : !!value;
-}
-
-function toggleAgent3ScreeningInterpretation(event) {
-  if (event) {
-    event.preventDefault();
-    event.stopPropagation();
-  }
-  var appKey = agent3ScreeningInterpretationAppKey(currentApp);
-  AGENT3_SCREENING_INTERPRETATION_COLLAPSED[appKey] = !isAgent3ScreeningInterpretationCollapsed(currentApp);
-  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
-}
-
-// PR-AGENT3-HIT-LEVEL-UI-1: render structured hit_rows / hit_row_status_counts
-// from the Agent 3 output (backend PR-AGENT3-HIT-LEVEL-OUTPUT-1). Display only —
-// advisory, no provider calls, no officer-decision mutation.
-var AGENT3_HIT_STATUS_META = {
-  needs_review:          { label: 'Needs review',          bg: '#fffbeb', border: '#fde68a', text: '#92400e' },
-  likely_false_positive: { label: 'Likely false positive', bg: '#ecfdf5', border: '#a7f3d0', text: '#047857' },
-  high_confidence_match: { label: 'High-confidence match', bg: '#fef2f2', border: '#fecaca', text: '#b91c1c' },
-  unavailable:           { label: 'Unavailable',           bg: '#f1f5f9', border: 'var(--border1)', text: 'var(--text2)' }
-};
-
-function agent3HitStatusMeta(status) {
-  return AGENT3_HIT_STATUS_META[String(status || '').toLowerCase()] ||
-    { label: (status ? String(status).replace(/_/g, ' ') : 'Unknown'), bg: '#f1f5f9', border: 'var(--border1)', text: 'var(--text2)' };
-}
-
-function agent3HitStatusBadge(status) {
-  var m = agent3HitStatusMeta(status);
-  return '<span style="display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:12px;white-space:nowrap;background:' + m.bg + ';border:1px solid ' + m.border + ';color:' + m.text + ';">' + escapeHtml(m.label) + '</span>';
-}
-
-function agent3HitStatusCountsHtml(counts) {
-  counts = counts && typeof counts === 'object' ? counts : {};
-  var chips = [];
-  ['needs_review', 'high_confidence_match', 'likely_false_positive', 'unavailable'].forEach(function(k) {
-    if (counts[k]) {
-      var m = agent3HitStatusMeta(k);
-      chips.push('<span class="explain-data-source" style="background:' + m.bg + ';border-color:' + m.border + ';color:' + m.text + ';">' + escapeHtml(m.label) + ': ' + escapeHtml(String(counts[k])) + '</span>');
-    }
-  });
-  return chips.join('');
-}
-
-function agent3LooksLikeUuid(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || '').trim());
-}
-
-function agent3TraceRowsHtml(rows) {
-  rows = (rows || []).filter(function(row) { return row && row[1] !== null && row[1] !== undefined && String(row[1]).trim() !== ''; });
-  if (!rows.length) return '<div style="font-size:11px;color:var(--text3);">No technical provider metadata available.</div>';
-  return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px 12px;font-size:11px;">' + rows.map(function(row) {
-    return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <strong style="color:var(--text2);word-break:break-word;">' + escapeHtml(String(row[1])) + '</strong></div>';
-  }).join('') + '</div>';
-}
-
-function agent3AuditTraceHtml(output) {
-  // Compact, de-duplicated regulator trace: one line per hit. Provider reference
-  // and "evidence ref" are the same identifier (shown once); screening mode /
-  // screened-at are per-report facts already in the panel header, so they are not
-  // repeated per hit. Raw provider score (when present) is shown as a raw value,
-  // never a percentage, pending CA scale clarification.
-  var rows = Array.isArray(output && output.hit_rows) ? output.hit_rows : [];
-  if (!rows.length) return '<div style="font-size:12px;color:var(--text3);">No provider hit metadata is available.</div>';
-  return rows.map(function(row) {
-    row = row || {};
-    var trace = row.audit_trace || {};
-    var title = agent3LooksLikeUuid(row.matched_entity) ? 'Unnamed provider match' : (row.matched_entity || ('Hit ' + row.index));
-    var ref = trace.provider_reference || row.evidence_ref || '';
-    var pass = trace.surfaced_by_pass || row.surfaced_by_pass || '';
-    var cat = trace.raw_category_type || row.type || '';
-    var rawScore = trace.match_score_raw;
-    var pendingReason = trace.pending_degraded_reason || '';
-    var bits = [];
-    if (cat) bits.push(escapeHtml(String(cat)));
-    if (pass) bits.push(escapeHtml(String(pass)) + ' pass');
-    if (rawScore != null && String(rawScore).trim() !== '') bits.push('provider score (raw): ' + escapeHtml(String(rawScore)));
-    if (pendingReason) bits.push('reason: ' + escapeHtml(String(pendingReason)));
-    return '<div style="padding:8px 10px;border:1px solid var(--border1);border-radius:8px;background:#fff;margin-bottom:6px;font-size:11.5px;color:var(--text2);">' +
-      '<b>' + escapeHtml(title) + '</b>' +
-      (bits.length ? ' · ' + bits.join(' · ') : '') +
-      (ref ? '<div style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--text3);margin-top:3px;word-break:break-all;">provider ref ' + escapeHtml(String(ref)) + '</div>' : '') +
-    '</div>';
-  }).join('');
-}
-
-// SRP-3e Phase E: dense audit table — subject · matched name · category ·
-// RegMind triage (rts) · status & reason. One compact row per hit; article
-// evidence lives inline on the ranked hit cards, provider score/pass live in
-// the Audit trace disclosure. Display only — advisory.
-function agent3TriageCellHtml(row) {
-  row = row || {};
-  var score = typeof row.triage_score === 'number' && !isNaN(row.triage_score) ? row.triage_score : null;
-  if (score === null) {
-    return '<span style="font-size:11px;color:var(--text3);">unscored</span>';
-  }
-  var band = screeningTriageScoreBand(score, null);
-  return '<span style="font-family:ui-monospace,Menlo,monospace;font-weight:700;color:' + band.color + ';" title="RegMind triage score — a ranking that orders matches for review. Not a provider score.">' + escapeHtml(String(score)) + '</span>' +
-    (band.label ? ' <span style="font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:' + band.color + ';">' + escapeHtml(band.label) + '</span>' : '');
-}
-
-function agent3HitRowsTableHtml(rows) {
-  rows = Array.isArray(rows) ? rows : [];
-  if (!rows.length) return '<div style="font-size:12px;color:var(--text3);">No provider hit rows in the stored screening results.</div>';
-  var th = 'text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);font-weight:700;padding:0 8px 6px;border-bottom:1px solid var(--border1);white-space:nowrap;';
-  var td = 'padding:6px 8px;border-bottom:1px solid var(--border1);vertical-align:top;';
-  var html = '<div style="overflow-x:auto;"><table data-agent3-hit-audit-table="true" style="width:100%;border-collapse:collapse;font-size:12px;">';
-  html += '<thead><tr>' +
-    '<th style="' + th + 'width:16%;">Subject</th>' +
-    '<th style="' + th + 'width:24%;">Matched name</th>' +
-    '<th style="' + th + 'width:16%;">Category</th>' +
-    '<th style="' + th + 'width:12%;">RegMind triage</th>' +
-    '<th style="' + th + '">Status &amp; reason</th>' +
-    '</tr></thead><tbody>';
-  // Founder review: the audit table used to dump one row per provider record,
-  // so a subject with 198 duplicate/syndicated adverse-media records rendered a
-  // 198-row wall of identical "matched name · category · triage · reason" lines
-  // (differing only by provider reference id). That old flat table contradicts
-  // the approved design, which groups near-identical records. Here, rows that
-  // share subject, matched entity, category, triage score, suggested status and
-  // reason are collapsed into ONE audit row carrying a "× N grouped" count and
-  // an expandable that still lists EVERY provider reference — the audit trail
-  // is preserved in full, only the wall disappears. Ordering is stable (first
-  // occurrence wins) and no count is re-derived: every reference is retained.
-  var groups = [];
-  var groupByKey = {};
-  rows.forEach(function(r) {
-    r = r || {};
-    var key = [r.subject_name, r.subject_type, r.matched_entity, r.list, r.type, r.triage_score, r.suggested_status, r.reason].join('|~|');
-    var g = groupByKey[key];
-    if (!g) { g = { rep: r, refs: [], count: 0 }; groupByKey[key] = g; groups.push(g); }
-    g.count += 1;
-    if (r.evidence_ref) g.refs.push(String(r.evidence_ref));
-  });
-  groups.forEach(function(g) {
-    var r = g.rep;
-    var subjectBits = [r.subject_name, r.subject_type ? '(' + String(r.subject_type) + ')' : ''].filter(Boolean).join(' ');
-    // Readable fallback when the stored provider result only carries an id.
-    var matched;
-    if (agent3LooksLikeUuid(r.matched_entity)) {
-      matched = '<span>Unnamed provider match</span>' +
-        '<div style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--text3);word-break:break-all;" title="Provider reference">' + escapeHtml(String(r.matched_entity)) + '</div>';
-    } else {
-      matched = '<span style="font-weight:600;">' + escapeHtml(r.matched_entity || 'n/a') + '</span>';
-    }
-    if (g.count > 1) {
-      matched += ' <span style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:.03em;padding:1px 7px;border-radius:12px;background:var(--surface2);color:var(--text3);white-space:nowrap;" title="Near-identical provider records collapsed for review — every reference is retained below.">× ' + g.count + ' grouped</span>';
-    }
-    var listCell = escapeHtml(r.list || (r.type ? String(r.type).replace(/_/g, ' ') : '') || 'n/a');
-    var evRef;
-    if (g.count > 1) {
-      var refItems = g.refs.map(function(ref) {
-        return '<span style="font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--text3);word-break:break-all;">[' + escapeHtml(ref) + ']</span>';
-      }).join(' ');
-      evRef = ' <details style="margin-top:5px;"><summary style="cursor:pointer;list-style:none;font-size:10.5px;font-weight:700;color:var(--text3);">' + g.count + ' near-identical records grouped' + (g.refs.length ? ' · show ' + g.refs.length + ' reference' + (g.refs.length === 1 ? '' : 's') : '') + '</summary>' + (refItems ? '<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:6px;">' + refItems + '</div>' : '') + '</details>';
-    } else {
-      evRef = g.refs.length ? ' <span style="color:var(--text3);font-size:10.5px;">[' + escapeHtml(g.refs[0]) + ']</span>' : '';
-    }
-    html += '<tr>' +
-      '<td style="' + td + '">' + (subjectBits ? escapeHtml(subjectBits) : '<span style="color:var(--text3);">n/a</span>') + '</td>' +
-      '<td style="' + td + '">' + matched + '</td>' +
-      '<td style="' + td + '">' + listCell + '</td>' +
-      '<td style="' + td + '">' + agent3TriageCellHtml(r) + '</td>' +
-      '<td style="' + td + '">' + agent3HitStatusBadge(r.suggested_status) + ' <span style="color:#475569;">' + escapeHtml(r.reason || '') + '</span>' + evRef + '</td>' +
-      '</tr>';
-  });
-  html += '</tbody></table></div>';
-  return html;
 }
 
 function agent3ScreeningResultTerminal(output) {
@@ -16568,223 +16289,144 @@ function agent3ScreeningResultTerminal(output) {
   }) && values.some(function(value) { return String(value || '').trim() !== ''; });
 }
 
-function agent3TriageNarrativeHtml(narrative) {
-  // SRP-4 Phase C — advisory "where to start" block. Rendered ONLY when the
-  // server-computed interpretation.triage_narrative is present (older stored
-  // interpretations lack it). Every count, band, and ordering comes from the
-  // server dict — the browser never recomputes them. The rts score is a
-  // ranking for review order only: never a percentage, provider confidence,
-  // or probability, and it never changes any status or disposition.
-  if (!narrative || typeof narrative !== 'object') return '';
-  // Phase F (F1): the server may supply grouped display entries (narrative
-  // .entries) — singleton standout hits first, then homogeneous masses
-  // collapsed to ONE line each ("198 matches on 'wirecard' — all triage 58 ·
-  // no single hit stands out"). Older stored narratives carry only
-  // narrative.priority_hits and keep the per-hit list. All counts, scores
-  // and ordering come from the server dict — never recomputed here.
+function agent3NarrativeEntriesForSubject(narrative, subjectName) {
+  // Server-computed narrative entries (grouped Phase-F shape, or legacy
+  // priority_hits), optionally scoped to one subject for the selected-subject
+  // workspace. Scoping is a display filter only — when no entry references
+  // the subject the full app-wide list is returned so nothing is hidden.
+  if (!narrative || typeof narrative !== 'object') return [];
   var hits = Array.isArray(narrative.priority_hits) ? narrative.priority_hits : [];
-  var entries = Array.isArray(narrative.entries) && narrative.entries.length ? narrative.entries : null;
-  var listItems = entries || hits;
-  var html = '<div data-agent3-triage-narrative="true" style="margin-bottom:12px;padding:12px 14px;border:1px solid rgba(124,58,237,0.35);border-left:4px solid #7c3aed;border-radius:8px;background:rgba(124,58,237,0.05);">';
-  html += '<div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#7c3aed;margin-bottom:6px;">Where to start — RegMind triage (advisory)</div>';
-  if (narrative.headline) {
-    html += '<div style="font-size:13px;font-weight:700;color:var(--text1);margin-bottom:8px;">' + escapeHtml(String(narrative.headline)) + '</div>';
-  }
-  if (listItems.length) {
-    html += '<ol style="margin:0 0 8px;padding-left:20px;">';
-    listItems.forEach(function(hit) {
-      hit = hit || {};
-      var band = String(hit.band || '').toLowerCase();
-      // Band word for strong/moderate; the bare number otherwise (never a
-      // percentage). Colors mirror screeningTriageScoreBand (Phase B).
-      var chipLabel = band === 'strong' ? 'Strong' : (band === 'moderate' ? 'Moderate' : String(hit.score != null ? hit.score : ''));
-      var chipColor = band === 'strong' ? '#b91c1c' : (band === 'moderate' ? '#92400e' : 'var(--text2)');
-      var reasons = Array.isArray(hit.reasons) ? hit.reasons.filter(Boolean) : [];
-      var isGroup = hit.kind === 'group' && Number(hit.count || 0) > 1;
-      html += '<li style="font-size:12.5px;color:var(--text2);line-height:1.5;margin-bottom:6px;">';
-      html += '<span style="font-weight:700;color:var(--text1);">' + escapeHtml(hit.subject_name || 'Unknown subject') + '</span>';
-      if (isGroup) {
-        html += ' <span style="color:var(--text3);">—</span> <span style="font-weight:600;">' + escapeHtml(String(hit.count)) + ' near-identical matches on ‘' + escapeHtml(hit.matched_name || 'Stored hit') + '’</span> ';
-      } else {
-        html += ' <span style="color:var(--text3);">— matched</span> <span style="font-weight:600;">' + escapeHtml(hit.matched_name || 'Stored hit') + '</span> ';
-      }
-      html += '<span style="display:inline-block;font-size:10px;font-weight:800;letter-spacing:0.04em;padding:1px 8px;border-radius:12px;border:1px solid ' + chipColor + ';color:' + chipColor + ';white-space:nowrap;" title="RegMind triage score — a ranking that orders matches for review. Not a provider score.">' + (isGroup ? 'all ' : '') + escapeHtml(chipLabel) + ' · RegMind triage</span>';
-      if (reasons.length) {
-        html += '<div style="font-size:11.5px;color:var(--text3);margin-top:2px;">' + escapeHtml(reasons.join('; ')) + (isGroup ? ' — no single hit stands out.' : '') + '</div>';
-      } else if (isGroup) {
-        html += '<div style="font-size:11.5px;color:var(--text3);margin-top:2px;">No single hit stands out.</div>';
-      }
-      html += '</li>';
-    });
-    html += '</ol>';
-  }
-  if (Number(narrative.weak_tail_count || 0) > 0) {
-    html += '<div style="font-size:11.5px;color:var(--text3);">' + escapeHtml(String(narrative.weak_tail_count)) + ' hit(s) rank below the weak threshold (' + escapeHtml(String(narrative.weak_threshold != null ? narrative.weak_threshold : '—')) + ') and are grouped in the weak tail.</div>';
-  }
-  if (Number(narrative.unscored_count || 0) > 0) {
-    html += '<div style="font-size:11.5px;color:var(--text3);margin-top:2px;">' + escapeHtml(String(narrative.unscored_count)) + ' hit(s) were screened before triage scoring existed and are unscored — review them individually.</div>';
-  }
-  html += '</div>';
-  return html;
+  var entries = Array.isArray(narrative.entries) && narrative.entries.length ? narrative.entries : hits;
+  if (!subjectName) return entries;
+  var scoped = entries.filter(function(entry) {
+    return entry && screeningSubjectNamesMatch(entry.subject_name, subjectName);
+  });
+  return scoped.length ? scoped : entries;
 }
 
-function renderAgent3ScreeningInterpretationPanel(app) {
+function agent3TriageNarrativeHtml(narrative, subjectName) {
+  // Approved per-hit mock: ONE flowing advisory paragraph ("Start with the
+  // sanctions + PEP match X (triage 92, STRONG) — …; review it first. The
+  // remaining 99 are near-identical adverse-media hits …") composed ONLY from
+  // the server-computed narrative dict — the browser never recomputes counts,
+  // scores, bands or ordering. The rts score renders as "triage N": a
+  // review-ordering rank, never a percentage, provider confidence, or
+  // probability, and it never changes any status or disposition. When
+  // subjectName is set the paragraph is scoped to that subject's entries;
+  // unscoped rendering prefixes each sentence with its subject name instead.
+  if (!narrative || typeof narrative !== 'object') return '';
+  var entries = agent3NarrativeEntriesForSubject(narrative, subjectName);
+  var categoryWords = function(categories) {
+    var words = [];
+    (Array.isArray(categories) ? categories : []).forEach(function(category) {
+      var key = String(category || '').trim().toLowerCase().replace(/_/g, ' ');
+      var word = key === 'sanctions' ? 'sanctions'
+        : (key === 'pep' ? 'PEP'
+        : (key === 'adverse media' ? 'adverse-media'
+        : (key === 'watchlist' ? 'watchlist' : '')));
+      if (word && words.indexOf(word) === -1) words.push(word);
+    });
+    return words.join(' + ');
+  };
+  var sentences = [];
+  entries.forEach(function(hit, index) {
+    hit = hit || {};
+    var isGroup = hit.kind === 'group' && Number(hit.count || 0) > 1;
+    var band = String(hit.band || '').toLowerCase();
+    var bandWord = band === 'strong' ? 'STRONG' : (band === 'moderate' ? 'Moderate' : '');
+    var score = hit.score != null ? String(hit.score) : '—';
+    var word = categoryWords(hit.categories);
+    var reasons = (Array.isArray(hit.reasons) ? hit.reasons : []).filter(Boolean);
+    var sentence = '';
+    if (!subjectName && hit.subject_name) {
+      sentence += '<b>' + escapeHtml(hit.subject_name || 'Unknown subject') + '</b>: ';
+    }
+    if (isGroup) {
+      sentence += (index === 0 ? 'All ' : 'The remaining ') + escapeHtml(String(hit.count));
+      sentence += ' are near-identical ' + (word ? escapeHtml(word) + ' ' : '') + 'hits (all triage ' + escapeHtml(score) + ') on ‘' + escapeHtml(hit.matched_name || 'Stored hit') + '’ — no single one stands out.';
+    } else {
+      sentence += (index === 0 ? 'Start with the ' : 'Then the ') + (word ? escapeHtml(word) + ' ' : '') + 'match <b>' + escapeHtml(hit.matched_name || 'Stored hit') + '</b>';
+      sentence += ' (triage ' + escapeHtml(score) + (bandWord ? ', ' + escapeHtml(bandWord) : '') + ')';
+      if (reasons.length) sentence += ' — ' + escapeHtml(reasons.join('; '));
+      sentence += index === 0 ? '; review it first.' : '.';
+    }
+    sentences.push(sentence);
+  });
+  if (!subjectName) {
+    // App-wide footnotes (server counts, verbatim semantics). The scoped view
+    // stays a clean single paragraph per the mock — the ranked hit sections
+    // below carry the subject's own weak tail.
+    if (Number(narrative.weak_tail_count || 0) > 0) {
+      sentences.push(escapeHtml(String(narrative.weak_tail_count)) + ' hit(s) rank below the weak threshold (' + escapeHtml(String(narrative.weak_threshold != null ? narrative.weak_threshold : '—')) + ') and are grouped in the weak tail.');
+    }
+    if (Number(narrative.unscored_count || 0) > 0) {
+      sentences.push(escapeHtml(String(narrative.unscored_count)) + ' hit(s) were screened before triage scoring existed and are unscored — review them individually.');
+    }
+  }
+  if (!sentences.length && narrative.headline) sentences.push(escapeHtml(String(narrative.headline)));
+  if (!sentences.length) return '';
+  return '<div data-agent3-triage-narrative="true" style="font-size:13.5px;color:var(--text1);line-height:1.65;">' + sentences.join(' ') + '</div>';
+}
+
+function renderAgent3ScreeningInterpretationPanel(app, subjectName) {
+  // Approved per-hit mock (founder-signed): Agent 3 is ONE compact advisory
+  // callout — a purple header line ("AGENT 3 — SCREENING INTERPRETATION ·
+  // scoped to <subject>"), a single where-to-start paragraph, and an advisory
+  // caption. The former stacked layout (advisory banner, recommendation /
+  // severity badge row, summary + key-concerns grid, provider-count chips,
+  // hit-by-hit audit disclosure, collapse toggle) duplicated the status
+  // strip, the triage tiles and the ranked per-hit cards — the sole decision
+  // surface — and is retired. Stored interpretation data is unchanged;
+  // regeneration and the officer decision flow are untouched. Display only.
   var output = getAgent3ScreeningInterpretation(app);
-  var generatedAt = output && output.generated_at ? String(output.generated_at).replace('T', ' ').slice(0, 19) : '';
   var buttonLabel = AGENT3_SCREENING_INTERPRETATION_BUSY ? 'Generating...' : (output ? 'Refresh interpretation' : 'Generate interpretation');
   var disabled = AGENT3_SCREENING_INTERPRETATION_BUSY || !(app && (app.id || app.ref)) ? ' disabled' : '';
-  var collapsed = isAgent3ScreeningInterpretationCollapsed(app);
-  var toggleLabel = collapsed ? 'Expand Agent 3' : 'Collapse Agent 3';
-  var advisoryCopy = 'This is an advisory screening interpretation, not an approval decision.';
+  var generatedAt = output && output.generated_at ? String(output.generated_at).replace('T', ' ').slice(0, 19) : '';
+  var narrative = output && output.triage_narrative && typeof output.triage_narrative === 'object' ? output.triage_narrative : null;
+  var scoped = !!(narrative && subjectName && agent3NarrativeEntriesForSubject(narrative, '').some(function(entry) {
+    return entry && screeningSubjectNamesMatch(entry.subject_name, subjectName);
+  }));
+  var caption = 'Advisory — decisions are made by officers.' + (generatedAt ? ' · Generated: ' + generatedAt : '');
+
   var html = '';
   html += '<div class="card" id="agent3-screening-interpretation-panel" style="margin-bottom:16px;border-left:4px solid #7c3aed;background:rgba(124,58,237,0.035);">';
-  html += '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">';
-  html += '<div><div class="card-title">Agent 3 Screening Interpretation</div>';
-  html += '<div style="font-size:12px;color:var(--text3);margin-top:4px;">Generate an AI-assisted interpretation from stored screening results. This does not re-run screening or change the officer decision.</div>';
-  html += '<div style="font-size:11px;font-weight:800;letter-spacing:0.02em;color:#7c3aed;margin-top:4px;">Advisory — decisions are made by officers.</div></div>';
-  html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto;">';
-  html += '<button class="btn btn-secondary btn-sm" id="agent3-toggle-screening-interpretation-btn" onclick="toggleAgent3ScreeningInterpretation(event)">' + escapeHtml(toggleLabel) + '</button>';
-  html += '<button class="btn btn-primary btn-sm" id="agent3-generate-screening-interpretation-btn" onclick="generateAgent3ScreeningInterpretation(event)"' + disabled + '>' + escapeHtml(buttonLabel) + '</button>';
-  html += '</div>';
+  html += '<div style="padding:14px 18px;">';
+  html += '<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">';
+  html += '<span aria-hidden="true">🤖</span>';
+  html += '<span style="font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#7c3aed;">Agent 3 — Screening Interpretation</span>';
+  if (scoped) html += '<span style="font-size:12px;color:var(--text3);">· scoped to ' + escapeHtml(subjectName) + '</span>';
+  html += '<span style="margin-left:auto;"><button class="btn btn-secondary btn-sm" id="agent3-generate-screening-interpretation-btn" onclick="generateAgent3ScreeningInterpretation(event)"' + disabled + '>' + escapeHtml(buttonLabel) + '</button></span>';
   html += '</div>';
 
   if (!output) {
-    if (collapsed) {
-      html += '<div style="padding:0 18px 18px;font-size:12px;color:var(--text2);line-height:1.6;">No Agent 3 interpretation generated.</div>';
-      html += '</div>';
-      return html;
-    }
-    html += '<div style="padding:0 18px 18px;font-size:12px;color:var(--text2);line-height:1.6;">No Agent 3 interpretation has been generated for this screening review yet.</div>';
-    html += '</div>';
+    html += '<div style="font-size:12.5px;color:var(--text3);margin-top:8px;">No Agent 3 interpretation has been generated for this screening review yet.</div>';
+    html += '</div></div>';
     return html;
   }
 
   var hitRows = Array.isArray(output.hit_rows) ? output.hit_rows : [];
-  var hitCounts = output.hit_row_status_counts && typeof output.hit_row_status_counts === 'object' ? output.hit_row_status_counts : {};
   var totalHits = output.hit_counts && output.hit_counts.total != null ? Number(output.hit_counts.total) : hitRows.length;
   if (isNaN(totalHits)) totalHits = hitRows.length;
   var hasProviderHits = totalHits > 0 || hitRows.length > 0;
-  // Phase F (F1): ONE compact status line — recommendation · severity ·
-  // generated-at. The old stacked chip rows collapse into it; provider-hit
-  // count chips move inside the single collapsed audit disclosure below.
-  var statusLineHtml = '<div data-agent3-status-line="true" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px;">' +
-    agent3RecommendationBadge(output.recommended_disposition) +
-    agent3SeverityBadge(output.severity) +
-    (generatedAt ? '<span class="explain-data-source">Generated: ' + escapeHtml(generatedAt) + '</span>' : '') +
-  '</div>';
-  // Provider-hit counts are only meaningful when there are hits; an all-zeros
-  // chip row is noise on a clean screen, so suppress it there.
-  var providerSummaryHtml = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">' +
-    agent3ProviderHitsHtml(output) +
-    agent3HitStatusCountsHtml(output.hit_row_status_counts) +
-  '</div>';
-
-  html += '<div style="padding:0 18px 18px;">';
-
-  if (collapsed) {
-    html += statusLineHtml;
-    html += '</div>';
-    html += '</div>';
-    return html;
-  }
-
-  var expSummary = 'cursor:pointer;padding:10px 14px;font-size:11.5px;font-weight:700;letter-spacing:.03em;color:var(--text2);background:var(--surface1);display:flex;align-items:center;justify-content:space-between;gap:8px;';
-  var expCnt = 'font-weight:600;color:var(--text3);font-size:11px;';
-  var needReview = hitCounts.needs_review || 0;
-  var hitCountLabel = hitRows.length + ' hit' + (hitRows.length === 1 ? '' : 's') + (needReview ? ' · ' + needReview + ' need review' : '');
 
   if (!hasProviderHits) {
-    html += statusLineHtml;
-    var displayedRecommendation = String(agent3DisplayRecommendation(output.recommended_disposition) || '').trim().toLowerCase();
-    var softPositive = agent3ScreeningResultTerminal(output) && displayedRecommendation === 'no reportable provider hit recorded';
-    if (softPositive) {
-      // Genuinely terminal-clean: the recommendation/severity/generated line is
-      // already shown above. Collapse to a single caveat line — no counts row, no
-      // green box, no "show full detail", no audit trace (nothing to trace).
-      html += '<div style="font-size:11.5px;color:var(--text3);font-style:italic;margin-top:2px;">Advisory only · officer decision still required · absence of hits is not proof of no compliance risk.</div>';
-      html += '</div>';
-      html += '</div>';
-      return html;
+    if (agent3ScreeningResultTerminal(output)) {
+      // Terminal clean: one honest line — never a green all-clear box.
+      html += '<div style="font-size:13.5px;color:var(--text1);line-height:1.6;margin-top:8px;">' + escapeHtml(agent3DisplayRecommendation(output.recommended_disposition) || 'No reportable provider hit recorded') + '.</div>';
+      html += '<div style="font-size:11.5px;color:var(--text3);font-style:italic;margin-top:6px;">Advisory only · officer decision still required · absence of hits is not proof of no compliance risk.</div>';
+    } else {
+      html += '<div style="margin-top:8px;padding:10px 12px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;color:#92400e;font-size:12.5px;line-height:1.55;"><b>Screening is not a terminal clean result.</b> Zero reportable hit rows, but the stored screening is incomplete or a review signal remains present' + (output.pending_degraded_reason ? ' (' + escapeHtml(String(output.pending_degraded_reason)) + ')' : '') + '. Officer decision required.</div>';
+      html += '<div style="font-size:11.5px;color:var(--text3);margin-top:6px;">' + escapeHtml(caption) + '</div>';
     }
-    // 0 hits but NOT terminal-clean (incomplete/degraded): keep the fuller amber
-    // state + detail so the officer can see why it is not a clean result.
-    html += '<div style="padding:12px 14px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;color:#92400e;">';
-    html += '<div style="font-size:13px;font-weight:800;">Screening is not a terminal clean result.</div>';
-    html += '<div style="font-size:12px;line-height:1.5;margin-top:4px;">Zero reportable hit rows, but the stored screening is incomplete or a review signal remains present' + (output.pending_degraded_reason ? ' (' + escapeHtml(String(output.pending_degraded_reason)) + ')' : '') + '.</div>';
-    html += '<div style="font-size:12px;line-height:1.5;margin-top:4px;">Officer decision required. ' + escapeHtml(advisoryCopy) + '</div>';
-    html += '</div>';
-    html += '<details style="margin-top:10px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
-    html += '<summary style="' + expSummary + '"><span>Show full detail</span><span style="' + expCnt + '">summary · context · evidence</span></summary>';
-    html += '<div style="padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">';
-    html += agent3ScreeningFieldHtml('Plain-English summary', output.summary);
-    html += agent3ScreeningFieldHtml('Key concerns', output.key_concerns || []);
-    html += agent3ScreeningFieldHtml('False-positive assessment', output.false_positive_assessment);
-    html += agent3ScreeningFieldHtml('Adverse media relevance', output.adverse_media_relevance);
-    html += '</div>';
-    html += '<div style="padding:0 14px 12px;">' + agent3EvidenceHtml(output.evidence_used) + '</div>';
-    html += '</details>';
-    html += '</div>';
-    html += '</div>';
+    html += '</div></div>';
     return html;
   }
 
-  // Phase F (F1) consolidated hit layout: advisory header line → grouped
-  // "Where to start" narrative → ONE compact status line → plain-English
-  // summary with the false-positive assessment merged after it → key
-  // concerns → ONE collapsed audit disclosure holding the hit-by-hit table,
-  // evidence used and audit trace. Nothing is deleted from the DATA — the
-  // former stacked sub-section cards are folded, not dropped.
-  html += '<div style="margin-bottom:12px;padding:9px 12px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;font-size:12px;font-weight:600;color:#92400e;">Officer decision required. Agent 3 provides an advisory interpretation only. ' + escapeHtml(advisoryCopy) + '</div>';
-  // SRP-4 Phase C: advisory triage narrative — render-if-present only (older
-  // stored interpretations have no triage_narrative and keep today's layout).
-  if (output.triage_narrative && typeof output.triage_narrative === 'object') {
-    html += agent3TriageNarrativeHtml(output.triage_narrative);
-  }
-  html += statusLineHtml;
-  // Primary view: summary (+ merged false-positive assessment and adverse
-  // media relevance context) + key concerns visible by default.
-  html += '<div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;">';
-  html += '<div style="padding:12px 14px;border-radius:8px;background:#eef2ff;">';
-  html += '<div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#4338ca;margin-bottom:5px;">Plain-English summary</div>';
-  html += '<div style="font-size:13px;color:var(--text2);line-height:1.55;">' + escapeHtml(output.summary || 'Not available') + '</div>';
-  html += '</div>';
-  html += agent3ScreeningFieldHtml('Key concerns', output.key_concerns || []);
-  html += '</div>';
-
-  // ONE collapsed audit disclosure: hit-by-hit table (with its provider-hit
-  // count chips), evidence used, audit trace. Expanding reveals the dense
-  // audit detail; nothing here duplicates the summary view above.
-  var evidenceCount = Array.isArray(output.evidence_used) ? output.evidence_used.length : 0;
-  html += '<details style="margin-top:12px;border:1px solid var(--border1);border-radius:8px;overflow:hidden;background:#fff;">';
-  html += '<summary style="' + expSummary + '"><span>Hit-by-hit review, evidence &amp; audit trace</span><span style="' + expCnt + '">' + escapeHtml(hitCountLabel + ' · ' + evidenceCount + ' source' + (evidenceCount === 1 ? '' : 's')) + '</span></summary>';
-  html += '<div style="padding:12px 14px;">';
-  // Secondary advisory context — folded out of the always-visible view into
-  // the collapsed detail so the default panel leads with the narrative,
-  // summary and key concerns (founder review: the stacked "False-positive
-  // assessment" / "Adverse media relevance" labelled blocks read as clutter).
-  if (output.false_positive_assessment) {
-    html += '<div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text3);margin:0 0 6px;">False-positive assessment</div>';
-    html += '<div style="font-size:12.5px;color:var(--text2);line-height:1.55;margin-bottom:12px;">' + escapeHtml(output.false_positive_assessment) + '</div>';
-  }
-  if (output.adverse_media_relevance) {
-    html += '<div style="font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text3);margin:0 0 6px;">Adverse media relevance</div>';
-    html += '<div style="font-size:12.5px;color:var(--text2);line-height:1.55;margin-bottom:12px;">' + escapeHtml(output.adverse_media_relevance) + '</div>';
-  }
-  html += providerSummaryHtml;
-  if (!Array.isArray(output.hit_rows) && totalHits > 0) {
-    // Interpretation predates hit-level output — do not present it as "0 hits".
-    html += '<div style="font-size:12px;color:#92400e;background:#fffbeb;padding:10px 12px;border-radius:8px;">Hit details are not available for this interpretation. Click <b>Refresh interpretation</b> to regenerate them from the stored screening results.</div>';
-  } else {
-    html += agent3HitRowsTableHtml(hitRows);
-  }
-  html += '<div style="font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text3);margin:14px 0 6px;">Evidence used</div>';
-  html += agent3EvidenceHtml(output.evidence_used);
-  html += '<div style="font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text3);margin:14px 0 6px;">Audit trace</div>';
-  html += agent3AuditTraceHtml(output);
-  html += '</div>';
-  html += '</details>';
-  html += '</div>';
-  html += '</div>';
+  var paragraph = narrative ? agent3TriageNarrativeHtml(narrative, scoped ? subjectName : '') : '';
+  if (!paragraph) paragraph = '<div style="font-size:13.5px;color:var(--text1);line-height:1.65;">' + escapeHtml(output.summary || 'Not available') + '</div>';
+  html += '<div style="margin-top:8px;">' + paragraph + '</div>';
+  html += '<div style="font-size:11.5px;color:var(--text3);margin-top:8px;">' + escapeHtml(caption) + '</div>';
+  html += '</div></div>';
   return html;
 }
 
@@ -18124,8 +17766,17 @@ function renderScreeningReviewPanel(app, focus) {
   var queueRows = (SCREENING_QUEUE && SCREENING_QUEUE.rows ? SCREENING_QUEUE.rows : []).filter(function(row) {
     return row.application_ref === app.ref;
   });
-  // E-1: no evidence-mode data for this application yet → hydrate once.
-  if (app.ref && !queueRows.some(function(row) { return row && row.screening_evidence; })) {
+  // E-1: no EVIDENCE-MODE data for this application yet → hydrate once.
+  // Summary queue rows (include_evidence=false, i.e. arriving via the
+  // Screening Queue list) carry a truthy screening_evidence dict with no
+  // items array and no server triage block — treating those as "already
+  // hydrated" left every subject of the application on the legacy
+  // pre-triage UI. Evidence mode is detected by the hydrated items array or
+  // the server-computed triage block, never by mere truthiness.
+  var hasEvidenceModeRows = queueRows.some(function(row) {
+    return row && ((row.screening_evidence && Array.isArray(row.screening_evidence.items)) || (row.triage && row.triage.buckets));
+  });
+  if (app.ref && !hasEvidenceModeRows) {
     ensureApplicationScreeningEvidenceRows(app.ref);
   }
   // Per-hit redesign: hydrate stored per-hit decisions once so they survive a

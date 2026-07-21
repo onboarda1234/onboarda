@@ -299,9 +299,40 @@ def test_application_tab_hydrates_evidence_without_queue_visit():
     assert "SCREENING_REVIEW_APP_EVIDENCE_FETCHES[appRef] = 'error'" in fetch_fn
     assert "renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus)" in fetch_fn
     panel_start = html.index("function renderScreeningReviewPanel")
-    panel_head = html[panel_start:panel_start + 1600]
+    panel_head = html[panel_start:panel_start + 2600]
     assert "ensureApplicationScreeningEvidenceRows(app.ref)" in panel_head
-    assert "row.screening_evidence" in panel_head
+    # The hydration trigger must detect EVIDENCE-MODE rows (hydrated items
+    # array or server triage block) — a truthy screening_evidence check
+    # alone matched the stripped summary dict that include_evidence=false
+    # rows carry, so arriving via the Screening Queue list suppressed
+    # hydration and left every subject on the legacy pre-triage UI.
+    assert "hasEvidenceModeRows" in panel_head
+    assert "Array.isArray(row.screening_evidence.items)" in panel_head
+    assert "row.triage && row.triage.buckets" in panel_head
+    assert (
+        "!queueRows.some(function(row) { return row && row.screening_evidence; })"
+        not in panel_head
+    )
+
+
+def test_summary_queue_rows_show_loading_never_legacy_evidence():
+    # A summary-mode queue row (include_evidence=false) is hydratable by
+    # definition — the server marks it with evidence_detail_available and
+    # strips items + triage. The readiness panel must show the loading state
+    # and trigger the evidence fetch for that shape, never fall through to
+    # the legacy "Provider match records (stored report)" renderer.
+    html = _html()
+    panel = _function_region(
+        html,
+        "screeningQueueEvidenceReadinessPanel",
+        "providerIndicatorDetails",
+    )
+    loading_branch = panel.index(
+        "(row.triage && row.triage.buckets) || row.evidence_detail_available"
+    )
+    legacy_branch = panel.index("providerResultHighlights(legacyResults")
+    assert loading_branch < legacy_branch
+    assert "Loading ranked screening hits" in panel
 
 
 # ---------------------------------------------------------------------------
@@ -324,47 +355,71 @@ def test_phase_f_first_strip_tile_never_excludes_what_it_names():
     assert "Sanctions & warnings" not in strip
 
 
-def test_phase_f_agent3_panel_consolidated_layout():
-    """F1: advisory line → grouped narrative → ONE compact status line →
-    summary (false-positive merged after) → key concerns → ONE collapsed
-    audit disclosure (hit-by-hit table + evidence used + audit trace). The
-    old stacked sub-section cards are retired; their content is folded, not
-    deleted."""
+def test_agent3_panel_is_the_compact_approved_callout():
+    """Approved per-hit mock: Agent 3 is ONE compact advisory callout —
+    purple header ("Agent 3 — Screening Interpretation", scoped to the
+    selected subject when the narrative references it), a single
+    where-to-start paragraph, and an advisory caption. The former stacked
+    layout (advisory banner, recommendation/severity badge row, summary +
+    key-concerns grid, provider-count chips, hit-by-hit audit disclosure,
+    collapse toggle) duplicated the status strip, the triage tiles and the
+    ranked per-hit cards and is retired."""
     html = _html()
     panel = _function_region(
         html, "renderAgent3ScreeningInterpretationPanel", "generateAgent3ScreeningInterpretation"
     )
-    assert panel.count("data-agent3-status-line") == 1
-    assert "Hit-by-hit review, evidence &amp; audit trace" in panel
-    # Retired stacked cards (their labels survive as folded section content).
-    assert "False-positive assessment &amp; context" not in panel
-    assert "sanctions · PEP · adverse media" not in panel
-    # Folded content still renders once each in the hit path.
-    assert "agent3EvidenceHtml(output.evidence_used)" in panel
-    assert "agent3AuditTraceHtml(output)" in panel
-    assert "False-positive assessment" in panel
-    assert "Adverse media relevance" in panel
-    # Order in the hit path: advisory line, narrative, status line, summary.
-    hit_path = panel[panel.index("Officer decision required. Agent 3 provides an advisory interpretation only."):]
-    assert hit_path.index("agent3TriageNarrativeHtml(output.triage_narrative)") \
-        < hit_path.index("statusLineHtml") \
-        < hit_path.index("Plain-English summary")
+    assert "Agent 3 — Screening Interpretation" in panel
+    assert "scoped to" in panel
+    assert "agent3TriageNarrativeHtml(narrative" in panel
+    assert panel.count("Advisory — decisions are made by officers.") == 1
+    for retired in (
+        "Hit-by-hit review",
+        "agent3HitRowsTableHtml",
+        "agent3RecommendationBadge",
+        "agent3SeverityBadge",
+        "agent3ProviderHitsHtml",
+        "agent3HitStatusCountsHtml",
+        "agent3ScreeningFieldHtml",
+        "agent3EvidenceHtml",
+        "agent3AuditTraceHtml",
+        "Plain-English summary",
+        "Key concerns",
+        "Show full detail",
+        "Officer decision required. Agent 3 provides an advisory interpretation only.",
+        "Collapse Agent 3",
+        "data-agent3-status-line",
+    ):
+        assert retired not in panel, f"retired Agent 3 surface leaked back: {retired!r}"
+    # Honesty floors survive the slim-down: terminal-clean is one caveat line,
+    # incomplete zero-hit keeps the amber not-clean notice.
+    assert "absence of hits is not proof of no compliance risk" in panel
+    assert "Screening is not a terminal clean result." in panel
 
 
 def test_phase_f_narrative_helper_renders_grouped_entries():
-    """F1: the narrative helper renders server-grouped entries when present
-    (homogeneous masses collapse to one line), falling back to priority_hits
-    for older stored narratives. Counts are never recomputed client-side."""
+    """The narrative helper renders the server-grouped entries when present
+    (homogeneous masses collapse to one sentence), falling back to
+    priority_hits for older stored narratives. Counts are never recomputed
+    client-side, and the scoped view filters by subject without hiding
+    entries when nothing matches."""
     html = _html()
+    scope = _function_region(
+        html, "agent3NarrativeEntriesForSubject", "agent3TriageNarrativeHtml"
+    )
+    assert "narrative.entries" in scope
+    assert "narrative.priority_hits" in scope
+    assert "screeningSubjectNamesMatch(entry.subject_name, subjectName)" in scope
+    assert "scoped.length ? scoped : entries" in scope
     helper = _function_region(
         html, "agent3TriageNarrativeHtml", "renderAgent3ScreeningInterpretationPanel"
     )
-    assert "narrative.entries" in helper
-    assert "narrative.priority_hits" in helper
+    assert "agent3NarrativeEntriesForSubject" in helper
     assert "hit.kind === 'group'" in helper
-    assert "near-identical matches on" in helper
-    assert "No single hit stands out." in helper
+    assert "near-identical " in helper
+    assert "no single one stands out." in helper
+    assert "review it first." in helper
     assert "escapeHtml(String(hit.count))" in helper
+    assert "data-agent3-triage-narrative" in helper
 
 
 def test_phase_f_provider_id_walls_collapsed():

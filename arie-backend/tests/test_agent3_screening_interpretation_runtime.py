@@ -656,88 +656,67 @@ def _extract_function(source, name):
 def test_backoffice_agent3_screening_panel_static_contract():
     html = BACKOFFICE_HTML.read_text(encoding="utf-8")
 
-    assert "Agent 3 Screening Interpretation" in html
-    assert "Generate an AI-assisted interpretation from stored screening results." in html
-    assert "This does not re-run screening or change the officer decision." in html
+    # Approved per-hit mock: ONE compact advisory callout — purple header
+    # ("Agent 3 — Screening Interpretation", scoped to the selected subject
+    # when the narrative references it), a single where-to-start paragraph,
+    # and an advisory caption with the generate/refresh control.
+    assert "Agent 3 — Screening Interpretation" in html
+    assert "scoped to" in html
     assert "Generate interpretation" in html
-    assert "Officer decision required. Agent 3 provides an advisory interpretation only." in html
-    assert "Collapse Agent 3" in html
-    assert "Expand Agent 3" in html
-    assert "AGENT3_SCREENING_INTERPRETATION_COLLAPSED" in html
-    assert "agent3ScreeningInterpretationAppKey" in html
-    assert "isAgent3ScreeningInterpretationCollapsed" in html
-    assert "Plain-English summary" in html
-    assert "False-positive assessment" in html
-    assert "Adverse media relevance" in html
-    assert "Evidence used" in html
-    assert "Provider reference" in html
-    assert "Provider result rows:" in html
-    assert "provider screening adverse-media row(s)" in html
-    assert "other/uncategorized provider result row(s)" in html
-    assert "Audit trace" in html
+    assert "Refresh interpretation" in html
+    assert "Advisory — decisions are made by officers." in html
     assert "No reportable provider hit recorded" in html
-    assert "This is an advisory screening interpretation, not an approval decision." in html
-    assert "Draft audit note" not in _extract_function(html, "renderAgent3ScreeningInterpretationPanel")
 
     panel_body = _extract_function(html, "renderAgent3ScreeningInterpretationPanel")
     render_body = _extract_function(html, "renderScreeningReviewPanel")
     fetch_detail_body = _extract_function(html, "fetchApplicationDetail")
     generate_body = _extract_function(html, "generateAgent3ScreeningInterpretation")
-    toggle_body = _extract_function(html, "toggleAgent3ScreeningInterpretation")
-    collapsed_body = _extract_function(html, "isAgent3ScreeningInterpretationCollapsed")
 
     assert "/agent3/screening-interpretation" not in render_body
     assert "/agent3/screening-interpretation" not in fetch_detail_body
-    assert "/agent3/screening-interpretation" not in toggle_body
-    assert "boApiCall(" not in toggle_body
-    assert "boApiCall(" not in collapsed_body
     assert "boApiCall('POST', '/applications/' + appKey + '/agent3/screening-interpretation'" in generate_body
     assert "boApiCall('GET', '/applications/' + appKey + '/agent3/screening-interpretation'" not in generate_body
-    assert "Agent recommendation:" in html
-    assert "Decision:" not in render_body
-    assert panel_body.count("agent3RecommendationBadge(output.recommended_disposition)") == 1
-    assert "agent3ScreeningFieldHtml('Recommended disposition'" not in panel_body
-    assert panel_body.count("This is an advisory screening interpretation, not an approval decision.") == 1
-    assert panel_body.count("agent3ProviderHitsHtml(output)") == 1
-    assert panel_body.count("agent3HitStatusCountsHtml(output.hit_row_status_counts)") == 1
-    assert "Show full detail" in panel_body
-    # Clean terminal 0-hit collapses to a single caveat line; an incomplete 0-hit
-    # keeps the amber "not a terminal clean result" notice (never soft-green).
+    assert "boApiCall(" not in panel_body
+
+    # The retired bulky layout must not come back anywhere in the file: the
+    # collapse toggle, badge/chip rows, summary + key-concerns grid, second
+    # hit table and audit disclosure all duplicated the status strip, the
+    # triage tiles or the ranked per-hit cards (the sole decision surface).
+    for retired in (
+        "Collapse Agent 3",
+        "Expand Agent 3",
+        "AGENT3_SCREENING_INTERPRETATION_COLLAPSED",
+        "isAgent3ScreeningInterpretationCollapsed",
+        "toggleAgent3ScreeningInterpretation",
+        "agent3RecommendationBadge",
+        "agent3SeverityBadge",
+        "agent3ProviderHitsHtml",
+        "agent3HitStatusCountsHtml",
+        "agent3HitRowsTableHtml",
+        "agent3TriageCellHtml",
+        "agent3AuditTraceHtml",
+        "agent3TraceRowsHtml",
+        "agent3EvidenceHtml",
+        "agent3ScreeningFieldHtml",
+        "AGENT3_HIT_STATUS_META",
+        "Hit-by-hit review",
+        "data-agent3-hit-audit-table",
+        "Show full detail",
+        "Agent recommendation:",
+        "Provider result rows:",
+        "This is an advisory screening interpretation, not an approval decision.",
+        "Officer decision required. Agent 3 provides an advisory interpretation only.",
+        "Generate an AI-assisted interpretation from stored screening results.",
+    ):
+        assert retired not in html, f"retired Agent 3 surface leaked back: {retired!r}"
+
+    # Advisory caption renders exactly once; honesty floors survive the
+    # slim-down (terminal-clean caveat line, amber incomplete notice).
+    assert panel_body.count("Advisory — decisions are made by officers.") == 1
     assert "absence of hits is not proof of no compliance risk" in panel_body
     assert "Screening is not a terminal clean result." in panel_body
+    assert "Draft audit note" not in panel_body
 
-    # PR-AGENT3-HIT-LEVEL-UI-1: hit-level rendering binds to the backend output
-    # (hit_rows / hit_row_status_counts) and stays advisory + display-only.
-    assert "agent3HitRowsTableHtml" in html
-    assert "agent3HitStatusCountsHtml" in html
-    assert "output.hit_rows" in html
-    assert "output.hit_row_status_counts" in html
-    assert "Hit-by-hit review" in html
-    assert "surfaced_by_pass" in html
-    assert "agent3AuditTraceHtml" in html
-    for _status_label in ("Needs review", "Likely false positive", "High-confidence match", "Unavailable"):
-        assert _status_label in html
-    table_body = _extract_function(html, "agent3HitRowsTableHtml")
-    assert "boApiCall(" not in table_body
-    assert "/agent3/screening-interpretation" not in table_body
-    assert "agent3HitActionButtonsHtml" not in html
-    assert "False Positive" not in table_body
-    # SRP-3e Phase E: dense audit table — subject / matched name / category /
-    # RegMind triage / status & reason; the recital is a collapsed disclosure
-    # and per-row article evidence lives on the ranked hit cards instead.
-    assert "data-agent3-hit-audit-table" in table_body
-    assert "RegMind triage" in table_body
-    assert "agent3TriageCellHtml" in table_body
-    triage_cell = _extract_function(html, "agent3TriageCellHtml")
-    assert "unscored" in triage_cell
-    assert "screeningTriageScoreBand" in triage_cell
-    assert "Not a provider score" in triage_cell
-    panel_src = _extract_function(html, "renderAgent3ScreeningInterpretationPanel")
-    hit_by_hit_details = panel_src[panel_src.index("Hit-by-hit review") - 400:panel_src.index("Hit-by-hit review")]
-    assert "<details style=" in hit_by_hit_details
-    assert "' open' " not in hit_by_hit_details
-    assert "agent3HitEvidenceDetailsHtml" not in html
-    assert "agent3ProviderEvidenceCellHtml" not in html
     comparison_body = _extract_function(html, "buildScreeningComparisonPanel")
     assert "Declared vs Provider Match" in comparison_body
     # Phase F (F6): no provider profile attributes → the comparison panel
@@ -746,142 +725,7 @@ def test_backoffice_agent3_screening_panel_static_contract():
     assert "Provider profile attributes unavailable" not in comparison_body
 
 
-def test_backoffice_agent3_provider_count_chip_reconciles_all_buckets():
-    if not shutil.which("node"):
-        pytest.skip("node is not available for provider count chip check")
-    html = BACKOFFICE_HTML.read_text(encoding="utf-8")
-    script = "\n".join([
-        textwrap.dedent(
-            """
-            function escapeHtml(value) {
-              return String(value == null ? '' : value)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
-            }
-            const failures = [];
-            function assertIncludes(name, haystack, needle) {
-              if (!haystack.includes(needle)) failures.push(name + ' missing ' + needle);
-            }
-            function assertEquals(name, actual, expected) {
-              if (actual !== expected) failures.push(name + ' expected ' + expected + ' got ' + actual);
-            }
-            function count(haystack, needle) {
-              return (haystack.match(new RegExp(needle.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'), 'g')) || []).length;
-            }
-            """
-        ),
-        _extract_function(html, "agent3IsDeclaredPepYes"),
-        _extract_function(html, "agent3ProviderHitsHtml"),
-        textwrap.dedent(
-            """
-            const rendered = agent3ProviderHitsHtml({
-              hit_counts: {
-                total: 88,
-                sanctions: 0,
-                pep: 12,
-                adverse_media: 0,
-                other: 76,
-                declared_pep: 0
-              }
-            });
-            assertIncludes('total rows', rendered, 'Provider result rows: 88 total');
-            assertIncludes('sanctions count', rendered, '0 sanctions');
-            assertIncludes('pep count', rendered, '12 PEP');
-            assertIncludes('provider adverse media label', rendered, '0 provider screening adverse-media row(s)');
-            assertIncludes('other count', rendered, '76 other/uncategorized provider result row(s)');
-            assertEquals('provider adverse media appears once', count(rendered, 'provider screening adverse-media row(s)'), 1);
-
-            const legacyRendered = agent3ProviderHitsHtml({
-              hit_counts: {
-                total: 10,
-                sanctions: 1,
-                pep: 2,
-                adverse_media: 3,
-                declared_pep: 0
-              }
-            });
-            assertIncludes('legacy other derived', legacyRendered, '4 other/uncategorized provider result row(s)');
-
-            if (failures.length) {
-              console.error(failures.join('\\n'));
-              process.exit(1);
-            }
-            """
-        ),
-    ])
-    subprocess.run(["node", "-e", script], check=True, text=True, capture_output=True)
-
-
-def test_backoffice_agent3_provider_evidence_helpers_render_expected_copy():
-    if not shutil.which("node"):
-        pytest.skip("node is not available for helper rendering check")
-    html = BACKOFFICE_HTML.read_text(encoding="utf-8")
-    script = "\n".join([
-        textwrap.dedent(
-            """
-            function escapeHtml(value) {
-              return String(value == null ? '' : value)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
-            }
-            const failures = [];
-            function assertIncludes(name, haystack, needle) {
-              if (!haystack.includes(needle)) failures.push(name + ' missing ' + needle);
-            }
-            function assertExcludes(name, haystack, needle) {
-              if (haystack.includes(needle)) failures.push(name + ' unexpectedly contained ' + needle);
-            }
-            """
-        ),
-        _extract_function(html, "screeningTriageScoreBand"),
-        _extract_function(html, "agent3TriageCellHtml"),
-        _extract_function(html, "agent3TraceRowsHtml"),
-        _extract_function(html, "agent3LooksLikeUuid"),
-        _extract_function(html, "agent3HitStatusBadge"),
-        _extract_function(html, "agent3HitStatusMeta"),
-        "var AGENT3_HIT_STATUS_META = {};",
-        _extract_function(html, "agent3HitRowsTableHtml"),
-        textwrap.dedent(
-            """
-            const strongCell = agent3TriageCellHtml({triage_score: 92});
-            assertIncludes('strong score', strongCell, '>92<');
-            assertIncludes('strong band', strongCell, 'Strong');
-            assertExcludes('strong percent', strongCell, '%');
-            assertIncludes('ranking tooltip', strongCell, 'Not a provider score');
-            assertIncludes('unscored', agent3TriageCellHtml({}), 'unscored');
-            const table = agent3HitRowsTableHtml([{
-              subject_name: 'Jane Director',
-              subject_type: 'director',
-              matched_entity: 'MURPHY, Gerard',
-              list: 'PEP class 2',
-              triage_score: 92,
-              suggested_status: 'needs_review',
-              reason: 'provider match score 92',
-              evidence_ref: 'prov-1'
-            }]);
-            assertIncludes('table subject', table, 'Jane Director');
-            assertIncludes('table matched', table, 'MURPHY, Gerard');
-            assertIncludes('table list', table, 'PEP class 2');
-            assertIncludes('table triage', table, '>92<');
-            assertIncludes('table marker', table, 'data-agent3-hit-audit-table');
-            assertExcludes('no per-row evidence disclosure', table, 'Evidence details');
-            if (failures.length) {
-              console.error(failures.join('\\n'));
-              process.exit(1);
-            }
-            """
-        ),
-    ])
-    subprocess.run(["node", "-e", script], check=True, text=True, capture_output=True)
-
-
-def test_backoffice_agent3_panel_render_dedupes_recommendation_and_advisory():
+def test_backoffice_agent3_compact_panel_renders_prose_and_honest_states():
     if not shutil.which("node"):
         pytest.skip("node is not available for panel rendering check")
     html = BACKOFFICE_HTML.read_text(encoding="utf-8")
@@ -898,14 +742,9 @@ def test_backoffice_agent3_panel_render_dedupes_recommendation_and_advisory():
             }
             const AGENT3_SCREENING_INTERPRETATION_BUSY = false;
             function getAgent3ScreeningInterpretation(app) { return app.output; }
-            function isAgent3ScreeningInterpretationCollapsed(app) { return !!app.collapsed; }
-            function agent3SeverityBadge(value) { return '<span>Severity: ' + escapeHtml(value) + '</span>'; }
-            function agent3ProviderHitsHtml(output) { return '<span>Provider result rows: ' + escapeHtml(output.hit_counts.total) + ' total</span>'; }
-            function agent3HitStatusCountsHtml(counts) { return counts && counts.needs_review ? '<span>Needs review: ' + counts.needs_review + '</span>' : ''; }
-            function agent3ScreeningFieldHtml(label, value) { return '<section><h4>' + escapeHtml(label) + '</h4><p>' + escapeHtml(Array.isArray(value) ? value.join('; ') : value) + '</p></section>'; }
-            function agent3EvidenceHtml(_evidence) { return '<div>Evidence used body</div>'; }
-            function agent3HitRowsTableHtml(rows) { return '<table><tbody><tr><td>hit rows ' + rows.length + '</td></tr></tbody></table>'; }
-            function agent3AuditTraceHtml(_output) { return '<div>Audit trace body</div>'; }
+            function screeningSubjectNamesMatch(a, b) {
+              return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+            }
             const failures = [];
             function count(haystack, needle) { return (haystack.match(new RegExp(needle.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'), 'g')) || []).length; }
             function assertEquals(name, actual, expected) {
@@ -920,67 +759,75 @@ def test_backoffice_agent3_panel_render_dedupes_recommendation_and_advisory():
             """
         ),
         _extract_function(html, "agent3DisplayRecommendation"),
-        _extract_function(html, "agent3RecommendationBadge"),
         _extract_function(html, "agent3ScreeningResultTerminal"),
+        _extract_function(html, "agent3NarrativeEntriesForSubject"),
+        _extract_function(html, "agent3TriageNarrativeHtml"),
         _extract_function(html, "renderAgent3ScreeningInterpretationPanel"),
         textwrap.dedent(
             """
-            const advisory = 'This is an advisory screening interpretation, not an approval decision.';
+            const advisory = 'Advisory — decisions are made by officers.';
             const hitOutput = {
               recommended_disposition: 'Officer review required',
-              severity: 'Medium',
+              severity: 'High',
               generated_at: '2026-07-03T12:00:00Z',
-              ai_notice: '',
-              hit_counts: {total: 1},
+              hit_counts: {total: 100},
               hit_rows: [{index: 1}],
-              hit_row_status_counts: {needs_review: 1},
-              summary: 'Stored screening result contains one provider hit.',
-              key_concerns: ['Review the provider evidence.'],
-              false_positive_assessment: 'Officer disambiguation required.',
-              adverse_media_relevance: 'No adverse media hit.',
-              evidence_used: [{source: 'prescreening_data.screening_report'}],
-              screening_result_terminal: true
+              summary: 'Stored screening result contains 100 provider hits.',
+              screening_result_terminal: true,
+              triage_narrative: {
+                weak_threshold: 40, weak_tail_count: 0, unscored_count: 0,
+                headline: '1 hit(s) stand out.',
+                entries: [
+                  { kind: 'hit', subject_name: 'Jan Marsalek', matched_name: 'MARSALEK, Jan',
+                    score: 92, band: 'strong', count: 1, categories: ['sanctions', 'pep'],
+                    reasons: ['EU-sanctioned', 'class-2 PEP'] },
+                  { kind: 'group', subject_name: 'Jan Marsalek', matched_name: 'jan marsalek',
+                    score: 58, band: '', count: 99, categories: ['adverse_media'],
+                    reasons: ['adverse media'] }
+                ]
+              }
             };
-            const hitHtml = renderAgent3ScreeningInterpretationPanel({id: 'app-hit', output: hitOutput});
-            assertEquals('hit recommendation once', count(hitHtml, 'Officer review required'), 1);
-            assertEquals('hit advisory once', count(hitHtml, advisory), 1);
-            assertEquals('hit provider counts once', count(hitHtml, 'Provider result rows: 1 total'), 1);
-            assertExcludes('hit lower disposition', hitHtml, 'Recommended disposition');
-            assertIncludes('hit table rendered', hitHtml, 'hit rows 1');
+            const scopedHtml = renderAgent3ScreeningInterpretationPanel({id: 'a', output: hitOutput}, 'Jan Marsalek');
+            assertIncludes('scoped chip', scopedHtml, 'scoped to Jan Marsalek');
+            assertIncludes('prose standout', scopedHtml, 'Start with the sanctions + PEP match <b>MARSALEK, Jan</b> (triage 92, STRONG)');
+            assertIncludes('prose mass', scopedHtml, 'The remaining 99 are near-identical adverse-media hits (all triage 58)');
+            assertEquals('advisory caption once', count(scopedHtml, advisory), 1);
+            assertExcludes('no hit table', scopedHtml, 'Hit-by-hit');
+            assertExcludes('no provider chips', scopedHtml, 'Provider result rows');
+            assertExcludes('no summary grid', scopedHtml, 'Plain-English summary');
+            assertExcludes('no recommendation badge', scopedHtml, 'Agent recommendation:');
+
+            const legacyOutput = Object.assign({}, hitOutput, {triage_narrative: null});
+            const legacyHtml = renderAgent3ScreeningInterpretationPanel({id: 'b', output: legacyOutput}, 'Jan Marsalek');
+            assertIncludes('legacy falls back to stored summary', legacyHtml, 'Stored screening result contains 100 provider hits.');
 
             const noHitOutput = {
               recommended_disposition: 'No reportable provider hit recorded',
-              severity: 'Low',
               generated_at: '2026-07-03T12:00:00Z',
-              ai_notice: '',
               hit_counts: {total: 0},
               hit_rows: [],
-              hit_row_status_counts: {},
               summary: 'Stored screening result contains zero provider hit rows.',
-              key_concerns: ['No provider hits found in stored screening results.'],
-              false_positive_assessment: 'No provider false positives to clear.',
-              adverse_media_relevance: 'No provider adverse media hits found.',
-              evidence_used: [{source: 'prescreening_data.screening_report'}],
               screening_result_terminal: true
             };
-            const noHitHtml = renderAgent3ScreeningInterpretationPanel({id: 'app-clean', output: noHitOutput});
-            // Clean terminal state = minimal: recommendation once + a single caveat line;
-            // no all-zeros counts row, no green box, no "Show full detail", no audit trace.
+            const noHitHtml = renderAgent3ScreeningInterpretationPanel({id: 'c', output: noHitOutput}, 'Jan Marsalek');
             assertEquals('no-hit recommendation once', count(noHitHtml, 'No reportable provider hit recorded'), 1);
             assertIncludes('no-hit caveat line', noHitHtml, 'absence of hits is not proof of no compliance risk');
-            assertEquals('no-hit provider counts suppressed', count(noHitHtml, 'Provider result rows: 0 total'), 0);
-            assertExcludes('no-hit clean has no full-detail toggle', noHitHtml, 'Show full detail');
-            assertExcludes('no-hit empty hit table omitted', noHitHtml, 'hit rows 0');
+            assertExcludes('no-hit has no green box', noHitHtml, '#ecfdf5');
 
             const pendingNoHitOutput = Object.assign({}, noHitOutput, {
               screening_result_terminal: false,
-              screening_result_state: 'pending_provider'
+              screening_result_state: 'pending_provider',
+              pending_degraded_reason: 'provider retry scheduled'
             });
-            const pendingNoHitHtml = renderAgent3ScreeningInterpretationPanel({id: 'app-pending', output: pendingNoHitOutput});
-            // 0 hits but NOT terminal-clean → amber notice + full-detail, never green.
+            const pendingNoHitHtml = renderAgent3ScreeningInterpretationPanel({id: 'd', output: pendingNoHitOutput}, 'Jan Marsalek');
             assertIncludes('pending no-hit warning', pendingNoHitHtml, 'Screening is not a terminal clean result.');
-            assertIncludes('pending no-hit keeps detail', pendingNoHitHtml, 'Show full detail');
+            assertIncludes('pending no-hit reason', pendingNoHitHtml, 'provider retry scheduled');
             assertExcludes('pending no-hit not green', pendingNoHitHtml, '#ecfdf5');
+
+            const emptyHtml = renderAgent3ScreeningInterpretationPanel({id: 'e', output: null}, 'Jan Marsalek');
+            assertIncludes('no output minimal line', emptyHtml, 'No Agent 3 interpretation has been generated');
+            assertIncludes('no output generate button', emptyHtml, 'Generate interpretation');
+
             if (failures.length) {
               console.error(failures.join('\\n'));
               process.exit(1);

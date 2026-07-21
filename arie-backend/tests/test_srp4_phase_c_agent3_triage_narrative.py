@@ -431,10 +431,12 @@ class TestBackofficeTriageNarrativeStatic:
         panel = _function_region(
             html, "renderAgent3ScreeningInterpretationPanel", "generateAgent3ScreeningInterpretation"
         )
-        # Render-if-present: older stored interpretations lack triage_narrative.
+        # Render-if-present: older stored interpretations lack triage_narrative
+        # (the compact panel then falls back to the stored summary paragraph).
         assert "output.triage_narrative && typeof output.triage_narrative === 'object'" in panel
-        assert "agent3TriageNarrativeHtml(output.triage_narrative)" in panel
-        # The advisory label survives Phase C.
+        assert "agent3TriageNarrativeHtml(narrative, scoped ? subjectName : '')" in panel
+        assert "escapeHtml(output.summary || 'Not available')" in panel
+        # The advisory label survives.
         assert "Advisory — decisions are made by officers." in panel
 
     def test_narrative_helper_contract(self):
@@ -442,28 +444,29 @@ class TestBackofficeTriageNarrativeStatic:
         helper = _function_region(
             html, "agent3TriageNarrativeHtml", "renderAgent3ScreeningInterpretationPanel"
         )
-        assert "Where to start — RegMind triage (advisory)" in helper
-        # Counts come from the server dict — never recomputed client-side.
-        assert "narrative.priority_hits" in helper
+        # Approved mock: one flowing prose paragraph ("Start with the … match …
+        # (triage N, BAND) … review it first."), composed only from the
+        # server dict — counts, scores, bands and ordering never recomputed.
+        assert "Start with the " in helper
+        assert "(triage " in helper
+        assert "(all triage " in helper
         assert "narrative.weak_tail_count" in helper
         assert "narrative.unscored_count" in helper
         assert "narrative.weak_threshold" in helper
         assert "narrative.headline" in helper
-        # Band word for strong/moderate, bare number otherwise; RegMind triage
-        # label context — never a percentage.
+        # Band word for strong/moderate, bare number otherwise — never a
+        # percentage.
         assert "band === 'strong'" in helper
         assert "band === 'moderate'" in helper
-        assert "RegMind triage" in helper
         assert "%" not in helper
         _assert_no_banned_probability_vocabulary(helper)
         # Every dynamic value flows through escapeHtml.
-        assert "escapeHtml(String(narrative.headline))" in helper
         assert "escapeHtml(hit.subject_name || 'Unknown subject')" in helper
         assert "escapeHtml(hit.matched_name || 'Stored hit')" in helper
-        assert "escapeHtml(chipLabel)" in helper
         assert "escapeHtml(reasons.join('; '))" in helper
         assert "escapeHtml(String(narrative.weak_tail_count))" in helper
         assert "escapeHtml(String(narrative.unscored_count))" in helper
+        assert "escapeHtml(String(narrative.headline))" in helper
         # Weak-tail and unscored copy render server counts.
         assert "and are grouped in the weak tail." in helper
         assert "review them individually." in helper
