@@ -94,6 +94,11 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 CLAUDE_BUDGET_USD = float(os.getenv("CLAUDE_BUDGET_USD", "50.0"))
 CLAUDE_MOCK_MODE = os.getenv("CLAUDE_MOCK_MODE", "false").lower() == "true"
 AI_CONFIDENCE_THRESHOLD = float(os.getenv("AI_CONFIDENCE_THRESHOLD", "0.70"))
+# P12-7 (DCI-014): rules-first pass for HYBRID verification checks — AI runs
+# only on deterministic INCONCLUSIVE. OFF by default: live behaviour is
+# unchanged until per-check evaluators are authored and approved (see
+# docs/compliance/P12_7_VERIFICATION_MATRIX_DECISION_MEMO.md).
+ENABLE_HYBRID_INCONCLUSIVE_GATE = os.getenv("ENABLE_HYBRID_INCONCLUSIVE_GATE", "false").lower() == "true"
 ARIE_MODEL_FAST = os.getenv("ARIE_MODEL_FAST", "claude-sonnet-4-6")
 ARIE_MODEL_THOROUGH = os.getenv("ARIE_MODEL_THOROUGH", "claude-opus-4-6")
 
