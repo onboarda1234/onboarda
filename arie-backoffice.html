@@ -15356,8 +15356,10 @@ function screeningQueueEvidenceReadinessPanel(row, legacyResults, legacyContext)
     evidenceCards = screeningTriageRankedHitSections(row) || items.map(screeningQueueEvidenceItemCard).join('');
   } else if (evidenceDetailError) {
     evidenceCards = '<div data-screening-evidence-error="true" style="font-size:12px;color:#991b1b;line-height:1.5;margin-top:8px;padding:10px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;">Detailed provider evidence could not be loaded. Summary evidence remains available.</div>';
-  } else if (row.triage && row.triage.buckets) {
-    // Per-hit (triaged) subject whose detailed evidence has not hydrated yet.
+  } else if ((row.triage && row.triage.buckets) || row.evidence_detail_available) {
+    // Per-hit (triaged) subject whose detailed evidence has not hydrated yet,
+    // OR a summary-mode queue row (include_evidence=false marks hydratable
+    // rows with evidence_detail_available and strips items + triage).
     // NEVER fall to the legacy "Provider match records (stored report)" stacked
     // blocks here — that is the "old UI" competing with the per-hit design. Show
     // a clean loading state and trigger the lazy evidence fetch; the ranked hit
@@ -18124,8 +18126,17 @@ function renderScreeningReviewPanel(app, focus) {
   var queueRows = (SCREENING_QUEUE && SCREENING_QUEUE.rows ? SCREENING_QUEUE.rows : []).filter(function(row) {
     return row.application_ref === app.ref;
   });
-  // E-1: no evidence-mode data for this application yet → hydrate once.
-  if (app.ref && !queueRows.some(function(row) { return row && row.screening_evidence; })) {
+  // E-1: no EVIDENCE-MODE data for this application yet → hydrate once.
+  // Summary queue rows (include_evidence=false, i.e. arriving via the
+  // Screening Queue list) carry a truthy screening_evidence dict with no
+  // items array and no server triage block — treating those as "already
+  // hydrated" left every subject of the application on the legacy
+  // pre-triage UI. Evidence mode is detected by the hydrated items array or
+  // the server-computed triage block, never by mere truthiness.
+  var hasEvidenceModeRows = queueRows.some(function(row) {
+    return row && ((row.screening_evidence && Array.isArray(row.screening_evidence.items)) || (row.triage && row.triage.buckets));
+  });
+  if (app.ref && !hasEvidenceModeRows) {
     ensureApplicationScreeningEvidenceRows(app.ref);
   }
   // Per-hit redesign: hydrate stored per-hit decisions once so they survive a

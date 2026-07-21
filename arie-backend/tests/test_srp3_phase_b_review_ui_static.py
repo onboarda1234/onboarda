@@ -299,9 +299,40 @@ def test_application_tab_hydrates_evidence_without_queue_visit():
     assert "SCREENING_REVIEW_APP_EVIDENCE_FETCHES[appRef] = 'error'" in fetch_fn
     assert "renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus)" in fetch_fn
     panel_start = html.index("function renderScreeningReviewPanel")
-    panel_head = html[panel_start:panel_start + 1600]
+    panel_head = html[panel_start:panel_start + 2600]
     assert "ensureApplicationScreeningEvidenceRows(app.ref)" in panel_head
-    assert "row.screening_evidence" in panel_head
+    # The hydration trigger must detect EVIDENCE-MODE rows (hydrated items
+    # array or server triage block) — a truthy screening_evidence check
+    # alone matched the stripped summary dict that include_evidence=false
+    # rows carry, so arriving via the Screening Queue list suppressed
+    # hydration and left every subject on the legacy pre-triage UI.
+    assert "hasEvidenceModeRows" in panel_head
+    assert "Array.isArray(row.screening_evidence.items)" in panel_head
+    assert "row.triage && row.triage.buckets" in panel_head
+    assert (
+        "!queueRows.some(function(row) { return row && row.screening_evidence; })"
+        not in panel_head
+    )
+
+
+def test_summary_queue_rows_show_loading_never_legacy_evidence():
+    # A summary-mode queue row (include_evidence=false) is hydratable by
+    # definition — the server marks it with evidence_detail_available and
+    # strips items + triage. The readiness panel must show the loading state
+    # and trigger the evidence fetch for that shape, never fall through to
+    # the legacy "Provider match records (stored report)" renderer.
+    html = _html()
+    panel = _function_region(
+        html,
+        "screeningQueueEvidenceReadinessPanel",
+        "providerIndicatorDetails",
+    )
+    loading_branch = panel.index(
+        "(row.triage && row.triage.buckets) || row.evidence_detail_available"
+    )
+    legacy_branch = panel.index("providerResultHighlights(legacyResults")
+    assert loading_branch < legacy_branch
+    assert "Loading ranked screening hits" in panel
 
 
 # ---------------------------------------------------------------------------
