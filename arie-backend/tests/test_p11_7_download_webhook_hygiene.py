@@ -109,20 +109,35 @@ def test_presign_sanitizes_hostile_filename():
 
 def test_local_download_paths_sanitize_stored_filenames():
     server = _read("server.py")
-    for handler in (
-        "class DocumentDownloadHandler",
-        "class ComplianceResourceDownloadHandler",
-        "class RegulatoryIntelligenceDownloadHandler",
+    # (handler start marker, sanitized variable that must FEED the header —
+    # audit follow-up: the regex merely existing in the region is not enough)
+    for handler, safe_var in (
+        ("class DocumentDownloadHandler", "safe_doc_name"),
+        ("class ComplianceResourceDownloadHandler", "safe_resource_name"),
+        ("class RegulatoryIntelligenceDownloadHandler", "safe_reg_name"),
     ):
         region = _region(server, handler, "\nclass ")
         assert "re.sub(r'[^\\w \\-.]'" in region, (
             f"{handler} must sanitize the stored filename before setting "
             "Content-Disposition (P11-7 / BSA-008)"
         )
+        assert f'filename="{{{safe_var}}}"' in region, (
+            f"{handler}: the sanitized name ({safe_var}) must be what the "
+            "Content-Disposition header interpolates"
+        )
     # The raw interpolations this PR removed must not come back.
     assert 'filename="{doc["doc_name"]}"' not in server
     assert 'filename="{resource["file_name"]}"' not in server
     assert 'filename="{row.get("file_name") or (document_id + ".bin")}"' not in server
+
+
+def test_s3_branch_still_passes_stored_filename():
+    """Audit follow-up: if a refactor drops response_filename=doc["doc_name"]
+    from the S3 presign call, every S3 download silently becomes
+    filename="document" and nothing else fails."""
+    server = _read("server.py")
+    region = _region(server, "class DocumentDownloadHandler", "\nclass ")
+    assert 'response_filename=doc["doc_name"]' in region
 
 
 def test_no_crlf_permissive_sanitizer_remains():
