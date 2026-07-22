@@ -164,6 +164,15 @@ def test_near_identical_hits_collapse_into_grouped_multiselect_block():
         html, "screeningTriageGroupedBlock", "screeningTriageRankedHitSections"
     )
     assert "near-identical" in block
+    # Scored groups tag the shared triage score; unscored groups are labelled
+    # "(unscored)" so they are NOT mistaken for a duplicate of the scored card.
+    assert "' (all triage '" in block
+    assert "' (unscored)'" in block
+    # Honesty: the group is stated as the verified grouping basis (matched name +
+    # category) with duplication framed as "likely" — the grouping does not prove
+    # the stronger "no new facts across them" claim, so that assertion is gone.
+    assert "likely duplicate or syndicated records of the same matter" in block
+    assert "no new facts across them" not in block
     # Bulk clear only the not-yet-reviewed remainder; multi-select clear; and the
     # invariant that confirming any one flips the subject and bulk never overrides.
     assert "Clear the remaining " in block
