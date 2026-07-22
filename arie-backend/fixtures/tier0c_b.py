@@ -187,6 +187,9 @@ def run_tier0c_b_recomputation_transaction(
     user: Mapping[str, Any],
     log_audit_fn: Callable[..., Any],
     validator_fn: Callable[..., Any],
+    commit_on_success: bool = True,
+    risk_config_override: Mapping[str, Any] | None = None,
+    capture_routing_result: bool = False,
 ) -> dict[str, Any]:
     """Recompute and validate a Tier 0C-B batch in one transaction.
 
@@ -198,8 +201,14 @@ def run_tier0c_b_recomputation_transaction(
     writer are transaction participants: neither can commit, roll back,
     close, or replace the caller-owned connection.
 
+    ``risk_config_override`` lets a guarded caller pin the already-validated
+    configuration row locked by this same transaction. Ordinary callers omit
+    it and retain the canonical runtime-loader behaviour.
+
     The function owns the sole commit/rollback decision for this operation.
-    It never opens a second connection.
+    It never opens a second connection. ``commit_on_success=False`` is the
+    controlled dry-run contract: validation must still pass explicitly, then
+    the complete application/audit transaction is rolled back.
     """
 
     ids = tuple(application_ids)
@@ -215,6 +224,14 @@ def run_tier0c_b_recomputation_transaction(
         raise Tier0CBTransactionError("Tier 0C-B requires an audit writer")
     if not callable(validator_fn):
         raise Tier0CBTransactionError("Tier 0C-B requires a validation callback")
+    if not isinstance(commit_on_success, bool):
+        raise Tier0CBTransactionError(
+            "Tier 0C-B commit_on_success must be an explicit boolean"
+        )
+    if not isinstance(capture_routing_result, bool):
+        raise Tier0CBTransactionError(
+            "Tier 0C-B capture_routing_result must be an explicit boolean"
+        )
 
     participant_db = _TransactionParticipantConnection(db)
     audit_writer = _TransactionBoundAuditWriter(
@@ -226,14 +243,21 @@ def run_tier0c_b_recomputation_transaction(
 
     try:
         for position, application_id in enumerate(ids, start=1):
+            recompute_kwargs = {
+                "user": user,
+                "log_audit_fn": audit_writer,
+                "apply_routing_policy": True,
+                "audit_commit": False,
+            }
+            if risk_config_override is not None:
+                recompute_kwargs["config_override"] = risk_config_override
+            if capture_routing_result:
+                recompute_kwargs["capture_routing_result"] = True
             result = recompute_risk(
                 participant_db,
                 application_id,
                 reason,
-                user=user,
-                log_audit_fn=audit_writer,
-                apply_routing_policy=True,
-                audit_commit=False,
+                **recompute_kwargs,
             )
             audit_writer.raise_if_failed()
             participant_db.assert_transaction_continuity()
@@ -267,8 +291,13 @@ def run_tier0c_b_recomputation_transaction(
             "applications_recomputed": len(recomputations),
             "recomputations": recomputations,
             "validation": validation,
+            "committed": commit_on_success,
+            "rolled_back": not commit_on_success,
         }
-        db.commit()
+        if commit_on_success:
+            db.commit()
+        else:
+            db.rollback()
         return result
     except BaseException:
         db.rollback()

@@ -60,6 +60,7 @@ def canonical_postgres(monkeypatch):
         import fixtures.pilot_canonical as canonical_module
         import fixtures.pilot_canonical_seeder as seeder_module
         import fixtures.tier0c_b as tier0c_b_module
+        import fixtures.tier0c_b_runner as tier0c_b_runner_module
 
         db_module = loaded_db_module
         db_module.close_pg_pool()
@@ -92,6 +93,7 @@ def canonical_postgres(monkeypatch):
             db=db_module,
             seeder=seeder_module,
             tier0c_b=tier0c_b_module,
+            tier0c_b_runner=tier0c_b_runner_module,
         )
     finally:
         if db_module is not None:
@@ -226,6 +228,7 @@ def _tier0c_b_transaction_snapshot(db_module):
             ("applications", "WHERE ref LIKE ?", ("RM-PILOT-%",)),
             ("audit_log", "", ()),
             ("edd_cases", "", ()),
+            ("edd_findings", "", ()),
             ("application_enhanced_requirements", "", ()),
         ):
             rows = [
@@ -279,6 +282,69 @@ def _canonical_ids(db_module):
         ]
     finally:
         connection.close()
+
+
+def _tier0c_b_runner_kwargs(runtime, monkeypatch):
+    deploy_sha = "a" * 40
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+    monkeypatch.setenv("GIT_SHA", deploy_sha)
+    monkeypatch.setenv("IMAGE_TAG", deploy_sha)
+
+    connection = runtime.db.get_db()
+    try:
+        config = runtime.tier0c_b_runner.load_risk_config(db=connection)
+    finally:
+        connection.rollback()
+        connection.close()
+
+    return {
+        "expected_deploy_sha": deploy_sha,
+        "reviewed_manifest_sha256": EXPECTED_MANIFEST_SHA256,
+        "expected_risk_config_version": config["_config_version"],
+        "expected_risk_config_sha256": (
+            runtime.tier0c_b_runner.risk_config_sha256(config)
+        ),
+        "reason": "reviewed exact-41 Tier 0C-B test",
+        "user": {
+            "sub": "admin001",
+            "name": "Aisha Sudally",
+            "role": "admin",
+        },
+        "log_audit_fn": _standard_audit_writer(),
+    }
+
+
+def _insert_noncanonical_runner_trap(db_module):
+    connection = db_module.get_db()
+    try:
+        connection.execute(
+            "INSERT INTO applications "
+            "(id,ref,company_name,status,is_fixture,prescreening_data) "
+            "VALUES (?,?,?,?,?,?)",
+            (
+                "tier0cb-noncanonical-trap",
+                "RM-PILOT-999",
+                "Noncanonical selection trap",
+                "submitted",
+                False,
+                json.dumps({
+                    "dataset_name": "foreign-dataset",
+                    "synthetic": True,
+                    "source": "tests.noncanonical",
+                }),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _tier0c_b_runner_connection(runtime):
+    connection = runtime.db.get_db()
+    # get_db() performs a PostgreSQL liveness ping. The dedicated runner
+    # requires an idle connection before it starts its sole transaction.
+    connection.rollback()
+    return connection
 
 
 def test_rm_pilot_037_persists_integer_override_flag(canonical_postgres):
@@ -407,6 +473,522 @@ def test_tier0c_b_routes_and_decision_eligibility_reconcile_on_postgres(
         "RM-PILOT-036": "screening_pending_or_unresolved",
         "RM-PILOT-038": "rejected",
     }
+
+
+def test_exact_41_runner_dry_run_and_gated_apply_are_fail_closed(
+    canonical_postgres,
+    monkeypatch,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+    _insert_noncanonical_runner_trap(runtime.db)
+    kwargs = _tier0c_b_runner_kwargs(runtime, monkeypatch)
+    before = _tier0c_b_transaction_snapshot(runtime.db)
+    terminal_references = {
+        "RM-PILOT-001", "RM-PILOT-003", "RM-PILOT-004", "RM-PILOT-005",
+        "RM-PILOT-008", "RM-PILOT-014", "RM-PILOT-024", "RM-PILOT-025",
+        "RM-PILOT-037", "RM-PILOT-038", "RM-PILOT-039", "RM-PILOT-040",
+        "RM-PILOT-041",
+    }
+
+    connection = _tier0c_b_runner_connection(runtime)
+    try:
+        dry_run = runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+            connection,
+            mode="dry-run",
+            **kwargs,
+        )
+    finally:
+        connection.close()
+
+    assert dry_run["applications_selected"] == 41
+    assert dry_run["applications_recomputed"] == 41
+    assert dry_run["references"] == list(
+        runtime.tier0c_b_runner.EXPECTED_REFERENCES
+    )
+    assert terminal_references <= set(dry_run["references"])
+    assert dry_run["noncanonical_applications_selected"] == 0
+    assert dry_run["committed"] is False
+    assert dry_run["rolled_back"] is True
+    assert dry_run["pre_application_state_sha256"] == (
+        dry_run["post_rollback_application_state_sha256"]
+    )
+    assert dry_run["pre_mutation_scope_sha256"] == (
+        dry_run["post_rollback_mutation_scope_sha256"]
+    )
+    assert dry_run["validation"]["factor_ledgers_valid"] is True
+    assert dry_run["validation"]["dimension_ledgers_valid"] is True
+    assert dry_run["validation"]["composite_arithmetic_valid"] is True
+    assert dry_run["validation"]["approval_routes_valid"] is True
+    assert dry_run["validation"]["decision_eligibility_valid"] is True
+    screening_by_ref = {
+        row["reference"]: row
+        for row in dry_run["validation"]["screening_policy_results"]
+    }
+    assert screening_by_ref["RM-PILOT-024"] == {
+        "reference": "RM-PILOT-024",
+        "workflow_state": "sanctions_hit",
+        "persisted_disposition": "true_match",
+        "overlay_applied": True,
+    }
+    approval_by_ref = {
+        row["reference"]: row
+        for row in dry_run["validation"]["tier_policy_results"]
+    }
+    assert approval_by_ref["RM-PILOT-024"] == {
+        "reference": "RM-PILOT-024",
+        "approval_route": "dual_control_required",
+        "decision_eligibility": "blocked",
+        "eligibility_reason": "terminal_state",
+    }
+    assert _tier0c_b_transaction_snapshot(runtime.db) == before
+
+    observer = runtime.db.get_db()
+    try:
+        assert observer.execute(
+            "SELECT COUNT(*) AS n FROM audit_log "
+            "WHERE action='Risk Recomputed' AND target LIKE ?",
+            ("RM-PILOT-%",),
+        ).fetchone()["n"] == 0
+        trap_before = dict(observer.execute(
+            "SELECT * FROM applications WHERE id=?",
+            ("tier0cb-noncanonical-trap",),
+        ).fetchone())
+    finally:
+        observer.close()
+
+    # Apply is independently gated before the first recomputation.
+    connection = _tier0c_b_runner_connection(runtime)
+    try:
+        with pytest.raises(
+            runtime.tier0c_b_runner.Tier0CBRunnerError,
+            match="ALLOW_TIER0C_B_EXACT41",
+        ):
+            runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+                connection,
+                mode="apply",
+                reviewed_plan_sha256=dry_run["plan_sha256"],
+                confirmation=runtime.tier0c_b_runner.APPLY_CONFIRMATION,
+                **kwargs,
+            )
+    finally:
+        connection.close()
+    assert _tier0c_b_transaction_snapshot(runtime.db) == before
+
+    monkeypatch.setenv(
+        runtime.tier0c_b_runner.APPLY_ENVIRONMENT_GATE,
+        runtime.tier0c_b_runner.APPLY_ENVIRONMENT_VALUE,
+    )
+    connection = _tier0c_b_runner_connection(runtime)
+    try:
+        applied = runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+            connection,
+            mode="apply",
+            reviewed_plan_sha256=dry_run["plan_sha256"],
+            confirmation=runtime.tier0c_b_runner.APPLY_CONFIRMATION,
+            **kwargs,
+        )
+    finally:
+        connection.close()
+
+    assert applied["applications_recomputed"] == 41
+    assert applied["committed"] is True
+    assert applied["rolled_back"] is False
+    assert applied["plan_sha256"] == dry_run["plan_sha256"]
+    observer = runtime.db.get_db()
+    try:
+        audit_counts = {
+            row["target"]: int(row["n"])
+            for row in observer.execute(
+                "SELECT target,COUNT(*) AS n FROM audit_log "
+                "WHERE action='Risk Recomputed' "
+                "AND target IN ("
+                + ",".join("?" for _ in range(41))
+                + ") GROUP BY target",
+                tuple(runtime.tier0c_b_runner.EXPECTED_REFERENCES),
+            ).fetchall()
+        }
+        assert audit_counts == {
+            reference: 1
+            for reference in runtime.tier0c_b_runner.EXPECTED_REFERENCES
+        }
+        assert observer.execute(
+            "SELECT COUNT(*) AS n FROM audit_log WHERE target=?",
+            ("RM-PILOT-999",),
+        ).fetchone()["n"] == 0
+        trap_after = dict(observer.execute(
+            "SELECT * FROM applications WHERE id=?",
+            ("tier0cb-noncanonical-trap",),
+        ).fetchone())
+    finally:
+        observer.close()
+    assert trap_after == trap_before
+
+
+def test_exact_41_runner_rejects_post_review_drift_without_residue(
+    canonical_postgres,
+    monkeypatch,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+    kwargs = _tier0c_b_runner_kwargs(runtime, monkeypatch)
+
+    connection = _tier0c_b_runner_connection(runtime)
+    try:
+        reviewed = runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+            connection,
+            mode="dry-run",
+            **kwargs,
+        )
+    finally:
+        connection.close()
+
+    connection = runtime.db.get_db()
+    try:
+        connection.execute(
+            "UPDATE applications SET decision_notes=? WHERE ref=?",
+            ("post-review drift", "RM-PILOT-001"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    drifted = _tier0c_b_transaction_snapshot(runtime.db)
+
+    monkeypatch.setenv(
+        runtime.tier0c_b_runner.APPLY_ENVIRONMENT_GATE,
+        runtime.tier0c_b_runner.APPLY_ENVIRONMENT_VALUE,
+    )
+    connection = _tier0c_b_runner_connection(runtime)
+    try:
+        with pytest.raises(
+            runtime.tier0c_b_runner.Tier0CBRunnerError,
+            match="reviewed dry-run plan hash",
+        ):
+            runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+                connection,
+                mode="apply",
+                reviewed_plan_sha256=reviewed["plan_sha256"],
+                confirmation=runtime.tier0c_b_runner.APPLY_CONFIRMATION,
+                **kwargs,
+            )
+    finally:
+        connection.close()
+
+    assert _tier0c_b_transaction_snapshot(runtime.db) == drifted
+
+
+def test_exact_41_runner_rejects_scope_identity_and_runtime_drift(
+    canonical_postgres,
+    monkeypatch,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+    kwargs = _tier0c_b_runner_kwargs(runtime, monkeypatch)
+    before = _tier0c_b_transaction_snapshot(runtime.db)
+
+    for variable in ("GIT_SHA", "IMAGE_TAG"):
+        monkeypatch.setenv(variable, "b" * 40)
+        connection = _tier0c_b_runner_connection(runtime)
+        try:
+            with pytest.raises(
+                runtime.tier0c_b_runner.Tier0CBRunnerError,
+                match=f"runtime drift: {variable}",
+            ):
+                runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+                    connection,
+                    mode="dry-run",
+                    **kwargs,
+                )
+        finally:
+            connection.close()
+        assert _tier0c_b_transaction_snapshot(runtime.db) == before
+        monkeypatch.setenv(variable, kwargs["expected_deploy_sha"])
+
+    connection = runtime.db.get_db()
+    try:
+        identity = connection.execute(
+            "SELECT prescreening_data FROM applications WHERE ref=?",
+            ("RM-PILOT-001",),
+        ).fetchone()["prescreening_data"]
+        identity = dict(identity)
+        identity["dataset_hash"] = "unreviewed"
+        connection.execute(
+            "UPDATE applications SET prescreening_data=? WHERE ref=?",
+            (json.dumps(identity, sort_keys=True), "RM-PILOT-001"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    drifted = _tier0c_b_transaction_snapshot(runtime.db)
+
+    connection = _tier0c_b_runner_connection(runtime)
+    try:
+        with pytest.raises(
+            runtime.tier0c_b_runner.Tier0CBRunnerError,
+            match="canonical fixture identity mismatch",
+        ):
+            runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+                connection,
+                mode="dry-run",
+                **kwargs,
+            )
+    finally:
+        connection.close()
+    assert _tier0c_b_transaction_snapshot(runtime.db) == drifted
+
+
+def test_exact_41_runner_rejects_missing_duplicate_and_wrong_id_scope(
+    canonical_postgres,
+    monkeypatch,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+    kwargs = _tier0c_b_runner_kwargs(runtime, monkeypatch)
+
+    connection = runtime.db.get_db()
+    try:
+        connection.execute(
+            "UPDATE applications SET ref=? WHERE ref=?",
+            ("RM-PILOT-MISSING", "RM-PILOT-041"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    drifted = _tier0c_b_transaction_snapshot(runtime.db)
+
+    connection = _tier0c_b_runner_connection(runtime)
+    try:
+        with pytest.raises(
+            runtime.tier0c_b_runner.Tier0CBRunnerError,
+            match="canonical application scope mismatch",
+        ):
+            runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+                connection,
+                mode="dry-run",
+                **kwargs,
+            )
+    finally:
+        connection.close()
+    assert _tier0c_b_transaction_snapshot(runtime.db) == drifted
+
+    manifest = runtime.canonical.load_manifest()
+    connection = runtime.db.get_db()
+    try:
+        rows = [
+            dict(row)
+            for row in connection.execute(
+                "SELECT * FROM applications WHERE ref LIKE ? ORDER BY ref",
+                ("RM-PILOT-%",),
+            ).fetchall()
+        ]
+    finally:
+        connection.close()
+    restored_041 = dict(rows[-1])
+    restored_041["ref"] = "RM-PILOT-041"
+    duplicate_rows = [dict(row) for row in rows[:-1]] + [dict(rows[0])]
+    with pytest.raises(
+        runtime.tier0c_b_runner.Tier0CBRunnerError,
+        match="duplicate canonical references",
+    ):
+        runtime.tier0c_b_runner._validate_exact_scope(duplicate_rows, manifest)
+    wrong_id_rows = [dict(row) for row in rows[:-1]] + [restored_041]
+    wrong_id_rows[0]["id"] = "wrong-deterministic-id"
+    with pytest.raises(
+        runtime.tier0c_b_runner.Tier0CBRunnerError,
+        match="deterministic application ID mismatch",
+    ):
+        runtime.tier0c_b_runner._validate_exact_scope(wrong_id_rows, manifest)
+
+
+def test_exact_41_runner_rejects_manifest_config_and_actor_drift(
+    canonical_postgres,
+    monkeypatch,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+    kwargs = _tier0c_b_runner_kwargs(runtime, monkeypatch)
+    before = _tier0c_b_transaction_snapshot(runtime.db)
+    cases = (
+        ({"reviewed_manifest_sha256": "0" * 64}, "reviewed manifest hash mismatch"),
+        ({"expected_risk_config_version": "risk_config:drift"}, "version drift"),
+        ({"expected_risk_config_sha256": "0" * 64}, "hash drift"),
+        ({"user": {**kwargs["user"], "role": "sco"}}, "does not match"),
+    )
+    for overrides, message in cases:
+        call_kwargs = {**kwargs, **overrides}
+        connection = _tier0c_b_runner_connection(runtime)
+        try:
+            with pytest.raises(
+                runtime.tier0c_b_runner.Tier0CBRunnerError,
+                match=message,
+            ):
+                runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+                    connection,
+                    mode="dry-run",
+                    **call_kwargs,
+                )
+        finally:
+            connection.close()
+        assert _tier0c_b_transaction_snapshot(runtime.db) == before
+
+
+def test_exact_41_runner_apply_tokens_and_dirty_connection_fail_closed(
+    canonical_postgres,
+    monkeypatch,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+    kwargs = _tier0c_b_runner_kwargs(runtime, monkeypatch)
+    before = _tier0c_b_transaction_snapshot(runtime.db)
+    monkeypatch.setenv(
+        runtime.tier0c_b_runner.APPLY_ENVIRONMENT_GATE,
+        runtime.tier0c_b_runner.APPLY_ENVIRONMENT_VALUE,
+    )
+    for plan_hash, confirmation, message in (
+        ("bad", runtime.tier0c_b_runner.APPLY_CONFIRMATION, "full reviewed"),
+        ("0" * 64, "WRONG", "confirmation token"),
+    ):
+        connection = _tier0c_b_runner_connection(runtime)
+        try:
+            with pytest.raises(
+                runtime.tier0c_b_runner.Tier0CBRunnerError,
+                match=message,
+            ):
+                runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+                    connection,
+                    mode="apply",
+                    reviewed_plan_sha256=plan_hash,
+                    confirmation=confirmation,
+                    **kwargs,
+                )
+        finally:
+            connection.close()
+        assert _tier0c_b_transaction_snapshot(runtime.db) == before
+
+    connection = runtime.db.get_db()
+    try:
+        connection.execute("SELECT 1")
+        status_before = connection.conn.get_transaction_status()
+        with pytest.raises(
+            runtime.tier0c_b_runner.Tier0CBRunnerError,
+            match="dedicated idle connection",
+        ):
+            runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+                connection,
+                mode="dry-run",
+                **kwargs,
+            )
+        assert connection.conn.get_transaction_status() == status_before
+    finally:
+        connection.rollback()
+        connection.close()
+    assert _tier0c_b_transaction_snapshot(runtime.db) == before
+
+
+def test_exact_41_runner_validator_failure_after_all_41_rolls_back(
+    canonical_postgres,
+    monkeypatch,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+    kwargs = _tier0c_b_runner_kwargs(runtime, monkeypatch)
+    before = _tier0c_b_transaction_snapshot(runtime.db)
+    original = runtime.tier0c_b_runner._validate_persisted_results
+    observed = []
+
+    def forced_failure(**validator_kwargs):
+        result = original(**validator_kwargs)
+        observed.append(len(validator_kwargs["recomputations"]))
+        assert result["valid"] is True
+        raise runtime.tier0c_b_runner.Tier0CBRunnerError(
+            "forced exact-41 validator failure"
+        )
+
+    monkeypatch.setattr(
+        runtime.tier0c_b_runner,
+        "_validate_persisted_results",
+        forced_failure,
+    )
+    connection = _tier0c_b_runner_connection(runtime)
+    try:
+        with pytest.raises(
+            runtime.tier0c_b_runner.Tier0CBRunnerError,
+            match="forced exact-41 validator failure",
+        ):
+            runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+                connection,
+                mode="dry-run",
+                **kwargs,
+            )
+    finally:
+        connection.close()
+    assert observed == [41]
+    assert _tier0c_b_transaction_snapshot(runtime.db) == before
+
+
+def test_exact_41_runner_independently_enforces_screening_overlay(
+    canonical_postgres,
+    monkeypatch,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+    kwargs = _tier0c_b_runner_kwargs(runtime, monkeypatch)
+    before = _tier0c_b_transaction_snapshot(runtime.db)
+
+    import rule_engine
+
+    monkeypatch.setattr(
+        rule_engine,
+        "_apply_screening_disposition_floor_for_recompute",
+        lambda db, app, risk: {},
+    )
+    connection = _tier0c_b_runner_connection(runtime)
+    try:
+        with pytest.raises(
+            runtime.tier0c_b_runner.Tier0CBRunnerError,
+            match="RM-PILOT-024: recompute screening floor differs",
+        ):
+            runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+                connection,
+                mode="dry-run",
+                **kwargs,
+            )
+    finally:
+        connection.close()
+    assert _tier0c_b_transaction_snapshot(runtime.db) == before
+
+
+def test_exact_41_runner_rejects_screening_fixture_contract_drift(
+    canonical_postgres,
+    monkeypatch,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+    kwargs = _tier0c_b_runner_kwargs(runtime, monkeypatch)
+    connection = runtime.db.get_db()
+    try:
+        connection.execute(
+            "UPDATE screening_reviews SET disposition_code=? WHERE application_id=?",
+            ("no_match", "pcdv100000000024"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    drifted = _tier0c_b_transaction_snapshot(runtime.db)
+    connection = _tier0c_b_runner_connection(runtime)
+    try:
+        with pytest.raises(
+            runtime.tier0c_b_runner.Tier0CBRunnerError,
+            match="RM-PILOT-024: persisted screening disposition differs",
+        ):
+            runtime.tier0c_b_runner.run_exact_41_tier0c_b(
+                connection,
+                mode="dry-run",
+                **kwargs,
+            )
+    finally:
+        connection.close()
+    assert _tier0c_b_transaction_snapshot(runtime.db) == drifted
 
 
 def test_tier0c_b_success_commits_risk_evidence_and_audit_together(

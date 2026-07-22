@@ -1021,8 +1021,12 @@ def _parse_config_column(val):
     return val  # JSONB already parsed: dict/list pass validation, scalars get flagged
 
 
-def load_risk_config():
+def load_risk_config(db=None):
     """Load live risk scoring configuration from DB.
+
+    Callers may supply an existing connection when configuration must be read
+    from their caller-owned transaction. The default continues to open and
+    close its own read connection exactly as normal runtime callers expect.
 
     Validates that score-mapping columns (country_risk_scores, sector_risk_scores,
     entity_type_scores) are dicts after JSON parsing, attempting normalization of
@@ -1038,15 +1042,20 @@ def load_risk_config():
     """
     fail_closed = _risk_config_fail_closed()
     try:
-        from db import get_db
-        db = get_db()
+        owns_connection = db is None
+        if owns_connection:
+            from db import get_db
+            config_db = get_db()
+        else:
+            config_db = db
         try:
-            config = db.execute("SELECT * FROM risk_config WHERE id=1").fetchone()
+            config = config_db.execute("SELECT * FROM risk_config WHERE id=1").fetchone()
         finally:
-            try:
-                db.close()
-            except Exception:
-                pass
+            if owns_connection:
+                try:
+                    config_db.close()
+                except Exception:
+                    pass
         if config:
             result = {}
             for key in ("dimensions", "thresholds", "country_risk_scores",
@@ -2502,6 +2511,8 @@ def recompute_risk(
     log_audit_fn=None,
     apply_routing_policy=True,
     audit_commit=True,
+    config_override=None,
+    capture_routing_result=False,
 ):
     """Recompute risk score for a single application and persist the result.
 
@@ -2523,6 +2534,12 @@ def recompute_risk(
                       surrounding transaction must pass False so the primary
                       ``Risk Recomputed`` row commits or rolls back with the
                       application update and related routing evidence.
+        config_override: Optional already-validated configuration pinned by a
+                      controlled caller. Normal runtime callers omit it and
+                      continue to use the canonical runtime loader.
+        capture_routing_result: Include the routing actuator's structured
+                      result for a controlled validator. False by default so
+                      ordinary runtime return/audit payloads remain unchanged.
 
     Returns:
         dict with keys:
@@ -2592,7 +2609,14 @@ def recompute_risk(
             ubos=ubos,
             intermediaries=intermediaries,
         )
-        new_risk = compute_risk_score(scoring_input)
+        if config_override is None:
+            # Preserve the established ordinary-runtime call contract.
+            new_risk = compute_risk_score(scoring_input)
+        else:
+            new_risk = compute_risk_score(
+                scoring_input,
+                config_override=config_override,
+            )
         routing_floor = _apply_edd_routing_floor_for_recompute(db, app, new_risk)
         screening_floor = _apply_screening_disposition_floor_for_recompute(db, app, new_risk)
         workflow_preservation = _preserve_manual_compliance_workflow(db, app, new_risk)
@@ -2797,7 +2821,7 @@ def recompute_risk(
                 _risk_dict.setdefault("final_risk_level", new_level)
                 _risk_dict.setdefault("base_risk_level", new_risk.get("base_risk_level", new_level))
                 _risk_dict.setdefault("sector_label", (dict(_app_post or {})).get("sector"))
-                apply_routing_decision(
+                routing_application_result = apply_routing_decision(
                     db=db,
                     app_row=(dict(_app_post) if _app_post else app),
                     risk_dict=_risk_dict,
@@ -2806,7 +2830,14 @@ def recompute_risk(
                     client_ip="",
                     source=SOURCE_RISK_RECOMPUTE,
                 )
+                if capture_routing_result:
+                    result["routing_policy_result"] = routing_application_result
             except Exception as _re_err:
+                if capture_routing_result:
+                    result["routing_policy_result"] = {
+                        "ran": False,
+                        "errors": [f"unexpected_exception:{_re_err}"],
+                    }
                 logger.warning(
                     "apply_routing_decision (recompute) failed for app_id=%s: %s",
                     app_id, _re_err,
