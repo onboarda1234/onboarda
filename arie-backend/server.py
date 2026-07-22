@@ -21437,6 +21437,31 @@ def _screening_evidence_category(*values):
     return "Unclassified Provider Risk"
 
 
+def _screening_evidence_bucket_category(*values):
+    """MOST-MATERIAL-first categoriser for TRIAGE BUCKETING ONLY (audit H5).
+
+    A ComplyAdvantage hit can carry several category signals at once (e.g. both
+    sanctions and adverse media). The shared `_screening_evidence_category`
+    tests adverse/media first, so such a hit bucketed as Adverse Media and the
+    Sanctions tile read 0 while a real sanctions hit existed. Bucketing must
+    pick the most material category so the Sanctions tile can never exclude a
+    sanctions hit. This helper is used ONLY where the triage-bucket key is set
+    (one caller); the shared categoriser is deliberately left unchanged because
+    it also feeds evidence-to-subject linking (_screening_row_categories /
+    candidate categorisation), where changing the single returned value would
+    alter linking. One category per item is preserved (bucket sum == total)."""
+    text = _screening_evidence_norm(" ".join(_screening_evidence_text(v) for v in values))
+    if "sanction" in text:
+        return "Sanctions"
+    if "watchlist" in text or "warning" in text:
+        return "Watchlist"
+    if "pep" in text or "politically exposed" in text or "political" in text:
+        return "PEP"
+    if "adverse" in text or "media" in text:
+        return "Adverse Media"
+    return "Unclassified Provider Risk"
+
+
 def _screening_evidence_source_url(item):
     return _first_non_empty(
         item.get("source_url"),
@@ -21945,7 +21970,11 @@ def _screening_evidence_matched_profile_fields(evidence):
 def _normalise_screening_evidence_item(row, evidence, *, source, link_strategy=None):
     evidence = evidence if isinstance(evidence, dict) else {}
     ids = _screening_evidence_provider_ids(evidence)
-    category = _screening_evidence_category(
+    # Audit H5: bucket by the MOST MATERIAL category so a sanctions+adverse hit
+    # counts under Sanctions, never leaving the Sanctions tile at 0. This is the
+    # only site that switches to the most-material categoriser; linking sites
+    # (_screening_row_categories, candidate categorisation) keep the shared one.
+    category = _screening_evidence_bucket_category(
         evidence.get("category"),
         evidence.get("match_category"),
         evidence.get("match_categories"),
@@ -24700,6 +24729,28 @@ class ScreeningHitDispositionHandler(BaseHandler):
                 unknown = [hid for hid in hit_ids if hid not in real_hit_ids]
                 if unknown:
                     return self.error("Unknown screening hit", 400)
+            # Audit MEDIUM + H6: read each targeted hit's CURRENT disposition once,
+            # before the write loop. Two consumers: (1) the undo/overwrite role
+            # gate — reversing or changing a recorded false-positive clearance is
+            # as sensitive as making one, so it requires a clear-authorised role
+            # (the existing check only gated NEW clearances); (2) H6's audit
+            # record of what each write superseded.
+            prior_dispositions = {}
+            for hid in hit_ids:
+                prow = db.execute(
+                    "SELECT disposition FROM screening_hit_dispositions WHERE application_id=? "
+                    "AND subject_type=? AND subject_name=? AND hit_id=?",
+                    (app["id"], subject_type, subject_name, hid),
+                ).fetchone()
+                prior_dispositions[hid] = dict(prow)["disposition"] if prow else None
+            if user.get("role") not in _SCREENING_HIT_CLEAR_ROLES:
+                reverses_clear = [hid for hid in hit_ids if prior_dispositions.get(hid) == "cleared"]
+                if reverses_clear:
+                    return self.error(
+                        "Undoing or changing a recorded false-positive clearance "
+                        "requires Onboarding Officer, SCO, or admin role",
+                        403,
+                    )
             reviewer_id = user.get("sub") or ""
             reviewer_name = user.get("name") or reviewer_id
             now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -24742,6 +24793,13 @@ class ScreeningHitDispositionHandler(BaseHandler):
                     "hit_count": len(hit_ids),
                     "disposition": "pending" if undo else disposition,
                     "materiality": materiality,
+                    # Audit H6: the officer's rationale and what each hit's
+                    # decision superseded are recorded in the append-only
+                    # audit_log, so a superseded/undone clearance's reasoning
+                    # survives the mutable disposition row being overwritten/
+                    # deleted. Parity with the subject-level handler's [:1000].
+                    "rationale": (rationale or "")[:1000],
+                    "prior_dispositions": prior_dispositions,
                     "actor": reviewer_id,
                     "actor_role": user.get("role"),
                     "timestamp": now_utc,
