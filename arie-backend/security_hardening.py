@@ -94,6 +94,16 @@ def _parse_approval_timestamp(value: Any) -> datetime:
 _CANONICAL_APPROVAL_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}
 _APPROVAL_RISK_UNAVAILABLE_WARNING = "Risk unavailable — recalculation required"
 _APPROVAL_EDD_ZERO_SCORE_WARNING = "EDD required while canonical risk score is unavailable or zero"
+DUAL_FIRST_APPROVAL_REQUIRED = (
+    "HIGH/VERY_HIGH risk application requires dual approval. "
+    "Another compliance officer must approve first."
+)
+DUAL_SAME_OFFICER = "DUAL_SAME_OFFICER"
+DUAL_APPROVER_ROLE_INVALID = "DUAL_APPROVER_ROLE_INVALID"
+DUAL_FIRST_APPROVER_ROLE_UNVERIFIED = "DUAL_FIRST_APPROVER_ROLE_UNVERIFIED"
+DUAL_FIRST_APPROVER_ROLE_INVALID = "DUAL_FIRST_APPROVER_ROLE_INVALID"
+DUAL_ROLE_PAIR_REQUIRED = "DUAL_ROLE_PAIR_REQUIRED"
+_DUAL_APPROVAL_ROLES = frozenset({"sco", "admin"})
 
 
 def _truthy_db_value(value: Any) -> bool:
@@ -2118,12 +2128,14 @@ class ApprovalGateValidator:
     ) -> Tuple[bool, str]:
         """
         For HIGH/VERY_HIGH risk applications: validates dual-approval eligibility
-        using structured application fields (first_approver_id, first_approved_at).
+        using the structured first-approver fields and the immutable first-leg
+        audit role. Approval Policy v1.0 requires exactly one SCO and one Admin.
 
         Returns:
             Tuple of (can_approve: bool, error_or_info: str)
-            - (False, msg) when this is the first approval (caller should record it)
-            - (True, "") when a different officer already recorded first approval
+            - (False, DUAL_FIRST_APPROVAL_REQUIRED) when the caller should
+              record the first approval
+            - (True, "") only when the two distinct approvals are SCO + Admin
         """
         try:
             risk_level = (
@@ -2137,6 +2149,8 @@ class ApprovalGateValidator:
                 return (True, "")
 
             current_user_id = current_user.get('sub', current_user.get('id', ''))
+            current_user_role = str(current_user.get('role') or '').strip().lower()
+            app_id = app.get('id', '')
             app_ref = app.get('ref', '')
 
             if not db or not app_ref:
@@ -2145,25 +2159,55 @@ class ApprovalGateValidator:
             # Read structured first_approver_id from the application row
             first_approver_id = app.get('first_approver_id')
 
+            # Same officer cannot perform both approvals
+            if first_approver_id and first_approver_id == current_user_id:
+                return (False, DUAL_SAME_OFFICER)
+
+            if current_user_role not in _DUAL_APPROVAL_ROLES:
+                return (False, DUAL_APPROVER_ROLE_INVALID)
+
             if not first_approver_id:
                 # No first approval yet — caller must record it
-                return (
-                    False,
-                    "HIGH/VERY_HIGH risk application requires dual approval. "
-                    "Another compliance officer must approve first."
-                )
+                return (False, DUAL_FIRST_APPROVAL_REQUIRED)
 
-            # Same officer cannot perform both approvals
-            if first_approver_id == current_user_id:
-                return (
-                    False,
-                    "DUAL_SAME_OFFICER"
-                )
+            # The application row stores the first approver's identity; the
+            # append-only audit row stores their role at approval time. Do not
+            # reinterpret historical authority through a mutable users.role.
+            first_approval_audit = db.execute(
+                """SELECT user_role FROM audit_log
+                   WHERE action = ? AND application_id = ?
+                     AND target = ? AND user_id = ?
+                   ORDER BY id DESC LIMIT 1""",
+                (
+                    "First Approval (Pending Second)",
+                    app_id,
+                    app_ref,
+                    first_approver_id,
+                ),
+            ).fetchone()
+            if not first_approval_audit:
+                return (False, DUAL_FIRST_APPROVER_ROLE_UNVERIFIED)
 
-            # Different officer has already given first approval — allow second
+            first_approval_evidence = dict(first_approval_audit)
+            first_approver_role = str(
+                first_approval_evidence.get('user_role') or ''
+            ).strip().lower()
+            if first_approver_role not in _DUAL_APPROVAL_ROLES:
+                return (False, DUAL_FIRST_APPROVER_ROLE_INVALID)
+
+            if {first_approver_role, current_user_role} != _DUAL_APPROVAL_ROLES:
+                return (False, DUAL_ROLE_PAIR_REQUIRED)
+
+            # The distinct approvals are exactly one SCO and one Admin.
             logger.info(
-                f"Application {app_ref} ({risk_level}) passed dual approval check: "
-                f"first approver={first_approver_id}, second approver={current_user_id}"
+                "Application %s (%s) passed SCO + Admin dual approval check: "
+                "first approver=%s (%s), second approver=%s (%s)",
+                app_ref,
+                risk_level,
+                first_approver_id,
+                first_approver_role,
+                current_user_id,
+                current_user_role,
             )
             return (True, "")
 
