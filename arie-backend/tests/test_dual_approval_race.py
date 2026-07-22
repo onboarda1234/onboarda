@@ -30,6 +30,31 @@ def _make_user(user_id, name, role="sco"):
     return {"sub": user_id, "name": name, "role": role}
 
 
+def _record_first_approval(db, app, user, *, audit_role=None):
+    """Persist the same first-leg identity and immutable role evidence as runtime."""
+    role = audit_role or user["role"]
+    db.execute(
+        "UPDATE applications SET first_approver_id = ?, "
+        "first_approved_at = datetime('now'), updated_at = datetime('now') "
+        "WHERE id = ?",
+        (user["sub"], app["id"]),
+    )
+    db.execute(
+        """INSERT INTO audit_log
+           (user_id, user_name, user_role, action, target, application_id, detail)
+           VALUES (?, ?, ?, 'First Approval (Pending Second)', ?, ?, ?)""",
+        (
+            user["sub"],
+            user["name"],
+            role,
+            app["ref"],
+            app["id"],
+            "Test first approval",
+        ),
+    )
+    db.commit()
+
+
 def _insert_high_risk_app(db, risk_level="HIGH"):
     """Insert a HIGH/VERY_HIGH risk application with a valid compliance memo."""
     suffix = uuid.uuid4().hex[:8]
@@ -123,12 +148,13 @@ class TestDualApprovalValidation:
         finally:
             db.close()
 
-    def test_same_officer_blocked_after_first_approval(self, temp_db):
+    @pytest.mark.parametrize("risk_level", ["HIGH", "VERY_HIGH"])
+    def test_same_officer_blocked_after_first_approval(self, temp_db, risk_level):
         """Same officer who did first approval is blocked with DUAL_SAME_OFFICER."""
         from security_hardening import ApprovalGateValidator
         db = _get_db()
         try:
-            app = _insert_high_risk_app(db)
+            app = _insert_high_risk_app(db, risk_level=risk_level)
             user_a = _make_user("officer-a", "Officer A")
 
             # Simulate first approval by writing structured field
@@ -149,20 +175,15 @@ class TestDualApprovalValidation:
             db.close()
 
     def test_different_officer_allowed_after_first_approval(self, temp_db):
-        """Different officer passes dual approval check after first approval."""
+        """A distinct Admin completes a first SCO approval."""
         from security_hardening import ApprovalGateValidator
         db = _get_db()
         try:
             app = _insert_high_risk_app(db)
             user_a = _make_user("officer-a", "Officer A")
-            user_b = _make_user("officer-b", "Officer B")
+            user_b = _make_user("officer-b", "Officer B", role="admin")
 
-            # Simulate first approval by officer A
-            db.execute(
-                "UPDATE applications SET first_approver_id = ?, first_approved_at = datetime('now') WHERE id = ?",
-                (user_a["sub"], app["id"])
-            )
-            db.commit()
+            _record_first_approval(db, app, user_a)
 
             app = db.execute("SELECT * FROM applications WHERE id = ?", (app["id"],)).fetchone()
             app = dict(app)
@@ -170,6 +191,84 @@ class TestDualApprovalValidation:
             can_approve, msg = ApprovalGateValidator.validate_high_risk_dual_approval(app, user_b, db)
             assert can_approve
             assert msg == ""
+        finally:
+            db.close()
+
+    @pytest.mark.parametrize("risk_level", ["HIGH", "VERY_HIGH"])
+    @pytest.mark.parametrize(
+        ("first_role", "second_role"),
+        [("sco", "admin"), ("admin", "sco")],
+    )
+    def test_only_sco_admin_pair_passes(self, temp_db, risk_level, first_role, second_role):
+        from security_hardening import ApprovalGateValidator
+        db = _get_db()
+        try:
+            app = _insert_high_risk_app(db, risk_level=risk_level)
+            first = _make_user("first-authority", "First Authority", first_role)
+            second = _make_user("second-authority", "Second Authority", second_role)
+            _record_first_approval(db, app, first)
+            app = dict(db.execute(
+                "SELECT * FROM applications WHERE id = ?", (app["id"],)
+            ).fetchone())
+
+            assert ApprovalGateValidator.validate_high_risk_dual_approval(
+                app, second, db
+            ) == (True, "")
+        finally:
+            db.close()
+
+    @pytest.mark.parametrize("risk_level", ["HIGH", "VERY_HIGH"])
+    @pytest.mark.parametrize(
+        ("first_role", "second_role", "expected_error"),
+        [
+            ("sco", "sco", "DUAL_ROLE_PAIR_REQUIRED"),
+            ("admin", "admin", "DUAL_ROLE_PAIR_REQUIRED"),
+            ("co", "sco", "DUAL_FIRST_APPROVER_ROLE_INVALID"),
+            ("co", "admin", "DUAL_FIRST_APPROVER_ROLE_INVALID"),
+            ("sco", "co", "DUAL_APPROVER_ROLE_INVALID"),
+            ("admin", "co", "DUAL_APPROVER_ROLE_INVALID"),
+        ],
+    )
+    def test_invalid_dual_control_role_pairs_fail(
+        self, temp_db, risk_level, first_role, second_role, expected_error
+    ):
+        from security_hardening import ApprovalGateValidator
+        db = _get_db()
+        try:
+            app = _insert_high_risk_app(db, risk_level=risk_level)
+            first = _make_user("first-invalid", "First Invalid", first_role)
+            second = _make_user("second-invalid", "Second Invalid", second_role)
+            _record_first_approval(db, app, first)
+            app = dict(db.execute(
+                "SELECT * FROM applications WHERE id = ?", (app["id"],)
+            ).fetchone())
+
+            assert ApprovalGateValidator.validate_high_risk_dual_approval(
+                app, second, db
+            ) == (False, expected_error)
+        finally:
+            db.close()
+
+    def test_missing_first_approval_role_evidence_fails_closed(self, temp_db):
+        from security_hardening import ApprovalGateValidator
+        db = _get_db()
+        try:
+            app = _insert_high_risk_app(db)
+            db.execute(
+                "UPDATE applications SET first_approver_id = ?, "
+                "first_approved_at = datetime('now') WHERE id = ?",
+                ("unverified-first", app["id"]),
+            )
+            db.commit()
+            app = dict(db.execute(
+                "SELECT * FROM applications WHERE id = ?", (app["id"],)
+            ).fetchone())
+
+            allowed, error = ApprovalGateValidator.validate_high_risk_dual_approval(
+                app, _make_user("verified-admin", "Verified Admin", "admin"), db
+            )
+            assert not allowed
+            assert error == "DUAL_FIRST_APPROVER_ROLE_UNVERIFIED"
         finally:
             db.close()
 
@@ -320,24 +419,19 @@ class TestDualApprovalRaceCondition:
             db.close()
 
     def test_sequential_different_officers_succeed(self, temp_db):
-        """First officer records first approval, different officer completes second."""
+        """A first SCO approval is completed by an Admin."""
         from security_hardening import ApprovalGateValidator
         db = _get_db()
         try:
             app = _insert_high_risk_app(db)
             user_a = _make_user("officer-seq-a", "Officer Seq A")
-            user_b = _make_user("officer-seq-b", "Officer Seq B")
+            user_b = _make_user("officer-seq-b", "Officer Seq B", role="admin")
 
             # First officer: gets (False, needs first approval)
             can_approve_1, _ = ApprovalGateValidator.validate_high_risk_dual_approval(app, user_a, db)
             assert not can_approve_1
 
-            # Record first approval
-            db.execute(
-                "UPDATE applications SET first_approver_id = ?, first_approved_at = datetime('now') WHERE id = ?",
-                (user_a["sub"], app["id"])
-            )
-            db.commit()
+            _record_first_approval(db, app, user_a)
             app2 = db.execute("SELECT * FROM applications WHERE id = ?", (app["id"],)).fetchone()
             app2 = dict(app2)
 
@@ -356,14 +450,10 @@ class TestDualApprovalRaceCondition:
         try:
             app = _insert_high_risk_app(db)
             user_a = _make_user("officer-conc-a", "Officer Conc A")
-            user_b = _make_user("officer-conc-b", "Officer Conc B")
+            user_b = _make_user("officer-conc-b", "Officer Conc B", role="admin")
 
             # Officer A wins the first approval
-            db.execute(
-                "UPDATE applications SET first_approver_id = ?, first_approved_at = datetime('now') WHERE id = ?",
-                (user_a["sub"], app["id"])
-            )
-            db.commit()
+            _record_first_approval(db, app, user_a)
 
             # Officer B reads the updated row and sees first_approver_id is already set
             app_after = db.execute("SELECT * FROM applications WHERE id = ?", (app["id"],)).fetchone()

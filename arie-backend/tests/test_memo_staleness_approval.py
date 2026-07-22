@@ -32,6 +32,30 @@ def _make_user(user_id, name, role="sco"):
     return {"sub": user_id, "name": name, "role": role}
 
 
+def _record_first_approval(db, app, user):
+    """Persist the production first-leg fields and immutable audit role."""
+    db.execute(
+        "UPDATE applications SET first_approver_id = ?, "
+        "first_approved_at = datetime('now'), updated_at = datetime('now') "
+        "WHERE id = ?",
+        (user["sub"], app["id"]),
+    )
+    db.execute(
+        """INSERT INTO audit_log
+           (user_id, user_name, user_role, action, target, application_id, detail)
+           VALUES (?, ?, ?, 'First Approval (Pending Second)', ?, ?, ?)""",
+        (
+            user["sub"],
+            user["name"],
+            user["role"],
+            app["ref"],
+            app["id"],
+            "Test first approval",
+        ),
+    )
+    db.commit()
+
+
 def _valid_screening():
     from tests.conftest import clean_ca_screening_report
     return clean_ca_screening_report(
@@ -304,19 +328,14 @@ class TestDualApprovalNoFalseStaleness:
         _insert_resolved_enhanced_requirement(db, app_id)
 
         user_a = _make_user("officer-a", "Officer A")
-        user_b = _make_user("officer-b", "Officer B")
+        user_b = _make_user("officer-b", "Officer B", role="admin")
 
         # Step 1: First approval — sets first_approver_id and updated_at
         app = _get_app(db, app_id)
         can, msg = ApprovalGateValidator.validate_high_risk_dual_approval(app, user_a, db)
         assert not can  # first approval needed
         # Record first approval (mimics server.py logic)
-        db.execute(
-            "UPDATE applications SET first_approver_id = ?, first_approved_at = datetime('now'), "
-            "updated_at = datetime('now') WHERE id = ?",
-            (user_a["sub"], app_id)
-        )
-        db.commit()
+        _record_first_approval(db, app, user_a)
 
         # Step 2: Re-read app — updated_at is now, but inputs_updated_at is still old
         app = _get_app(db, app_id)
@@ -380,15 +399,11 @@ class TestDualApprovalNoFalseStaleness:
         _insert_resolved_enhanced_requirement(db, app_id)
 
         user_a = _make_user("officer-a", "Officer A")
-        user_b = _make_user("officer-b", "Officer B")
+        user_b = _make_user("officer-b", "Officer B", role="admin")
 
         # First approval
-        db.execute(
-            "UPDATE applications SET first_approver_id = ?, first_approved_at = datetime('now'), "
-            "updated_at = datetime('now') WHERE id = ?",
-            (user_a["sub"], app_id)
-        )
-        db.commit()
+        app = _get_app(db, app_id)
+        _record_first_approval(db, app, user_a)
 
         # Simulate a real data change (e.g., screening rerun)
         # This should update BOTH updated_at AND inputs_updated_at
@@ -445,18 +460,13 @@ class TestDualApprovalNoFalseStaleness:
         _insert_resolved_enhanced_requirement(db, app_id)
 
         user_a = _make_user("officer-a", "Officer A")
-        user_b = _make_user("officer-b", "Officer B")
+        user_b = _make_user("officer-b", "Officer B", role="admin")
 
         # First approval
         app = _get_app(db, app_id)
         can, msg = ApprovalGateValidator.validate_high_risk_dual_approval(app, user_a, db)
         assert not can  # needs first approval
-        db.execute(
-            "UPDATE applications SET first_approver_id = ?, first_approved_at = datetime('now'), "
-            "updated_at = datetime('now') WHERE id = ?",
-            (user_a["sub"], app_id)
-        )
-        db.commit()
+        _record_first_approval(db, app, user_a)
 
         # Second officer - gate should pass
         app = _get_app(db, app_id)

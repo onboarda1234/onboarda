@@ -88,6 +88,10 @@ from security_hardening import (
     store_screening_mode, PIIEncryptor, collect_approval_gate_blockers,
     screening_second_review_pending_summary,
     can_decide_application, classify_approval_route,
+    DUAL_FIRST_APPROVAL_REQUIRED, DUAL_SAME_OFFICER,
+    DUAL_APPROVER_ROLE_INVALID, DUAL_FIRST_APPROVER_ROLE_UNVERIFIED,
+    DUAL_FIRST_APPROVER_ROLE_INVALID, DUAL_ROLE_PAIR_REQUIRED,
+    FIRST_APPROVAL_AUDIT_ACTION,
 )
 HAS_SECURITY_HARDENING = True  # Always True — module is now mandatory
 
@@ -34528,11 +34532,32 @@ class ApplicationDecisionHandler(BaseHandler):
             if approval_risk_level in ("HIGH", "VERY_HIGH"):
                 can_approve, dual_error = ApprovalGateValidator.validate_high_risk_dual_approval(app, user, db)
                 if not can_approve:
-                    # Distinguish: same-officer retry vs genuine first approval
-                    if dual_error == "DUAL_SAME_OFFICER":
-                        reason = (
-                            "Dual-approval conflict: you already recorded the first approval. "
-                            "A different authorized officer must complete the second approval."
+                    # Record a first leg only for the validator's explicit
+                    # first-approval result. Role-composition failures must not
+                    # overwrite the existing first approver.
+                    if dual_error != DUAL_FIRST_APPROVAL_REQUIRED:
+                        dual_errors = {
+                            DUAL_SAME_OFFICER: (
+                                "Dual-approval conflict: you already recorded the first approval. "
+                                "A different authorized officer must complete the second approval."
+                            ),
+                            DUAL_APPROVER_ROLE_INVALID: (
+                                "Dual approval requires one Senior Compliance Officer and one Admin. "
+                                "The current officer cannot satisfy either dual-control leg."
+                            ),
+                            DUAL_FIRST_APPROVER_ROLE_UNVERIFIED: (
+                                "Dual approval blocked: the first approver's historical role could not be verified."
+                            ),
+                            DUAL_FIRST_APPROVER_ROLE_INVALID: (
+                                "Dual approval blocked: the first approver was not a Senior Compliance Officer or Admin."
+                            ),
+                            DUAL_ROLE_PAIR_REQUIRED: (
+                                "Dual approval requires exactly one Senior Compliance Officer and one Admin."
+                            ),
+                        }
+                        reason = dual_errors.get(
+                            dual_error,
+                            "Dual approval could not be verified safely.",
                         )
                         self.log_governance_attempt(
                             user, "application.decision", attempt_target, "rejected", 409,
@@ -34555,7 +34580,7 @@ class ApplicationDecisionHandler(BaseHandler):
                             user.get("sub", ""),
                             user.get("name", ""),
                             user.get("role", ""),
-                            "First Approval (Pending Second)",
+                            FIRST_APPROVAL_AUDIT_ACTION,
                             app["ref"],
                             real_id,
                             f"Decision: approve | Reason: {decision_reason} | Awaiting second approver",

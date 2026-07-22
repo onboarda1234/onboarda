@@ -280,6 +280,19 @@ class E2EAuthorityMatrixTest(AsyncHTTPTestCase):
         assert "requires compliance/SCO review" in self._json(resp)["error"]
         assert self._status_of(app_id)["status"] == "compliance_review"
 
+    def test_sco_single_approval_completes_clean_medium_without_dual_leg(self):
+        app_id, ref = self._seed_approvable("MEDIUM")
+        resp = self._approve(app_id, self.sco_token, reason="Single compliance approval")
+        assert resp.code in (200, 201), resp.body.decode()
+        row = self.db.execute(
+            "SELECT status, decision_by, first_approver_id FROM applications WHERE id = ?",
+            (app_id,),
+        ).fetchone()
+        assert row["status"] == "approved"
+        assert row["decision_by"] == "sco001"
+        assert row["first_approver_id"] is None
+        assert not self._audit(ref, "First Approval (Pending Second)")
+
     def test_co_approves_clean_low_without_compliance_memo(self):
         app_id, ref = self._seed_approvable("LOW", with_memo=False)
         resp = self._approve(app_id, self.co_token, reason="Direct clean LOW approval")
@@ -500,7 +513,7 @@ class E2EAuthorityMatrixTest(AsyncHTTPTestCase):
         # SCO begins dual approval from the submitted-to-compliance state.
         first = self._approve(app_id, self.sco_token, reason="Senior review first approval")
         assert first.code == 202, first.body.decode()
-        second = self._approve(app_id, self.sco2_token, reason="Senior review second approval")
+        second = self._approve(app_id, self.admin_token, reason="Admin dual-control approval")
         assert second.code in (200, 201), second.body.decode()
         assert self._status_of(app_id)["status"] == "approved"
 
@@ -511,4 +524,23 @@ class E2EAuthorityMatrixTest(AsyncHTTPTestCase):
         ).fetchall()]
         assert any(r["action"] == "Submit to Compliance" and r["user_role"] == "co" for r in rows)
         assert any(r["action"] == "First Approval (Pending Second)" and r["user_role"] == "sco" for r in rows)
-        assert any(r["action"] == "Decision" and r["user_role"] == "sco" for r in rows)
+        assert any(r["action"] == "Decision" and r["user_role"] == "admin" for r in rows)
+
+    def test_sco_plus_sco_is_rejected_without_replacing_first_approver(self):
+        app_id, ref = self._seed_approvable("HIGH")
+        first = self._approve(app_id, self.sco_token, reason="SCO first approval")
+        assert first.code == 202, first.body.decode()
+
+        second_sco = self._approve(app_id, self.sco2_token, reason="Second SCO attempt")
+        assert second_sco.code == 409, second_sco.body.decode()
+        assert "one Senior Compliance Officer and one Admin" in self._json(second_sco)["error"]
+        row = self.db.execute(
+            "SELECT status, first_approver_id FROM applications WHERE id = ?", (app_id,)
+        ).fetchone()
+        assert row["status"] != "approved"
+        assert row["first_approver_id"] == "sco001"
+        assert not self._audit(ref, "Decision")
+
+        admin = self._approve(app_id, self.admin_token, reason="Admin completes dual control")
+        assert admin.code in (200, 201), admin.body.decode()
+        assert self._status_of(app_id)["status"] == "approved"
