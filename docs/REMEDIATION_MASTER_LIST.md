@@ -24,7 +24,7 @@ things stand") was retired in the 2026-07-15 restructure; see git history.
 
 # Onboarda / RegMind — Audit-Remediation Master List
 
-**Reconciled:** 2026-07-21 against live GitHub · `main` = `78f2352` (merge of #811) · scoped reconcile unions the #780 register stream with the eight staged remediation closures through #811; no duplicate register rows
+**Reconciled:** 2026-07-22 against live GitHub · `main` = `61a1076` (merge of #837) · unions the #780 register stream with the first staged batch (#808–#815) and the second batch (#833–#837, all merged + staging-deployed); no duplicate register rows
 **Pilot:** all 4 code blockers ✅ closed · remaining pilot work = **RSMP Tier 0C** (post-reset 0C-A rerun → 0C-B) + the open 🟠 gates below · Applications module: unconditional **PILOT-READY** (confirmation audit, 2026-07-16)
 **Production:** blocked — Audit-3 verdict REMEDIATE BEFORE PROCEEDING; Phase 14 largely open. Nothing in this file is a production-readiness claim.
 **Open PRs:** [#788](https://github.com/onboarda1234/onboarda/pull/788) (draft docs — staging-reset closure; content incorporated here) · [#779](https://github.com/onboarda1234/onboarda/pull/779) (draft — 0C-A evidence pack, pre-reset verdict) · [#737](https://github.com/onboarda1234/onboarda/pull/737) (draft — P12-1 Phase A discovery report) · #780 register reconcile is merged and unioned here
@@ -255,7 +255,7 @@ are out of scope for every SRP item.
 | P10-4 | Per-decision-type prerequisite gates (RDI-003/008) | HIGH | — | 📋 scoped — policy decision needed | — |
 | P10-5 | Decision-record coverage + provenance (RDI-009 non-SAR, 010) — includes RDI-002 residual assertions | HIGH | — | 📋 scoped (P10-2 dependency now met) | — |
 | P10-6 | Sign-off IP attribution (RDI-012) — RDI-107 explicit allowlist delivered default-off | HIGH | [#708](https://github.com/onboarda1234/onboarda/pull/708), [#809](https://github.com/onboarda1234/onboarda/pull/809) | ✅ merged + staging-validated 2026-07-21 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#eight-remediation-prs-808-815) |
-| P10-7 | Append-only audit at DB level (RDI-013 non-SAR) | MEDIUM | — | 📋 scoped — grants half is RDS/infra ops | — |
+| P10-7 | Append-only audit at DB level (RDI-013 non-SAR) | MEDIUM | [#837](https://github.com/onboarda1234/onboarda/pull/837) | ◐ code half ✅ merged + staging-validated 2026-07-22 (DB triggers, `audit_log`) · RDS-grants ops half open | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#second-remediation-batch-prs-833-837) |
 | RDI-002 | LOW/MEDIUM fast-path — by-design HIGH policy-exception; policy approved & signed (Aisha Sudally, 2026-07-07): [`LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md`](compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md) | HIGH | — | ✅ policy approved · residual code assertions → P10-5 | — |
 | RDI-005 | SAR permanence (= **DCI-002**) — Enterprise pre-enable blocker; safe only while `ENABLE_SAR_WORKFLOW`/`ENABLE_SAR_STR` stay false; same guard covers SAR slices of RDI-009/013 | HIGH | — | ⏸ deferred until Enterprise SAR/STR enablement | — |
 
@@ -274,9 +274,9 @@ are out of scope for every SRP item.
 | P11-2 | Dependency CVE remediation + pip-audit CI gate (BSA-015) — 🔴 blocker, closed | HIGH | [#730](https://github.com/onboarda1234/onboarda/pull/730) | ✅ merged + validated 2026-07-09 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p11-2-pr-730) |
 | P11-3 | Fail-closed inputs + AI budget (BSA-006/007/013) | MED+LOW | [#706](https://github.com/onboarda1234/onboarda/pull/706) | ✅ merged + validated | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#overnight-batch-prs-705-708) |
 | P11-4 | Offload blocking I/O off the IOLoop (BSA-004/005) — coordinate with item 12 | MED | — | 📋 scoped | — |
-| P11-5 | AI prompt sanitisation + output schema + circuit breaker (BSA-011/012) | MED | — | 📋 scoped | — |
-| P11-6 | AuthZ & audit hardening — admin reset re-auth, `log_authz_denial()` routing (BSA-003/009) | MED | — | 📋 scoped | — |
-| P11-7 | Document-download attachment + webhook signature hygiene (BSA-008/010, + DCI-017) | MED+LOW | — | 📋 scoped | — |
+| P11-5 | AI prompt sanitisation + output schema + circuit breaker (BSA-011/012) | MED | [#836](https://github.com/onboarda1234/onboarda/pull/836) | ◐ breaker + prompt-fencing merged + staging-validated 2026-07-22, flag-gated OFF · activation is a founder sign-off (PR body); `extract_document_fields` schema follow-up open | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#second-remediation-batch-prs-833-837) |
+| P11-6 | AuthZ & audit hardening — admin reset re-auth, `log_authz_denial()` routing (BSA-003/009) | MED | [#834](https://github.com/onboarda1234/onboarda/pull/834) | ✅ merged + staging-validated 2026-07-22 (admin re-auth + 9 denial sites audited) · next BSA-009 slice (6 portal type-gates, 3 cm role gates) noted | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#second-remediation-batch-prs-833-837) |
+| P11-7 | Document-download attachment + webhook signature hygiene (BSA-008/010, + DCI-017) | MED+LOW | [#833](https://github.com/onboarda1234/onboarda/pull/833) | ✅ merged + staging-validated 2026-07-22 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#second-remediation-batch-prs-833-837) |
 | P11-8 | Supply-chain pinning (BSA-016/017/019 = DCI-022/024) — hash-pinned runtime lock enforced | MED+LOW | [#712](https://github.com/onboarda1234/onboarda/pull/712), [#811](https://github.com/onboarda1234/onboarda/pull/811) | ✅ merged + staging-validated 2026-07-21 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#eight-remediation-prs-808-815) |
 | P11-9 | CI coverage-gate fail-closed (BSA-018 = DCI-026) | LOW | [#707](https://github.com/onboarda1234/onboarda/pull/707) | ✅ merged + deployed | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#overnight-batch-prs-705-708) |
 
@@ -299,7 +299,7 @@ are out of scope for every SRP item.
 | P12-4 | Migration hard-stops + schema-drift detection (DCI-005/004) | HIGH | [#711](https://github.com/onboarda1234/onboarda/pull/711) | ◐ DCI-005 half ✅ #711 · DCI-004 drift check 📋 | — |
 | P12-5 | Status-column CHECK constraints (DCI-006, Migration v2.47) | MED | [#716](https://github.com/onboarda1234/onboarda/pull/716) + [#739](https://github.com/onboarda1234/onboarda/pull/739) | ✅ merged; staging constraints installed via #739, executed 2026-07-11 · 54-FK follow-up tracked at DCI-104 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-5-dci-006-prs-716-and-739) |
 | P12-6 | PG pool connection validation — pre-ping on checkout (DCI-007) | MED | [#709](https://github.com/onboarda1234/onboarda/pull/709) | ✅ merged 2026-07-08 | — |
-| P12-7 | Verification-matrix fidelity — HYBRID only on deterministic INCONCLUSIVE; resolve 5 TODO mappings (DCI-014/015) | MED+LOW | — | 📋 scoped | — |
+| P12-7 | Verification-matrix fidelity — HYBRID only on deterministic INCONCLUSIVE; resolve 5 TODO mappings (DCI-014/015) | MED+LOW | [#835](https://github.com/onboarda1234/onboarda/pull/835) | ◐ mechanism (rules-first gate + INCONCLUSIVE-aware aggregation) merged + staging-validated 2026-07-22, flag-gated OFF · DCI-015 mappings + evaluator activation = founder sign-off ([memo](compliance/P12_7_VERIFICATION_MATRIX_DECISION_MEMO.md)) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#second-remediation-batch-prs-833-837) |
 | P12-8 | Retention purge enforceability + purge-log evidence (DCI-020/021, Migration v2.48) | MED | [#717](https://github.com/onboarda1234/onboarda/pull/717) + hotfix [#723](https://github.com/onboarda1234/onboarda/pull/723) | ✅ merged + deployed | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-8-prs-717-and-723) |
 | P12-9 | Observability hardening — JSON logs, request-correlation ids, readiness gates (DCI-028/029, Migration v2.49) | MED | [#718](https://github.com/onboarda1234/onboarda/pull/718) | ✅ merged + deployed | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-9-pr-718) |
 | P12-10 | Infra guards — upload body-size pre-buffering, deploy fails on `services-stable` timeout (DCI-016/025; stability half partly mitigated by #702) | MED+LOW | [#812](https://github.com/onboarda1234/onboarda/pull/812) | ◐ upload limits ✅ 2026-07-21 · deploy-timeout half open | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#eight-remediation-prs-808-815) |
@@ -493,23 +493,25 @@ are out of scope for every SRP item.
 
 ---
 
-## Roll-up — computed by counting rows, 2026-07-21
+## Roll-up — computed by counting rows, 2026-07-22
 
 Counting rule: every row in Phases 0–14 + the Re-audit/RSMP tables counts once.
 The 3 cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 7
 APP-CONF-003, Phase 13 CA row) and the Optional Modernization tables are
 excluded. ◐ = items with one named half done and one open (SRP-1, SRP-2a,
 staging-SHA gate, P12-4, P13-7, staging-reset closure, P9-13, DCI-104,
-RSMP-0C-A, RSMP-0C-REM). This count is the 2026-07-19 union of the #780
-stream with the rows merged through #805.
+RSMP-0C-A, RSMP-0C-REM, and the second-batch splits P12-7, P10-7, P11-5).
+This count unions the #780 stream with both staged batches (#808–#815 and
+#833–#837). Second batch moved 5 rows out of 📋 scoped: P11-6/P11-7 → ✅,
+P12-7/P10-7/P11-5 → ◐ (total unchanged — items changed category, none added).
 
 | Status | Count |
 |--------|:--:|
-| ✅ done/merged | 118 |
-| ◐ split — one half open | 11 |
+| ✅ done/merged | 120 |
+| ◐ split — one half open | 14 |
 | 🟢 PR open | 0 |
 | 🔨 in progress | 3 |
-| 📋 scoped | 20 |
+| 📋 scoped | 15 |
 | ⏸ blocked | 5 |
 | ⬜ pending | 32 |
 | **Total tracked items** | **189** |

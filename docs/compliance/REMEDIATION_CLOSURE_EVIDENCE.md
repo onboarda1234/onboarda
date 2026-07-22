@@ -635,6 +635,30 @@ its accepted validation window. DCI-104 remains split because batch 2 does not
 claim closure of the full 54-index backlog; P12-10 remains split because the
 deploy-timeout half remains open.
 
+## Second remediation batch PRs 833-837
+
+Controlled-pilot overnight batch, 2026-07-21 → 2026-07-22. Each PR was
+authored, put through an **independent adversarial pre-merge audit** (a
+separate agent, three lenses, findings fixed before merge), CI-gated on the
+PostgreSQL lane, then merged and staging-deployed. No production action, RSMP
+activation, Tier 0C recomputation, frozen-workflow behaviour change, or
+production-readiness claim was made. Deep CloudWatch + functional staging
+validation is delegated to Codex as the independent pass.
+
+| PR / register ID | Merge SHA | Deploy run | Scope + audit outcome |
+|---|---|---|---|
+| #833 / P11-7 (BSA-008/010, DCI-017) | `2ef7819ac82f5890827e8c76269cf8e3e882628f` | `29869…` (run 1084) success | Every download path serves an explicit sanitized `Content-Disposition` (S3 always-emit + local-fallback sanitize; CR/LF-safe class); no signature material in webhook logs. Audit: safe, 2 guard tests added. |
+| #834 / P11-6 (BSA-003/009) | `a43099d67ff4bf4d2d1e53143df15cc02e79ce50` | run 1085 success | Admin reset re-auth (bcrypt, fail-closed, ordered to preserve EX-01 + deny a token oracle) + shared rate limit; 9 previously-silent 403 sites routed through `log_authz_denial`, byte-identical bodies. Audit caught a non-string-password 500 that skipped the audit row (fixed) + an unpinned rate limit. Residual: next BSA-009 slice (6 portal type-gates + 3 cm role gates). |
+| #835 / P12-7 (DCI-014/015) | `29e859b6decd13f205cb6dfb1bd9eae423368d31` | run 1086 success | Flag-gated (OFF) rules-first HYBRID gate + INCONCLUSIVE-aware aggregation; DCI-015 mappings + evaluator activation packaged as a founder decision memo. Audit caught a flag-off aggregation leak + an AI-set reorder that changed the Claude prompt (both fixed; order-sensitive tests added). |
+| #836 / P11-5 (BSA-011/012) | `7bf3de31b3c811f164a869e94249040f6c72a3ed` | run 1087 success | Flag-gated (OFF) module-level cross-call circuit breaker + prompt fencing. Audit built a differential harness proving flag-off prompts byte-identical to parent, and caught document-caused terminal 400s opening the provider-health breaker (fixed to exclude `terminal_invalid_request`). Residual: `extract_document_fields` schema registration; breaker probe-in-flight marker at activation. |
+| #837 / P10-7 (RDI-013 non-SAR, code half) | `61a1076f2a6bfd5ded2010b7038d35cc4e28f847` | run 1088 success | `audit_log` `BEFORE UPDATE`/`DELETE` triggers (SQLite + PostgreSQL) with a maintenance-window bypass preserving sanctioned retention purge + fixture cleanups. Audit caught a **fail-open blocker** — the window marker committed while its close ran in a never-committed transaction, permanently disarming the triggers after the first purge (fixed: commit moved outside the window; regression tests added) — plus two missed staging cleanup paths and a PG-lane CI fix. Residual (register ops half): RDS grants — separate trigger-owner role; app role without UPDATE/DELETE/TRUNCATE/ALTER on `audit_log`. |
+
+Splits recorded on the register: **P12-7, P10-7, P11-5** land the mechanism
+merged + staging-deployed but flag-gated OFF / code-half only, with activation
+or the ops grants half remaining as named open work; **P11-6, P11-7** are ✅
+closed. Sign-off memo for P12-7:
+[`P12_7_VERIFICATION_MATRIX_DECISION_MEMO.md`](P12_7_VERIFICATION_MATRIX_DECISION_MEMO.md).
+
 ## Appendix — de-flake backlog and CI-infra notes
 
 Test de-flake backlog (not remediation items):
