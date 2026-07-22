@@ -292,6 +292,8 @@ class TestRecomputeRiskAudit:
                 "detail": detail,
                 "before_state": kwargs.get("before_state"),
                 "after_state": kwargs.get("after_state"),
+                "commit_provided": "commit" in kwargs,
+                "commit": kwargs.get("commit"),
             })
 
         user = _make_user()
@@ -315,6 +317,44 @@ class TestRecomputeRiskAudit:
         assert entry["after_state"]["risk_score"] is not None
         assert entry["after_state"]["risk_level"] is not None
         assert entry["after_state"]["risk_computed_at"] is not None
+        assert entry["commit_provided"] is False
+        assert entry["commit"] is None
+        db.close()
+
+    def test_controlled_recompute_keeps_primary_audit_in_caller_transaction(
+        self, temp_db
+    ):
+        """Tier 0C-B can opt out without changing the runtime default."""
+        from rule_engine import recompute_risk
+
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, _ = _insert_scored_app(
+            db,
+            risk_score=99.9,
+            risk_level="VERY_HIGH",
+        )
+        audit_calls = []
+
+        def mock_audit(user, action, target, detail, **kwargs):
+            audit_calls.append({"action": action, "commit": kwargs.get("commit")})
+
+        result = recompute_risk(
+            db,
+            app_id,
+            "tier0c_b_transaction_regression",
+            user=_make_user(),
+            log_audit_fn=mock_audit,
+            apply_routing_policy=False,
+            audit_commit=False,
+        )
+
+        assert result["recomputed"] is True
+        primary = [
+            row for row in audit_calls if row["action"] == "Risk Recomputed"
+        ]
+        assert primary == [{"action": "Risk Recomputed", "commit": False}]
+        db.rollback()
         db.close()
 
 
