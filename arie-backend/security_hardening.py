@@ -103,6 +103,7 @@ DUAL_APPROVER_ROLE_INVALID = "DUAL_APPROVER_ROLE_INVALID"
 DUAL_FIRST_APPROVER_ROLE_UNVERIFIED = "DUAL_FIRST_APPROVER_ROLE_UNVERIFIED"
 DUAL_FIRST_APPROVER_ROLE_INVALID = "DUAL_FIRST_APPROVER_ROLE_INVALID"
 DUAL_ROLE_PAIR_REQUIRED = "DUAL_ROLE_PAIR_REQUIRED"
+FIRST_APPROVAL_AUDIT_ACTION = "First Approval (Pending Second)"
 _DUAL_APPROVAL_ROLES = frozenset({"sco", "admin"})
 
 
@@ -2179,7 +2180,7 @@ class ApprovalGateValidator:
                      AND target = ? AND user_id = ?
                    ORDER BY id DESC LIMIT 1""",
                 (
-                    "First Approval (Pending Second)",
+                    FIRST_APPROVAL_AUDIT_ACTION,
                     app_id,
                     app_ref,
                     first_approver_id,

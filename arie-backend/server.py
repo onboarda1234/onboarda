@@ -91,6 +91,7 @@ from security_hardening import (
     DUAL_FIRST_APPROVAL_REQUIRED, DUAL_SAME_OFFICER,
     DUAL_APPROVER_ROLE_INVALID, DUAL_FIRST_APPROVER_ROLE_UNVERIFIED,
     DUAL_FIRST_APPROVER_ROLE_INVALID, DUAL_ROLE_PAIR_REQUIRED,
+    FIRST_APPROVAL_AUDIT_ACTION,
 )
 HAS_SECURITY_HARDENING = True  # Always True — module is now mandatory
 
@@ -34579,7 +34580,7 @@ class ApplicationDecisionHandler(BaseHandler):
                             user.get("sub", ""),
                             user.get("name", ""),
                             user.get("role", ""),
-                            "First Approval (Pending Second)",
+                            FIRST_APPROVAL_AUDIT_ACTION,
                             app["ref"],
                             real_id,
                             f"Decision: approve | Reason: {decision_reason} | Awaiting second approver",

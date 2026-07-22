@@ -35,7 +35,8 @@ def _record_first_approval(db, app, user, *, audit_role=None):
     role = audit_role or user["role"]
     db.execute(
         "UPDATE applications SET first_approver_id = ?, "
-        "first_approved_at = datetime('now') WHERE id = ?",
+        "first_approved_at = datetime('now'), updated_at = datetime('now') "
+        "WHERE id = ?",
         (user["sub"], app["id"]),
     )
     db.execute(
