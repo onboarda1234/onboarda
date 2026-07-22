@@ -609,6 +609,56 @@ fix) · **#796** (memo detail rendering compatibility). Manifest SHA-256
 `fixtures.pilot_canonical_cli` as a one-off Fargate task on the deployed
 image (post-#791 image required for the converged fixture format).
 
+## Eight remediation PRs 808-815
+
+Controlled-pilot staging closure, 2026-07-20 through 2026-07-21. This is a
+scoped union update alongside register PR #780 (now merged), not a replacement
+or duplicate of that register stream. No production action, RSMP activation,
+Tier 0C recomputation, or production-readiness claim was made.
+
+| PR / finding | Merge SHA | Deploy run | Staging evidence |
+|---|---|---|---|
+| #813 / R2-PROC-1 | `a58449e0218da5aa3c1960c41c3a4b0a09083aee` | `29757828706` success | Docs-only warm-up; backend `:902`, worker `:350`; health, SHA alignment, ALB and logs clean. |
+| #814 / APP-AUD-005 | `99d897ad743c0afdf36198060011b1d33df2b503` | `29762747996` success | Backend `:903`, worker `:351`; `search=Wirecard` exactly matched existing `q=Wirecard`; logs clean. |
+| #812 / P12-10 | `f6ac90138558c869833504be66d8be7c028ca3bd` | `29794512855` success | Normal upload 201; 11 MB rejected 400 at unchanged 10 MB default. Earlier shared-window FAIL reconciled PASS-with-note: unrelated #823 datetime error, fixed and live-PG verified by #825/`563cc2b`; corrected window clean. |
+| #809 / RDI-107 | `b2f93b6f7ed50939f770f784d67bd386e484d5ab` | `29806818643` success | Backend `:909`, worker `:357`; allowlist unset/default-off; real public client IP preserved through ALB; no CIDR parse warnings; logs clean. |
+| #810 / DCI-104 batch 2 | `35ebaf0240424559b9ceb3f186d24e5f32e706da` | `29815802356` success | Backend `:912`, worker `:360`; ADR-0008 ledger `050`, no 049 FK collision; all eight batch indexes present; zero migration errors. |
+| #815 / APP-AUD-gov-dup-1 | `3389d4eb16a3b9850b782d07f8c8c1fa8f53efa9` | `29821015477` success | Backend `:914`, worker `:362`; controlled approval 200 and exactly one approval audit row; logs clean. |
+| #808 / R2-BSA-016 | `16e502659bc597e6a7065d210f555ffce6ec5b12` | `29837370259` success | Backend `:916`, worker `:364`; normal verification 200; document/supervisor/enhanced-upload limits returned 429 only over threshold with `retry_after`; logs clean. |
+| #811 / R2-BSA-019 | `78f235215bfe8d79ac59c9502b7431c8efa63670` | `29843617583` success | Backend `:917`, worker `:365`; hash-enforced Docker build/push and container smoke passed; ECS/SHA/ALB health and logs clean. |
+
+Every deploy reported exact `/api/version` `git_sha`/`image_tag` alignment,
+HTTP 200 liveness/health/authenticated readiness (`ready=true`), completed
+backend and verification-worker rollouts with zero failed tasks, healthy ALB
+targets, and zero ERROR/CRITICAL/Exception/Traceback/unexpected-5xx matches in
+its accepted validation window. DCI-104 remains split because batch 2 does not
+claim closure of the full 54-index backlog; P12-10 remains split because the
+deploy-timeout half remains open.
+
+## Second remediation batch PRs 833-837
+
+Controlled-pilot overnight batch, 2026-07-21 → 2026-07-22. Each PR was
+authored, put through an **independent adversarial pre-merge audit** (a
+separate agent, three lenses, findings fixed before merge), CI-gated on the
+PostgreSQL lane, then merged and staging-deployed. No production action, RSMP
+activation, Tier 0C recomputation, frozen-workflow behaviour change, or
+production-readiness claim was made. Deep CloudWatch + functional staging
+validation is delegated to Codex as the independent pass.
+
+| PR / register ID | Merge SHA | Deploy run | Scope + audit outcome |
+|---|---|---|---|
+| #833 / P11-7 (BSA-008/010, DCI-017) | `2ef7819ac82f5890827e8c76269cf8e3e882628f` | `29869…` (run 1084) success | Every download path serves an explicit sanitized `Content-Disposition` (S3 always-emit + local-fallback sanitize; CR/LF-safe class); no signature material in webhook logs. Audit: safe, 2 guard tests added. |
+| #834 / P11-6 (BSA-003/009) | `a43099d67ff4bf4d2d1e53143df15cc02e79ce50` | run 1085 success | Admin reset re-auth (bcrypt, fail-closed, ordered to preserve EX-01 + deny a token oracle) + shared rate limit; 9 previously-silent 403 sites routed through `log_authz_denial`, byte-identical bodies. Audit caught a non-string-password 500 that skipped the audit row (fixed) + an unpinned rate limit. Residual: next BSA-009 slice (6 portal type-gates + 3 cm role gates). |
+| #835 / P12-7 (DCI-014/015) | `29e859b6decd13f205cb6dfb1bd9eae423368d31` | run 1086 success | Flag-gated (OFF) rules-first HYBRID gate + INCONCLUSIVE-aware aggregation; DCI-015 mappings + evaluator activation packaged as a founder decision memo. Audit caught a flag-off aggregation leak + an AI-set reorder that changed the Claude prompt (both fixed; order-sensitive tests added). |
+| #836 / P11-5 (BSA-011/012) | `7bf3de31b3c811f164a869e94249040f6c72a3ed` | run 1087 success | Flag-gated (OFF) module-level cross-call circuit breaker + prompt fencing. Audit built a differential harness proving flag-off prompts byte-identical to parent, and caught document-caused terminal 400s opening the provider-health breaker (fixed to exclude `terminal_invalid_request`). Residual: `extract_document_fields` schema registration; breaker probe-in-flight marker at activation. |
+| #837 / P10-7 (RDI-013 non-SAR, code half) | `61a1076f2a6bfd5ded2010b7038d35cc4e28f847` | run 1088 success | `audit_log` `BEFORE UPDATE`/`DELETE` triggers (SQLite + PostgreSQL) with a maintenance-window bypass preserving sanctioned retention purge + fixture cleanups. Audit caught a **fail-open blocker** — the window marker committed while its close ran in a never-committed transaction, permanently disarming the triggers after the first purge (fixed: commit moved outside the window; regression tests added) — plus two missed staging cleanup paths and a PG-lane CI fix. Residual (register ops half): RDS grants — separate trigger-owner role; app role without UPDATE/DELETE/TRUNCATE/ALTER on `audit_log`. |
+
+Splits recorded on the register: **P12-7, P10-7, P11-5** land the mechanism
+merged + staging-deployed but flag-gated OFF / code-half only, with activation
+or the ops grants half remaining as named open work; **P11-6, P11-7** are ✅
+closed. Sign-off memo for P12-7:
+[`P12_7_VERIFICATION_MATRIX_DECISION_MEMO.md`](P12_7_VERIFICATION_MATRIX_DECISION_MEMO.md).
+
 ## Appendix — de-flake backlog and CI-infra notes
 
 Test de-flake backlog (not remediation items):
