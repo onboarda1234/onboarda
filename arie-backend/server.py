@@ -22245,11 +22245,19 @@ def _screening_evidence_rollup(items, row, *, raw_count=0):
 
 
 def _screening_evidence_reference_summary(items, row=None):
+    from screening_config import get_provider_display_name
+
     items = [item for item in items or [] if isinstance(item, dict)]
     row = row or {}
+    resolved_provider = "complyadvantage" if any(_screening_evidence_norm(item.get("provider")) == "complyadvantage" for item in items) else _screening_evidence_row_provider(row)
     refs = {
-        "provider": "complyadvantage" if any(_screening_evidence_norm(item.get("provider")) == "complyadvantage" for item in items) else _screening_evidence_row_provider(row),
-        "provider_display_name": "ComplyAdvantage Mesh",
+        "provider": resolved_provider,
+        # Do not fabricate ComplyAdvantage provenance for evidence whose provider
+        # is unknown (CLAUDE.md provider-source-of-truth invariant). The display
+        # name is derived from the resolved provider so an unknown provider stays
+        # "Unknown provider" instead of silently reading as CA. Byte-identical to
+        # the previous hardcoded value for the complyadvantage case.
+        "provider_display_name": get_provider_display_name(resolved_provider, unknown_label="Unknown provider"),
         "case_ids": sorted({item.get("provider_case_id") for item in items if item.get("provider_case_id")}),
         "alert_ids": sorted({item.get("provider_alert_id") for item in items if item.get("provider_alert_id")}),
         "risk_ids": sorted({item.get("provider_risk_id") for item in items if item.get("provider_risk_id")}),
