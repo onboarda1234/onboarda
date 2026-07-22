@@ -17600,8 +17600,8 @@ function screeningTriageGroupedBlock(row, meta, groupEntries) {
   if (cleared) pills += pill(cleared + ' cleared', 'mut');
   if (pending) pills += pill(pending + ' undecided', 'warn');
   var html = '<div data-screening-hit-group="' + escapeHtml(groupId) + '" style="margin-top:12px;border:1px solid ' + (resolved ? 'var(--green)' : 'var(--border1)') + ';border-radius:11px;background:' + (resolved ? 'rgba(34,197,94,.08)' : 'var(--surface2)') + ';padding:14px;">';
-  html += '<div style="font-size:13px;font-weight:800;">' + total + ' near-identical ' + escapeHtml(catLabel) + ' matches' + (score != null ? ' (all triage ' + score + ')' : '') + '</div>';
-  html += '<div style="font-size:12px;color:var(--text3);margin:3px 0 10px;line-height:1.5;">Duplicate or syndicated records of the same matter — no new facts across them. Review any individually, or clear the ones you have not reviewed in one action.</div>';
+  html += '<div style="font-size:13px;font-weight:800;">' + total + ' near-identical ' + escapeHtml(catLabel) + ' matches' + (score != null ? ' (all triage ' + score + ')' : ' (unscored)') + '</div>';
+  html += '<div style="font-size:12px;color:var(--text3);margin:3px 0 10px;line-height:1.5;">Grouped by the same matched name and category — likely duplicate or syndicated records of the same matter. Review any individually, or clear the ones you have not reviewed in one action.</div>';
   if (pills) html += '<div style="display:flex;gap:6px;flex-wrap:wrap;font-size:11px;margin-bottom:10px;">' + pills + '</div>';
   if (can) {
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
