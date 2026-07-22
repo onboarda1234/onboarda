@@ -2494,7 +2494,15 @@ def _preserve_manual_compliance_workflow(db, app, recomputed_risk):
     }
 
 
-def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routing_policy=True):
+def recompute_risk(
+    db,
+    app_id,
+    reason,
+    user=None,
+    log_audit_fn=None,
+    apply_routing_policy=True,
+    audit_commit=True,
+):
     """Recompute risk score for a single application and persist the result.
 
     Args:
@@ -2510,6 +2518,11 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
                       immediately invoke the same routing helper themselves
                       after recomputation and want to avoid duplicate routing
                       audit/actuation writes.
+        audit_commit: Preserve the standard audit writer's autonomous-commit
+                      behaviour by default. Controlled callers that own the
+                      surrounding transaction must pass False so the primary
+                      ``Risk Recomputed`` row commits or rolls back with the
+                      application update and related routing evidence.
 
     Returns:
         dict with keys:
@@ -2711,8 +2724,23 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
                 f"{floor_detail}"
             )
             try:
-                log_audit_fn(user, "Risk Recomputed", app.get("ref", app_id), detail,
-                             db=db, before_state=before_state, after_state=after_state)
+                audit_kwargs = {
+                    "db": db,
+                    "before_state": before_state,
+                    "after_state": after_state,
+                }
+                # Keep the historical callback signature and default commit
+                # behaviour for every ordinary runtime caller. Tier 0C-B opts
+                # into the caller-owned transaction explicitly.
+                if not audit_commit:
+                    audit_kwargs["commit"] = False
+                log_audit_fn(
+                    user,
+                    "Risk Recomputed",
+                    app.get("ref", app_id),
+                    detail,
+                    **audit_kwargs,
+                )
             except Exception as e:
                 logger.warning("recompute_risk audit log failed: %s", e)
 

@@ -59,6 +59,7 @@ def canonical_postgres(monkeypatch):
         import fixtures.seeder as fixture_seeder_module
         import fixtures.pilot_canonical as canonical_module
         import fixtures.pilot_canonical_seeder as seeder_module
+        import fixtures.tier0c_b as tier0c_b_module
 
         db_module = loaded_db_module
         db_module.close_pg_pool()
@@ -90,6 +91,7 @@ def canonical_postgres(monkeypatch):
             canonical=canonical_module,
             db=db_module,
             seeder=seeder_module,
+            tier0c_b=tier0c_b_module,
         )
     finally:
         if db_module is not None:
@@ -208,6 +210,70 @@ def _canonical_correction_request_snapshot(db_module):
                 "JOIN rmi_requests r ON r.id=i.request_id "
                 "JOIN applications a ON a.id=r.application_id "
                 "WHERE a.ref LIKE ? ORDER BY i.id",
+                ("RM-PILOT-%",),
+            ).fetchall()
+        ]
+    finally:
+        connection.close()
+
+
+def _tier0c_b_transaction_snapshot(db_module):
+    """Capture every table the controlled recompute path may mutate."""
+    connection = db_module.get_db()
+    try:
+        snapshot = {}
+        for table, where, params in (
+            ("applications", "WHERE ref LIKE ?", ("RM-PILOT-%",)),
+            ("audit_log", "", ()),
+            ("edd_cases", "", ()),
+            ("application_enhanced_requirements", "", ()),
+        ):
+            rows = [
+                dict(row)
+                for row in connection.execute(
+                    f'SELECT * FROM "{table}" {where} ORDER BY id',
+                    params,
+                ).fetchall()
+            ]
+            snapshot[table] = json.loads(
+                json.dumps(rows, sort_keys=True, default=str)
+            )
+        return snapshot
+    finally:
+        connection.close()
+
+
+def _standard_audit_writer():
+    """Expose BaseHandler's real commit-defaulting writer without Tornado."""
+    from base_handler import BaseHandler
+
+    class AuditContext:
+        @staticmethod
+        def get_client_ip():
+            return "127.0.0.1"
+
+    context = AuditContext()
+
+    def writer(user, action, target, detail, **kwargs):
+        return BaseHandler.log_audit(
+            context,
+            user,
+            action,
+            target,
+            detail,
+            **kwargs,
+        )
+
+    return writer
+
+
+def _canonical_ids(db_module):
+    connection = db_module.get_db()
+    try:
+        return [
+            row["id"]
+            for row in connection.execute(
+                "SELECT id FROM applications WHERE ref LIKE ? ORDER BY ref",
                 ("RM-PILOT-%",),
             ).fetchall()
         ]
@@ -341,6 +407,400 @@ def test_tier0c_b_routes_and_decision_eligibility_reconcile_on_postgres(
         "RM-PILOT-036": "screening_pending_or_unresolved",
         "RM-PILOT-038": "rejected",
     }
+
+
+def test_tier0c_b_success_commits_risk_evidence_and_audit_together(
+    canonical_postgres,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=False,
+        references=["RM-PILOT-001"],
+    )
+
+    connection = runtime.db.get_db()
+    application = connection.execute(
+        "SELECT id,risk_score,risk_computed_at FROM applications WHERE ref=?",
+        ("RM-PILOT-001",),
+    ).fetchone()
+    application_id = application["id"]
+    connection.execute(
+        "UPDATE applications SET risk_score=?,risk_level=? WHERE id=?",
+        (99.9, "VERY_HIGH", application_id),
+    )
+    connection.commit()
+    baseline = dict(
+        connection.execute(
+            "SELECT risk_score,risk_level,risk_dimensions::text AS risk_dimensions,"
+            "risk_computed_at FROM applications WHERE id=?",
+            (application_id,),
+        ).fetchone()
+    )
+    audit_writer = _standard_audit_writer()
+
+    def validator(*, db, recomputations, audit_writer):
+        assert len(recomputations) == 1
+        pending = db.execute(
+            "SELECT risk_score,risk_level,risk_dimensions::text AS risk_dimensions,"
+            "risk_computed_at FROM applications WHERE id=?",
+            (application_id,),
+        ).fetchone()
+        assert pending["risk_score"] != baseline["risk_score"]
+        assert pending["risk_dimensions"] != baseline["risk_dimensions"]
+        assert db.execute(
+            "SELECT COUNT(*) AS n FROM audit_log "
+            "WHERE action='Risk Recomputed' AND target=?",
+            ("RM-PILOT-001",),
+        ).fetchone()["n"] == 1
+
+        # The caller's transaction is still uncommitted while validation runs.
+        observer = runtime.db.get_db()
+        try:
+            observed = observer.execute(
+                "SELECT risk_score,risk_level,risk_dimensions::text AS risk_dimensions,"
+                "risk_computed_at FROM applications WHERE id=?",
+                (application_id,),
+            ).fetchone()
+            assert dict(observed) == baseline
+            assert observer.execute(
+                "SELECT COUNT(*) AS n FROM audit_log "
+                "WHERE action='Risk Recomputed' AND target=?",
+                ("RM-PILOT-001",),
+            ).fetchone()["n"] == 0
+        finally:
+            observer.close()
+        return {
+            "approval_routes_valid": True,
+            "decision_eligibility_valid": True,
+        }
+
+    result = runtime.tier0c_b.run_tier0c_b_recomputation_transaction(
+        connection,
+        [application_id],
+        reason="tier0c_b_transaction_success",
+        user={"sub": "tier0cb-test", "name": "Tier 0C-B", "role": "admin"},
+        log_audit_fn=audit_writer,
+        validator_fn=validator,
+    )
+    connection.close()
+
+    assert result["applications_recomputed"] == 1
+    observer = runtime.db.get_db()
+    try:
+        committed = observer.execute(
+            "SELECT risk_score,risk_level,risk_dimensions::text AS risk_dimensions,"
+            "risk_computed_at FROM applications WHERE id=?",
+            (application_id,),
+        ).fetchone()
+        assert dict(committed) != baseline
+        assert observer.execute(
+            "SELECT COUNT(*) AS n FROM audit_log "
+            "WHERE action='Risk Recomputed' AND target=?",
+            ("RM-PILOT-001",),
+        ).fetchone()["n"] == 1
+    finally:
+        observer.close()
+
+
+def test_tier0c_b_validator_cannot_commit_and_failure_rolls_back_audit(
+    canonical_postgres,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=False,
+        references=["RM-PILOT-001"],
+    )
+    before = _tier0c_b_transaction_snapshot(runtime.db)
+    application_id = _canonical_ids(runtime.db)[0]
+    connection = runtime.db.get_db()
+
+    def validator(*, db, recomputations, audit_writer):
+        assert recomputations
+        assert db.execute(
+            "SELECT COUNT(*) AS n FROM audit_log "
+            "WHERE action='Risk Recomputed' AND target=?",
+            ("RM-PILOT-001",),
+        ).fetchone()["n"] == 1
+        with pytest.raises(
+            runtime.tier0c_b.Tier0CBTransactionBoundaryError,
+            match="cannot commit",
+        ):
+            db.conn.commit()
+        db.execute("SELECT 1 AS chained_commit_escape").commit()
+
+    with pytest.raises(
+        runtime.tier0c_b.Tier0CBTransactionBoundaryError,
+        match="cannot commit",
+    ):
+        runtime.tier0c_b.run_tier0c_b_recomputation_transaction(
+            connection,
+            [application_id],
+            reason="tier0c_b_validator_failure",
+            user={"sub": "tier0cb-test", "name": "Tier 0C-B", "role": "admin"},
+            log_audit_fn=_standard_audit_writer(),
+            validator_fn=validator,
+        )
+    connection.close()
+
+    assert _tier0c_b_transaction_snapshot(runtime.db) == before
+
+
+def test_tier0c_b_detects_swallowed_postgres_rollback_and_leaves_zero_residue(
+    canonical_postgres,
+    monkeypatch,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=False,
+        references=["RM-PILOT-001"],
+    )
+    before = _tier0c_b_transaction_snapshot(runtime.db)
+    application_id = _canonical_ids(runtime.db)[0]
+
+    def swallowed_database_error(
+        db,
+        application_id,
+        reason,
+        user=None,
+        log_audit_fn=None,
+        apply_routing_policy=True,
+        audit_commit=True,
+    ):
+        db.execute(
+            "UPDATE applications SET risk_score=risk_score+1 WHERE id=?",
+            (application_id,),
+        )
+        try:
+            db.execute("SELECT * FROM tier0c_b_missing_table")
+        except Exception:
+            pass
+        # DBConnection has rolled back the first update. These writes begin a
+        # new transaction; continuity detection must reject and roll them back.
+        db.execute(
+            "UPDATE applications SET risk_level=? WHERE id=?",
+            ("HIGH", application_id),
+        )
+        log_audit_fn(
+            user,
+            "Risk Recomputed",
+            "RM-PILOT-001",
+            "swallowed PostgreSQL rollback regression",
+            db=db,
+        )
+        return {"recomputed": True, "changed": True}
+
+    monkeypatch.setattr(
+        runtime.tier0c_b,
+        "recompute_risk",
+        swallowed_database_error,
+    )
+    connection = runtime.db.get_db()
+    with pytest.raises(
+        runtime.tier0c_b.Tier0CBTransactionBoundaryError,
+        match="transaction changed",
+    ):
+        runtime.tier0c_b.run_tier0c_b_recomputation_transaction(
+            connection,
+            [application_id],
+            reason="tier0c_b_swallowed_database_error",
+            user={"sub": "tier0cb-test", "name": "Tier 0C-B", "role": "admin"},
+            log_audit_fn=_standard_audit_writer(),
+            validator_fn=lambda **kwargs: {"valid": True},
+        )
+    connection.close()
+
+    assert _tier0c_b_transaction_snapshot(runtime.db) == before
+
+
+def test_tier0c_b_validator_requires_explicit_success(
+    canonical_postgres,
+    monkeypatch,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(
+        dry_run=False,
+        references=["RM-PILOT-001"],
+    )
+    before = _tier0c_b_transaction_snapshot(runtime.db)
+    application_id = _canonical_ids(runtime.db)[0]
+
+    def transactional_recompute(
+        db,
+        application_id,
+        reason,
+        user=None,
+        log_audit_fn=None,
+        apply_routing_policy=True,
+        audit_commit=True,
+    ):
+        db.execute(
+            "UPDATE applications SET risk_score=risk_score+1 WHERE id=?",
+            (application_id,),
+        )
+        log_audit_fn(
+            user,
+            "Risk Recomputed",
+            "RM-PILOT-001",
+            "explicit validator success regression",
+            db=db,
+        )
+        return {"recomputed": True, "changed": True}
+
+    monkeypatch.setattr(
+        runtime.tier0c_b,
+        "recompute_risk",
+        transactional_recompute,
+    )
+    for invalid_result in (None, False, {"valid": False}):
+        connection = runtime.db.get_db()
+        with pytest.raises(
+            runtime.tier0c_b.Tier0CBTransactionError,
+            match="explicit success",
+        ):
+            runtime.tier0c_b.run_tier0c_b_recomputation_transaction(
+                connection,
+                [application_id],
+                reason="tier0c_b_validator_must_pass_explicitly",
+                user={
+                    "sub": "tier0cb-test",
+                    "name": "Tier 0C-B",
+                    "role": "admin",
+                },
+                log_audit_fn=_standard_audit_writer(),
+                validator_fn=lambda **kwargs: invalid_result,
+            )
+        connection.close()
+        assert _tier0c_b_transaction_snapshot(runtime.db) == before
+
+
+def test_tier0c_b_failure_on_application_41_leaves_zero_residue(
+    canonical_postgres,
+    monkeypatch,
+):
+    runtime = canonical_postgres
+    runtime.seeder.seed_pilot_canonical_dataset(dry_run=False)
+    application_ids = _canonical_ids(runtime.db)
+    assert len(application_ids) == 41
+    before = _tier0c_b_transaction_snapshot(runtime.db)
+    calls = []
+
+    def fail_after_application_41_audit(
+        db,
+        application_id,
+        reason,
+        user=None,
+        log_audit_fn=None,
+        apply_routing_policy=True,
+        audit_commit=True,
+    ):
+        calls.append(application_id)
+        assert audit_commit is False
+        db.execute(
+            "UPDATE applications SET risk_score=risk_score+1,risk_level=?,"
+            "risk_dimensions=? WHERE id=?",
+            (
+                "HIGH",
+                json.dumps({"transaction_test": len(calls)}, sort_keys=True),
+                application_id,
+            ),
+        )
+        target = f"RM-PILOT-{len(calls):03d}"
+        log_audit_fn(
+            user,
+            "Risk Recomputed",
+            target,
+            "Tier 0C-B application-41 rollback regression",
+            db=db,
+            before_state={"position": len(calls)},
+            after_state={"position": len(calls)},
+        )
+        if len(calls) == 1:
+            log_audit_fn(
+                user,
+                "Manual workflow preserved during recomputation",
+                target,
+                "same-transaction preservation evidence",
+                db=db,
+            )
+        db.execute(
+            "INSERT INTO audit_log "
+            "(user_id,user_name,user_role,action,target,detail,ip_address) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (
+                "tier0cb-test",
+                "Tier 0C-B",
+                "admin",
+                "edd_routing.evaluated",
+                target,
+                "same-transaction routing evidence",
+                "127.0.0.1",
+            ),
+        )
+        db.execute(
+            "INSERT INTO audit_log "
+            "(user_id,user_name,user_role,action,target,detail,ip_address) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (
+                "tier0cb-test",
+                "Tier 0C-B",
+                "admin",
+                "edd_routing.actuated",
+                target,
+                "same-transaction EDD actuation evidence",
+                "127.0.0.1",
+            ),
+        )
+        if len(calls) == 41:
+            raise RuntimeError("forced failure after application 41 audit")
+        return {"recomputed": True, "changed": True}
+
+    monkeypatch.setattr(
+        runtime.tier0c_b,
+        "recompute_risk",
+        fail_after_application_41_audit,
+    )
+    connection = runtime.db.get_db()
+    with pytest.raises(
+        RuntimeError,
+        match="forced failure after application 41 audit",
+    ):
+        runtime.tier0c_b.run_tier0c_b_recomputation_transaction(
+            connection,
+            application_ids,
+            reason="tier0c_b_application_41_failure",
+            user={"sub": "tier0cb-test", "name": "Tier 0C-B", "role": "admin"},
+            log_audit_fn=_standard_audit_writer(),
+            validator_fn=lambda **kwargs: {"valid": True},
+        )
+    connection.close()
+
+    assert calls == application_ids
+    assert _tier0c_b_transaction_snapshot(runtime.db) == before
+
+
+def test_non_tier0c_standard_audit_writer_still_commits_by_default(
+    canonical_postgres,
+):
+    runtime = canonical_postgres
+    connection = runtime.db.get_db()
+    _standard_audit_writer()(
+        {"sub": "runtime-test", "name": "Runtime", "role": "admin"},
+        "Runtime Audit Default",
+        "application:runtime-default",
+        "Normal runtime audit behaviour remains autonomous",
+        db=connection,
+    )
+
+    observer = runtime.db.get_db()
+    try:
+        assert observer.execute(
+            "SELECT COUNT(*) AS n FROM audit_log "
+            "WHERE action='Runtime Audit Default' AND target=?",
+            ("application:runtime-default",),
+        ).fetchone()["n"] == 1
+    finally:
+        observer.close()
+        connection.close()
 
 
 def test_postgres_converges_only_reviewed_prior_manifest_identity(
