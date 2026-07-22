@@ -17277,8 +17277,12 @@ function screeningSubjectRollupStrip(row) {
   if (r.cleared) pills += pill(r.cleared + ' cleared', 'mut');
   if (r.pending) pills += pill(r.pending + ' need decision', 'warn');
   var adverse = Number(((triage.buckets || {}).adverse_media) || 0);
+  // Audit H4: state ONLY the count — never assert the hits are "near-identical
+  // copies of one story", which the strip cannot verify (it has no grouping
+  // signal, only a bucket count). The genuine near-duplicate grouping is
+  // computed and shown by the Agent 3 triage narrative on this same screen.
   var honesty = adverse >= 10
-    ? '<div style="margin-top:9px;border-top:1px dashed var(--border2);padding-top:8px;font-size:11.5px;color:var(--text2);line-height:1.5;">⚖️ <strong style="color:var(--text1);">' + adverse + ' adverse-media hits</strong>, but near-identical copies of one story — grouped so a single decision covers the set, not counted as ' + adverse + ' independent risks.</div>'
+    ? '<div style="margin-top:9px;border-top:1px dashed var(--border2);padding-top:8px;font-size:11.5px;color:var(--text2);line-height:1.5;">⚖️ <strong style="color:var(--text1);">' + adverse + ' adverse-media hits</strong> — review the ranked list; RegMind groups near-duplicates for review where detected (see the Agent 3 interpretation).</div>'
     : '';
   return '<div data-screening-subject-rollup="true" style="margin:0 0 14px;border:1px solid ' + accent + ';background:' + bg + ';border-radius:10px;padding:11px 14px;">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
