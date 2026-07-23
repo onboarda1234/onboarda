@@ -6872,16 +6872,20 @@ function initializeSidebar() {
   setSidebarCollapsed(saved === 'true' || saved === 'false' ? saved === 'true' : false, false);
 }
 
-document.addEventListener('DOMContentLoaded', initializeSidebar);
-window.addEventListener('resize', function() {
-  var saved = null;
-  try {
-    saved = localStorage.getItem(SIDEBAR_PREFERENCE_KEY);
-  } catch (e) {
-    saved = null;
-  }
-  setSidebarCollapsed(saved === 'true', false);
-});
+if (globalThis.document) {
+  globalThis.document.addEventListener('DOMContentLoaded', initializeSidebar);
+}
+if (globalThis.window) {
+  globalThis.window.addEventListener('resize', function() {
+    var saved = null;
+    try {
+      saved = localStorage.getItem(SIDEBAR_PREFERENCE_KEY);
+    } catch (e) {
+      saved = null;
+    }
+    setSidebarCollapsed(saved === 'true', false);
+  });
+}
 
 // MOBILE MENU
 // ═══════════════════════════════════════════════════════════
