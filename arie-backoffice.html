@@ -8947,13 +8947,36 @@ function detailValueFromAliases(record, keys) {
   return '';
 }
 
+// Single source of truth for classifying a declared-PEP value as Yes / No /
+// unknown. Every PEP truthiness and display path routes through this so the
+// same person can't read as a PEP on one surface and not on another — the prior
+// implementations used divergent token sets (e.g. only some recognised the
+// 'declared_yes' status string), which is exactly the inconsistency being
+// fixed. Returns 'Yes' | 'No' | null (unknown / not captured).
+function pepDeclaredTriState(value) {
+  if (value === true || value === 1) return 'Yes';
+  if (value === false || value === 0) return 'No';
+  var n = String(value == null ? '' : value).trim().toLowerCase();
+  if (!n) return null;
+  if (n.indexOf('not captured') >= 0 || n.indexOf('not verified') >= 0 ||
+      n === 'unknown' || n === 'pending' || n === 'pending_review' || n === 'not_verified') return null;
+  if (n === 'no' || n === 'n' || n === 'false' || n === '0' || n === 'not_pep' ||
+      n === 'declared_no' || n === 'false_positive' ||
+      n.indexOf('no pep') >= 0 || n.indexOf('false positive') >= 0 || n.indexOf('not pep') >= 0) return 'No';
+  if (n === 'yes' || n === 'y' || n === 'true' || n === '1' || n === 'confirmed_pep' || n === 'declared_yes' ||
+      n.indexOf('declared pep') >= 0 || n.indexOf('client-declared pep') >= 0 ||
+      n.indexOf('officer-verified pep') >= 0 || n.indexOf('confirmed pep') >= 0) return 'Yes';
+  return null;
+}
+
 function normalizePepDisplay(value) {
   if (value == null || value === '') return 'Not verified yet';
   var normalized = String(value).trim().toLowerCase();
-  if (value === true || value === 1 || normalized === '1' || normalized === 'yes' || normalized === 'confirmed_pep') return 'Yes';
-  if (value === false || value === 0 || normalized === '0' || normalized === 'no' || normalized === 'not_pep') return 'No';
+  // false_positive is a distinct display state (not a plain "No").
   if (normalized === 'false_positive') return 'False positive';
-  if (normalized === 'pending_review' || normalized === 'pending' || normalized === 'not_verified' || normalized === 'unknown') return 'Not verified yet';
+  var tri = pepDeclaredTriState(value);
+  if (tri === 'Yes') return 'Yes';
+  if (tri === 'No') return 'No';
   return 'Not verified yet';
 }
 
@@ -9017,11 +9040,24 @@ function personHasDeclaredOrVerifiedPep(person) {
   }
   if (!declaration || typeof declaration !== 'object') declaration = {};
   var status = String(person.pep_status || declaration.pep_status || '').toLowerCase();
-  if (person.client_declared_pep === true || person.declared_pep === true || person.officer_verified_pep === true || person.verified_pep === true) return true;
-  if (declaration.client_declared_pep === true || declaration.declared_pep === true || declaration.officer_verified_pep === true || declaration.verified_pep === true) return true;
+  // Canonical token classification across all declared/verified fields (person
+  // + declaration), so string forms ('yes'/'declared_yes'/'no'/…) are caught
+  // consistently — not only strict boolean === true/false. Yes-signals take
+  // precedence over No-signals (compliance-safe: a declared PEP is never
+  // silently overridden), preserving the prior ordering.
+  var fieldValues = [
+    person.client_declared_pep, person.declared_pep, person.officer_verified_pep, person.verified_pep,
+    declaration.client_declared_pep, declaration.declared_pep, declaration.officer_verified_pep, declaration.verified_pep
+  ];
+  // Yes-signals (broadened to string forms via the canonical classifier) take
+  // precedence and are evaluated before any No return, so a declared PEP is
+  // never hidden. The No-side stays STRICT boolean === false (original
+  // semantics on purpose): a string 'no' on a field must not pre-empt the
+  // label / is_pep Yes-signals checked further down, which would drop a real
+  // PEP that the field ordering previously still caught.
+  if (fieldValues.map(pepDeclaredTriState).indexOf('Yes') >= 0) return true;
   if (status === 'declared_yes' || status === 'confirmed_pep') return true;
-  if (person.client_declared_pep === false || person.declared_pep === false || person.officer_verified_pep === false || person.verified_pep === false) return false;
-  if (declaration.client_declared_pep === false || declaration.declared_pep === false || declaration.officer_verified_pep === false || declaration.verified_pep === false) return false;
+  if (fieldValues.indexOf(false) >= 0) return false;
   if (['declared_no','false_positive','not_pep','pending_review','not_verified'].indexOf(status) >= 0) return false;
   var label = String(person.pep_status_display || person.pep || '').toLowerCase();
   if (label.indexOf('client declared no pep') >= 0 || label.indexOf('false positive') >= 0 || label.indexOf('not pep') >= 0) return false;
@@ -11308,14 +11344,8 @@ function pepYesNoFromValue(value) {
       pepYesNoFromValue(value.is_pep) ||
       pepYesNoFromValue(value.pep);
   }
-  if (value === true || value === 1) return 'Yes';
-  if (value === false || value === 0) return 'No';
-  var normalized = String(value).trim().toLowerCase();
-  if (!normalized) return null;
-  if (normalized.indexOf('not captured') >= 0 || normalized.indexOf('not verified') >= 0 || normalized === 'unknown' || normalized === 'pending') return null;
-  if (normalized === 'no' || normalized === 'false' || normalized === '0' || normalized === 'not_pep' || normalized === 'declared_no' || normalized.indexOf('no pep') >= 0) return 'No';
-  if (normalized === 'yes' || normalized === 'true' || normalized === '1' || normalized === 'confirmed_pep' || normalized === 'declared_yes' || normalized.indexOf('declared pep') >= 0 || normalized.indexOf('client-declared pep') >= 0 || normalized.indexOf('confirmed pep') >= 0) return 'Yes';
-  return null;
+  // Canonical classification — same token set as every other PEP path.
+  return pepDeclaredTriState(value);
 }
 
 function partyClientDeclaredPepDisplay(party) {
