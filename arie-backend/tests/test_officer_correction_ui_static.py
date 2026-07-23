@@ -32,7 +32,10 @@ def _extract_function(html, name):
 
 
 def _officer_runtime_js(html, scenario):
-    pep_start = html.index("function normalizePepDisplay(value)")
+    # Start at the shared pepDeclaredTriState classifier (defined just above
+    # normalizePepDisplay) so the extracted PEP block carries the helper that
+    # normalizePepDisplay / personHasDeclaredOrVerifiedPep now delegate to.
+    pep_start = html.index("function pepDeclaredTriState(value)")
     pep_end = html.index("\nfunction buildPartyDisplayName", pep_start)
     correction_start = html.index("function safeParseJson(value, fallback)")
     correction_end = html.index("\nasync function submitOfficerCorrection", correction_start)
