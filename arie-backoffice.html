@@ -18155,14 +18155,13 @@ function renderScreeningReviewPanel(app, focus) {
   });
 
   var html = '';
-  html += '<div class="card" style="margin-bottom:16px;border-left:4px solid var(--brand);background:rgba(43,47,143,0.03);">';
-  html += '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">';
-  html += '<div><div class="card-title">Screening Review</div><div style="font-size:12px;color:var(--text3);margin-top:4px;">Stored provider AML/watchlist and PEP results for this application. This is the dedicated review surface opened from the Screening Queue.</div></div>';
-  // Screening report (PDF) export button hidden for now — pending PR-2 placement/UX.
-  // The endpoint (GET /api/applications/:id/screening/pdf) and downloadScreeningReportPDF()
-  // remain available; re-add screeningReportDownloadButtonHtml() here to surface it.
-  html += '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-left:auto;">' + screeningModeBadge(screeningSummary.screening_mode) + (screeningSummary.screened_at ? '<span class="explain-data-source">Last screened: ' + escapeHtml(String(screeningSummary.screened_at).replace('T', ' ').slice(0, 19)) + '</span>' : '') + '</div>';
-  html += '</div>';
+  // Header card retired (SRP-3e / Phase E de-dup, founder request): the active
+  // tab already reads "Screening Review"; the mode badge, last-screened
+  // timestamp and focused subject are all shown on the subject card below
+  // (screeningModeBadge renders there via buildEntity/PersonScreeningReviewCard),
+  // so a full-width header card repeating them was pure scroll cost. Only the
+  // compliance-critical freshness warning + data-outage banner remain — now
+  // standalone rather than wrapped in the redundant card.
   // EX-10: Screening freshness warning in review panel
   if (screeningSummary.screening_freshness) {
     var sfr = screeningSummary.screening_freshness;
@@ -18182,8 +18181,6 @@ function renderScreeningReviewPanel(app, focus) {
       '<button type="button" class="btn btn-outline btn-sm" onclick="retryApplicationScreeningEvidenceRows(\'' + escapeJsAttr(app.ref) + '\')">Retry evidence load</button>' +
     '</div>';
   }
-  if (focus && focus.subject_name) html += '<div style="font-size:12px;color:var(--text2);padding:0 18px 18px;">Focused subject: <strong>' + escapeHtml(focus.subject_name) + '</strong> (' + escapeHtml(String(focus.subject_type || '').replace('_', ' ')) + ')</div>';
-  html += '</div>';
   // SRP-3e Phase E: the Agent 3 guidance panel renders inside the selected
   // subject workspace (between the triage strip and the ranked hit sections)
   // per the approved mockup — see screeningSubjectWorkspaceBody.
