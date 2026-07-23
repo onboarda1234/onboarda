@@ -1,0 +1,23 @@
+{
+  "contract": "tier0c-b-noncanonical-qa-exclusions-v1",
+  "environment": "staging",
+  "selection_effect": "none",
+  "runner_scope": "RM-PILOT-001 through RM-PILOT-041 only",
+  "fixtures": [
+    {
+      "reference": "ARF-QAFIX-H5-PR840",
+      "application_id": "f1xedprc840h5001",
+      "classification": "excluded_noncanonical_qa_fixture",
+      "origin_pr": 840,
+      "origin_merge_sha": "6a769883cdcfc00425d803a1b1136a13fd7b790d",
+      "purpose": "Post-merge H5 sanctions-first screening-bucket validation",
+      "fixture": true,
+      "synthetic": true,
+      "non_production": true,
+      "canonical_runner_eligible": false,
+      "persistent_validation_dependency": false,
+      "disposition": "retain_pending_sanctioned_targeted_cleanup",
+      "cleanup_constraint": "Do not delete until a reviewed exact-identity cleanup path exists"
+    }
+  ]
+}
