@@ -17836,6 +17836,25 @@ async function ensureApplicationScreeningEvidenceRows(appRef) {
   } catch (e) {
     console.warn('Could not load screening evidence rows for application:', appRef, e);
     SCREENING_REVIEW_APP_EVIDENCE_FETCHES[appRef] = 'error';
+    // Surface the outage instead of silently leaving the officer on an empty /
+    // "clean-looking" panel; the re-render shows the outage banner + Retry so a
+    // failed provider-evidence load can never read as "no matches / clear"
+    // (audit items: stuck loading + data-outage looks clean).
+    if (typeof currentApp !== 'undefined' && currentApp && currentApp.ref === appRef) {
+      renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    }
+  }
+}
+
+// Let the officer recover from a failed application-evidence load: clear the
+// latched 'error' state (ensure* otherwise never retries) and re-fetch, then
+// re-render immediately so the panel leaves the outage state.
+function retryApplicationScreeningEvidenceRows(appRef) {
+  if (!appRef) return;
+  SCREENING_REVIEW_APP_EVIDENCE_FETCHES[appRef] = null;
+  ensureApplicationScreeningEvidenceRows(appRef);
+  if (typeof currentApp !== 'undefined' && currentApp && currentApp.ref === appRef) {
+    renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
   }
 }
 
@@ -17996,6 +18015,14 @@ function renderScreeningReviewPanel(app, focus) {
     } else if (sfr.status === 'aging') {
       html += '<div style="margin:0 18px 12px;padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;font-size:12px;color:#92400e;font-weight:600;">⚠️ Screening aging — ' + sfr.age_days + ' day(s) old (limit: ' + sfr.validity_days + ' days). Consider re-screening.</div>';
     }
+  }
+  // Data-outage flag: a failed application-evidence load must never read as a
+  // clean/empty screen. Explicit banner + Retry (never silently blank).
+  if (SCREENING_REVIEW_APP_EVIDENCE_FETCHES[app.ref] === 'error') {
+    html += '<div data-screening-evidence-outage="true" style="margin:0 18px 12px;padding:10px 14px;background:#fef2f2;border:1px solid #dc2626;border-radius:8px;font-size:12px;color:#991b1b;font-weight:600;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+      '<span>🚫 Screening evidence could not be loaded from the provider feed. This panel may be incomplete — do not treat an empty or “clear” result as a completed screen. Retry before making a decision.</span>' +
+      '<button type="button" class="btn btn-outline btn-sm" onclick="retryApplicationScreeningEvidenceRows(\'' + escapeJsAttr(app.ref) + '\')">Retry evidence load</button>' +
+    '</div>';
   }
   if (focus && focus.subject_name) html += '<div style="font-size:12px;color:var(--text2);padding:0 18px 18px;">Focused subject: <strong>' + escapeHtml(focus.subject_name) + '</strong> (' + escapeHtml(String(focus.subject_type || '').replace('_', ' ')) + ')</div>';
   html += '</div>';
