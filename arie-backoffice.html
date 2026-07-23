@@ -35571,69 +35571,322 @@ function downloadRiskCSV() {
   showToast('Authoritative CSV risk report downloaded');
 }
 
+function requireAuthoritativeRiskPdfEvidence(app) {
+  if (!app) throw new Error('No application selected');
+  var evidence = getAuthoritativeRiskEvidence(app);
+  if (!evidence) {
+    var blocked = app.riskReportEvidence || app.risk_report_evidence || {};
+    throw new Error(blocked.message || 'Authoritative risk evidence is missing, incomplete, or stale. Recompute risk before exporting.');
+  }
+  var risk = evidence.application || {};
+  var route = risk.approval_route || {};
+  var factors = evidence.factor_evidence;
+  var dimensions = evidence.dimension_computation_evidence;
+  var computation = evidence.computation_evidence || {};
+  var factorFields = [
+    'dimension_id', 'factor_key', 'factor_label', 'raw_value', 'normalized_value',
+    'rule_score', 'factor_weight', 'weighted_factor_contribution',
+    'resolution_status', 'rule_identifier', 'evidence_source'
+  ];
+  var dimensionFields = [
+    'dimension_id', 'dimension_score', 'dimension_weight',
+    'composite_contribution', 'rounding_adjustment', 'factor_keys'
+  ];
+  if (
+    !Number.isFinite(Number(risk.score)) || !risk.tier || !risk.edd_route ||
+    !route.route || !evidence.config_version || !evidence.risk_computed_at ||
+    !Array.isArray(factors) || factors.length !== 17 ||
+    !Array.isArray(dimensions) || dimensions.length !== 5 ||
+    computation.schema_version !== 'risk-factor-evidence-v1' ||
+    !Number.isFinite(Number(computation.base_composite_score)) ||
+    !Number.isFinite(Number(computation.policy_adjustment)) ||
+    !Number.isFinite(Number(computation.final_composite_score))
+  ) {
+    throw new Error('Authoritative factor evidence is incomplete. Recompute risk before exporting.');
+  }
+  factors.forEach(function(factor) {
+    if (!factor || factorFields.some(function(field) { return !Object.prototype.hasOwnProperty.call(factor, field); })) {
+      throw new Error('Authoritative factor evidence is incomplete. Recompute risk before exporting.');
+    }
+  });
+  dimensions.forEach(function(dimension) {
+    if (!dimension || dimensionFields.some(function(field) { return !Object.prototype.hasOwnProperty.call(dimension, field); })) {
+      throw new Error('Authoritative dimension evidence is incomplete. Recompute risk before exporting.');
+    }
+  });
+  return evidence;
+}
+
+function riskReportDisplayValue(value) {
+  if (value == null || value === '') return 'Not recorded';
+  if (Array.isArray(value)) return value.length ? value.map(riskReportDisplayValue).join(', ') : 'None recorded';
+  if (typeof value === 'object') {
+    var entries = Object.keys(value).sort().map(function(key) {
+      return riskReportBusinessLabel(key) + ': ' + riskReportDisplayValue(value[key]);
+    });
+    return entries.length ? entries.join('; ') : 'None recorded';
+  }
+  return String(value);
+}
+
+function riskReportBusinessLabel(value) {
+  var acronyms = { aml:'AML', brn:'BRN', edd:'EDD', kyc:'KYC', pep:'PEP', rsmp:'RSMP', sco:'SCO', ubo:'UBO' };
+  return String(value == null ? '' : value)
+    .replace(/^floor_rule_/i, '')
+    .replace(/^stale:unmapped_/i, 'unresolved ')
+    .replace(/:[a-f0-9]{8,}$/i, '')
+    .replace(/[._:/-]+/g, ' ')
+    .replace(/\b\w+\b/g, function(word) {
+      var lower = word.toLowerCase();
+      return acronyms[lower] || lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .trim();
+}
+
+function riskReportRuleLabel(factor) {
+  var identifier = String((factor && factor.rule_identifier) || '');
+  var businessRule = identifier
+    .replace(/^rule_engine[._\s]*/i, '')
+    .replace(/_runtime_score$/i, '')
+    .replace(/_score$/i, '')
+    .replace(/_max_/gi, '_maximum_')
+    .replace(/^selected_service$/i, 'selected_service_maximum');
+  return riskReportBusinessLabel(businessRule || (factor && (factor.factor_label || factor.factor_key)) || 'Recorded') + ' rule';
+}
+
+function riskReportRouteLabel(route) {
+  var labels = {
+    direct_low_medium: 'Onboarding Officer approval',
+    compliance_required: 'Compliance approval',
+    dual_control_required: 'Dual control - SCO and Admin',
+    rejected: 'Rejected',
+    blocked: 'Currently blocked'
+  };
+  return labels[String(route || '')] || riskReportBusinessLabel(route || 'Not recorded');
+}
+
+function riskReportEligibilityLabel(value) {
+  var key = String(value || '').toLowerCase();
+  if (key === 'eligible') return 'Eligible for decision';
+  if (key === 'blocked') return 'Blocked from decision';
+  return riskReportBusinessLabel(value || 'Not recorded');
+}
+
+function riskReportRiskTierLabel(value) {
+  return String(value || 'Not recorded').replace(/_/g, ' ').toUpperCase();
+}
+
+function riskReportEddLabel(value) {
+  var key = String(value || '').toLowerCase();
+  if (key === 'edd' || key.indexOf('enhanced') !== -1) return 'Required';
+  if (key) return 'Not required';
+  return 'Not recorded';
+}
+
+function riskReportExecutiveRecommendation(route) {
+  var eligibility = String(route.decision_eligibility || '').toLowerCase();
+  if (eligibility === 'blocked') {
+    return 'Resolve the recorded decision-eligibility condition before approval. The underlying approval route remains ' +
+      riskReportRouteLabel(route.approval_route || route.route) + '.';
+  }
+  var policyRoute = String(route.approval_route || route.route || '');
+  if (policyRoute === 'dual_control_required') return 'Proceed through distinct SCO and Admin approval.';
+  if (policyRoute === 'compliance_required') return 'Submit to a Compliance Officer or SCO for approval.';
+  if (policyRoute === 'direct_low_medium') return 'Proceed through Onboarding Officer approval.';
+  if (policyRoute === 'rejected') return 'The application remains rejected.';
+  return 'Follow the recorded approval route before a final decision.';
+}
+
+function riskReportFactorExplanation(factor) {
+  return 'The stored input resolved as "' + riskReportDisplayValue(factor.normalized_value) +
+    '" under the ' + riskReportRuleLabel(factor).toLowerCase() +
+    '. Resolution status: ' + riskReportBusinessLabel(factor.resolution_status || 'not recorded') + '.';
+}
+
+function buildAuthoritativeRiskPdfHtml(app, evidence, generatedBy, generatedAt) {
+  var risk = evidence.application || {};
+  var route = risk.approval_route || {};
+  var factors = evidence.factor_evidence || [];
+  var dimensionEvidence = evidence.dimension_computation_evidence || [];
+  var computation = evidence.computation_evidence || {};
+  var riskDimensions = risk.dimensions || [];
+  var storedRiskDimensions = app.dims || {};
+  var canonical = storedRiskDimensions.canonical_dataset || app.prescreeningData || app._raw_prescreening || {};
+  var policyRoute = route.approval_route || route.route || '';
+  var decisionEligibility = route.decision_eligibility || 'not recorded';
+  var evidenceHash = evidence.evidence_hash || computation.evidence_hash || 'Not separately recorded';
+  var computationHash = evidence.computation_hash || computation.computation_hash || 'Not separately recorded';
+  var manifestVersion = canonical.dataset_version || 'Not applicable';
+  var manifestHash = canonical.dataset_hash || 'Not applicable';
+
+  function cell(value) { return escapeHtml(riskReportDisplayValue(value)); }
+  function auditItem(label, value) {
+    return '<div class="audit-item"><div class="eyebrow">' + cell(label) + '</div><div class="audit-value">' + cell(value) + '</div></div>';
+  }
+  function summaryCard(label, value, helper, tone) {
+    return '<div class="summary-card ' + (tone || '') + '"><div class="eyebrow">' + cell(label) +
+      '</div><div class="summary-value">' + cell(value) + '</div><div class="summary-helper">' + cell(helper) + '</div></div>';
+  }
+
+  var materialFactors = factors.filter(function(factor) {
+    return Number(factor.rule_score) > 1;
+  }).sort(function(left, right) {
+    return Number(right.weighted_factor_contribution) - Number(left.weighted_factor_contribution);
+  });
+  if (!materialFactors.length) materialFactors = factors.slice(0, 5);
+  var driverHtml = materialFactors.slice(0, 8).map(function(factor) {
+    return '<div class="driver"><span class="driver-score">' + cell(factor.rule_score) + '</span><div><strong>' +
+      cell(factor.factor_label) + '</strong><span>' + cell(factor.raw_value) + '</span></div></div>';
+  }).join('');
+
+  var detailedDimensions = dimensionEvidence.map(function(dimension) {
+    var dimensionId = String(dimension.dimension_id || '');
+    var dimensionMeta = riskDimensions.find(function(item) { return String(item.id || '') === dimensionId; }) || {};
+    var factorOrder = Array.isArray(dimension.factor_keys) ? dimension.factor_keys : [];
+    var dimensionFactors = factorOrder.map(function(factorKey) {
+      return factors.find(function(factor) {
+        return String(factor.dimension_id || '') === dimensionId && String(factor.factor_key || '') === String(factorKey);
+      });
+    }).filter(Boolean);
+    var factorRows = dimensionFactors.map(function(factor) {
+      var raw = riskReportDisplayValue(factor.raw_value);
+      var normalized = riskReportDisplayValue(factor.normalized_value);
+      var normalizedHtml = normalized !== raw
+        ? '<span class="subvalue">Resolved as: ' + cell(normalized) + '</span>'
+        : '';
+      return '<tr><td><strong>' + cell(factor.factor_label) + '</strong></td>' +
+        '<td>' + cell(raw) + normalizedHtml + '</td>' +
+        '<td>' + cell(riskReportRuleLabel(factor)) + '</td>' +
+        '<td class="numeric"><strong>' + cell(factor.rule_score) + '</strong></td>' +
+        '<td class="numeric">' + cell(factor.factor_weight) + '%</td>' +
+        '<td class="numeric"><strong>' + cell(factor.weighted_factor_contribution) + '</strong></td>' +
+        '<td><span class="status-pill">' + cell(riskReportBusinessLabel(factor.resolution_status)) + '</span><span class="subvalue">Stored evidence</span></td>' +
+        '<td>' + cell(riskReportFactorExplanation(factor)) + '</td></tr>';
+    }).join('');
+    return '<section class="dimension-block">' +
+      '<div class="dimension-heading"><div><div class="eyebrow">Detailed dimension computation</div><h2>' +
+      cell(dimensionId + ' - ' + (dimensionMeta.name || dimensionId)) + '</h2></div>' +
+      '<div class="dimension-score"><span>Final dimension score</span><strong>' + cell(dimension.dimension_score) + '</strong></div></div>' +
+      '<div class="dimension-summary">' +
+        summaryCard('Dimension Score', dimension.dimension_score, 'Stored authoritative value') +
+        summaryCard('Dimension Weight', String(dimension.dimension_weight) + '%', 'Stored model weight') +
+        summaryCard('Composite Contribution', dimension.composite_contribution, 'Stored contribution') +
+        summaryCard('Rounding Adjustment', dimension.rounding_adjustment, 'Stored reconciliation value') +
+      '</div>' +
+      '<table class="factor-table"><colgroup><col style="width:12%"><col style="width:16%"><col style="width:13%"><col style="width:6%"><col style="width:6%"><col style="width:9%"><col style="width:10%"><col style="width:28%"></colgroup>' +
+      '<thead><tr><th>Factor</th><th>Input Value</th><th>Rule Applied</th><th>Rule Score</th><th>Weight</th><th>Weighted Contribution</th><th>Evidence</th><th>Explanation</th></tr></thead>' +
+      '<tbody>' + factorRows + '</tbody></table></section>';
+  }).join('');
+
+  var floorOutcomes = (risk.floor_reasons || []).map(riskReportBusinessLabel);
+  var escalationOutcomes = (risk.escalations || []).map(riskReportBusinessLabel);
+  var approvalOutcomes = (route.escalation_reasons || route.reasons || []).map(riskReportBusinessLabel);
+  var ruleOutcomes = [
+    ['Risk floor', floorOutcomes.join('; ') || 'No elevated floor recorded'],
+    ['Escalation', escalationOutcomes.join('; ') || 'No additional escalation recorded'],
+    ['Approval basis', approvalOutcomes.join('; ') || riskReportRouteLabel(policyRoute)],
+    ['Decision eligibility', riskReportEligibilityLabel(decisionEligibility) +
+      (route.eligibility_reason ? ' - ' + riskReportBusinessLabel(route.eligibility_reason) : '')]
+  ];
+
+  var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Authoritative Risk Evidence - ' + cell(app.ref) + '</title>';
+  html += '<style>' +
+    '@page{size:A4 landscape;margin:12mm 12mm 14mm}' +
+    '*{box-sizing:border-box}html{background:#e9eef5}body{font-family:Inter,"Segoe UI",Arial,sans-serif;margin:0;color:#14263d;font-size:9.2px;line-height:1.4;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
+    '.report-page{min-height:180mm;position:relative}.page-break{break-before:page;page-break-before:always}.no-print{position:fixed;right:18px;top:14px;z-index:10}' +
+    '.print-button{padding:9px 16px;border:0;border-radius:7px;background:#102a43;color:#fff;font-weight:700;box-shadow:0 4px 16px #102a4330}' +
+    '.report-header{display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:9px;border-bottom:3px solid #102a43}.brand{font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:900;color:#234e7d}.report-header h1{font-size:23px;line-height:1.08;margin:3px 0 0;letter-spacing:-.025em;color:#102a43}.case-meta{text-align:right;color:#52657a}.case-meta strong{display:block;font-size:13px;color:#102a43}.eyebrow{font-size:7.5px;letter-spacing:.09em;text-transform:uppercase;font-weight:850;color:#6b7f95}.context-strip{display:grid;grid-template-columns:1.45fr 1fr 1fr 1fr;gap:8px;margin-top:10px}.context-item{padding:8px 10px;border:1px solid #dbe5f0;border-radius:8px;background:#f8fafc}.context-value{display:block;margin-top:2px;font-weight:750;color:#203b59;overflow-wrap:anywhere}' +
+    '.section-title{display:flex;align-items:end;justify-content:space-between;margin:15px 0 7px}.section-title h2{font-size:14px;margin:0;color:#102a43}.section-title span{color:#6b7f95}.summary-grid{display:grid;grid-template-columns:1fr 1fr 1.35fr 1.2fr 1fr;gap:8px}.summary-card{padding:10px 11px;border:1px solid #dbe5f0;border-radius:9px;background:#fff;min-width:0}.summary-card.primary{background:linear-gradient(135deg,#102a43,#234e7d);border-color:#102a43;color:#fff}.summary-card.primary .eyebrow,.summary-card.primary .summary-helper{color:#cbd8e7}.summary-value{font-size:14px;line-height:1.18;font-weight:850;margin-top:4px;overflow-wrap:anywhere}.summary-helper{font-size:7.8px;color:#6b7f95;margin-top:4px}.executive-note{margin-top:9px;padding:10px 12px;border-radius:9px;background:#edf5ff;border:1px solid #cbdff4;display:grid;grid-template-columns:125px 1fr;gap:12px;align-items:center}.executive-note strong{font-size:11px;color:#183b63}.executive-note p{margin:0;color:#38536f}' +
+    '.driver-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}.driver{display:flex;align-items:center;gap:8px;padding:8px 9px;border:1px solid #dbe5f0;border-radius:8px;background:#f9fbfd;min-width:0}.driver-score{display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:7px;background:#e1ebf6;color:#183b63;font-weight:900;font-size:11px;flex:none}.driver strong{display:block;font-size:8.8px}.driver span:not(.driver-score){display:block;color:#6b7f95;font-size:7.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}' +
+    '.evidence-banner{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.evidence-status{padding:9px 10px;border:1px solid #cfe4d8;border-radius:8px;background:#f1faf5}.evidence-status strong{display:block;color:#176b45}.evidence-status span{color:#527064}.dimension-block{break-inside:avoid;page-break-inside:avoid;margin:0 0 11px}.dimension-heading{display:flex;align-items:end;justify-content:space-between;border-bottom:2px solid #234e7d;padding:3px 0 6px;margin-bottom:7px}.dimension-heading h2{font-size:14px;margin:2px 0 0;color:#102a43}.dimension-score{text-align:right}.dimension-score span{display:block;color:#6b7f95;font-size:7.5px;text-transform:uppercase;font-weight:800}.dimension-score strong{font-size:19px;color:#234e7d}.dimension-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:7px}.dimension-summary .summary-card{padding:7px 8px}.dimension-summary .summary-value{font-size:11px}' +
+    'table{width:100%;border-collapse:separate;border-spacing:0}thead{display:table-header-group}th{padding:6px 6px;text-align:left;background:#eaf0f7;color:#3e566f;font-size:6.8px;line-height:1.2;text-transform:uppercase;letter-spacing:.035em;border-top:1px solid #d3deea;border-bottom:1px solid #c7d4e2}th:first-child{border-left:1px solid #d3deea;border-radius:6px 0 0 0}th:last-child{border-right:1px solid #d3deea;border-radius:0 6px 0 0}td{padding:6px;border-bottom:1px solid #e3e9f0;vertical-align:top;overflow-wrap:anywhere;background:#fff}tbody tr:nth-child(even) td{background:#fafbfd}.numeric{text-align:right;white-space:nowrap}.subvalue{display:block;color:#6b7f95;font-size:6.9px;margin-top:2px}.status-pill{display:inline-block;padding:2px 5px;border-radius:999px;background:#e9f6ef;color:#176b45;font-size:6.8px;font-weight:800}' +
+    '.final-grid{display:grid;grid-template-columns:1.35fr 1fr;gap:9px;break-inside:avoid}.reconciliation{padding:12px;border-radius:10px;background:linear-gradient(135deg,#102a43,#234e7d);color:#fff}.reconciliation h2{font-size:14px;margin:0 0 8px}.formula{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:7px;align-items:center}.formula-card{padding:9px;border-radius:8px;background:#ffffff14;border:1px solid #ffffff2b}.formula-card span{display:block;color:#cbd8e7;font-size:7.5px;text-transform:uppercase}.formula-card strong{font-size:17px}.operator{font-size:17px;font-weight:900}.outcome-table td:first-child{width:34%;font-weight:750;color:#3e566f}.audit-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.audit-item{padding:7px 8px;border:1px solid #dbe5f0;border-radius:7px;background:#f8fafc;min-width:0}.audit-value{margin-top:2px;font-size:8px;font-weight:700;overflow-wrap:anywhere}.report-footer{margin-top:10px;padding-top:7px;border-top:1px solid #dbe5f0;display:flex;justify-content:space-between;color:#718096;font-size:7px}' +
+    '@media print{html{background:#fff}.no-print{display:none!important}.report-page{min-height:auto}}' +
+    '</style></head><body>';
+  html += '<div class="no-print"><button class="print-button" onclick="window.print()">Print / Save as PDF</button></div>';
+  html += '<main class="report-page executive-page" data-pdf-page="executive">' +
+    '<header class="report-header"><div><div class="brand">RegMind</div><h1>Authoritative Risk Evidence</h1></div><div class="case-meta"><span>Application</span><strong>' +
+      cell(app.ref) + '</strong><span>' + cell(generatedAt) + '</span></div></header>' +
+    '<div class="context-strip">' +
+      '<div class="context-item"><span class="eyebrow">Customer</span><span class="context-value">' + cell(app.company) + '</span></div>' +
+      '<div class="context-item"><span class="eyebrow">Country / BRN</span><span class="context-value">' + cell((app.country || '') + (app.brn ? ' / ' + app.brn : '')) + '</span></div>' +
+      '<div class="context-item"><span class="eyebrow">Sector</span><span class="context-value">' + cell(app.sector) + '</span></div>' +
+      '<div class="context-item"><span class="eyebrow">Entity Type</span><span class="context-value">' + cell(app.entityType) + '</span></div>' +
+    '</div>' +
+    '<div class="section-title"><h2>Executive Summary</h2><span>Authoritative stored outcome</span></div>' +
+    '<div class="summary-grid">' +
+      summaryCard('Overall Risk', riskReportRiskTierLabel(risk.tier), 'Final stored risk tier', 'primary') +
+      summaryCard('Risk Score', String(risk.score) + ' / 100', 'Final stored score', 'primary') +
+      summaryCard('Approval Route', riskReportRouteLabel(policyRoute), 'Underlying policy route') +
+      summaryCard('Decision Eligibility', riskReportEligibilityLabel(decisionEligibility), route.eligibility_reason ? riskReportBusinessLabel(route.eligibility_reason) : 'No eligibility block recorded') +
+      summaryCard('EDD', riskReportEddLabel(risk.edd_route), risk.edd_route || 'No review lane recorded') +
+    '</div>' +
+    '<div class="executive-note"><strong>Executive Recommendation</strong><p>' + cell(riskReportExecutiveRecommendation(route)) + '</p></div>' +
+    '<div class="section-title"><h2>Key Risk Drivers</h2><span>Factors selected from the stored ledger</span></div>' +
+    '<div class="driver-grid">' + driverHtml + '</div>' +
+    '<div class="section-title"><h2>Evidence Status</h2><span>No score is calculated in this report</span></div>' +
+    '<div class="evidence-banner">' +
+      '<div class="evidence-status"><strong>Complete factor ledger</strong><span>All 17 expected factor records are present.</span></div>' +
+      '<div class="evidence-status"><strong>Dimension reconciliation verified</strong><span>D1 through D5 are stored with their reconciliation values.</span></div>' +
+      '<div class="evidence-status"><strong>Authoritative and read-only</strong><span>This report renders persisted evidence without recalculation.</span></div>' +
+    '</div>' +
+    '<div class="report-footer"><span>Confidential - compliance and audit use</span><span>Generated by ' + cell(generatedBy) + '</span></div></main>';
+  html += '<main class="report-page page-break" data-pdf-page="detailed">' +
+    '<header class="report-header"><div><div class="brand">RegMind</div><h1>Detailed Dimension Computation</h1></div><div class="case-meta"><span>Application</span><strong>' + cell(app.ref) + '</strong><span>Stored factor evidence</span></div></header>' +
+    '<div style="height:10px"></div>' + detailedDimensions +
+    '<section class="final-grid">' +
+      '<div class="reconciliation"><div class="eyebrow" style="color:#cbd8e7">Final computation</div><h2>Stored score reconciliation</h2><div class="formula">' +
+        '<div class="formula-card"><span>Composite Score</span><strong>' + cell(computation.base_composite_score) + '</strong></div><div class="operator">+</div>' +
+        '<div class="formula-card"><span>Policy Adjustment</span><strong>' + cell(computation.policy_adjustment) + '</strong></div><div class="operator">=</div>' +
+        '<div class="formula-card"><span>Final Score</span><strong>' + cell(computation.final_composite_score) + '</strong></div>' +
+      '</div><div style="margin-top:9px">Risk tier: <strong>' + cell(riskReportRiskTierLabel(risk.tier)) + '</strong> &nbsp; Approval route: <strong>' + cell(riskReportRouteLabel(policyRoute)) +
+      '</strong> &nbsp; Decision eligibility: <strong>' + cell(riskReportEligibilityLabel(decisionEligibility)) + '</strong></div></div>' +
+      '<div><div class="section-title" style="margin-top:0"><h2>Rule Outcomes</h2></div><table class="outcome-table"><tbody>' +
+        ruleOutcomes.map(function(item) { return '<tr><td>' + cell(item[0]) + '</td><td>' + cell(item[1]) + '</td></tr>'; }).join('') +
+      '</tbody></table></div>' +
+    '</section>' +
+    '<div class="report-footer"><span>Confidential - compliance and audit use</span><span>Stored factor computation appendix</span></div></main>' +
+    '<main class="report-page page-break" data-pdf-page="report-information">' +
+    '<header class="report-header"><div><div class="brand">RegMind</div><h1>Report Information</h1></div><div class="case-meta"><span>Application</span><strong>' +
+      cell(app.ref) + '</strong><span>Regulator-facing provenance</span></div></header>' +
+    '<div class="section-title"><h2>Authoritative Record</h2><span>Persisted provenance only</span></div>' +
+    '<div class="executive-note" style="grid-template-columns:155px 1fr;margin-bottom:10px"><strong>Evidence Integrity</strong><p>These values identify the stored risk computation and canonical fixture provenance. Where a separate per-application hash is not persisted, the report says so explicitly and does not generate one.</p></div>' +
+    '<div class="audit-grid">' +
+      auditItem('Risk Configuration Version', evidence.config_version) +
+      auditItem('Risk Computed At', evidence.risk_computed_at) +
+      auditItem('RSMP Version', evidence.rsmp_version || computation.rsmp_version || 'Not separately recorded') +
+      auditItem('Manifest Version', manifestVersion) +
+      auditItem('Manifest Hash', manifestHash) +
+      auditItem('Evidence Hash', evidenceHash) +
+      auditItem('Computation Hash', computationHash) +
+      auditItem('Report Generated At', generatedAt) +
+    '</div>' +
+    '<div class="report-footer"><span>Confidential - compliance and audit use</span><span>Generated by ' + cell(generatedBy) + ' at ' + cell(generatedAt) + '</span></div></main>';
+  html += '</body></html>';
+  return html;
+}
+
 function downloadRiskPDF() {
   if (!currentApp) { showToast('No application selected'); return; }
   var app = currentApp;
   var evidence;
   try {
-    evidence = requireAuthoritativeRiskReportEvidence(app);
+    evidence = requireAuthoritativeRiskPdfEvidence(app);
   } catch (error) {
     showToast(error.message || 'Authoritative risk evidence is unavailable');
     return;
   }
-
-  var risk = evidence.application;
-  var route = risk.approval_route || {};
-  var reportWindow = window.open('', '_blank', 'width=900,height=1200');
-  if (!reportWindow) { showToast('Pop-up blocked — please allow pop-ups for this site'); return; }
-
-  function reportCell(value) { return escapeHtml(value == null ? '' : value); }
-  var html = '<!DOCTYPE html><html><head><title>Authoritative Risk Evidence — ' + reportCell(app.ref) + '</title>';
-  html += '<style>body{font-family:"Segoe UI",system-ui,sans-serif;margin:34px 46px;color:#102a43;font-size:13px;line-height:1.5}.header{border-bottom:4px solid #102a43;padding-bottom:16px;margin-bottom:20px}.header h1{margin:0;font-size:24px;color:#102a43;letter-spacing:-.02em}.notice{padding:10px 12px;background:#f3f7fc;border:1px solid #dbe4f0;border-radius:8px;margin:14px 0;color:#52606d}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.item{padding:11px 13px;background:#fff;border:1px solid #dbe4f0;border-radius:9px}.label{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:#718096;font-weight:800}.value{font-size:14px;font-weight:800;overflow-wrap:anywhere}.section{font-size:15px;font-weight:800;color:#102a43;margin:22px 0 10px;border-bottom:2px solid #dbe4f0;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin-bottom:14px}th{text-align:left;padding:8px;background:#edf3f9;font-size:9px;text-transform:uppercase;color:#52606d}td{padding:8px;border-bottom:1px solid #edf2f7;font-size:11px}.outcome{background:linear-gradient(120deg,#102a43,#234e7d);color:#fff;padding:18px;border-radius:10px;margin:16px 0}.outcome strong{font-size:28px}.driver{display:inline-block;padding:6px 9px;background:#f3f7fc;border:1px solid #dbe4f0;border-radius:999px;margin:2px;font-size:11px;font-weight:700}.footer{margin-top:28px;border-top:1px solid #dbe4f0;padding-top:10px;font-size:10px;color:#718096}@media print{body{margin:20px 30px}.no-print{display:none!important}}</style></head><body>';
-  html += '<div class="header"><h1>RegMind Authoritative Risk Evidence Report</h1><div>Application ' + reportCell(app.ref) + '</div></div>';
-  html += '<div class="no-print"><button onclick="window.print()" style="padding:8px 18px;background:#0f3460;color:white;border:0;border-radius:5px">Print / Save as PDF</button></div>';
-  html += '<div class="notice">This report displays stored application risk outcomes and the validated runtime configuration that produced them. No score is calculated in this document or in the browser.</div>';
-  html += '<div class="grid">';
-  [
-    ['Company', app.company], ['Country / BRN', (app.country || '') + ' / ' + (app.brn || '')],
-    ['Sector', app.sector], ['Risk computed at', evidence.risk_computed_at],
-    ['Configuration version', evidence.config_version], ['Evidence source', evidence.source]
-  ].forEach(function(item) {
-    html += '<div class="item"><div class="label">' + reportCell(item[0]) + '</div><div class="value">' + reportCell(item[1]) + '</div></div>';
-  });
-  html += '</div>';
-  html += '<div class="section">Executive Summary</div><div class="outcome"><div>Stored authoritative outcome</div><strong>' + reportCell(risk.score) + ' / 100 — ' + reportCell(risk.tier) + '</strong><div>EDD / onboarding route: ' + reportCell(risk.edd_route) + '</div><div>Approval route: ' + reportCell(route.route) + '</div></div>';
-  var pdfDrivers = (evidence.factor_evidence || []).map(function(f) { return f.label || f.family; }).filter(Boolean);
-  [app.sector, app.country, app.entityType].forEach(function(value) { if (value && pdfDrivers.indexOf(value) === -1) pdfDrivers.push(value); });
-  html += '<div class="section">Key Risk Drivers</div><div>' + pdfDrivers.slice(0, 8).map(function(value) { return '<span class="driver">✓ ' + reportCell(value) + '</span>'; }).join('') + '</div>';
-  html += '<div class="section">Evidence at a glance</div><div class="grid"><div class="item"><div class="label">Screening</div><div class="value">✓ Stored evidence</div></div><div class="item"><div class="label">KYC</div><div class="value">✓ Stored evidence</div></div><div class="item"><div class="label">Risk evidence</div><div class="value">✓ Authoritative</div></div></div>';
-  html += '<div class="section">Risk Breakdown</div><table><thead><tr><th>Dimension</th><th>Runtime Weight</th><th>Stored Score</th><th>Source</th></tr></thead><tbody>';
-  (risk.dimensions || []).forEach(function(dimension) {
-    html += '<tr><td>' + reportCell(dimension.id + ': ' + dimension.name) + '</td><td>' + reportCell(dimension.weight) + '%</td><td>' + reportCell(dimension.stored_score) + '</td><td>' + reportCell(dimension.source) + '</td></tr>';
-  });
-  html += '</tbody></table>';
-  html += '<div class="section">Runtime Subcriteria Configuration Reference</div><table><thead><tr><th>Dimension</th><th>Subcriterion</th><th>Runtime Weight</th></tr></thead><tbody>';
-  (risk.dimensions || []).forEach(function(dimension) {
-    (dimension.subcriteria || []).forEach(function(subcriterion) {
-      html += '<tr><td>' + reportCell(dimension.id) + '</td><td>' + reportCell(subcriterion.name) + '</td><td>' + reportCell(subcriterion.weight) + '%</td></tr>';
-    });
-  });
-  html += '</tbody></table>';
-  html += '<div class="section">Rule Outcomes</div><table><tbody>';
-  html += '<tr><td>High floor reasons</td><td>' + reportCell((risk.floor_reasons || []).join('; ') || 'None recorded') + '</td></tr>';
-  html += '<tr><td>All escalation evidence</td><td>' + reportCell((risk.escalations || []).join('; ') || 'None recorded') + '</td></tr>';
-  html += '<tr><td>Approval reasons</td><td>' + reportCell((route.reasons || []).join('; ') || 'None recorded') + '</td></tr>';
-  html += '</tbody></table>';
-  html += '<div class="section">Authoritative Factor Evidence</div><table><thead><tr><th>Family</th><th>Stored Label</th><th>Runtime Score</th><th>Source</th></tr></thead><tbody>';
-  (evidence.factor_evidence || []).forEach(function(factor) {
-    html += '<tr><td>' + reportCell(factor.family) + '</td><td>' + reportCell(factor.label) + '</td><td>' + reportCell(factor.score) + '</td><td>' + reportCell(factor.source) + '</td></tr>';
-  });
-  html += '</tbody></table>';
-  html += '<div class="footer">Onboarda | Powered by RegMind | Confidential — internal use only | Generated by ' + reportCell(currentUser.name || '') + ' on ' + reportCell(new Date().toISOString()) + '</div>';
-  html += '</body></html>';
+  var reportWindow = window.open('', '_blank', 'width=1200,height=900');
+  if (!reportWindow) { showToast('Pop-up blocked - please allow pop-ups for this site'); return; }
+  var html = buildAuthoritativeRiskPdfHtml(
+    app,
+    evidence,
+    currentUser.name || '',
+    new Date().toISOString()
+  );
   reportWindow.document.write(html);
   reportWindow.document.close();
-  showToast('Authoritative PDF risk report opened — use Print / Save as PDF');
+  showToast('Authoritative PDF risk report opened - use Print / Save as PDF');
 }
 </script>
 </body>
