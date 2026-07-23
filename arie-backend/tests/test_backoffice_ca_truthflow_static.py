@@ -169,7 +169,9 @@ def test_backoffice_screening_review_omits_duplicate_document_readiness_banner()
 
     assert "renderDocumentReadinessBanner" not in review_region
     assert "renderDocumentReadinessBanner(documentReadiness) + freshnessBanner + screeningMeta" not in detail_region
-    assert "Stored provider AML/watchlist and PEP results for this application." in review_region
+    # Header card retired (SRP-3e de-dup): the review panel is anchored by the
+    # subject list, not the former intro card. This test's real guard is the
+    # ABSENCE of the document-readiness banner (asserted above), unaffected.
     assert "Screening Subjects" in review_region
     assert "buildEntityScreeningReviewCard" in review_region
     assert "buildPersonScreeningReviewCard" in review_region

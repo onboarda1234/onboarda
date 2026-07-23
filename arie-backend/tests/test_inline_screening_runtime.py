@@ -1298,7 +1298,10 @@ class TestInlineScreeningRuntime:
         assert director_subject["status"] == "Review Required"
         assert director_subject["reviewRequired"] is True
         assert director_subject["reviewActionable"] is True
-        assert "Focused subject: <strong>Jane Director</strong> (director)" in result["directDetailWithoutQueueHtml"]
+        # Header card retired (SRP-3e de-dup): the "Focused subject:" line was
+        # removed. The panel still renders the focused subject — proven by its
+        # name in the subject card + its disposition actions below (both durable).
+        assert "Jane Director" in result["directDetailWithoutQueueHtml"]
         assert "Clear as False Positive" in result["directDetailWithoutQueueHtml"]
         assert "Confirm True Match" in result["directDetailWithoutQueueHtml"]
         assert "Escalate" in result["directDetailWithoutQueueHtml"]
