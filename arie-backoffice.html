@@ -17566,6 +17566,33 @@ function screeningTriageHitToggled(el) {
   }
 }
 
+// Collapsible section (weak tail, bucket overflow) open-state — persisted across
+// re-renders so an action (disposition, bulk-clear) never silently collapses a
+// section the officer expanded. Mirrors SCREENING_HIT_OPEN for individual cards.
+var SCREENING_TRIAGE_SECTION_OPEN = {};
+function screeningTriageSectionKey(row, sectionId) {
+  var appRef = (row && row.application_ref) || (currentApp && currentApp.ref) || '';
+  return screeningReviewSubjectKey(appRef, (row && row.subject_type) || '', (row && row.subject_name) || '') + '|' + sectionId;
+}
+function screeningTriageSectionToggled(el) {
+  if (!el) return;
+  var key = el.getAttribute('data-section-open-key');
+  if (!key) return;
+  if (el.open) SCREENING_TRIAGE_SECTION_OPEN[key] = true;
+  else delete SCREENING_TRIAGE_SECTION_OPEN[key];
+}
+// Nearest scrollable ancestor (or the page) so an in-place re-render can restore
+// the officer's scroll position instead of jumping to the top.
+function screeningReviewScrollElement(el) {
+  for (var p = el; p; p = p.parentElement) {
+    if (p.scrollHeight > p.clientHeight) {
+      var oy = window.getComputedStyle ? getComputedStyle(p).overflowY : '';
+      if (oy === 'auto' || oy === 'scroll') return p;
+    }
+  }
+  return document.scrollingElement || document.documentElement;
+}
+
 function screeningTriageHitCard(row, item, itemIndex, weakThreshold) {
   item = item || {};
   var name = screeningTriageHitDisplayName(item);
@@ -17606,7 +17633,9 @@ function screeningTriageWeakTailSection(row, weakEntries, triage) {
   var weakCount = triage.weak_count != null ? Number(triage.weak_count) : weakEntries.length;
   var threshold = triage.weak_threshold != null ? String(triage.weak_threshold) : '—';
   var tailLine = String(weakCount) + ' weak name-only matches — below triage threshold ' + threshold + ' · no identity corroboration · each remains reviewable';
-  return '<details data-screening-triage-weak-tail="true" style="margin-top:16px;border:1px solid var(--border1);border-radius:10px;background:#fff;">' +
+  var weakKey = screeningTriageSectionKey(row, 'weak');
+  var weakOpen = !!SCREENING_TRIAGE_SECTION_OPEN[weakKey];
+  return '<details data-screening-triage-weak-tail="true" data-section-open-key="' + escapeHtml(weakKey) + '"' + (weakOpen ? ' open' : '') + ' ontoggle="screeningTriageSectionToggled(this)" style="margin-top:16px;border:1px solid var(--border1);border-radius:10px;background:#fff;">' +
     '<summary style="list-style:none;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:11px 14px;cursor:pointer;">' +
       '<span style="font-size:12px;color:var(--text2);"><strong style="color:var(--text1);">' + escapeHtml(tailLine) + '</strong></span>' +
       '<span style="margin-left:auto;font-size:11px;color:var(--text3);">Expand ▾</span>' +
@@ -17860,7 +17889,9 @@ function screeningTriageRankedHitSections(row) {
         html += screeningTriageHitCard(row, entry.item, entry.index, weakThreshold);
       });
       if (overflowEntries.length) {
-        html += '<details data-screening-triage-bucket-overflow="' + escapeHtml(meta.key) + '" style="border:1px solid var(--border1);border-top:none;background:#fff;">' +
+        var overflowKey = screeningTriageSectionKey(row, 'overflow|' + meta.key);
+        var overflowOpen = !!SCREENING_TRIAGE_SECTION_OPEN[overflowKey];
+        html += '<details data-screening-triage-bucket-overflow="' + escapeHtml(meta.key) + '" data-section-open-key="' + escapeHtml(overflowKey) + '"' + (overflowOpen ? ' open' : '') + ' ontoggle="screeningTriageSectionToggled(this)" style="border:1px solid var(--border1);border-top:none;background:#fff;">' +
           '<summary style="list-style:none;display:flex;gap:10px;align-items:center;padding:10px 14px;cursor:pointer;">' +
             '<span style="font-size:12px;color:var(--text2);"><strong style="color:var(--text1);">' + escapeHtml('+' + overflowEntries.length + ' more — show all (ranked)') + '</strong></span>' +
             '<span style="margin-left:auto;font-size:11px;color:var(--text3);">Expand ▾</span>' +
@@ -17929,6 +17960,25 @@ async function ensureApplicationScreeningEvidenceRows(appRef) {
   } catch (e) {
     console.warn('Could not load screening evidence rows for application:', appRef, e);
     SCREENING_REVIEW_APP_EVIDENCE_FETCHES[appRef] = 'error';
+    // Surface the outage instead of silently leaving the officer on an empty /
+    // "clean-looking" panel; the re-render shows the outage banner + Retry so a
+    // failed provider-evidence load can never read as "no matches / clear"
+    // (audit items: stuck loading + data-outage looks clean).
+    if (typeof currentApp !== 'undefined' && currentApp && currentApp.ref === appRef) {
+      renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+    }
+  }
+}
+
+// Let the officer recover from a failed application-evidence load: clear the
+// latched 'error' state (ensure* otherwise never retries) and re-fetch, then
+// re-render immediately so the panel leaves the outage state.
+function retryApplicationScreeningEvidenceRows(appRef) {
+  if (!appRef) return;
+  SCREENING_REVIEW_APP_EVIDENCE_FETCHES[appRef] = null;
+  ensureApplicationScreeningEvidenceRows(appRef);
+  if (typeof currentApp !== 'undefined' && currentApp && currentApp.ref === appRef) {
+    renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
   }
 }
 
@@ -18090,6 +18140,14 @@ function renderScreeningReviewPanel(app, focus) {
       html += '<div style="margin:0 18px 12px;padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;font-size:12px;color:#92400e;font-weight:600;">⚠️ Screening aging — ' + sfr.age_days + ' day(s) old (limit: ' + sfr.validity_days + ' days). Consider re-screening.</div>';
     }
   }
+  // Data-outage flag: a failed application-evidence load must never read as a
+  // clean/empty screen. Explicit banner + Retry (never silently blank).
+  if (SCREENING_REVIEW_APP_EVIDENCE_FETCHES[app.ref] === 'error') {
+    html += '<div data-screening-evidence-outage="true" style="margin:0 18px 12px;padding:10px 14px;background:#fef2f2;border:1px solid #dc2626;border-radius:8px;font-size:12px;color:#991b1b;font-weight:600;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+      '<span>🚫 Screening evidence could not be loaded from the provider feed. This panel may be incomplete — do not treat an empty or “clear” result as a completed screen. Retry before making a decision.</span>' +
+      '<button type="button" class="btn btn-outline btn-sm" onclick="retryApplicationScreeningEvidenceRows(\'' + escapeJsAttr(app.ref) + '\')">Retry evidence load</button>' +
+    '</div>';
+  }
   if (focus && focus.subject_name) html += '<div style="font-size:12px;color:var(--text2);padding:0 18px 18px;">Focused subject: <strong>' + escapeHtml(focus.subject_name) + '</strong> (' + escapeHtml(String(focus.subject_type || '').replace('_', ' ')) + ')</div>';
   html += '</div>';
   // SRP-3e Phase E: the Agent 3 guidance panel renders inside the selected
@@ -18135,7 +18193,16 @@ function renderScreeningReviewPanel(app, focus) {
   html += '</div>';
   html += '</div>';
 
+  // Preserve scroll across in-place re-renders — a disposition / bulk-clear
+  // action re-renders the whole panel; without this the officer is thrown back
+  // to the top. Only restore on a re-render, never on the first paint. Feature-
+  // detected so a minimal (non-DOM) host is a safe no-op.
+  var canTrackScroll = typeof host.getAttribute === 'function' && typeof host.setAttribute === 'function';
+  var scroller = canTrackScroll ? screeningReviewScrollElement(host) : null;
+  var prevScrollTop = (canTrackScroll && host.getAttribute('data-screening-rendered') && scroller) ? scroller.scrollTop : null;
   host.innerHTML = html;
+  if (canTrackScroll) host.setAttribute('data-screening-rendered', '1');
+  if (prevScrollTop != null && scroller) scroller.scrollTop = prevScrollTop;
 }
 
 function openScreeningReview(ref, subjectType, subjectName) {
