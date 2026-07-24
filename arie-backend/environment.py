@@ -54,17 +54,40 @@ _ENV_ALIASES = {
 def canonicalize_environment(raw) -> str:
     """Return the canonical environment name for any raw ENVIRONMENT value.
 
-    Lowercases/strips, maps known aliases (prod→production, stage→staging,
-    dev→development, test→testing), and falls back to 'development' (with an
-    error log) for anything unrecognised. This is the single source of truth
-    for environment-name normalization — config.py uses it too, so
+    Lowercases/strips and maps known aliases (prod→production, stage→staging,
+    dev→development, test→testing). This is the single source of truth for
+    environment-name normalization — config.py uses it too, so
     config.ENVIRONMENT and environment.ENV can never disagree again.
+
+    RDI-001 (CRITICAL, fail-closed): a MISSING/empty value defaults to
+    'development' (the safe local-dev default, preserved). But a NON-EMPTY
+    value that is not a valid environment even after alias resolution is a
+    MISCONFIGURATION — previously it was logged and silently coerced to
+    'development', which on a deployed box silently stripped every
+    production-only guard (mock-mode block, required real API keys, real
+    screening, forbidden-flag checks) while leaving a typo like
+    ENVIRONMENT='producton' looking intentional. There is no legitimate use
+    for an unrecognised non-empty environment name, so refuse to start rather
+    than boot with the wrong safety profile. This runs at import time
+    (environment.ENV and config.ENVIRONMENT), so a bad value is fatal before
+    any request is served — matching config.py's sys.exit(1) precedent for a
+    missing production JWT_SECRET.
     """
-    env = (raw or "development").lower().strip()
+    # Missing/empty -> safe local-dev default (unchanged).
+    if raw is None or str(raw).strip() == "":
+        return "development"
+
+    env = str(raw).lower().strip()
     env = _ENV_ALIASES.get(env, env)
     if env not in VALID_ENVIRONMENTS:
-        logger.error(f"REJECTED: Invalid ENVIRONMENT='{env}' — not in {VALID_ENVIRONMENTS}. Defaulting to 'development'.")
-        env = "development"
+        logger.critical(
+            "FATAL: Invalid ENVIRONMENT=%r — not one of %s (after alias "
+            "resolution). A misconfigured environment name silently strips "
+            "production safety guards; refusing to start. Set ENVIRONMENT/ENV "
+            "to a valid value.",
+            env, VALID_ENVIRONMENTS,
+        )
+        sys.exit(1)
     return env
 
 
