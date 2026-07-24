@@ -444,10 +444,13 @@ class TestBackofficeTriageNarrativeStatic:
         helper = _function_region(
             html, "agent3TriageNarrativeHtml", "renderAgent3ScreeningInterpretationPanel"
         )
-        # Approved mock: one flowing prose paragraph ("Start with the … match …
-        # (triage N, BAND) … review it first."), composed only from the
-        # server dict — counts, scores, bands and ordering never recomputed.
-        assert "Start with the " in helper
+        # Compact prose paragraph (Proposal A): the lead standout uses the
+        # "Priority match — review first" framing; the mass uses the factual
+        # homogeneity-confirmation basis (no dismissive "no single one stands
+        # out"). Composed only from the server dict — never recomputed.
+        assert "Priority match — review first: the " in helper
+        assert "grouped as duplicates by identical name, score and reason." in helper
+        assert "no single one stands out" not in helper
         assert "(triage " in helper
         assert "(all triage " in helper
         assert "narrative.weak_tail_count" in helper
@@ -611,14 +614,17 @@ class TestTriageNarrativeNextStep:
         ])
         assert narrative["entries"][0]["action"] == server._AGENT3_ENTRY_NEXT_STEP_BY_BUCKET["watchlist"]
 
-    def test_mass_group_action_is_materiality_sample_with_count(self):
+    def test_mass_group_action_is_sample_and_verify_homogeneity(self):
+        # Safety-first framing: sample AND confirm the cluster is genuinely
+        # homogeneous — not "skip the rest".
         hits = [_mass_hit(i) for i in range(198)]
         hits.append(_hit("Wirecard AG", "Wirecard AG Warning List", 53,
                          reasons=["Watchlist warning match"], categories=["watchlist"]))
         narrative = server._agent3_triage_narrative(hits)
         mass_entry = next(entry for entry in narrative["entries"] if entry["kind"] == "group")
-        assert mass_entry["action"] == server._AGENT3_ENTRY_NEXT_STEP_MASS.format(count=198)
-        assert "198 rows" in mass_entry["action"]
+        assert mass_entry["action"] == server._AGENT3_ENTRY_NEXT_STEP_MASS
+        assert "confirm the cluster contains no distinct" in mass_entry["action"]
+        assert "representative row" in mass_entry["action"]
 
     def test_default_action_for_uncategorized_hit(self):
         narrative = server._agent3_triage_narrative([
@@ -656,3 +662,74 @@ class TestTriageNarrativeNextStep:
         )
         assert "hit.action" in helper
         assert "escapeHtml(action)" in helper
+
+
+# ---------------------------------------------------------------------------
+# SRP-4 #1 (Proposal A) — negative-space "no sanctions/PEP exposure" line
+# ---------------------------------------------------------------------------
+
+class TestNegativeSpaceExposure:
+    """When neither sanctions nor PEP appears in ANY hit, the narrative states
+    it explicitly (scoped to 'these screening results', never an absolute
+    clearance). Present otherwise → line suppressed."""
+
+    def test_no_risk_line_when_no_sanctions_or_pep(self):
+        narrative = server._agent3_triage_narrative([
+            _hit("Wirecard AG", "WIRECARD AG", 53,
+                 reasons=["Watchlist warning match"], categories=["watchlist"]),
+            _hit("Wirecard AG", "wirecard media", 58,
+                 reasons=["Adverse media"], categories=["adverse_media"]),
+        ])
+        assert narrative["no_risk_exposure"] == server._AGENT3_NO_RISK_EXPOSURE_TEXT
+        assert "No sanctions or PEP exposure found" in narrative["no_risk_exposure"]
+
+    def test_no_risk_line_suppressed_when_sanctions_present(self):
+        narrative = server._agent3_triage_narrative([
+            _hit("Acme", "ACME", 92, reasons=["Sanctions list match"], categories=["sanctions"]),
+        ])
+        assert narrative["no_risk_exposure"] == ""
+
+    def test_no_risk_line_suppressed_when_pep_present(self):
+        narrative = server._agent3_triage_narrative([
+            _hit("Jane", "Jane D", 74, reasons=["PEP class 1-2 match"], categories=["pep"]),
+        ])
+        assert narrative["no_risk_exposure"] == ""
+
+    def test_no_risk_considers_weak_and_unscored_hits_too(self):
+        # A sanctions hit in the WEAK tail still counts as exposure — the line
+        # must not claim "no sanctions" just because it scored low.
+        narrative = server._agent3_triage_narrative([
+            _hit("W", "W", 58, reasons=["Adverse media"], categories=["adverse_media"]),
+            _hit("S", "S", 10, reasons=["Sanctions list match"], categories=["sanctions"]),
+        ])
+        assert narrative["no_risk_exposure"] == ""
+
+    def test_no_risk_considers_a_truly_unscored_risk_hit(self):
+        # An UNSCORED (triage_score=None) sanctions hit — which never enters the
+        # scored/priority path — must still suppress the line. Guards the raw-hit
+        # iteration, not a threshold artefact. Needs a scored hit present so the
+        # narrative is not None.
+        narrative = server._agent3_triage_narrative([
+            _hit("W", "W", 58, reasons=["Adverse media"], categories=["adverse_media"]),
+            _hit("Legacy", "Legacy Sanction", None, categories=["sanctions"]),
+        ])
+        assert narrative is not None
+        assert narrative["no_risk_exposure"] == ""
+
+    def test_no_risk_suppressed_when_one_hit_carries_both_categories(self):
+        narrative = server._agent3_triage_narrative([
+            _hit("Both", "Both", 92, reasons=["Sanctions list match"],
+                 categories=["sanctions", "pep"]),
+        ])
+        assert narrative["no_risk_exposure"] == ""
+
+    def test_helper_renders_negative_space_line_appwide_only(self):
+        html = _html()
+        helper = _function_region(
+            html, "agent3TriageNarrativeHtml", "renderAgent3ScreeningInterpretationPanel"
+        )
+        assert "narrative.no_risk_exposure" in helper
+        assert "escapeHtml(String(narrative.no_risk_exposure))" in helper
+        # Rendered inside the app-wide (!subjectName) footnote block only.
+        block = helper[helper.index("if (!subjectName)"):]
+        assert "narrative.no_risk_exposure" in block
