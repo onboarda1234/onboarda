@@ -31528,12 +31528,21 @@ class SupervisorRunHandler(BaseHandler):
             )
             return
 
-        # Persist to database (survives restarts)
+        # RDI-005: no decision-equivalent success without a committed durable
+        # record. persist_pipeline_result now raises on failure; surface a 5xx
+        # instead of returning a supervisor result that was never persisted.
         try:
             from supervisor.api import persist_pipeline_result
             persist_pipeline_result(result, trigger_type=trigger_type, trigger_source=trigger_source)
         except Exception as persist_err:
-            logger.error("Failed to persist pipeline result: %s", persist_err)
+            logger.error(
+                "Supervisor pipeline result NOT persisted for app %s: %s",
+                app_id, persist_err,
+            )
+            return self.error(
+                "Pipeline result could not be persisted; no durable record was written",
+                500,
+            )
 
         # Serialize and return results — separate try/except for clearer diagnostics
         try:
@@ -31606,20 +31615,12 @@ class SupervisorResultHandler(BaseHandler):
             return self.error("Application not found", 404)
         db.close()
 
-        # Return from memory cache first, then fall back to database
+        # RDI-005: the durable store is the source of truth. The in-memory
+        # _pipeline_cache is a non-authoritative convenience layer that must
+        # never be served as a fallback masking a missing durable row, so this
+        # read resolves exclusively from the database.
         try:
-            from supervisor.api import _pipeline_cache, load_latest_pipeline_result
-            # 1. Check in-memory cache (fast path)
-            latest = None
-            for pid, result in _pipeline_cache.items():
-                if result.application_id == app["id"]:
-                    if latest is None or (result.completed_at or "") > (latest.completed_at or ""):
-                        latest = result
-            if latest:
-                self.success(latest.to_dict())
-                return
-
-            # 2. Fall back to database (survives restarts)
+            from supervisor.api import load_latest_pipeline_result
             db_result = load_latest_pipeline_result(app["id"])
             if db_result:
                 self.success(db_result)

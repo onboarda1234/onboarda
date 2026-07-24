@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
 
-from .audit import AuditLogger
+from .audit import AuditLogger, AuditPersistenceError
 from .confidence import ConfidenceEvaluator
 from .contradictions import ContradictionDetector
 from .rules_engine import RulesEngine
@@ -308,6 +308,13 @@ class AgentSupervisor:
                     status=parsed.status.value,
                 )
 
+            except AuditPersistenceError:
+                # RDI-004: a lost audit record must fail the whole pipeline
+                # closed — it must NOT be re-labelled as a mere agent execution
+                # failure and swallowed into `failed_agents`. Propagate so the
+                # handler returns a blocked/error outcome with no durable
+                # decision-equivalent result.
+                raise
             except Exception as e:
                 elapsed_ms = int((time.time() - start_time) * 1000)
                 error_msg = str(e)
