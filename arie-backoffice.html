@@ -12077,29 +12077,11 @@ function renderAuthoritativeAppDetail(app, options) {
   document.getElementById('detail-score-breakdown').innerHTML = renderStoredRiskComputationHtml(app);
 
   var screeningSummary = getApplicationScreeningSummary(app);
-  var freshnessBanner = '';
-  if (screeningSummary.screening_freshness) {
-    var sf = screeningSummary.screening_freshness;
-    if (sf.status === 'parse_error') {
-      freshnessBanner = '<div style="margin-bottom:8px;padding:10px 14px;background:#fef2f2;border:1px solid #dc2626;border-radius:8px;font-size:12px;color:#991b1b;font-weight:600;">' +
-        '🚫 Screening freshness could not be verified — timestamp data could not be parsed. Re-screening or manual review is required before approval.</div>';
-    } else if (sf.status === 'expired') {
-      freshnessBanner = '<div style="margin-bottom:8px;padding:10px 14px;background:#fef2f2;border:1px solid #dc2626;border-radius:8px;font-size:12px;color:#991b1b;font-weight:600;">' +
-        '🚫 Screening results have expired (' + sf.age_days + ' day(s) old, validity period: ' + sf.validity_days + ' days). Approval is blocked until a re-screen is performed.</div>';
-    } else if (sf.status === 'aging') {
-      freshnessBanner = '<div style="margin-bottom:8px;padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;font-size:12px;color:#92400e;font-weight:600;">' +
-        '⚠️ Screening results are aging (' + sf.age_days + ' day(s) old, validity period: ' + sf.validity_days + ' days). Consider re-screening before approval.</div>';
-    }
-  }
-  var screeningMeta = '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);margin-bottom:12px;">' +
-    '<div><strong>Screening Run:</strong> ' + (screeningSummary.screening_run_recorded ? 'Recorded' : 'Not recorded') + '</div>' +
-    '<div><strong>Total Hits:</strong> ' + escapeHtml(String(screeningSummary.total_hits || 0)) + '</div>' +
-    '<div style="display:flex;align-items:center;gap:6px;"><strong>Mode:</strong> ' + screeningModeBadge(screeningSummary.screening_mode) + '</div>' +
-    '<div><strong>Screened At:</strong> ' + escapeHtml(normalizeDetailValue(screeningSummary.screened_at)) + '</div>' +
-    (screeningSummary.screening_freshness ? '<div><strong>Screening Age:</strong> ' + screeningSummary.screening_freshness.age_days + ' day(s)' +
-    (screeningSummary.screening_valid_until ? ' — <strong>Valid Until:</strong> ' + escapeHtml(String(screeningSummary.screening_valid_until).replace('T', ' ').slice(0, 19)) : '') + '</div>' : '') +
-    '</div>';
-  document.getElementById('detail-screening-review').innerHTML = freshnessBanner + screeningMeta;
+  // Dead-compute removed (PR-E #7): a freshness banner + screening-meta card was
+  // built and written to #detail-screening-review here, then immediately
+  // clobbered by renderScreeningReviewPanel below (host.innerHTML = html). The
+  // panel renders its own freshness banner and the subject card carries the
+  // mode / screened-at meta, so nothing is lost.
   renderScreeningReviewPanel(app, currentScreeningReviewFocus);
   renderExplainabilityPanel(app, screeningSummary);
   updateExplainabilityPanelState(app, screeningSummary);
