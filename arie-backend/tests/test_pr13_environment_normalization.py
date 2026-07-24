@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         ("production", "production"),
         (None, "development"),
         ("", "development"),
-        ("garbage-env", "development"),
+        ("   ", "development"),
     ],
 )
 def test_canonicalize_environment(raw, expected):
@@ -48,12 +48,41 @@ def test_canonicalize_environment(raw, expected):
     assert canonicalize_environment(raw) == expected
 
 
-def test_unknown_environment_logs_error(caplog):
+def test_unknown_environment_is_fatal(caplog):
+    """RDI-001: a NON-EMPTY unrecognised ENVIRONMENT must terminate startup,
+    not be silently coerced to 'development' (which would strip production
+    guards on a mis-typed prod box)."""
     from environment import canonicalize_environment
 
-    with caplog.at_level(logging.ERROR):
-        assert canonicalize_environment("qa-lab-7") == "development"
+    with caplog.at_level(logging.CRITICAL):
+        with pytest.raises(SystemExit) as excinfo:
+            canonicalize_environment("qa-lab-7")
+    assert excinfo.value.code == 1
     assert any("Invalid ENVIRONMENT" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("bad", ["producton", "qa", "prd", "prodction", "staging1", "garbage-env"])
+def test_common_typos_terminate_startup(bad):
+    """RDI-001: realistic production/staging typos must be fatal, not degrade
+    to development."""
+    from environment import canonicalize_environment
+
+    with pytest.raises(SystemExit):
+        canonicalize_environment(bad)
+
+
+def test_invalid_environment_is_fatal_at_import(monkeypatch, restore_modules):
+    """Boot path: an invalid ENVIRONMENT must abort module import (environment.ENV
+    / config.ENVIRONMENT are computed at import), not boot with the wrong safety
+    profile."""
+    monkeypatch.setenv("ENVIRONMENT", "producton")
+    monkeypatch.delenv("ENV", raising=False)
+
+    import environment as environment_module
+
+    with pytest.raises(SystemExit) as excinfo:
+        importlib.reload(environment_module)
+    assert excinfo.value.code == 1
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +128,7 @@ def restore_modules():
         )
 
 
-@pytest.mark.parametrize("raw", ["prod", "PROD", "production", " staging ", "stage", "garbage"])
+@pytest.mark.parametrize("raw", ["prod", "PROD", "production", " staging ", "stage"])
 def test_config_and_environment_agree(monkeypatch, restore_modules, raw):
     environment_module, config_module = _reload_both(monkeypatch, raw)
     assert config_module.ENVIRONMENT == environment_module.ENV, (

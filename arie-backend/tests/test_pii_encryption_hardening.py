@@ -204,7 +204,8 @@ class TestEnvironmentValidationPII:
 # ═══════════════════════════════════════════════════════════════
 
 class TestEnvironmentDefault:
-    """Ensure invalid/missing ENVIRONMENT defaults to 'development', not 'demo'."""
+    """Ensure a MISSING ENVIRONMENT defaults to 'development' (not 'demo'), while
+    a non-empty INVALID value is fatal (RDI-001)."""
 
     def test_missing_env_defaults_to_development(self, monkeypatch):
         monkeypatch.delenv("ENVIRONMENT", raising=False)
@@ -213,11 +214,13 @@ class TestEnvironmentDefault:
         result = get_environment()
         assert result == "development"
 
-    def test_unknown_env_defaults_to_development(self, monkeypatch):
+    def test_unknown_env_is_fatal(self, monkeypatch):
+        # RDI-001: a non-empty unrecognised ENVIRONMENT must terminate startup,
+        # not be silently coerced to 'development'.
         monkeypatch.setenv("ENVIRONMENT", "prod-staging-hybrid")
         from environment import get_environment
-        result = get_environment()
-        assert result == "development"
+        with pytest.raises(SystemExit):
+            get_environment()
 
     def test_accepted_environments_are_explicit(self):
         from environment import VALID_ENVIRONMENTS

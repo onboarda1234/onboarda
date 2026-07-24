@@ -66,9 +66,11 @@ class TestAbstractionFlag:
         monkeypatch.setenv("ENABLE_SCREENING_ABSTRACTION", "0")
         assert is_abstraction_enabled() is False
 
-    def test_unknown_env_defaults_false(self, monkeypatch):
+    def test_defaults_false_in_development(self, monkeypatch):
+        # RDI-001: an invalid ENVIRONMENT is now fatal, so this default-off
+        # assertion uses a valid environment. (The unset-flag default is False.)
         monkeypatch.delenv("ENABLE_SCREENING_ABSTRACTION", raising=False)
-        monkeypatch.setenv("ENVIRONMENT", "unknown_env")
+        monkeypatch.setenv("ENVIRONMENT", "development")
         assert is_abstraction_enabled() is False
 
 

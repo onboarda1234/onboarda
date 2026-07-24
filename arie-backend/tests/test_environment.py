@@ -31,11 +31,13 @@ class TestGetEnvironment:
         result = environment.get_environment()
         assert result == "staging"
 
-    def test_invalid_env_defaults_to_development(self, monkeypatch):
+    def test_invalid_env_is_fatal(self, monkeypatch):
+        # RDI-001: a non-empty unrecognised ENVIRONMENT must abort startup
+        # rather than silently degrade to development.
         monkeypatch.setenv("ENVIRONMENT", "invalid_env_name")
         import environment
-        result = environment.get_environment()
-        assert result == "development"
+        with pytest.raises(SystemExit):
+            environment.get_environment()
 
     def test_strips_whitespace(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "  demo  ")
