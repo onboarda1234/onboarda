@@ -107,7 +107,9 @@ def test_lifecycle_tab_loader_uses_existing_projection_endpoints():
 def test_switch_detail_tab_supports_lifecycle_alerts_and_activity_without_regressions():
     html = _read_backoffice()
     start = html.index("function switchDetailTab(tab)")
-    section = html[start:start + 1200]
+    # Slice the whole function (to the next top-level function) rather than a
+    # brittle fixed char window — new tab-entry hooks legitimately grow it.
+    section = html[start:html.index("\nfunction ", start)]
     assert "'lifecycle'" in section
     assert "'alerts'" in section
     assert "loadLifecycleDetailTab()" in section
