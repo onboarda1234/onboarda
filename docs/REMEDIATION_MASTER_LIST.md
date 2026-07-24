@@ -426,6 +426,45 @@ are out of scope for every SRP item.
 | RSMP-2 | Tier 2 — model governance: versioning, maker-checker, effective dating, rollback, activation workflow | — | ⬜ production readiness | — |
 ---
 
+## Audit 1 re-run 2026-07-21 (`3389d4eb`) — Regulatory Decision Integrity
+
+> Source: `regmind_audit_1_regulatory_decision_integrity_20260721.md` (audited at
+> `3389d4eb`). Re-audited on current `main` and CONFIRMED. Eight fail-open /
+> control-bypass findings were remediated overnight **2026-07-24**, each through
+> the full gate — re-audit → fix → independent adversarial review (APPROVE) →
+> PR → CI → merge → staging deploy (all four deploys green). RDI-002/003 touch the
+> **FROZEN** Application Review risk-staleness approval gate
+> (`_application_risk_staleness_error`) and are **deferred pending Aisha Sudally
+> sign-off** (Module Status & Change Control). The audit's remaining items
+> (RDI-009/010/015 screening-config source-of-truth, RDI-017 SAR gating, etc.)
+> are separate scope, not part of this batch.
+
+### Remediated (2026-07-24)
+
+| ID | Title | Sev | GitHub | Status |
+|----|-------|:--:|:--:|----|
+| 🔴 RDI-006 | `change_management.create_change_alert` committed the materiality classification before an optional/swallowed audit → made atomic + fail-closed (refuses without actor + audit writer) | CRITICAL | [#862](https://github.com/onboarda1234/onboarda/pull/862) | ✅ merged (`d377793`) + staging-deployed 2026-07-24 |
+| 🔴 RDI-001 | Unknown/typo `ENVIRONMENT` coerced to `development`, silently stripping every production guard (boot-path) → a non-empty invalid env is now fatal (`sys.exit(1)`); missing still → development | CRITICAL | [#863](https://github.com/onboarda1234/onboarda/pull/863) | ✅ merged (`436f24a`) + staging-deployed 2026-07-24 |
+| 🔴 RDI-007 | `monitoring_routing` committed alert status/action + linkage before a swallowed routing audit → single atomic transaction that propagates audit failure and rolls back | CRITICAL | [#864](https://github.com/onboarda1234/onboarda/pull/864) | ✅ merged (`81d762c`) + staging-deployed 2026-07-24 |
+| 🔴 RDI-004 | Supervisor `AuditLogger` advanced the in-memory hash-chain head before persistence, swallowing failures → persist-before-advance from the committed DB tail; raises `AuditPersistenceError` (fail closed) | CRITICAL | [#865](https://github.com/onboarda1234/onboarda/pull/865) | ✅ merged (`b3a3cbe`) + staging-deployed 2026-07-24 |
+| 🔴 RDI-005 | Supervisor pipeline returned a successful decision-equivalent result without persistence → typed persist-or-raise; no cache/return before commit; 500 on failure; durable-store reads | CRITICAL | [#865](https://github.com/onboarda1234/onboarda/pull/865) | ✅ merged (`b3a3cbe`) + staging-deployed 2026-07-24 |
+| RDI-008 | CRITICAL monitoring alert dismissable via the ordinary single-officer path (no severity gate) → fail-closed behind the M2.2 senior/four-eyes disposition (pairs RDI-007) | HIGH | [#864](https://github.com/onboarda1234/onboarda/pull/864) | ✅ merged (`81d762c`) + staging-deployed 2026-07-24 |
+| RDI-014 | Supervisor audit-verify API capped at 5000 rows → uncapped batched full-chain verify (`?full=true`, admin/SCO) returning root/head/count/timestamp (pairs RDI-004) | HIGH | [#865](https://github.com/onboarda1234/onboarda/pull/865) | ✅ merged (`b3a3cbe`) + staging-deployed 2026-07-24 |
+| RDI-016 | `revalidate_actor_post_await` existed but was unwired → invoked after the pipeline await, before persist, aborting on mid-request revocation/demotion (pairs RDI-005) | HIGH | [#865](https://github.com/onboarda1234/onboarda/pull/865) | ✅ merged (`b3a3cbe`) + staging-deployed 2026-07-24 |
+
+> Supervisor items (RDI-004/005/014/016) harden the Enterprise supervisor, which is
+> `ENABLE_AI_SUPERVISOR`-OFF in staging/production (dev/demo only). The frozen
+> memo-verdict hash-chain writer was proven behaviourally unchanged.
+
+### Deferred — FROZEN scope (needs founder sign-off)
+
+| ID | Title | Sev | Status |
+|----|-------|:--:|----|
+| 🔒 RDI-002 | Final approval allowed when the application has no `risk_config_version` (unknown risk provenance) — `_application_risk_staleness_error` | CRITICAL | ⏸ deferred — frozen Application Review approval gate; needs Aisha Sudally sign-off |
+| 🔒 RDI-003 | Risk-staleness control disabled when the current risk-config version row is absent (same gate) | CRITICAL | ⏸ deferred — frozen Application Review approval gate; needs Aisha Sudally sign-off |
+
+---
+
 ## Optional / Post-Production Modernization (NOT required for pilot or first production cut; excluded from roll-up)
 
 > Elective architecture/scale/enterprise upgrades for after production launch.
@@ -493,7 +532,7 @@ are out of scope for every SRP item.
 
 ---
 
-## Roll-up — computed by counting rows, 2026-07-22
+## Roll-up — computed by counting rows, 2026-07-24
 
 Counting rule: every row in Phases 0–14 + the Re-audit/RSMP tables counts once.
 The 3 cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 7
@@ -504,14 +543,18 @@ RSMP-0C-A, RSMP-0C-REM, and the second-batch splits P12-7, P10-7, P11-5).
 This count unions the #780 stream with both staged batches (#808–#815 and
 #833–#837). Second batch moved 5 rows out of 📋 scoped: P11-6/P11-7 → ✅,
 P12-7/P10-7/P11-5 → ◐ (total unchanged — items changed category, none added).
+Third batch (Audit 1 re-run 2026-07-21, PRs #862–#865) adds **10 net-new rows**:
+8 ✅ merged + staging-deployed 2026-07-24 (RDI-001/004/005/006/007/008/014/016)
+and 2 ⏸ deferred (RDI-002/003 — frozen risk-staleness approval gate, founder
+sign-off pending).
 
 | Status | Count |
 |--------|:--:|
-| ✅ done/merged | 120 |
+| ✅ done/merged | 128 |
 | ◐ split — one half open | 14 |
 | 🟢 PR open | 0 |
 | 🔨 in progress | 3 |
 | 📋 scoped | 15 |
-| ⏸ blocked | 5 |
+| ⏸ blocked | 7 |
 | ⬜ pending | 32 |
-| **Total tracked items** | **189** |
+| **Total tracked items** | **199** |
