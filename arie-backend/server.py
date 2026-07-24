@@ -26096,6 +26096,42 @@ def _agent3_primary_count_bucket(categories):
     return "other"
 
 
+# SRP-4 Agent 3 narrative — advisory "next step" per where-to-start entry.
+# Category-driven and count-driven only (from data already on the entry); adds
+# no new risk judgement and never changes ordering, scores, gates, suggested
+# status, or dispositions. Deliberately free of provider-confidence vocabulary
+# (no "%"/"confidence"/"probability") to satisfy the Phase C banned-vocabulary
+# contract. Display-only: the officer reads it, decisions stay theirs.
+_AGENT3_ENTRY_NEXT_STEP_BY_BUCKET = {
+    "sanctions": "Confirm identity — name, date of birth, nationality — against the provider profile before any clear.",
+    "watchlist": "Confirm the list and identity against the provider profile before any clear.",
+    "pep": "Verify the political position and consider enhanced due diligence.",
+    "adverse_media": "Assess source reliability, recency, and name-match quality before relying on it.",
+}
+_AGENT3_ENTRY_NEXT_STEP_DEFAULT = "Disambiguate identity against the provider profile before disposition."
+_AGENT3_ENTRY_NEXT_STEP_MASS = (
+    "Near-identical — likely one underlying story; review a representative "
+    "sample rather than re-reading all {count} rows individually."
+)
+
+
+def _agent3_entry_next_step(kind, categories, count):
+    """Advisory next-step clause for one where-to-start entry (display only).
+
+    A homogeneous mass gets the materiality/sampling steer; a distinct hit gets
+    the category-appropriate identity/relevance step. Pure over the entry's own
+    stored fields — no provider call, no mutation.
+    """
+    try:
+        count_int = int(count)
+    except (TypeError, ValueError):
+        count_int = 0
+    if kind == "group" and count_int > 1:
+        return _AGENT3_ENTRY_NEXT_STEP_MASS.format(count=count_int)
+    bucket = _agent3_primary_count_bucket(categories or [])
+    return _AGENT3_ENTRY_NEXT_STEP_BY_BUCKET.get(bucket, _AGENT3_ENTRY_NEXT_STEP_DEFAULT)
+
+
 def _agent3_provider_results(section, source_hint=""):
     if isinstance(section, list):
         return [item for item in section if isinstance(item, dict)]
@@ -26814,6 +26850,7 @@ def _agent3_triage_narrative(hits):
                 "categories": list(head.get("categories") or []),
                 "reasons": reasons,
                 "surfaced_by_pass": head.get("surfaced_by_pass") or "",
+                "action": _agent3_entry_next_step("hit", head.get("categories") or [], 1),
             })
         else:
             count = len(group["members"])
@@ -26835,6 +26872,7 @@ def _agent3_triage_narrative(hits):
                 "categories": list(head.get("categories") or []),
                 "reasons": list(group["reasons_all"]),
                 "surfaced_by_pass": head.get("surfaced_by_pass") or "",
+                "action": _agent3_entry_next_step("group", head.get("categories") or [], count),
             })
         sentences.append(sentence)
 

@@ -583,3 +583,76 @@ class TestTriageNarrativeGrouping:
         blob = json.dumps(first, sort_keys=True).lower()
         for banned in BANNED_VOCABULARY:
             assert banned not in blob
+
+
+# ---------------------------------------------------------------------------
+# SRP-4 #1 — advisory per-entry "next step" (materiality + category action)
+# ---------------------------------------------------------------------------
+
+class TestTriageNarrativeNextStep:
+    """Each where-to-start entry carries an advisory `action`: a homogeneous
+    mass gets the materiality/sampling steer; a distinct hit gets the
+    category-appropriate identity/relevance step. Display-only, additive to
+    `entries` (priority_hits shape untouched), banned-vocabulary clean."""
+
+    def test_singleton_actions_are_category_appropriate(self):
+        narrative = server._agent3_triage_narrative(_sample_hits())
+        actions = {entry["matched_name"]: entry["action"] for entry in narrative["entries"]}
+        assert actions["ACME HOLDING"] == server._AGENT3_ENTRY_NEXT_STEP_BY_BUCKET["sanctions"]
+        assert actions["Jane R Director"] == server._AGENT3_ENTRY_NEXT_STEP_BY_BUCKET["pep"]
+        assert actions["Acme Media Report"] == server._AGENT3_ENTRY_NEXT_STEP_BY_BUCKET["adverse_media"]
+
+    def test_watchlist_singleton_action_steers_to_the_list_and_profile(self):
+        # Directly serves the sourceless-watchlist gap: tell the officer to
+        # identify the list + confirm identity against the provider profile.
+        narrative = server._agent3_triage_narrative([
+            _hit("Wirecard AG", "Wirecard AG Warning List", 53,
+                 reasons=["Watchlist warning match"], categories=["watchlist"]),
+        ])
+        assert narrative["entries"][0]["action"] == server._AGENT3_ENTRY_NEXT_STEP_BY_BUCKET["watchlist"]
+
+    def test_mass_group_action_is_materiality_sample_with_count(self):
+        hits = [_mass_hit(i) for i in range(198)]
+        hits.append(_hit("Wirecard AG", "Wirecard AG Warning List", 53,
+                         reasons=["Watchlist warning match"], categories=["watchlist"]))
+        narrative = server._agent3_triage_narrative(hits)
+        mass_entry = next(entry for entry in narrative["entries"] if entry["kind"] == "group")
+        assert mass_entry["action"] == server._AGENT3_ENTRY_NEXT_STEP_MASS.format(count=198)
+        assert "198 rows" in mass_entry["action"]
+
+    def test_default_action_for_uncategorized_hit(self):
+        narrative = server._agent3_triage_narrative([
+            _hit("Nomatch Co", "Nomatch Co", 80, categories=["other"]),
+        ])
+        assert narrative["entries"][0]["action"] == server._AGENT3_ENTRY_NEXT_STEP_DEFAULT
+
+    def test_action_never_uses_banned_vocabulary(self):
+        narrative = server._agent3_triage_narrative(_sample_hits())
+        for entry in narrative["entries"]:
+            for banned in BANNED_VOCABULARY:
+                assert banned not in entry["action"].lower()
+        # Pin EVERY action constant directly — incl. the DEFAULT / MASS strings
+        # that _sample_hits() does not exercise — so a banned word in any of
+        # them fails here regardless of which fixture surfaces it.
+        all_actions = (
+            server._AGENT3_ENTRY_NEXT_STEP_DEFAULT,
+            server._AGENT3_ENTRY_NEXT_STEP_MASS,
+            *server._AGENT3_ENTRY_NEXT_STEP_BY_BUCKET.values(),
+        )
+        for text in all_actions:
+            for banned in BANNED_VOCABULARY:
+                assert banned not in text.lower(), f"banned vocabulary {banned!r} in {text!r}"
+
+    def test_priority_hits_shape_still_has_no_action_key(self):
+        # `action` is additive to `entries` only; the pinned priority_hits
+        # payload shape stays exactly as before.
+        narrative = server._agent3_triage_narrative(_sample_hits())
+        assert all("action" not in hit for hit in narrative["priority_hits"])
+
+    def test_helper_renders_action_clause_escaped(self):
+        html = _html()
+        helper = _function_region(
+            html, "agent3TriageNarrativeHtml", "renderAgent3ScreeningInterpretationPanel"
+        )
+        assert "hit.action" in helper
+        assert "escapeHtml(action)" in helper
