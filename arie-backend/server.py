@@ -24638,6 +24638,7 @@ class ScreeningHitDispositionHandler(BaseHandler):
             if subject_name:
                 query += " AND subject_name=?"
                 params.append(subject_name)
+            query += " ORDER BY subject_type, subject_name, hit_id"
             rows = [_screening_hit_disposition_public_row(row) for row in db.execute(query, tuple(params)).fetchall()]
             # PR-B / audit H2+H3: return the uncapped, denominator-aware rollup
             # for every subject that carries dispositions (plus the specifically
@@ -24817,7 +24818,8 @@ class ScreeningHitDispositionHandler(BaseHandler):
             db.commit()
             rows = [dict(row) for row in db.execute(
                 "SELECT hit_id, disposition, materiality FROM screening_hit_dispositions "
-                "WHERE application_id=? AND subject_type=? AND subject_name=?",
+                "WHERE application_id=? AND subject_type=? AND subject_name=? "
+                "ORDER BY hit_id",
                 (app["id"], subject_type, subject_name),
             ).fetchall()]
             rollup = _screening_hit_rollup(

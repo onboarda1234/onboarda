@@ -1239,6 +1239,8 @@ def _get_postgres_schema() -> str:
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(application_id, subject_type, subject_name, hit_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_screening_hit_dispositions_subject
+        ON screening_hit_dispositions(application_id, subject_type, subject_name);
 
     -- SRP-2: superseded screening-report snapshots. A governed re-screen
     -- archives the outgoing report here before replacement — screening
@@ -2699,6 +2701,8 @@ def _get_sqlite_schema() -> str:
         updated_at TEXT DEFAULT (datetime('now')),
         UNIQUE(application_id, subject_type, subject_name, hit_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_screening_hit_dispositions_subject
+        ON screening_hit_dispositions(application_id, subject_type, subject_name);
 
     -- SRP-2: superseded screening-report snapshots. A governed re-screen
     -- archives the outgoing report here before replacement — screening
