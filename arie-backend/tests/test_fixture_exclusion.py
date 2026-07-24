@@ -977,6 +977,96 @@ class TestMigrationV229(_IsFixtureBase):
                                  f"Rogue ref {ref} must be marked is_fixture=1")
 
 
+def test_inline_v229_requires_exact_historical_identity(tmp_path, monkeypatch):
+    """Exact marking prevents new false positives without repairing stale data."""
+    import config as config_module
+    import db as db_module
+    import environment as environment_module
+
+    db_path = str(tmp_path / "inline-v229-exact-identity.db")
+    monkeypatch.setattr(config_module, "DB_PATH", db_path)
+    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+    monkeypatch.setattr(environment_module, "is_demo", lambda: False)
+    monkeypatch.setattr(environment_module, "is_staging", lambda: True)
+
+    db_module.init_db()
+    db = db_module.get_db()
+    try:
+        db.execute(
+            "INSERT INTO applications "
+            "(id, ref, company_name, status, is_fixture) VALUES (?,?,?,?,?)",
+            (
+                "pilot-reused-ref",
+                "ARF-2026-100421",
+                "E2E-20260724-150642-S01-Low-Risk",
+                "kyc_documents",
+                0,
+            ),
+        )
+        db.execute(
+            "INSERT INTO applications "
+            "(id, ref, company_name, status, is_fixture) VALUES (?,?,?,?,?)",
+            (
+                "stale-pilot-marker",
+                "ARF-2026-100430",
+                "E2E-20260724-150642-S02-Cross-Border",
+                "pricing_review",
+                1,
+            ),
+        )
+        db.execute(
+            "INSERT INTO applications "
+            "(id, ref, company_name, status, is_fixture) VALUES (?,?,?,?,?)",
+            (
+                "historical-fixture",
+                "ARF-2026-100424",
+                "Portal Audit Test Ltd",
+                "submitted",
+                0,
+            ),
+        )
+        db.execute(
+            "INSERT INTO applications "
+            "(id, ref, company_name, status, is_fixture) VALUES (?,?,?,?,?)",
+            (
+                "f1xed-reused-ref",
+                "ARF-2026-100428",
+                "Reserved fixture with reused ref",
+                "submitted",
+                1,
+            ),
+        )
+        db.commit()
+
+        db_module._run_migrations(db)
+        db_module._run_migrations(db)
+
+        pilot = db.execute(
+            "SELECT is_fixture FROM applications WHERE id = ?",
+            ("pilot-reused-ref",),
+        ).fetchone()
+        historical = db.execute(
+            "SELECT is_fixture FROM applications WHERE id = ?",
+            ("historical-fixture",),
+        ).fetchone()
+        stale = db.execute(
+            "SELECT is_fixture FROM applications WHERE id = ?",
+            ("stale-pilot-marker",),
+        ).fetchone()
+        reserved = db.execute(
+            "SELECT is_fixture FROM applications WHERE id = ?",
+            ("f1xed-reused-ref",),
+        ).fetchone()
+        assert pilot["is_fixture"] == 0
+        # Startup prevention is intentionally not an implicit staging data
+        # repair. The guarded dry-run/apply tool owns this stale TRUE marker.
+        assert stale["is_fixture"] == 1
+        assert historical["is_fixture"] == 1
+        assert reserved["is_fixture"] == 1
+    finally:
+        db.close()
+
+
 class TestSeederSetsIsFixture(unittest.TestCase):
     """The seeder _upsert_application sets is_fixture = 1 on fixture rows."""
 

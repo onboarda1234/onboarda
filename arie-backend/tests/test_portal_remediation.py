@@ -223,14 +223,16 @@ def _insert_uploaded_document(db, app_id, *, doc_id=None, doc_type="cert_inc",
     db.execute(
         """
         INSERT INTO documents
-        (id, application_id, person_id, doc_type, doc_name, file_path, slot_key,
-         is_current, verification_status, verification_results, verified_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, application_id, person_id, person_type, doc_type, doc_name,
+         file_path, slot_key, is_current, verification_status,
+         verification_results, verified_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             final_doc_id,
             app_id,
             person_id,
+            person_type,
             doc_type,
             os.path.basename(file_path),
             file_path,
@@ -262,8 +264,20 @@ def _ensure_verified_document(db, app_id, *, doc_type, person_id=None, person_ty
     ).fetchone()
     if existing:
         db.execute(
-            "UPDATE documents SET verification_status=?, verification_results=?, verified_at=datetime('now') WHERE id=?",
-            ("verified", json.dumps({"overall": "verified", "checks": [{"result": "pass"}], "verified_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}), existing["id"]),
+            "UPDATE documents SET person_type=?, verification_status=?, "
+            "verification_results=?, verified_at=datetime('now') WHERE id=?",
+            (
+                person_type,
+                "verified",
+                json.dumps({
+                    "overall": "verified",
+                    "checks": [{"result": "pass"}],
+                    "verified_at": datetime.now(timezone.utc).strftime(
+                        "%Y-%m-%dT%H:%M:%S"
+                    ),
+                }),
+                existing["id"],
+            ),
         )
         db.execute(
             """

@@ -20,6 +20,7 @@ from periodic_review_notifications import (
     fixture_notification_suppression,
     notification_projection_from_review,
 )
+from enhanced_requirements import validate_enhanced_requirement_document_link
 
 ACTIVE_REVIEW_STATES = (
     "pending",
@@ -347,6 +348,11 @@ def _last_activity_timestamp(review) -> Optional[str]:
 
 
 def _periodic_review_doc_request_ready(requirement: Dict[str, Any]) -> bool:
+    if (
+        requirement.get("linked_document_id")
+        and requirement.get("linked_document_integrity_valid") is not True
+    ):
+        return False
     linked = requirement.get("linked_document") if isinstance(requirement.get("linked_document"), dict) else {}
     verification_status = str(
         linked.get("verification_status") or requirement.get("document_verification_status") or ""
@@ -390,16 +396,16 @@ def _periodic_review_document_request_status(db, review_id: int) -> Dict[str, in
     active_filter = "AND COALESCE(aer.active, 1) = 1" if "active" in req_columns else ""
     rows = db.execute(
         f"""
-        SELECT aer.id,
-               aer.mandatory,
-               aer.linked_document_id,
+        SELECT aer.*,
                {requirement_display_select} AS requirement_display_type,
                d.verification_status AS document_verification_status,
                d.review_status AS document_review_status,
                d.reviewer_role AS document_reviewer_role,
                d.review_comment AS document_review_comment
         FROM application_enhanced_requirements aer
-        LEFT JOIN documents d ON d.id = aer.linked_document_id
+        LEFT JOIN documents d
+          ON d.id = aer.linked_document_id
+         AND d.application_id = aer.application_id
         WHERE aer.linked_periodic_review_id = ?
           {active_filter}
         ORDER BY aer.id ASC
@@ -407,6 +413,18 @@ def _periodic_review_document_request_status(db, review_id: int) -> Dict[str, in
         (review_id,),
     ).fetchall()
     requests = [dict(row) for row in rows]
+    for item in requests:
+        linked_document_id = item.get("linked_document_id")
+        if not linked_document_id:
+            continue
+        _, link_integrity = validate_enhanced_requirement_document_link(
+            db,
+            item.get("application_id"),
+            item,
+            linked_document_id,
+        )
+        item["linked_document_integrity_valid"] = bool(link_integrity.get("valid"))
+        item["linked_document_integrity_reason"] = link_integrity.get("reason")
     evidence_requests = [
         item for item in requests
         if str(item.get("requirement_display_type") or "evidence").strip().lower() == "evidence"

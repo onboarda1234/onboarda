@@ -248,7 +248,7 @@ def _legacy_person_slot_key(doc_type: Any, person_id: Any = None) -> Optional[st
 
 
 def _party_requirement_key(person: Mapping[str, Any]) -> Optional[str]:
-    return person.get("person_key") or person.get("id")
+    return person.get("id")
 
 
 def build_required_document_expectations(db: Any, app: Mapping[str, Any]) -> List[Dict[str, Any]]:
@@ -267,48 +267,82 @@ def build_required_document_expectations(db: Any, app: Mapping[str, Any]) -> Lis
     if app_id and db is not None:
         try:
             directors = [_row_to_dict(row) for row in db.execute(
-                "SELECT * FROM directors WHERE application_id=?",
+                "SELECT * FROM directors WHERE application_id=? ORDER BY person_key, id",
                 (app_id,),
             ).fetchall()]
         except Exception:
             directors = []
         try:
             ubos = [_row_to_dict(row) for row in db.execute(
-                "SELECT * FROM ubos WHERE application_id=?",
+                "SELECT * FROM ubos WHERE application_id=? ORDER BY person_key, id",
                 (app_id,),
             ).fetchall()]
         except Exception:
             ubos = []
         try:
             intermediaries = [_row_to_dict(row) for row in db.execute(
-                "SELECT * FROM intermediaries WHERE application_id=?",
+                "SELECT * FROM intermediaries WHERE application_id=? ORDER BY person_key, id",
                 (app_id,),
             ).fetchall()]
         except Exception:
             intermediaries = []
+
+        identity_owners: Dict[str, set] = {}
+        typed_people = (
+            [("director", person) for person in directors]
+            + [("ubo", person) for person in ubos]
+            + [("intermediary", person) for person in intermediaries]
+        )
+        for party_type, person in typed_people:
+            stable_id = str(person.get("id") or "").strip()
+            owner = (party_type, stable_id)
+            for identifier in (
+                stable_id,
+                str(person.get("person_key") or "").strip(),
+            ):
+                if identifier:
+                    identity_owners.setdefault(identifier, set()).add(owner)
 
         for party_type, people in (("director", directors), ("ubo", ubos)):
             for person in people:
                 person_id = _party_requirement_key(person)
                 if not person_id:
                     continue
+                legacy_person_key = str(person.get("person_key") or "").strip()
+                expected_owner = (party_type, str(person_id))
+                if (
+                    not legacy_person_key
+                    or legacy_person_key == str(person_id)
+                    or identity_owners.get(legacy_person_key) != {expected_owner}
+                ):
+                    legacy_person_key = None
                 owner = person.get("full_name") or person_id
                 expectations.append({
                     "doc_type": "passport",
                     "label": f"Passport / Government ID for {owner}",
                     "person_id": person_id,
                     "person_type": party_type,
+                    "legacy_person_key": legacy_person_key,
                 })
                 expectations.append({
                     "doc_type": "poa",
                     "label": f"Proof of Address for {owner}",
                     "person_id": person_id,
                     "person_type": party_type,
+                    "legacy_person_key": legacy_person_key,
                 })
         for person in intermediaries:
             person_id = _party_requirement_key(person)
             if not person_id:
                 continue
+            legacy_person_key = str(person.get("person_key") or "").strip()
+            expected_owner = ("intermediary", str(person_id))
+            if (
+                not legacy_person_key
+                or legacy_person_key == str(person_id)
+                or identity_owners.get(legacy_person_key) != {expected_owner}
+            ):
+                legacy_person_key = None
             owner = person.get("entity_name") or person.get("full_name") or person_id
             for doc_type, label in (
                 ("cert_inc", "Certificate of Incorporation"),
@@ -322,6 +356,7 @@ def build_required_document_expectations(db: Any, app: Mapping[str, Any]) -> Lis
                     "label": f"{label} for {owner}",
                     "person_id": person_id,
                     "person_type": "intermediary",
+                    "legacy_person_key": legacy_person_key,
                 })
 
     for expectation in expectations:
@@ -360,14 +395,156 @@ def _index_documents(docs: Iterable[Mapping[str, Any]]) -> Tuple[Dict[str, Dict[
     by_id: Dict[Any, Dict[str, Any]] = {}
     for doc in docs:
         doc_dict = dict(doc)
-        slot = doc_dict.get("slot_key") or document_slot_key(doc_dict.get("doc_type"), doc_dict.get("person_id"))
-        by_slot[slot] = doc_dict
-        legacy_slot = _legacy_person_slot_key(doc_dict.get("doc_type"), doc_dict.get("person_id"))
-        if legacy_slot and legacy_slot not in by_slot:
-            by_slot[legacy_slot] = doc_dict
+        slot = doc_dict.get("slot_key") or document_slot_key(
+            doc_dict.get("doc_type"),
+            doc_dict.get("person_id"),
+            person_type=doc_dict.get("person_type"),
+        )
+        if slot in by_slot:
+            existing = by_slot[slot]
+            conflict_docs = list(existing.get("_conflict_documents") or [existing])
+            conflict_docs.append(doc_dict)
+            by_slot[slot] = {
+                "_integrity_conflict": "duplicate_document_slot",
+                "_conflict_documents": conflict_docs,
+                "slot_key": slot,
+            }
+        else:
+            by_slot[slot] = doc_dict
         if doc_dict.get("id"):
-            by_id[doc_dict.get("id")] = doc_dict
+            doc_id = doc_dict.get("id")
+            if doc_id in by_id:
+                by_id[doc_id] = {
+                    "_integrity_conflict": "duplicate_document_id",
+                    "id": doc_id,
+                }
+            else:
+                by_id[doc_id] = doc_dict
     return by_slot, by_id
+
+
+def _expectation_slot_aliases(expectation: Mapping[str, Any]) -> List[str]:
+    aliases = [str(expectation.get("slot_key") or "").strip()]
+    person_id = str(expectation.get("person_id") or "").strip()
+    person_type = _normalize_person_type(expectation.get("person_type"))
+    if person_id:
+        stable_legacy = _legacy_person_slot_key(expectation.get("doc_type"), person_id)
+        if stable_legacy and stable_legacy not in aliases:
+            aliases.append(stable_legacy)
+    legacy_person_key = str(expectation.get("legacy_person_key") or "").strip()
+    if legacy_person_key and person_type:
+        for alias in (
+            document_slot_key(
+                expectation.get("doc_type"),
+                legacy_person_key,
+                person_type=person_type,
+            ),
+            _legacy_person_slot_key(expectation.get("doc_type"), legacy_person_key),
+        ):
+            if alias and alias not in aliases:
+                aliases.append(alias)
+    return [alias for alias in aliases if alias]
+
+
+def _document_association_error(
+    expectation: Mapping[str, Any],
+    doc: Mapping[str, Any],
+) -> Optional[str]:
+    if doc.get("_integrity_conflict"):
+        return "Multiple current documents claim the same required slot"
+
+    expected_doc_type = _normalize_document_type(expectation.get("doc_type"))
+    actual_doc_type = _normalize_document_type(doc.get("doc_type"))
+    if actual_doc_type != expected_doc_type:
+        return (
+            f"Slot metadata names '{actual_doc_type}' instead of "
+            f"'{expected_doc_type}'"
+        )
+
+    expected_person_id = str(expectation.get("person_id") or "").strip()
+    actual_person_id = str(doc.get("person_id") or "").strip()
+    expected_person_type = _normalize_person_type(expectation.get("person_type"))
+    actual_person_type = _normalize_person_type(doc.get("person_type"))
+    actual_slot = str(doc.get("slot_key") or "").strip()
+
+    if not expected_person_id:
+        if actual_person_id or actual_person_type:
+            return "Entity document slot contains person ownership metadata"
+        if actual_slot.startswith("rmi:") and isinstance(doc.get("_rmi_trace"), dict):
+            if doc["_rmi_trace"].get("canonical_slot_key") != expectation.get("slot_key"):
+                return "RMI document canonical slot metadata is inconsistent"
+            return None
+        if actual_slot and actual_slot != expectation.get("slot_key"):
+            return "Entity document slot_key does not match its required document type"
+        return None
+
+    if actual_person_type != expected_person_type:
+        return (
+            "Person-scoped evidence is missing the exact persisted person_type "
+            "required by this slot"
+        )
+    legacy_person_key = str(expectation.get("legacy_person_key") or "").strip()
+    if actual_person_id not in {expected_person_id, legacy_person_key}:
+        return "Person-scoped evidence references a different party"
+    if actual_person_id == legacy_person_key and not legacy_person_key:
+        return "Legacy party alias is not uniquely resolvable"
+
+    allowed_slots = set(_expectation_slot_aliases(expectation))
+    if actual_slot.startswith("rmi:") and isinstance(doc.get("_rmi_trace"), dict):
+        if doc["_rmi_trace"].get("canonical_slot_key") != expectation.get("slot_key"):
+            return "RMI document canonical slot metadata is inconsistent"
+    elif actual_slot and actual_slot not in allowed_slots:
+        return "Person-scoped evidence slot_key is inconsistent with its party metadata"
+    return None
+
+
+def _select_expected_document(
+    expectation: Mapping[str, Any],
+    docs: Iterable[Mapping[str, Any]],
+    docs_by_slot: Mapping[str, Mapping[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    candidates: Dict[str, Dict[str, Any]] = {}
+    for slot_key in _expectation_slot_aliases(expectation):
+        candidate = docs_by_slot.get(slot_key)
+        if candidate:
+            candidate_dict = dict(candidate)
+            candidate_id = str(candidate_dict.get("id") or f"conflict:{slot_key}")
+            candidates[candidate_id] = candidate_dict
+
+    expected_person_id = str(expectation.get("person_id") or "").strip()
+    legacy_person_key = str(expectation.get("legacy_person_key") or "").strip()
+    expected_doc_type = _normalize_document_type(expectation.get("doc_type"))
+    for raw_doc in docs:
+        doc = dict(raw_doc)
+        if _normalize_document_type(doc.get("doc_type")) != expected_doc_type:
+            continue
+        actual_slot = str(doc.get("slot_key") or "").strip()
+        # Special request slots are not base-KYC candidates. RMI evidence is
+        # eligible only after the accepted request/item mapping above attaches
+        # a canonical trace; enhanced-requirement evidence never borrows or
+        # displaces the base entity/person slot.
+        if actual_slot.startswith("rmi:") and not isinstance(doc.get("_rmi_trace"), dict):
+            continue
+        if actual_slot.startswith("enhanced_requirement:"):
+            continue
+        actual_person_id = str(doc.get("person_id") or "").strip()
+        if expected_person_id:
+            if actual_person_id not in {expected_person_id, legacy_person_key}:
+                continue
+        elif actual_person_id:
+            continue
+        candidate_id = str(doc.get("id") or f"row:{id(raw_doc)}")
+        candidates.setdefault(candidate_id, doc)
+
+    if not candidates:
+        return None
+    if len(candidates) > 1:
+        return {
+            "_integrity_conflict": "multiple_documents_for_expectation",
+            "_conflict_documents": list(candidates.values()),
+            "slot_key": expectation.get("slot_key"),
+        }
+    return next(iter(candidates.values()))
 
 
 def _rmi_item_text(item: Mapping[str, Any]) -> str:
@@ -418,11 +595,17 @@ def resolve_rmi_replacement_slot(
 
     shorthand_matches = []
     for expectation in expected_items:
-        person_id = str(expectation.get("person_id") or "").strip()
-        if not person_id:
+        person_refs = [
+            str(expectation.get("person_id") or "").strip(),
+            str(expectation.get("legacy_person_key") or "").strip(),
+        ]
+        person_refs = [person_ref for person_ref in person_refs if person_ref]
+        if not person_refs:
             continue
-        shorthand = f"{person_id}:{requested_doc_type}".lower()
-        if shorthand in text:
+        if any(
+            f"{person_ref}:{requested_doc_type}".lower() in text
+            for person_ref in person_refs
+        ):
             shorthand_matches.append(expectation)
     if len(shorthand_matches) == 1:
         return dict(shorthand_matches[0])
@@ -476,7 +659,7 @@ def _apply_rmi_document_slot_aliases(
         if str(item.get("rmi_item_status") or "").strip().lower() == "rejected":
             continue
         doc = docs_by_id.get(item.get("document_id"))
-        if not doc:
+        if not doc or doc.get("_integrity_conflict"):
             continue
         rmi_slot_key = f"rmi:{item.get('rmi_item_id')}"
         current_slot = str(doc.get("slot_key") or "").strip()
@@ -676,6 +859,25 @@ def _evaluate_document(
         snapshot.update({"reliance_state": "unsupported", "verification_method": None, "blocker_reasons": [reason]})
         return {"allowed": False, "snapshot": snapshot, "blockers": blockers}
 
+    association_error = _document_association_error(expectation, doc)
+    if association_error:
+        reason = f"{expectation.get('label')} has invalid party/document association metadata: {association_error}."
+        blockers.append(
+            _blocker(
+                "document_party_association_integrity",
+                expectation,
+                doc,
+                reason,
+                status="unsupported",
+            )
+        )
+        snapshot.update({
+            "reliance_state": "association_integrity_failed",
+            "verification_method": None,
+            "blocker_reasons": [reason],
+        })
+        return {"allowed": False, "snapshot": snapshot, "blockers": blockers}
+
     manual = manual_acceptance_details(doc)
     snapshot["manual_acceptance"] = manual
     if manual["accepted"]:
@@ -777,10 +979,7 @@ def evaluate_document_reliance_gate(
     satisfied = 0
 
     for expectation in expectations:
-        doc = docs_by_slot.get(expectation["slot_key"])
-        if not doc:
-            legacy_slot = _legacy_person_slot_key(expectation.get("doc_type"), expectation.get("person_id"))
-            doc = docs_by_slot.get(legacy_slot) if legacy_slot else None
+        doc = _select_expected_document(expectation, docs, docs_by_slot)
         result = _evaluate_document(
             db,
             expectation,

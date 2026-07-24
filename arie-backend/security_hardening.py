@@ -3181,8 +3181,15 @@ class PIIEncryptor:
         'id_number',
         'country_of_residence',
         'residential_address',
+        'professional_profile_url',
     ]
-    PII_FIELDS_UBOS = ['passport_number', 'nationality', 'country_of_residence', 'residential_address']
+    PII_FIELDS_UBOS = [
+        'passport_number',
+        'nationality',
+        'country_of_residence',
+        'residential_address',
+        'professional_profile_url',
+    ]
     PII_FIELDS_INTERMEDIARIES = ['owned_or_controlled_by']
     PII_FIELDS_APPLICATIONS = ['pep_flags']
 

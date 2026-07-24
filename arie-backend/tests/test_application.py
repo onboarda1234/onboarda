@@ -349,20 +349,64 @@ class TestApplicationWorkflow:
         from server import store_application_parties
 
         metadata = {"provider": "companies_house", "lookup": {"id": "lookup-1"}}
+        keys = {
+            "directors": "dir-imported-json",
+            "ubos": "ubo-imported-json",
+            "intermediaries": "int-imported-json",
+        }
+        row_ids = {
+            table_name: f"{person_key}-id"
+            for table_name, person_key in keys.items()
+        }
+        db.execute(
+            """
+            INSERT INTO directors
+                (id, application_id, person_key, first_name, last_name,
+                 full_name, source, source_metadata_json, imported_at)
+            VALUES (?, ?, ?, 'Imported', 'Director', 'Imported Director',
+                    'companies_house', '{}', '2026-06-22T12:00:00+00:00')
+            """,
+            (row_ids["directors"], sample_application, keys["directors"]),
+        )
+        db.execute(
+            """
+            INSERT INTO ubos
+                (id, application_id, person_key, first_name, last_name,
+                 full_name, ownership_pct, source, source_metadata_json,
+                 imported_at)
+            VALUES (?, ?, ?, 'Imported', 'Owner', 'Imported Owner', 50,
+                    'companies_house', '{}', '2026-06-22T12:00:00+00:00')
+            """,
+            (row_ids["ubos"], sample_application, keys["ubos"]),
+        )
+        db.execute(
+            """
+            INSERT INTO intermediaries
+                (id, application_id, person_key, entity_name, ownership_pct,
+                 source, source_metadata_json, imported_at)
+            VALUES (?, ?, ?, 'Imported Holdco Ltd', 50, 'companies_house',
+                    '{}', '2026-06-22T12:00:00+00:00')
+            """,
+            (
+                row_ids["intermediaries"],
+                sample_application,
+                keys["intermediaries"],
+            ),
+        )
+        db.commit()
 
         def fake_existing_by_person_key(_db, table_name, _application_id):
-            keys = {
-                "directors": "dir-imported-json",
-                "ubos": "ubo-imported-json",
-                "intermediaries": "int-imported-json",
+            record = {
+                "id": row_ids[table_name],
+                "person_key": keys[table_name],
+                "source": "companies_house",
+                "source_metadata_json": metadata,
+                "imported_at": "2026-06-22T12:00:00+00:00",
             }
             return {
-                keys[table_name]: {
-                    "person_key": keys[table_name],
-                    "source": "companies_house",
-                    "source_metadata_json": metadata,
-                    "imported_at": "2026-06-22T12:00:00+00:00",
-                }
+                "rows": [record],
+                "by_id": {record["id"]: record},
+                "by_person_key": {record["person_key"]: record},
             }
 
         monkeypatch.setattr(

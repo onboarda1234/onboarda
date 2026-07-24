@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set
 
 from environment import get_screening_validity_days
+from enhanced_requirements import validate_enhanced_requirement_document_link
 
 TERMINAL_EDD_STAGES = {"edd_approved", "edd_rejected"}
 TERMINAL_ALERT_STATES = {"dismissed", "resolved", "routed_to_review", "routed_to_edd"}
@@ -143,6 +144,8 @@ def _document_request_ready(row: Dict[str, Any]) -> bool:
     # Deliberate waiver / cancellation stays terminal.
     if status in DOCUMENT_REQUEST_WAIVED_STATUSES:
         return True
+    if row.get("linked_document_id") and row.get("linked_document_integrity_valid") is not True:
+        return False
     if _truthy(row.get("workflow_test_accepted")):
         return True
     # PR-PRS-B (P0-EV1): officer "accepted" no longer satisfies completion on its
@@ -184,20 +187,16 @@ def _periodic_review_document_request_blockers(db, review) -> List[Dict[str, Any
     try:
         rows = db.execute(
             """
-            SELECT aer.id,
-                   aer.requirement_label,
-                   aer.requirement_key,
-                   aer.mandatory,
-                   aer.status,
-                   aer.linked_document_id,
-                   aer.workflow_test_accepted,
+            SELECT aer.*,
                    d.verification_status AS document_verification_status,
                    d.review_status AS document_review_status,
                    d.reviewer_role AS document_reviewer_role,
                    d.review_comment AS document_review_comment,
                    d.is_current AS document_is_current
             FROM application_enhanced_requirements aer
-            LEFT JOIN documents d ON d.id = aer.linked_document_id
+            LEFT JOIN documents d
+              ON d.id = aer.linked_document_id
+             AND d.application_id = aer.application_id
             WHERE aer.application_id = ?
               AND aer.linked_periodic_review_id = ?
               AND aer.active = 1
@@ -213,10 +212,26 @@ def _periodic_review_document_request_blockers(db, review) -> List[Dict[str, Any
         row = dict(raw)
         if not _truthy(row.get("mandatory")):
             continue
+        if row.get("linked_document_id"):
+            _, link_integrity = validate_enhanced_requirement_document_link(
+                db,
+                application_id,
+                row,
+                row.get("linked_document_id"),
+            )
+            row["linked_document_integrity_valid"] = bool(
+                link_integrity.get("valid")
+            )
+            row["linked_document_integrity_reason"] = link_integrity.get("reason")
         if _document_request_ready(row):
             continue
         label = row.get("requirement_label") or row.get("requirement_key") or "Required periodic review document"
-        reason = "is still missing" if not row.get("linked_document_id") else "still requires officer review"
+        if not row.get("linked_document_id"):
+            reason = "is still missing"
+        elif row.get("linked_document_integrity_valid") is False:
+            reason = "has an invalid evidence association that must be repaired"
+        else:
+            reason = "still requires officer review"
         blockers.append(
             _blocker(
                 "periodic_review_document_required",

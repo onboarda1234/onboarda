@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from periodic_review_engine import ReviewClosedError, require_review_not_terminal
+from enhanced_requirements import validate_enhanced_requirement_document_link
 
 
 RISK_LEVELS = ("LOW", "MEDIUM", "HIGH", "VERY_HIGH")
@@ -130,8 +131,7 @@ def _fetch_application(db, application_id):
 def _fetch_document_requests(db, review_id: int) -> List[Dict[str, Any]]:
     try:
         rows = db.execute(
-            "SELECT id, requirement_key, requirement_label, status, mandatory, "
-            "       linked_document_id, uploaded_at, reviewed_at "
+            "SELECT * "
             "FROM application_enhanced_requirements "
             "WHERE linked_periodic_review_id = ? AND active = 1 "
             "ORDER BY id ASC",
@@ -139,7 +139,18 @@ def _fetch_document_requests(db, review_id: int) -> List[Dict[str, Any]]:
         ).fetchall()
     except Exception:
         return []
-    return [dict(row) for row in rows]
+    requests = [dict(row) for row in rows]
+    for item in requests:
+        if not item.get("linked_document_id"):
+            continue
+        _, integrity = validate_enhanced_requirement_document_link(
+            db,
+            item.get("application_id"),
+            item,
+            item.get("linked_document_id"),
+        )
+        item["linked_document_integrity_valid"] = bool(integrity.get("valid"))
+    return requests
 
 
 def _fetch_linked_alerts(db, review) -> List[Dict[str, Any]]:
@@ -254,10 +265,17 @@ def derive_suggested_risk_impact(db, review, application=None) -> Dict[str, Any]
     ]
     missing_docs = [
         item for item in requests
-        if not item.get("linked_document_id")
-        and str(item.get("status") or "").strip().lower() not in {"accepted", "waived", "cancelled"}
+        if (
+            not item.get("linked_document_id")
+            or item.get("linked_document_integrity_valid") is not True
+        )
+        and str(item.get("status") or "").strip().lower() not in {"waived", "cancelled"}
     ]
-    uploaded_docs = [item for item in requests if item.get("linked_document_id")]
+    uploaded_docs = [
+        item for item in requests
+        if item.get("linked_document_id")
+        and item.get("linked_document_integrity_valid") is True
+    ]
     outcome = str(_row_get(review, "outcome") or "").strip().lower()
     reasons = []
     category = IMPACT_NO_RISK

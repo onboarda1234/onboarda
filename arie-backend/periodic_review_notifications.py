@@ -6,6 +6,7 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from enhanced_requirements import validate_enhanced_requirement_document_link
 
 CLIENT_STATUS_NOT_SENT = "not_sent"
 CLIENT_STATUS_SENT = "sent"
@@ -251,8 +252,10 @@ def _attestation_incomplete(review: Dict[str, Any]) -> bool:
 
 def _document_ready(row: Dict[str, Any]) -> bool:
     status = str(row.get("status") or "").strip().lower()
-    if status in DOCUMENT_TERMINAL_STATUSES:
+    if status in {"waived", "cancelled"}:
         return True
+    if row.get("linked_document_id") and row.get("linked_document_integrity_valid") is not True:
+        return False
     if str(row.get("workflow_test_accepted") or "").strip().lower() in {"1", "true", "yes", "y"}:
         return True
     if not row.get("linked_document_id"):
@@ -296,20 +299,16 @@ def periodic_review_document_notification_summary(db, review_id: int) -> Dict[st
     try:
         rows = db.execute(
             f"""
-            SELECT aer.id,
-                   aer.requirement_label,
-                   aer.requirement_key,
-                   aer.mandatory,
-                   aer.status,
-                   aer.linked_document_id,
-                   aer.workflow_test_accepted,
+            SELECT aer.*,
                    {display_select} AS requirement_display_type,
                    d.verification_status AS document_verification_status,
                    d.review_status AS document_review_status,
                    d.reviewer_role AS document_reviewer_role,
                    d.review_comment AS document_review_comment
             FROM application_enhanced_requirements aer
-            LEFT JOIN documents d ON d.id = aer.linked_document_id
+            LEFT JOIN documents d
+              ON d.id = aer.linked_document_id
+             AND d.application_id = aer.application_id
             WHERE aer.linked_periodic_review_id = ?
               {active_filter}
             ORDER BY aer.id ASC
@@ -327,10 +326,23 @@ def periodic_review_document_notification_summary(db, review_id: int) -> Dict[st
     missing = []
     pending_review = []
     for row in required_rows:
+        if row.get("linked_document_id"):
+            _, link_integrity = validate_enhanced_requirement_document_link(
+                db,
+                row.get("application_id"),
+                row,
+                row.get("linked_document_id"),
+            )
+            row["linked_document_integrity_valid"] = bool(
+                link_integrity.get("valid")
+            )
         if _document_ready(row):
             continue
         label = row.get("requirement_label") or row.get("requirement_key") or "Required periodic review document"
-        if row.get("linked_document_id"):
+        if (
+            row.get("linked_document_id")
+            and row.get("linked_document_integrity_valid") is not False
+        ):
             pending_review.append(str(label))
         else:
             missing.append(str(label))
