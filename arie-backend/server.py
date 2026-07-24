@@ -40941,6 +40941,15 @@ class ChangeAlertsListHandler(BaseHandler):
                 log_audit_fn=self.log_audit,
             )
             self.success(alert, 201)
+        except ValueError as e:
+            # RDI-006 fail-closed: missing actor/audit sink (should not occur
+            # here — both are always supplied above — but never 500 silently).
+            self.error(str(e), 400)
+        except Exception:
+            # RDI-006: a materiality decision must not be reported as created
+            # if its atomic insert+audit could not commit.
+            logger.exception("Change alert creation failed for %s", application_id)
+            self.error("Change alert could not be created", 500)
         finally:
             db.close()
 

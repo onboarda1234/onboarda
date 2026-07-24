@@ -29,6 +29,17 @@ def _get_cm():
     return cm
 
 
+def _audit_noop(*args, **kwargs):
+    """Inert audit sink (RDI-006).
+
+    ``create_change_alert`` is now fail-closed: it refuses to record an
+    alert's materiality without a non-null audit writer and actor. Tests that
+    exercise non-audit behaviour pass this inert sink to satisfy the guard;
+    tests that assert on audit output use a capturing collector instead.
+    """
+    return None
+
+
 def _get_db_module():
     """Lazy-import db module."""
     import db as db_module
@@ -461,7 +472,7 @@ class TestDBIntegration:
             alert_type="director_change", source_channel="companies_house",
             summary="New director detected",
             detected_changes={"directors": {"old": ["A"], "new": ["A", "B"]}},
-            confidence=0.95, user=user,
+            confidence=0.95, user=user, log_audit_fn=_audit_noop,
         )
         assert alert["id"].startswith("CA-")
         assert alert["status"] == "new"
@@ -477,7 +488,7 @@ class TestDBIntegration:
         user = {"sub": "u1", "name": "User", "role": "sco"}
 
         alert = cm.create_change_alert(wdb, app_id, "ubo_change", "open_corporates",
-                                        "Test", {}, user=user)
+                                        "Test", {}, user=user, log_audit_fn=_audit_noop)
         ok, _ = cm.update_change_alert_status(wdb, alert["id"], "under_review", user)
         assert ok
         ok, _ = cm.update_change_alert_status(wdb, alert["id"], "dismissed", user, notes="FP")
@@ -492,7 +503,8 @@ class TestDBIntegration:
         user = {"sub": "u1", "name": "User", "role": "sco"}
 
         alert = cm.create_change_alert(wdb, app_id, "director_change", "companies_house",
-                                        "Test", {"dirs": {"old": "A", "new": "B"}}, user=user)
+                                        "Test", {"dirs": {"old": "A", "new": "B"}}, user=user,
+                                        log_audit_fn=_audit_noop)
         cm.update_change_alert_status(wdb, alert["id"], "under_review", user)
 
         req, err = cm.convert_alert_to_request(wdb, alert["id"], user)
@@ -511,7 +523,7 @@ class TestDBIntegration:
         alert = cm.create_change_alert(
             wdb, app_id, "control_change", "companies_house",
             "Control change detected", {"control": {"old": "A", "new": "B"}},
-            user=user,
+            user=user, log_audit_fn=_audit_noop,
         )
         cm.update_change_alert_status(wdb, alert["id"], "under_review", user)
 
@@ -539,7 +551,8 @@ class TestDBIntegration:
         app_id, _ = _setup_test_data(db)
         user = {"sub": "u1", "name": "User", "role": "sco"}
 
-        alert = cm.create_change_alert(wdb, app_id, "other", "backoffice", "T", {}, user=user)
+        alert = cm.create_change_alert(wdb, app_id, "other", "backoffice", "T", {}, user=user,
+                                       log_audit_fn=_audit_noop)
         ok, err = cm.update_change_alert_status(wdb, alert["id"], "dismissed", user, notes="No actionable change")
         assert ok, err
         req, err = cm.convert_alert_to_request(wdb, alert["id"], user)
@@ -790,9 +803,9 @@ class TestDBIntegration:
         user = {"sub": "u1", "name": "User", "role": "sco"}
 
         cm.create_change_alert(wdb, app_id, "director_change", "companies_house",
-                               "A1", {}, user=user)
+                               "A1", {}, user=user, log_audit_fn=_audit_noop)
         cm.create_change_alert(wdb, app_id, "ubo_change", "open_corporates",
-                               "A2", {}, user=user)
+                               "A2", {}, user=user, log_audit_fn=_audit_noop)
 
         alerts = cm.list_change_alerts(wdb, application_id=app_id)
         assert len(alerts) >= 2
@@ -847,7 +860,8 @@ class TestDBIntegration:
         app_id, _ = _setup_test_data(db)
         user = {"sub": "u1", "name": "User", "role": "co"}
 
-        cm.create_change_alert(wdb, app_id, "other", "backoffice", "T", {}, user=user)
+        cm.create_change_alert(wdb, app_id, "other", "backoffice", "T", {}, user=user,
+                               log_audit_fn=_audit_noop)
         _items = [{"change_type": "other", "field_name": "note", "new_value": "test"}]
         cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice", "T", _items, user)
 
@@ -1036,3 +1050,110 @@ class TestDefenceInDepthAudit:
         denial_calls = [c for c in audit_calls
                         if c["action"] == "portal_cr_denied_not_owner"]
         assert len(denial_calls) == 0
+
+
+# ============================================================================
+# RDI-006 — create_change_alert: fail-closed + audit-in-transaction
+# ============================================================================
+
+class _OrderSpyDB(_DBWrapper):
+    """Records commit()/rollback() into a shared list so tests can assert the
+    audit write happened INSIDE the transaction (before the commit)."""
+
+    def __init__(self, conn, events):
+        super().__init__(conn)
+        self.events = events
+
+    def commit(self):
+        self.events.append(("commit",))
+        super().commit()
+
+    def rollback(self):
+        self.events.append(("rollback",))
+        super().rollback()
+
+
+class TestRdi006CreateAlertAtomicity:
+    """A change alert carries a server-assigned regulatory `materiality`. RDI-006:
+    that classification must never persist without audit evidence written in the
+    SAME transaction, and creation must fail closed if no actor/audit sink is
+    supplied."""
+
+    def test_create_alert_rejects_missing_audit_writer(self, db):
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, _ = _setup_test_data(db)
+        user = {"sub": "u1", "name": "User", "role": "sco"}
+
+        # No audit sink -> fail closed
+        with pytest.raises(ValueError, match="RDI-006"):
+            cm.create_change_alert(wdb, app_id, "director_change", "companies_house",
+                                   "No audit sink", {}, user=user)
+        # No actor -> fail closed
+        with pytest.raises(ValueError, match="RDI-006"):
+            cm.create_change_alert(wdb, app_id, "director_change", "companies_house",
+                                   "No actor", {}, user=None, log_audit_fn=_audit_noop)
+
+        # A refused alert must leave no row behind
+        rows = db.execute(
+            "SELECT COUNT(*) AS c FROM change_alerts WHERE application_id = ?",
+            (app_id,),
+        ).fetchone()["c"]
+        assert rows == 0, "materiality must not persist without audit evidence"
+
+    def test_create_alert_audit_written_before_commit(self, db):
+        cm = _get_cm()
+        events = []
+        wdb = _OrderSpyDB(db, events)
+        app_id, _ = _setup_test_data(db)
+        user = {"sub": "u1", "name": "User", "role": "sco"}
+
+        def spy_audit(user, action, target, detail, **kwargs):
+            events.append(("audit", action, kwargs.get("commit")))
+
+        alert = cm.create_change_alert(
+            wdb, app_id, "director_change", "companies_house",
+            "Ordered", {"d": {"old": "A", "new": "B"}},
+            user=user, log_audit_fn=spy_audit,
+        )
+        assert alert["id"].startswith("CA-")
+
+        audit_idx = [i for i, e in enumerate(events)
+                     if e[0] == "audit" and e[1] == "Change Alert Created"]
+        commit_idx = [i for i, e in enumerate(events) if e[0] == "commit"]
+        assert audit_idx, "alert-created audit event missing"
+        assert commit_idx, "commit event missing"
+        assert audit_idx[0] < commit_idx[-1], (
+            "RDI-006: the alert-created audit row must be written BEFORE the commit"
+        )
+        # commit=False forwarded so the audit joins the open transaction
+        assert events[audit_idx[0]][2] is False
+
+        row = db.execute(
+            "SELECT * FROM change_alerts WHERE id = ?", (alert["id"],)
+        ).fetchone()
+        assert row is not None
+
+    def test_create_alert_audit_failure_rolls_back_alert(self, db):
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, _ = _setup_test_data(db)
+        user = {"sub": "u1", "name": "User", "role": "sco"}
+
+        def failing_audit(user, action, target, detail, **kwargs):
+            raise RuntimeError("audit store down")
+
+        with pytest.raises(RuntimeError, match="audit store down"):
+            cm.create_change_alert(
+                wdb, app_id, "director_change", "companies_house",
+                "Rolls back", {"d": {"old": "A", "new": "B"}},
+                user=user, log_audit_fn=failing_audit,
+            )
+
+        rows = db.execute(
+            "SELECT COUNT(*) AS c FROM change_alerts WHERE application_id = ?",
+            (app_id,),
+        ).fetchone()["c"]
+        assert rows == 0, (
+            "RDI-006: an alert whose audit evidence could not be written must NOT persist"
+        )
