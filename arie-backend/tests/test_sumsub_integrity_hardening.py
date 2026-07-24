@@ -299,10 +299,44 @@ def test_simulated_screening_labeled():
 # ══════════════════════════════════════════════════════════════════
 
 def _make_handler_and_call(applicant_result, external_user_id="ext_user_1"):
-    """Create a SumsubApplicantHandler and call post() with mocked data."""
+    """Call the handler with a real scoped application + typed party."""
     from tornado.web import Application
     from tornado.httputil import HTTPServerRequest, HTTPHeaders
+    from db import get_db, init_db
     from server import SumsubApplicantHandler
+
+    init_db()
+    suffix = uuid.uuid4().hex[:10]
+    client_id = f"sumsub-audit-client-{suffix}"
+    application_id = f"sumsub-audit-app-{suffix}"
+    party_id = f"sumsub-audit-party-{suffix}"
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO clients
+            (id, email, password_hash, company_name, status)
+        VALUES (?, ?, 'test-only', 'Sumsub Audit Ltd', 'active')
+        """,
+        (client_id, f"{client_id}@example.test"),
+    )
+    db.execute(
+        """
+        INSERT INTO applications
+            (id, ref, client_id, company_name, country, status)
+        VALUES (?, ?, ?, 'Sumsub Audit Ltd', 'Mauritius', 'kyc_documents')
+        """,
+        (application_id, f"ARF-SUMSUB-{suffix.upper()}", client_id),
+    )
+    db.execute(
+        """
+        INSERT INTO directors
+            (id, application_id, person_key, first_name, last_name, full_name)
+        VALUES (?, ?, ?, 'Test', 'User', 'Test User')
+        """,
+        (party_id, application_id, external_user_id),
+    )
+    db.commit()
+    db.close()
 
     app = Application()
     mock_conn = MagicMock()
@@ -310,7 +344,9 @@ def _make_handler_and_call(applicant_result, external_user_id="ext_user_1"):
     mock_conn.context.remote_ip = "127.0.0.1"
 
     body_data = json.dumps({
-        "external_user_id": external_user_id,
+        "external_user_id": party_id,
+        "application_id": application_id,
+        "person_type": "director",
         "first_name": "Test",
         "last_name": "User",
     }).encode()
@@ -330,7 +366,12 @@ def _make_handler_and_call(applicant_result, external_user_id="ext_user_1"):
     handler.log_audit = lambda user, action, target, detail, **kw: audit_calls.append(
         {"action": action, "target": target, "detail": detail}
     )
-    handler.require_auth = lambda *a, **kw: {"sub": "test", "name": "Test", "role": "admin"}
+    handler.require_auth = lambda *a, **kw: {
+        "sub": "test",
+        "name": "Test",
+        "role": "admin",
+        "type": "officer",
+    }
 
     with patch("server.sumsub_create_applicant", return_value=applicant_result):
         handler.post()
@@ -378,9 +419,12 @@ def test_no_created_audit_on_empty_id():
         "error": "empty applicantId",
     }
     handler, audits = _make_handler_and_call(result)
-    for a in audits:
-        assert a["action"] != "KYC Applicant Created", \
-            "Must not write 'KYC Applicant Created' with empty applicantId"
+    assert len(audits) == 1
+    assert audits[0]["action"] == "KYC Applicant Creation Failed"
+    assert all(
+        audit["action"] != "KYC Applicant Created"
+        for audit in audits
+    ), "Must not write 'KYC Applicant Created' with empty applicantId"
 
 
 # ══════════════════════════════════════════════════════════════════

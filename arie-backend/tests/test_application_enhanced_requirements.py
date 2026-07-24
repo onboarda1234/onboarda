@@ -262,6 +262,50 @@ def _insert_document(db, app_id, doc_id=None, *, review_status="pending"):
     return doc_id
 
 
+def _link_valid_documents_to_document_requirements(db, app_id):
+    from enhanced_requirements import enhanced_requirement_document_policy
+
+    rows = db.execute(
+        """
+        SELECT id, requirement_key
+        FROM application_enhanced_requirements
+        WHERE application_id=? AND requirement_type='document'
+        ORDER BY id
+        """,
+        (app_id,),
+    ).fetchall()
+    for row in rows:
+        document_id = "doc_req_" + uuid.uuid4().hex[:12]
+        doc_type = enhanced_requirement_document_policy(
+            row["requirement_key"]
+        )["document_type"]
+        db.execute(
+            """
+            INSERT INTO documents
+                (id, application_id, doc_type, doc_name, file_path, slot_key,
+                 is_current, version, verification_status, review_status)
+            VALUES (?, ?, ?, ?, ?, ?, 1, 1, 'pending', 'pending')
+            """,
+            (
+                document_id,
+                app_id,
+                doc_type,
+                f"{doc_type}.pdf",
+                f"/tmp/{document_id}.pdf",
+                f"enhanced_requirement:{row['id']}",
+            ),
+        )
+        db.execute(
+            """
+            UPDATE application_enhanced_requirements
+            SET linked_document_id=?
+            WHERE id=?
+            """,
+            (document_id, row["id"]),
+        )
+    db.commit()
+
+
 def _count_rules(db, trigger_key):
     return db.execute(
         "SELECT COUNT(*) AS c FROM enhanced_requirement_rules WHERE trigger_key=? AND active=1",
@@ -600,6 +644,7 @@ def test_operational_summary_counts_and_next_actions(enhanced_app_db):
     )
     db.commit()
     _generate(db, app_id)
+    _link_valid_documents_to_document_requirements(db, app_id)
     requested_req = _first_requirement_id(db, app_id, offset=0)
     uploaded_req = _first_requirement_id(db, app_id, offset=1)
     accepted_req = _first_requirement_id(db, app_id, offset=2)
@@ -1563,10 +1608,10 @@ def test_standard_kyc_required_document_expectations_include_v5_section_b(enhanc
         if item.get("doc_type") in {"bankref", "source_wealth"}
     }
     assert section_b_pairs == {
-        ("bankref", "director", "dir-high"),
-        ("source_wealth", "director", "dir-high"),
-        ("bankref", "ubo", "ubo-high"),
-        ("source_wealth", "ubo", "ubo-high"),
+        ("bankref", "director", "dir_kyc_high"),
+        ("source_wealth", "director", "dir_kyc_high"),
+        ("bankref", "ubo", "ubo_kyc_high"),
+        ("source_wealth", "ubo", "ubo_kyc_high"),
     }
 
     low_app_id = _insert_application(conn, risk_level="MEDIUM")
@@ -1580,7 +1625,7 @@ def test_standard_kyc_required_document_expectations_include_v5_section_b(enhanc
     assert not [
         item for item in low_expected
         if item.get("doc_type") in {"bankref", "source_wealth"}
-        and item.get("person_id") == "dir-low"
+        and item.get("person_id") == "dir_kyc_low"
     ]
 
     pep_app_id = _insert_application(conn, risk_level="LOW")
@@ -1594,12 +1639,12 @@ def test_standard_kyc_required_document_expectations_include_v5_section_b(enhanc
     pep_pairs = {
         (item.get("doc_type"), item.get("person_type"), item.get("person_id"))
         for item in pep_expected
-        if item.get("person_id") == "dir-pep"
+        if item.get("person_id") == "dir_kyc_pep"
         and item.get("doc_type") in {"bankref", "source_wealth"}
     }
     assert pep_pairs == {
-        ("bankref", "director", "dir-pep"),
-        ("source_wealth", "director", "dir-pep"),
+        ("bankref", "director", "dir_kyc_pep"),
+        ("source_wealth", "director", "dir_kyc_pep"),
     }
 
 
@@ -1924,6 +1969,7 @@ def test_applications_list_includes_enhanced_operational_summary_and_filters(enh
     )
     resolved_app = _insert_application(conn, risk_level="HIGH")
     _generate(conn, resolved_app)
+    _link_valid_documents_to_document_requirements(conn, resolved_app)
     conn.execute(
         """
         UPDATE application_enhanced_requirements
@@ -2042,6 +2088,7 @@ def test_lifecycle_api_permissions_and_status_updates(enhanced_app_api_server):
     )
     conn.commit()
     _generate(conn, app_id)
+    _link_valid_documents_to_document_requirements(conn, app_id)
     req_admin = _first_requirement_id(conn, app_id, offset=0)
     req_sco = _first_requirement_id(conn, app_id, offset=1)
     req_co = _first_requirement_id(conn, app_id, offset=2)
@@ -2182,6 +2229,23 @@ def test_lifecycle_document_link_validation_and_invalid_status(enhanced_app_api_
     _generate(conn, app_id)
     req_id = _first_requirement_id(conn, app_id)
     valid_doc = _insert_document(conn, app_id, "doc_valid_link")
+    requirement = conn.execute(
+        "SELECT requirement_key FROM application_enhanced_requirements WHERE id=?",
+        (req_id,),
+    ).fetchone()
+    from enhanced_requirements import enhanced_requirement_document_policy
+    canonical_doc_type = enhanced_requirement_document_policy(
+        requirement["requirement_key"]
+    )["document_type"]
+    conn.execute(
+        """
+        UPDATE documents
+        SET doc_type=?, slot_key=?, is_current=1, person_id=NULL, person_type=NULL
+        WHERE id=?
+        """,
+        (canonical_doc_type, f"enhanced_requirement:{req_id}", valid_doc),
+    )
+    conn.commit()
     other_doc = _insert_document(conn, other_app_id, "doc_wrong_app")
     conn.close()
 

@@ -496,6 +496,176 @@ def test_person_type_keeps_same_person_id_doc_type_in_distinct_slots(document_ve
     assert active_ids == {director_doc["id"], ubo_doc["id"]}
 
 
+def test_base_upload_scope_rejects_entity_identity_and_preserves_high_risk_person_evidence(
+    document_versioning_server,
+):
+    app_id = "docver_app_scope_policy"
+    client_id = "docver_client_scope_policy"
+    director_id = "scope-policy-director"
+    _seed_application(app_id, client_id)
+
+    from db import get_db
+
+    conn = get_db()
+    conn.execute(
+        """
+        UPDATE applications
+        SET risk_level='HIGH', pre_approval_decision='PRE_APPROVE'
+        WHERE id=?
+        """,
+        (app_id,),
+    )
+    conn.execute(
+        """
+        INSERT INTO directors
+            (id, application_id, person_key, first_name, last_name, full_name, is_pep)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            director_id,
+            app_id,
+            "dir-scope-policy",
+            "High",
+            "Risk",
+            "High Risk Director",
+            "Yes",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    invalid = requests.post(
+        f"{document_versioning_server}/api/applications/{app_id}/documents?doc_type=passport",
+        headers=_client_headers(client_id),
+        files={
+            "file": (
+                "entity-passport-must-be-rejected.pdf",
+                b"%PDF-1.4\n%EOF\n",
+                "application/pdf",
+            )
+        },
+        timeout=5,
+    )
+    assert invalid.status_code == 400
+    assert "requires an explicit supported party association" in invalid.json()["error"]
+
+    conn = get_db()
+    audit = conn.execute(
+        """
+        SELECT action, detail
+        FROM audit_log
+        WHERE target=? AND action='Upload Rejected: invalid_document_scope'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (f"ARF-{app_id}",),
+    ).fetchone()
+    assert audit is not None
+    assert json.loads(audit["detail"])["reason_code"] == "invalid_document_scope"
+    assert conn.execute(
+        "SELECT COUNT(*) AS count FROM documents WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["count"] == 0
+    conn.close()
+
+    canonical_passport = _upload_document(
+        document_versioning_server,
+        app_id,
+        client_id,
+        "director-passport.pdf",
+        doc_type="passport",
+        person_id=director_id,
+        person_type="director",
+    )
+    assert canonical_passport["doc_type"] == "passport"
+    assert canonical_passport["slot_key"] == (
+        f"person:director:{director_id}:passport"
+    )
+
+    suffixed = requests.post(
+        f"{document_versioning_server}/api/applications/{app_id}/documents"
+        f"?doc_type=passport_dir1&person_id={director_id}&person_type=director",
+        headers=_client_headers(client_id),
+        files={
+            "file": (
+                "must-not-displace-canonical-passport.pdf",
+                b"%PDF-1.4\n%EOF\n",
+                "application/pdf",
+            )
+        },
+        timeout=5,
+    )
+    assert suffixed.status_code == 400, suffixed.text
+    assert "Non-canonical document type suffixes" in suffixed.json()["error"]
+
+    conn = get_db()
+    current_passports = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT id, doc_type, slot_key, is_current, superseded_by_document_id
+            FROM documents
+            WHERE application_id=?
+              AND person_id=?
+              AND COALESCE(is_current, 1)=1
+            """,
+            (app_id, director_id),
+        ).fetchall()
+    ]
+    suffix_audit = conn.execute(
+        """
+        SELECT detail
+        FROM audit_log
+        WHERE target=? AND action='Upload Rejected: noncanonical_doc_type'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (f"ARF-{app_id}",),
+    ).fetchone()
+    conn.close()
+    assert current_passports == [
+        {
+            "id": canonical_passport["id"],
+            "doc_type": "passport",
+            "slot_key": f"person:director:{director_id}:passport",
+            "is_current": 1,
+            "superseded_by_document_id": None,
+        }
+    ]
+    assert suffix_audit is not None
+    assert json.loads(suffix_audit["detail"])["reason_code"] == (
+        "noncanonical_doc_type"
+    )
+
+    bank_reference = _upload_document(
+        document_versioning_server,
+        app_id,
+        client_id,
+        "director-bank-reference.pdf",
+        doc_type="bankref",
+        person_id=director_id,
+        person_type="director",
+    )
+    source_of_wealth = _upload_document(
+        document_versioning_server,
+        app_id,
+        client_id,
+        "director-source-of-wealth.pdf",
+        doc_type="source_wealth",
+        person_id=director_id,
+        person_type="director",
+    )
+
+    assert bank_reference["slot_key"] == (
+        f"person:director:{director_id}:bankref"
+    )
+    assert source_of_wealth["slot_key"] == (
+        f"person:director:{director_id}:source_wealth"
+    )
+    assert bank_reference["person_type"] == "director"
+    assert source_of_wealth["person_type"] == "director"
+
+
 def test_normalized_doc_type_maps_equivalent_labels_to_same_slot_type():
     from server import _document_slot_key, _normalize_document_type
 
@@ -762,12 +932,104 @@ def test_repair_marks_latest_duplicate_per_slot_current_and_preserves_people(tmp
     assert rows["dir1_passport"]["is_current"] in (1, True)
     assert rows["dir2_passport"]["is_current"] in (1, True)
     assert rows["ubo1_passport"]["is_current"] in (1, True)
-    assert rows["dir1_passport"]["slot_key"] == "person:director:dir1:passport"
-    assert rows["ubo1_passport"]["slot_key"] == "person:ubo:ubo1:passport"
+    # Startup/version repair must not infer regulated party ownership from a
+    # string prefix alone. These deliberately untyped dangling legacy rows stay
+    # untouched for the guarded incident repair workflow.
+    assert rows["dir1_passport"]["person_type"] is None
+    assert rows["ubo1_passport"]["person_type"] is None
+    assert rows["dir1_passport"]["slot_key"] is None
+    assert rows["dir2_passport"]["slot_key"] is None
+    assert rows["ubo1_passport"]["slot_key"] is None
     assert rows["legacy_poa"]["doc_type"] == "poa"
     assert rows["legacy_poa"]["slot_key"] == "entity:poa"
-    assert rows["dir1_passport"]["slot_key"] != rows["dir2_passport"]["slot_key"]
-    assert rows["dir1_passport"]["slot_key"] != rows["ubo1_passport"]["slot_key"]
+
+
+def test_startup_repair_does_not_mutate_same_type_alias_id_collision(tmp_path):
+    """Ambiguous legacy ownership is left entirely to the guarded repair tool."""
+    db_path = str(tmp_path / "ambiguous-party-reference.db")
+    _sync_db_path(db_path)
+
+    from db import get_db, init_db, repair_document_current_versions
+
+    init_db()
+    app_id = "docver_ambiguous_party_app"
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO applications (id, ref, company_name, status) VALUES (?, ?, ?, ?)",
+        (app_id, "ARF-DOCVER-AMBIGUOUS", "Ambiguous Party Ltd", "draft"),
+    )
+    conn.execute(
+        """
+        INSERT INTO directors (id, application_id, person_key, full_name)
+        VALUES ('director-stable-a', ?, 'collision-ref', 'Alias Owner')
+        """,
+        (app_id,),
+    )
+    conn.execute(
+        """
+        INSERT INTO directors (id, application_id, person_key, full_name)
+        VALUES ('collision-ref', ?, 'director-other-key', 'Stable ID Owner')
+        """,
+        (app_id,),
+    )
+    conn.execute("DROP INDEX IF EXISTS idx_documents_one_current_slot")
+    for doc_id, uploaded_at in (
+        ("ambiguous-old", "2026-01-01 00:00:00"),
+        ("ambiguous-new", "2026-01-02 00:00:00"),
+    ):
+        conn.execute(
+            """
+            INSERT INTO documents
+                (id, application_id, person_id, person_type, doc_type, doc_name,
+                 file_path, slot_key, is_current, version, uploaded_at)
+            VALUES (?, ?, 'collision-ref', 'director', 'passport', ?, ?,
+                    'person:director:collision-ref:passport', 1, NULL, ?)
+            """,
+            (doc_id, app_id, f"{doc_id}.pdf", f"/tmp/{doc_id}.pdf", uploaded_at),
+        )
+    conn.commit()
+
+    before = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT id, person_id, person_type, slot_key, is_current, version,
+                   superseded_at, superseded_by_document_id
+              FROM documents
+             WHERE application_id=?
+             ORDER BY id
+            """,
+            (app_id,),
+        ).fetchall()
+    ]
+    with pytest.raises(
+        RuntimeError,
+        match="Refusing startup without the one-current-document-per-slot invariant",
+    ):
+        repair_document_current_versions(conn)
+    after = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT id, person_id, person_type, slot_key, is_current, version,
+                   superseded_at, superseded_by_document_id
+              FROM documents
+             WHERE application_id=?
+             ORDER BY id
+            """,
+            (app_id,),
+        ).fetchall()
+    ]
+    index_exists = conn.execute(
+        """
+        SELECT 1 FROM sqlite_master
+         WHERE type='index' AND name='idx_documents_one_current_slot'
+        """
+    ).fetchone()
+    conn.close()
+
+    assert after == before
+    assert index_exists is None
 
 
 def test_partial_unique_index_blocks_two_current_documents_in_same_slot(tmp_path):

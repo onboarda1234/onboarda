@@ -12,6 +12,7 @@ import re
 from datetime import datetime, timezone
 
 from document_policy_registry import STATUS_ACTIVE, STATUS_FUTURE, STATUS_MANUAL, policy_for_document_type
+from document_scope_policy import base_document_scope_error_for_canonical_type
 
 logger = logging.getLogger(__name__)
 
@@ -312,6 +313,442 @@ def enhanced_requirement_document_policy(requirement_key):
         "future_enterprise": verification_mode == "future_enterprise",
         "verification_mode": verification_mode,
     }
+
+
+def _is_monitoring_refresh_requirement(requirement):
+    requirement = requirement or {}
+    return (
+        _clean_text(requirement.get("generation_source")) == "monitoring_document_expiry_refresh"
+        or bool(requirement.get("monitoring_alert_id") or requirement.get("monitoring_document_id"))
+    )
+
+
+def _normalize_enhanced_person_type(value):
+    normalized = _clean_text(value).lower().replace("-", "_").replace(" ", "_")
+    return {
+        "directors": "director",
+        "beneficial_owner": "ubo",
+        "beneficial_owners": "ubo",
+        "ubos": "ubo",
+        "intermediaries": "intermediary",
+    }.get(normalized, normalized)
+
+
+def _canonical_monitoring_document_owner(db, application_id, document):
+    """Return the exact canonical ordinary owner/slot for a refresh target."""
+    document = document or {}
+    raw_doc_type = _clean_text(document.get("doc_type"))
+    doc_type_lookup = raw_doc_type.lower()
+    policy = policy_for_document_type(doc_type_lookup) or {}
+    canonical_doc_type = _clean_text(policy.get("document_type")).lower()
+    if not canonical_doc_type or raw_doc_type != canonical_doc_type:
+        return None, _enhanced_document_integrity_result(
+            False,
+            "monitoring_target_document_type_noncanonical",
+            "Monitoring refresh target document type requires repair before replacement.",
+        )
+    raw_slot_key = _clean_text(document.get("slot_key"))
+    if raw_slot_key.startswith(("rmi:", "enhanced_requirement:")):
+        return None, _enhanced_document_integrity_result(
+            False,
+            "monitoring_target_special_slot_unsupported",
+            "Monitoring refresh target uses a request-specific evidence slot that cannot be replaced through monitoring.",
+        )
+    raw_person_id = _clean_text(document.get("person_id"))
+    stored_person_type = _clean_text(document.get("person_type"))
+    raw_person_type = _normalize_enhanced_person_type(stored_person_type)
+    if not raw_person_id:
+        if stored_person_type:
+            return None, _enhanced_document_integrity_result(
+                False,
+                "monitoring_target_owner_incomplete",
+                "Monitoring refresh target has person type without person id.",
+            )
+        expected_slot_key = f"entity:{canonical_doc_type}"
+        if raw_slot_key != expected_slot_key:
+            return None, _enhanced_document_integrity_result(
+                False,
+                "monitoring_target_slot_noncanonical",
+                "Monitoring refresh target document slot requires repair before replacement.",
+                expected_doc_type=canonical_doc_type,
+                expected_slot_key=expected_slot_key,
+            )
+        scope_error = base_document_scope_error_for_canonical_type(
+            canonical_doc_type,
+            None,
+        )
+        if scope_error:
+            return None, _enhanced_document_integrity_result(
+                False,
+                "monitoring_target_scope_invalid",
+                "Monitoring refresh target document type is not valid for an entity document slot.",
+                expected_doc_type=canonical_doc_type,
+                expected_slot_key=expected_slot_key,
+            )
+        return {
+            "person_id": "",
+            "person_type": "",
+            "slot_key": expected_slot_key,
+        }, None
+
+    table = {
+        "director": "directors",
+        "ubo": "ubos",
+        "intermediary": "intermediaries",
+    }.get(raw_person_type)
+    if not table:
+        return None, _enhanced_document_integrity_result(
+            False,
+            "monitoring_target_owner_type_invalid",
+            "Monitoring refresh target has invalid party type metadata.",
+        )
+    if stored_person_type != raw_person_type:
+        return None, _enhanced_document_integrity_result(
+            False,
+            "monitoring_target_owner_type_noncanonical",
+            "Monitoring refresh target party type requires canonical metadata.",
+        )
+    try:
+        matches = db.execute(
+            f"""
+            SELECT id
+            FROM {table}
+            WHERE application_id = ?
+              AND (id = ? OR person_key = ?)
+            ORDER BY id
+            LIMIT 2
+            """,
+            (application_id, raw_person_id, raw_person_id),
+        ).fetchall()
+    except Exception:
+        logger.exception(
+            "enhanced_monitoring_owner_resolution_failed=true application_id=%s person_type=%s",
+            application_id,
+            raw_person_type,
+        )
+        matches = []
+    if len(matches) != 1:
+        return None, _enhanced_document_integrity_result(
+            False,
+            "monitoring_target_owner_unresolved",
+            "Monitoring refresh target party could not be resolved uniquely.",
+        )
+    canonical_person_id = _clean_text(_row_dict(matches[0]).get("id"))
+    if raw_person_id != canonical_person_id:
+        return None, _enhanced_document_integrity_result(
+            False,
+            "monitoring_target_owner_id_noncanonical",
+            "Monitoring refresh target party association requires a stable row ID.",
+        )
+    expected_slot_key = (
+        f"person:{raw_person_type}:{canonical_person_id}:{canonical_doc_type}"
+    )
+    if raw_slot_key != expected_slot_key:
+        return None, _enhanced_document_integrity_result(
+            False,
+            "monitoring_target_slot_noncanonical",
+            "Monitoring refresh target document slot requires repair before replacement.",
+            expected_doc_type=canonical_doc_type,
+            expected_slot_key=expected_slot_key,
+        )
+    scope_error = base_document_scope_error_for_canonical_type(
+        canonical_doc_type,
+        raw_person_type,
+    )
+    if scope_error:
+        return None, _enhanced_document_integrity_result(
+            False,
+            "monitoring_target_scope_invalid",
+            "Monitoring refresh target document type is not valid for its party type.",
+            expected_doc_type=canonical_doc_type,
+            expected_slot_key=expected_slot_key,
+        )
+    return {
+        "person_id": canonical_person_id,
+        "person_type": raw_person_type,
+        "slot_key": expected_slot_key,
+    }, None
+
+
+def _enhanced_document_integrity_result(valid, reason="", message="", **details):
+    result = {
+        "valid": bool(valid),
+        "reason": reason or "",
+        "message": message or "",
+    }
+    result.update(details)
+    return result
+
+
+def validate_enhanced_requirement_document_link(
+    db,
+    application_id,
+    requirement,
+    document_id,
+    *,
+    document=None,
+):
+    """Validate one persisted enhanced-requirement document association.
+
+    Ordinary enhanced evidence is isolated in the requirement's exact special
+    slot and cannot borrow or move a base entity/person KYC document. Monitoring
+    expiry refreshes are the only exception: they must replace the exact
+    monitored document slot, type, and owner.
+    """
+    requirement = serialize_application_requirement(requirement) or {}
+    requirement_id = _clean_text(requirement.get("id"))
+    application_id = _clean_text(application_id or requirement.get("application_id"))
+    document_id = _clean_text(document_id)
+    policy_info = enhanced_requirement_document_policy(requirement.get("requirement_key"))
+    expected_doc_type = _clean_text(policy_info.get("document_type") or "supporting_document").lower()
+    expected_slot_key = f"enhanced_requirement:{requirement_id}" if requirement_id else ""
+
+    if _clean_text(requirement.get("requirement_type")).lower() != "document":
+        return None, _enhanced_document_integrity_result(
+            False,
+            "requirement_does_not_accept_documents",
+            "Enhanced requirement does not accept document evidence.",
+            expected_doc_type=expected_doc_type,
+            expected_slot_key=expected_slot_key,
+        )
+    if not application_id or not requirement_id or not document_id:
+        return None, _enhanced_document_integrity_result(
+            False,
+            "incomplete_document_link_identity",
+            "Enhanced requirement document association is incomplete.",
+            expected_doc_type=expected_doc_type,
+            expected_slot_key=expected_slot_key,
+        )
+
+    doc = _row_dict(document)
+    if not doc:
+        row = db.execute(
+            "SELECT * FROM documents WHERE id = ? AND application_id = ?",
+            (document_id, application_id),
+        ).fetchone()
+        doc = _row_dict(row)
+    if not doc or _clean_text(doc.get("application_id")) != application_id:
+        return None, _enhanced_document_integrity_result(
+            False,
+            "document_not_in_application",
+            "Linked document must belong to the same application.",
+            expected_doc_type=expected_doc_type,
+            expected_slot_key=expected_slot_key,
+        )
+    if not _bool(doc.get("is_current"), default=True):
+        return doc, _enhanced_document_integrity_result(
+            False,
+            "document_not_current",
+            "Linked document is superseded and cannot satisfy the enhanced requirement.",
+            expected_doc_type=expected_doc_type,
+            expected_slot_key=expected_slot_key,
+        )
+    if _clean_text(doc.get("superseded_by_document_id")):
+        return doc, _enhanced_document_integrity_result(
+            False,
+            "current_document_has_successor",
+            "Linked document has inconsistent current-version lineage.",
+            expected_doc_type=expected_doc_type,
+            expected_slot_key=expected_slot_key,
+        )
+
+    expected_person_id = ""
+    expected_person_type = ""
+    if _is_monitoring_refresh_requirement(requirement):
+        context = requirement.get("trigger_context") if isinstance(requirement.get("trigger_context"), dict) else {}
+        monitored_document_id = _clean_text(
+            requirement.get("monitoring_document_id") or context.get("document_id")
+        )
+        monitored = None
+        if monitored_document_id:
+            monitored = _row_dict(db.execute(
+                "SELECT * FROM documents WHERE id = ? AND application_id = ?",
+                (monitored_document_id, application_id),
+            ).fetchone())
+        if not monitored:
+            return doc, _enhanced_document_integrity_result(
+                False,
+                "monitoring_target_document_missing",
+                "Monitoring refresh target document could not be resolved.",
+                expected_doc_type=expected_doc_type,
+                expected_slot_key="",
+            )
+        expected_doc_type = _clean_text(monitored.get("doc_type")).lower()
+        canonical_owner, owner_error = _canonical_monitoring_document_owner(
+            db,
+            application_id,
+            monitored,
+        )
+        if owner_error:
+            return doc, owner_error
+        expected_slot_key = _clean_text(canonical_owner.get("slot_key"))
+        expected_person_id = _clean_text(canonical_owner.get("person_id"))
+        expected_person_type = _clean_text(canonical_owner.get("person_type")).lower()
+        if not expected_doc_type or not expected_slot_key:
+            return doc, _enhanced_document_integrity_result(
+                False,
+                "monitoring_target_slot_incomplete",
+                "Monitoring refresh target is missing canonical type or slot metadata.",
+                expected_doc_type=expected_doc_type,
+                expected_slot_key=expected_slot_key,
+            )
+
+    actual_doc_type = _clean_text(doc.get("doc_type")).lower()
+    actual_slot_key = _clean_text(doc.get("slot_key"))
+    actual_person_id = _clean_text(doc.get("person_id"))
+    actual_person_type = _clean_text(doc.get("person_type")).lower()
+    if actual_doc_type != expected_doc_type:
+        return doc, _enhanced_document_integrity_result(
+            False,
+            "document_type_mismatch",
+            "Linked document type does not match the enhanced requirement policy.",
+            expected_doc_type=expected_doc_type,
+            expected_slot_key=expected_slot_key,
+        )
+    if actual_slot_key != expected_slot_key:
+        return doc, _enhanced_document_integrity_result(
+            False,
+            "document_slot_mismatch",
+            "Linked document must use the enhanced requirement's exact evidence slot; base KYC slots cannot be reused.",
+            expected_doc_type=expected_doc_type,
+            expected_slot_key=expected_slot_key,
+        )
+    if actual_person_id != expected_person_id or actual_person_type != expected_person_type:
+        return doc, _enhanced_document_integrity_result(
+            False,
+            "document_owner_mismatch",
+            "Linked document owner metadata does not match the enhanced requirement evidence slot.",
+            expected_doc_type=expected_doc_type,
+            expected_slot_key=expected_slot_key,
+        )
+    if _is_monitoring_refresh_requirement(requirement):
+        monitored_document_id = _clean_text(monitored.get("id"))
+        if document_id == monitored_document_id:
+            return doc, _enhanced_document_integrity_result(
+                False,
+                "monitoring_replacement_self_link",
+                "Monitoring refresh evidence must be a new replacement document.",
+                expected_doc_type=expected_doc_type,
+                expected_slot_key=expected_slot_key,
+            )
+        if _bool(monitored.get("is_current"), default=True):
+            return doc, _enhanced_document_integrity_result(
+                False,
+                "monitoring_target_not_superseded",
+                "Monitoring refresh target has not been superseded by the linked document.",
+                expected_doc_type=expected_doc_type,
+                expected_slot_key=expected_slot_key,
+            )
+        cursor = monitored
+        visited_document_ids = {monitored_document_id}
+        lineage_valid = False
+        lineage_hops = 0
+        while cursor:
+            lineage_hops += 1
+            if lineage_hops > 100:
+                return doc, _enhanced_document_integrity_result(
+                    False,
+                    "monitoring_replacement_lineage_too_deep",
+                    "Monitoring replacement lineage exceeds the safe traversal limit.",
+                    expected_doc_type=expected_doc_type,
+                    expected_slot_key=expected_slot_key,
+                )
+            successor_id = _clean_text(cursor.get("superseded_by_document_id"))
+            if not successor_id:
+                break
+            if successor_id in visited_document_ids:
+                return doc, _enhanced_document_integrity_result(
+                    False,
+                    "monitoring_replacement_lineage_cycle",
+                    "Monitoring replacement lineage contains a cycle.",
+                    expected_doc_type=expected_doc_type,
+                    expected_slot_key=expected_slot_key,
+                )
+            visited_document_ids.add(successor_id)
+            successor = (
+                doc
+                if successor_id == document_id
+                else _row_dict(db.execute(
+                    "SELECT * FROM documents WHERE id = ? AND application_id = ?",
+                    (successor_id, application_id),
+                ).fetchone())
+            )
+            if not successor:
+                break
+            successor_owner_id = _clean_text(successor.get("person_id"))
+            successor_owner_type = _clean_text(successor.get("person_type")).lower()
+            if (
+                _clean_text(successor.get("doc_type")).lower() != expected_doc_type
+                or _clean_text(successor.get("slot_key")) != expected_slot_key
+                or successor_owner_id != expected_person_id
+                or successor_owner_type != expected_person_type
+            ):
+                return doc, _enhanced_document_integrity_result(
+                    False,
+                    "monitoring_replacement_lineage_scope_mismatch",
+                    "Monitoring replacement lineage leaves the canonical document slot.",
+                    expected_doc_type=expected_doc_type,
+                    expected_slot_key=expected_slot_key,
+                )
+            try:
+                cursor_version = int(cursor.get("version") or 1)
+                successor_version = int(successor.get("version") or 1)
+            except (TypeError, ValueError):
+                cursor_version = successor_version = 0
+            if successor_version <= cursor_version:
+                return doc, _enhanced_document_integrity_result(
+                    False,
+                    "monitoring_replacement_version_invalid",
+                    "Monitoring replacement lineage is not strictly versioned.",
+                    expected_doc_type=expected_doc_type,
+                    expected_slot_key=expected_slot_key,
+                )
+            if successor_id == document_id:
+                lineage_valid = True
+                break
+            if _bool(successor.get("is_current"), default=True):
+                return doc, _enhanced_document_integrity_result(
+                    False,
+                    "monitoring_replacement_lineage_interrupted",
+                    "Monitoring replacement lineage stops at a different current document.",
+                    expected_doc_type=expected_doc_type,
+                    expected_slot_key=expected_slot_key,
+                )
+            cursor = successor
+        if not lineage_valid:
+            return doc, _enhanced_document_integrity_result(
+                False,
+                "monitoring_replacement_lineage_mismatch",
+                "Linked monitoring evidence is not in the recorded replacement lineage.",
+                expected_doc_type=expected_doc_type,
+                expected_slot_key=expected_slot_key,
+            )
+
+    other_link = db.execute(
+        """
+        SELECT id
+        FROM application_enhanced_requirements
+        WHERE application_id = ?
+          AND linked_document_id = ?
+          AND id <> ?
+          AND active = 1
+        LIMIT 1
+        """,
+        (application_id, document_id, requirement_id),
+    ).fetchone()
+    if other_link:
+        return doc, _enhanced_document_integrity_result(
+            False,
+            "document_linked_to_other_requirement",
+            "Linked document is already assigned to a different enhanced requirement.",
+            expected_doc_type=expected_doc_type,
+            expected_slot_key=expected_slot_key,
+        )
+    return doc, _enhanced_document_integrity_result(
+        True,
+        expected_doc_type=expected_doc_type,
+        expected_slot_key=expected_slot_key,
+    )
 
 
 DEFAULT_ENHANCED_REQUIREMENT_RULES = [
@@ -1286,7 +1723,7 @@ def _load_linked_documents_for_requirements(db, app_id, requirements):
         rows = db.execute(
             f"""
             SELECT id, application_id, doc_type, doc_name, file_size, mime_type,
-                   slot_key, is_current, version, verification_status,
+                   person_id, person_type, slot_key, is_current, version, verification_status,
                    verification_results, verified_at, review_status, reviewed_by,
                    reviewed_at, uploaded_at
             FROM documents
@@ -1352,6 +1789,25 @@ def decorate_application_requirements_for_backoffice(db, app, requirements):
             linked_doc = linked_documents.get(str(item.get("linked_document_id")))
             if linked_doc:
                 item["linked_document"] = linked_doc
+                _validated_doc, integrity = validate_enhanced_requirement_document_link(
+                    db,
+                    app.get("id"),
+                    item,
+                    item.get("linked_document_id"),
+                    document=linked_doc,
+                )
+            else:
+                integrity = _enhanced_document_integrity_result(
+                    False,
+                    "linked_document_unavailable",
+                    "Linked enhanced-requirement document is missing from the application.",
+                    expected_doc_type=item.get("canonical_doc_type") or "",
+                    expected_slot_key=f"enhanced_requirement:{item.get('id')}",
+                )
+            item["linked_document_integrity"] = integrity
+            item["linked_document_integrity_valid"] = bool(integrity.get("valid"))
+            if not integrity.get("valid"):
+                item["linked_document_integrity_error"] = integrity.get("message")
         decorated.append(item)
     return decorated
 
@@ -2337,6 +2793,43 @@ def _approval_requirement_item(item, action_needed="Resolve requirement"):
     }
 
 
+def _approval_document_link_integrity_item(db, application_id, item):
+    linked_document_id = _clean_text((item or {}).get("linked_document_id"))
+    if not linked_document_id:
+        if (
+            _clean_text((item or {}).get("requirement_type")).lower() == "document"
+            and _clean_text((item or {}).get("status")).lower() == "accepted"
+        ):
+            integrity = _enhanced_document_integrity_result(
+                False,
+                "linked_document_missing",
+                "Accepted document requirements must retain valid linked evidence.",
+            )
+            invalid = _approval_requirement_item(
+                item,
+                integrity["message"],
+            )
+            invalid["linked_document_id"] = ""
+            invalid["document_integrity"] = integrity
+            return invalid
+        return None
+    _doc, integrity = validate_enhanced_requirement_document_link(
+        db,
+        application_id,
+        item,
+        linked_document_id,
+    )
+    if integrity.get("valid"):
+        return None
+    invalid = _approval_requirement_item(
+        item,
+        integrity.get("message") or "Repair the enhanced-requirement document association before approval",
+    )
+    invalid["linked_document_id"] = linked_document_id
+    invalid["document_integrity"] = integrity
+    return invalid
+
+
 def _valid_approval_waiver(db, item):
     reason = _clean_text(item.get("waiver_reason"))
     waived_by = _clean_text(item.get("waived_by"))
@@ -2364,8 +2857,10 @@ def validate_enhanced_requirements_for_approval(db, application_id, app_row=None
         "blocking_unresolved_count": 0,
         "mandatory_unresolved_count": 0,
         "invalid_waiver_count": 0,
+        "document_integrity_error_count": 0,
         "unresolved_requirements": [],
         "invalid_waivers": [],
+        "invalid_document_links": [],
         "warnings": [],
         "errors": [],
         "missing_generated_requirements": False,
@@ -2414,6 +2909,12 @@ def validate_enhanced_requirements_for_approval(db, application_id, app_row=None
         return result
 
     for item in items:
+        invalid_document_link = _approval_document_link_integrity_item(db, application_id, item)
+        if invalid_document_link:
+            result["invalid_document_links"].append(invalid_document_link)
+            result["document_integrity_error_count"] += 1
+            result["unresolved_requirements"].append(invalid_document_link)
+            continue
         status = str(item.get("status") or "generated").strip().lower()
         is_blocking = bool(item.get("mandatory")) or bool(item.get("blocking_approval"))
         if status == "cancelled":
@@ -2480,8 +2981,10 @@ def _blank_enhanced_operational_summary():
         "last_updated_at": None,
         "missing_generated_requirements": False,
         "invalid_waiver_count": 0,
+        "document_integrity_error_count": 0,
         "unresolved_requirements": [],
         "invalid_waivers": [],
+        "invalid_document_links": [],
         "warnings": [],
         "errors": [],
     }
@@ -2508,8 +3011,10 @@ def _approval_validation_from_items(db, app, items, *, table_missing=False):
         "blocking_unresolved_count": 0,
         "mandatory_unresolved_count": 0,
         "invalid_waiver_count": 0,
+        "document_integrity_error_count": 0,
         "unresolved_requirements": [],
         "invalid_waivers": [],
+        "invalid_document_links": [],
         "warnings": [],
         "errors": [],
         "missing_generated_requirements": False,
@@ -2544,6 +3049,12 @@ def _approval_validation_from_items(db, app, items, *, table_missing=False):
         return result
 
     for item in items:
+        invalid_document_link = _approval_document_link_integrity_item(db, app.get("id"), item)
+        if invalid_document_link:
+            result["invalid_document_links"].append(invalid_document_link)
+            result["document_integrity_error_count"] += 1
+            result["unresolved_requirements"].append(invalid_document_link)
+            continue
         status = str(item.get("status") or "generated").strip().lower()
         is_blocking = bool(item.get("mandatory")) or bool(item.get("blocking_approval"))
         if status == "cancelled":
@@ -2601,8 +3112,10 @@ def _build_enhanced_operational_summary_from_items(db, app, items, validation=No
     summary["mandatory_unresolved_count"] = int(validation.get("mandatory_unresolved_count") or 0)
     summary["blocking_unresolved_count"] = int(validation.get("blocking_unresolved_count") or 0)
     summary["invalid_waiver_count"] = int(validation.get("invalid_waiver_count") or 0)
+    summary["document_integrity_error_count"] = int(validation.get("document_integrity_error_count") or 0)
     summary["unresolved_requirements"] = validation.get("unresolved_requirements") or []
     summary["invalid_waivers"] = validation.get("invalid_waivers") or []
+    summary["invalid_document_links"] = validation.get("invalid_document_links") or []
     summary["warnings"] = validation.get("warnings") or []
     summary["errors"] = validation.get("errors") or []
 
@@ -2652,6 +3165,10 @@ def _build_enhanced_operational_summary_from_items(db, app, items, validation=No
     if summary["missing_generated_requirements"]:
         summary["next_action_code"] = "generate_requirements"
         summary["next_action"] = "Generate enhanced review requirements"
+        summary["status_label"] = "Approval blocked"
+    elif summary["document_integrity_error_count"]:
+        summary["next_action_code"] = "repair_document_links"
+        summary["next_action"] = "Repair invalid enhanced-evidence document links"
         summary["status_label"] = "Approval blocked"
     elif rejected_client_facing:
         summary["next_action_code"] = "request_updated_info"
@@ -3576,29 +4093,64 @@ def serialize_portal_application_requirement(db, row):
             result["subject_type"] = subject.get("type")
     if requirement.get("linked_document_id"):
         result["linked_document_id"] = requirement.get("linked_document_id")
+        linked_document = None
+        link_integrity = _enhanced_document_integrity_result(
+            False,
+            "linked_document_validation_unavailable",
+            "Previously submitted evidence could not be matched safely.",
+        )
         try:
-            doc_row = db.execute(
-                """
-                SELECT id, doc_type, doc_name, uploaded_at, verification_status, review_status
-                FROM documents
-                WHERE id = ? AND application_id = ?
-                """,
-                (requirement.get("linked_document_id"), requirement.get("application_id")),
-            ).fetchone()
-            doc = _row_dict(doc_row) or {}
-            if doc:
-                result["linked_document"] = {
-                    "id": doc.get("id"),
-                    "doc_type": doc.get("doc_type"),
-                    "doc_name": doc.get("doc_name"),
-                    "uploaded_at": doc.get("uploaded_at"),
-                    "verification_status": doc.get("verification_status"),
-                    "verification_status_label": _verification_status_label(doc.get("verification_status")),
-                    "verification_status_tone": _verification_status_tone(doc.get("verification_status")),
-                    "review_status": doc.get("review_status"),
-                }
+            linked_document, link_integrity = validate_enhanced_requirement_document_link(
+                db,
+                requirement.get("application_id"),
+                requirement,
+                requirement.get("linked_document_id"),
+            )
         except Exception:
-            pass
+            logger.exception(
+                "portal_enhanced_requirement_link_validation_failed=true requirement_id=%s",
+                requirement.get("id"),
+            )
+        if link_integrity.get("valid") and linked_document:
+            result["linked_document_integrity_valid"] = True
+            result["linked_document_integrity"] = {"valid": True}
+            try:
+                result["linked_document"] = {
+                    "id": linked_document.get("id"),
+                    "doc_type": linked_document.get("doc_type"),
+                    "doc_name": linked_document.get("doc_name"),
+                    "uploaded_at": linked_document.get("uploaded_at"),
+                    "verification_status": linked_document.get("verification_status"),
+                    "verification_status_label": _verification_status_label(linked_document.get("verification_status")),
+                    "verification_status_tone": _verification_status_tone(linked_document.get("verification_status")),
+                    "review_status": linked_document.get("review_status"),
+                }
+            except Exception:
+                logger.exception(
+                    "portal_enhanced_requirement_link_serialization_failed=true requirement_id=%s",
+                    requirement.get("id"),
+                )
+                result.pop("linked_document", None)
+                result["linked_document_integrity_valid"] = False
+        else:
+            result["linked_document_integrity_valid"] = False
+
+        if result.get("linked_document_integrity_valid") is False:
+            # Do not expose internal slot/type identifiers to the client. The
+            # portal needs only a safe repair instruction and a fail-closed
+            # status; the detailed integrity reason remains in backoffice.
+            safe_integrity_message = (
+                "Previously submitted evidence could not be matched safely. "
+                "Please upload the requested document again or contact support."
+            )
+            result["linked_document_integrity"] = {
+                "valid": False,
+                "message": safe_integrity_message,
+            }
+            result["linked_document_integrity_error"] = safe_integrity_message
+            result["status"] = "required"
+            result["status_label"] = "Action required"
+            result.pop("linked_document", None)
     return result
 
 
@@ -3638,7 +4190,14 @@ def list_portal_application_enhanced_requirements(db, application_id, *, exclude
     return requirements
 
 
-def _validate_client_fulfillment_target(db, application_id, requirement_id, *, allowed_types):
+def _validate_client_fulfillment_target(
+    db,
+    application_id,
+    requirement_id,
+    *,
+    allowed_types,
+    allow_invalid_document_link_repair=False,
+):
     app = _load_application(db, application_id)
     if not app:
         return None, None, None, "Application not found", 404
@@ -3654,13 +4213,30 @@ def _validate_client_fulfillment_target(db, application_id, requirement_id, *, a
     if audience not in APPLICATION_REQUIREMENT_CLIENT_FULFILLMENT_AUDIENCES:
         return app, before, None, "Back-office-only enhanced requirements cannot be fulfilled from the portal", 400
 
-    current_status = str(before.get("status") or "generated").strip().lower()
-    if current_status not in APPLICATION_REQUIREMENT_CLIENT_FULFILLMENT_STATUSES:
-        return app, before, None, f"Enhanced requirement status cannot be fulfilled from the portal: {current_status}", 400
-
     requirement_type = str(before.get("requirement_type") or "").strip().lower()
     if requirement_type not in tuple(allowed_types or ()):
         return app, before, None, "Enhanced requirement type does not match this fulfilment endpoint", 400
+
+    current_status = str(before.get("status") or "generated").strip().lower()
+    status_allows_fulfillment = (
+        current_status in APPLICATION_REQUIREMENT_CLIENT_FULFILLMENT_STATUSES
+    )
+    if (
+        not status_allows_fulfillment
+        and allow_invalid_document_link_repair
+        and requirement_type == "document"
+        and current_status in ("uploaded", "under_review")
+        and before.get("linked_document_id")
+    ):
+        _, historical_integrity = validate_enhanced_requirement_document_link(
+            db,
+            app["id"],
+            before,
+            before.get("linked_document_id"),
+        )
+        status_allows_fulfillment = not historical_integrity.get("valid")
+    if not status_allows_fulfillment:
+        return app, before, None, f"Enhanced requirement status cannot be fulfilled from the portal: {current_status}", 400
 
     client_request, safe_error = _client_safe_requirement_fields(db, before)
     if safe_error:
@@ -3699,34 +4275,19 @@ def fulfill_application_enhanced_requirement_document(
         application_id,
         requirement_id,
         allowed_types=APPLICATION_REQUIREMENT_CLIENT_DOCUMENT_TYPES,
+        allow_invalid_document_link_repair=True,
     )
     if error:
         return None, error, status_code
 
-    is_monitoring_refresh = (
-        str(before.get("generation_source") or "").strip() == "monitoring_document_expiry_refresh"
-        or bool(before.get("monitoring_alert_id") or before.get("monitoring_document_id"))
+    _doc, link_integrity = validate_enhanced_requirement_document_link(
+        db,
+        app["id"],
+        before,
+        document_id,
     )
-    policy_info = enhanced_requirement_document_policy(before.get("requirement_key"))
-    expected_doc_type = policy_info.get("document_type") or "enhanced_requirement"
-    doc_type_clause = "" if is_monitoring_refresh else "AND doc_type = ?"
-    params = [document_id, app["id"]]
-    if not is_monitoring_refresh:
-        params.append(expected_doc_type)
-    doc = db.execute(
-        f"""
-        SELECT id
-        FROM documents
-        WHERE id = ?
-          AND application_id = ?
-          {doc_type_clause}
-        """,
-        params,
-    ).fetchone()
-    if not doc:
-        if is_monitoring_refresh:
-            return None, "Uploaded document must belong to the same application", 400
-        return None, "Uploaded document must match the requested enhanced requirement document type", 400
+    if not link_integrity.get("valid"):
+        return None, link_integrity.get("message") or "Uploaded document does not match the enhanced requirement evidence slot", 400
 
     now = _now_iso()
     client_id = client_user.get("sub")
@@ -4011,6 +4572,23 @@ def update_application_enhanced_requirement(
 
     if "status" in data and data.get("status") not in (None, ""):
         new_status = str(data.get("status") or "").strip().lower()
+        if (
+            new_status == "accepted"
+            and _clean_text(before.get("requirement_type")).lower() == "document"
+        ):
+            acceptance_document_id = _clean_text(
+                data.get("linked_document_id") or before.get("linked_document_id")
+            )
+            if not acceptance_document_id:
+                return None, "A valid linked document is required before accepting a document requirement", 400
+            _doc, link_integrity = validate_enhanced_requirement_document_link(
+                db,
+                app["id"],
+                before,
+                acceptance_document_id,
+            )
+            if not link_integrity.get("valid"):
+                return None, link_integrity.get("message") or "Enhanced evidence link must be repaired before acceptance", 400
         error = _validate_requirement_transition(before.get("status"), new_status, actor_role)
         if error:
             status_code = 403 if "Only admin or SCO" in error else 400
@@ -4057,12 +4635,14 @@ def update_application_enhanced_requirement(
 
     if "linked_document_id" in data and data.get("linked_document_id") not in (None, ""):
         linked_document_id = _clean_text(data.get("linked_document_id"))
-        doc = db.execute(
-            "SELECT id FROM documents WHERE id = ? AND application_id = ?",
-            (linked_document_id, app["id"]),
-        ).fetchone()
-        if not doc:
-            return None, "linked_document_id must belong to the same application", 400
+        _doc, link_integrity = validate_enhanced_requirement_document_link(
+            db,
+            app["id"],
+            before,
+            linked_document_id,
+        )
+        if not link_integrity.get("valid"):
+            return None, link_integrity.get("message") or "linked_document_id does not match the enhanced requirement evidence slot", 400
         if linked_document_id != before.get("linked_document_id"):
             updates["linked_document_id"] = linked_document_id
             changes["linked_document_id"] = {

@@ -41,6 +41,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from periodic_review_engine import require_review_not_terminal
+from enhanced_requirements import validate_enhanced_requirement_document_link
 
 
 logger = logging.getLogger("arie.periodic_review_memo")
@@ -180,8 +181,7 @@ def _fetch_edd_findings(db, edd_case_id):
 def _fetch_document_requests(db, review_id):
     try:
         rows = db.execute(
-            "SELECT id, requirement_key, requirement_label, requirement_type, "
-            "       status, mandatory, linked_document_id, uploaded_at, reviewed_at "
+            "SELECT * "
             "FROM application_enhanced_requirements "
             "WHERE linked_periodic_review_id = ? AND active = 1 "
             "ORDER BY id ASC",
@@ -189,7 +189,18 @@ def _fetch_document_requests(db, review_id):
         ).fetchall()
     except Exception:
         return []
-    return [dict(row) for row in rows]
+    requests = [dict(row) for row in rows]
+    for item in requests:
+        if not item.get("linked_document_id"):
+            continue
+        _, integrity = validate_enhanced_requirement_document_link(
+            db,
+            item.get("application_id"),
+            item,
+            item.get("linked_document_id"),
+        )
+        item["linked_document_integrity_valid"] = bool(integrity.get("valid"))
+    return requests
 
 
 def _fetch_recent_audit_refs(db, review_id, application_id):
@@ -353,14 +364,19 @@ def _build_attestation_summary(review) -> Dict[str, Any]:
 def _build_documents_summary(document_requests) -> Dict[str, Any]:
     requested = []
     for item in document_requests:
+        uploaded = bool(
+            item.get("linked_document_id")
+            and item.get("linked_document_integrity_valid") is True
+        )
         requested.append({
             "id": item.get("id"),
             "requirement_key": item.get("requirement_key"),
             "requirement_label": item.get("requirement_label"),
             "status": item.get("status"),
             "mandatory": bool(item.get("mandatory")),
-            "uploaded": bool(item.get("linked_document_id")),
+            "uploaded": uploaded,
             "linked_document_id": item.get("linked_document_id"),
+            "linked_document_integrity_valid": item.get("linked_document_integrity_valid"),
         })
     return {
         "requested_count": len(requested),
@@ -368,7 +384,7 @@ def _build_documents_summary(document_requests) -> Dict[str, Any]:
         "outstanding_count": len([
             item for item in requested
             if item["mandatory"] and not item["uploaded"]
-            and str(item.get("status") or "").lower() not in {"accepted", "waived", "cancelled"}
+            and str(item.get("status") or "").lower() not in {"waived", "cancelled"}
         ]),
         "items": requested,
     }

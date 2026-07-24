@@ -83,9 +83,10 @@ try:  # pragma: no cover - exercised via the taxonomy-parity test
 except Exception:  # pragma: no cover - defensive fallback
     _TAXONOMY_PII = {
         "directors": ["passport_number", "nationality", "id_number",
-                      "country_of_residence", "residential_address"],
+                      "country_of_residence", "residential_address",
+                      "professional_profile_url"],
         "ubos": ["passport_number", "nationality", "country_of_residence",
-                 "residential_address"],
+                 "residential_address", "professional_profile_url"],
         "intermediaries": ["owned_or_controlled_by"],
         "applications": ["pep_flags"],
     }
