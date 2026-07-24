@@ -15568,6 +15568,11 @@ function screeningQueueEvidenceReadinessPanel(row, legacyResults, legacyContext)
   if (qualityReason) stateNoteBits.push(qualityReason);
   if (partialMessage) stateNoteBits.push(partialMessage);
   if (missingSourceMessage) stateNoteBits.push(missingSourceMessage);
+  // Item-1 honesty: a truncated (capped) evidence scan must never read as the
+  // complete set. Server sets evidence_capped + the true total in the summary.
+  if (summary.evidence_capped) {
+    stateNoteBits.push('Evidence truncated: showing ' + (summary.evidence_cap != null ? String(summary.evidence_cap) : 'the first page') + ' of ' + (summary.application_evidence_total != null ? String(summary.application_evidence_total) : 'many') + ' provider records for this application (per-application cap applied) — not the complete evidence set');
+  }
   var stateNote = stateNoteBits.length
     ? '<div data-screening-evidence-state="true" style="font-size:11px;color:var(--text3);line-height:1.5;margin-bottom:6px;">' + escapeHtml(stateNoteBits.join(' · ')) + '</div>'
     : '';
