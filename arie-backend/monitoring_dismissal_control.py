@@ -131,6 +131,15 @@ def requires_control(alert: Any, *, action: str, outcome: Optional[str] = None,
     """True when this clearing decision needs the senior-override control."""
     if not is_clearing_action(action=action, outcome=outcome):
         return False
+    # RDI-008 reconciliation: any CRITICAL-severity clearing action always goes
+    # through the senior/four-eyes control, so M2.2 and the service-layer
+    # critical-dismissal gate (monitoring_routing.dismiss_alert) never disagree.
+    # Without this, a CRITICAL alert that classifies tier-2-duplicate (or an
+    # otherwise tier-3 shape) would slip the M2.2 control yet still be refused
+    # by the service gate — surfacing a raw 400 to the officer instead of
+    # routing them to a pending second review.
+    if _token(_get(alert, "severity")) == "critical":
+        return True
     tier = classify_alert_tier(alert)
     if tier == 3:
         return False

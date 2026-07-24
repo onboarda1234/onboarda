@@ -36023,6 +36023,21 @@ class MonitoringAlertDetailHandler(BaseHandler):
         db.close()
         self.success(result)
 
+    @staticmethod
+    def _critical_clearance(user, evidence_ref):
+        """Build the RDI-008 clearance that certifies the M2.2 senior disposition
+        to monitoring_routing.dismiss_alert's critical-severity gate.
+
+        ``via='senior_clear'`` is set only when the actor is actually senior, so
+        the marker never overstates the disposition; a non-senior actor must
+        rely on a non-empty ``evidence_ref`` instead. (For a non-critical alert
+        the whole clearance is ignored by the service layer.)
+        """
+        clearance = {"approver": dict(user or {}), "evidence_ref": evidence_ref or ""}
+        if _mdc.is_senior(user):
+            clearance["via"] = "senior_clear"
+        return clearance
+
     def _apply_dismissal_control(self, db, user, alert_id, alert_before, *,
                                  action, outcome, dismissal_reason, note,
                                  evidence_ref, send_for_second_review):
@@ -36340,17 +36355,17 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             user=user, audit_writer=self.log_audit,
                         )
                     elif cfg.get("dismissal_reason"):
-                        # RDI-008: a critical alert reaches this point only after
-                        # _apply_dismissal_control cleared the M2.2 senior control,
-                        # so certify that senior disposition to the service gate.
+                        # RDI-008 defense-in-depth: with the M2.2 reconciliation a
+                        # CRITICAL alert always requires control, so it reaches
+                        # here only after a senior direct-clear — certify that
+                        # disposition to the service-layer severity gate. (For a
+                        # non-critical alert the clearance is simply ignored.)
                         result = mr.dismiss_alert(
                             db, alert_id,
                             dismissal_reason=cfg["dismissal_reason"],
                             dismissal_notes=note,
                             user=user, audit_writer=self.log_audit,
-                            critical_clearance={"approver": dict(user or {}),
-                                                "evidence_ref": evidence_ref,
-                                                "via": "senior_clear"},
+                            critical_clearance=self._critical_clearance(user, evidence_ref),
                         )
                     else:
                         result = _execute_monitoring_decision_outcome(
@@ -36389,17 +36404,17 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             "alert": dict(_monitoring_alert_get(db, alert_id) or {}),
                             "audit_history": _monitoring_alert_audit_history(db, alert_id),
                         })
-                    # RDI-008: reached only after the M2.2 senior control cleared
-                    # (a critical alert would otherwise be 'pending' or 'blocked');
-                    # certify that disposition to the service-layer severity gate.
+                    # RDI-008 defense-in-depth: with the M2.2 reconciliation a
+                    # CRITICAL alert always requires control, so it reaches here
+                    # only after a senior direct-clear — certify that disposition
+                    # to the service-layer severity gate. (For a non-critical
+                    # alert the clearance is simply ignored.)
                     result = mr.dismiss_alert(
                         db, alert_id,
                         dismissal_reason=dismissal_reason,
                         dismissal_notes=reason or data.get("dismissal_notes"),
                         user=user, audit_writer=self.log_audit,
-                        critical_clearance={"approver": dict(user or {}),
-                                            "evidence_ref": evidence_ref,
-                                            "via": "senior_clear"},
+                        critical_clearance=self._critical_clearance(user, evidence_ref),
                     )
                 elif canonical_action == "route_to_periodic_review":
                     result = mr.route_alert_to_periodic_review(
