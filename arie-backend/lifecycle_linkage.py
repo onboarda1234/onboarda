@@ -188,7 +188,8 @@ def _detail(payload):
 
 
 def _emit_audit(audit_writer, user, action, target, detail_payload,
-                db, before_state=None, after_state=None):
+                db, before_state=None, after_state=None,
+                commit=True, propagate_errors=None):
     """Write a structured audit row via the injected writer.
 
     A structured log line is always emitted in addition to the
@@ -196,6 +197,16 @@ def _emit_audit(audit_writer, user, action, target, detail_payload,
     from application logs. audit_writer MUST be non-None when this
     function is called from a mutating helper (enforced upstream by
     _require_audit_writer).
+
+    RDI-007 (atomicity): when a caller is deferring its own commit
+    (``commit=False``), the audit row must join the caller's OPEN
+    transaction — so ``commit=False`` is forwarded to the writer — and any
+    audit-write failure must PROPAGATE so the whole unit rolls back rather
+    than committing state without its audit evidence. When ``commit`` is
+    True (the default for existing callers) the writer is called exactly as
+    before (no ``commit`` kwarg) and a failure is swallowed, preserving
+    byte-identical legacy behaviour. ``propagate_errors`` defaults to the
+    inverse of ``commit``.
     """
     user_dict = dict(user) if user else {}
     logger.info(
@@ -206,13 +217,21 @@ def _emit_audit(audit_writer, user, action, target, detail_payload,
         # Non-mutating callers (e.g. displacement no-op) may pass None.
         # Mutating helpers are guarded by _require_audit_writer.
         return
+    if propagate_errors is None:
+        propagate_errors = not commit
+    kwargs = {"db": db, "before_state": before_state, "after_state": after_state}
+    if not commit:
+        # Defer: the audit row joins the caller's still-open transaction.
+        kwargs["commit"] = False
     try:
         audit_writer(
             user_dict, action, target, _detail(detail_payload),
-            db=db, before_state=before_state, after_state=after_state,
+            **kwargs,
         )
     except Exception:
         logger.exception("lifecycle audit write failed action=%s", action)
+        if propagate_errors:
+            raise
 
 
 def _assert_edd_not_terminal(edd, edd_case_id):
@@ -229,7 +248,8 @@ def set_edd_origin(db, edd_case_id, *,
                    linked_monitoring_alert_id=None,
                    linked_periodic_review_id=None,
                    user=None,
-                   audit_writer=None):
+                   audit_writer=None,
+                   commit=True):
     """Record where an EDD came from.
 
     Requires a non-None audit_writer (raises MissingAuditWriter).
@@ -263,7 +283,8 @@ def set_edd_origin(db, edd_case_id, *,
         "WHERE id = ?",
         (origin_context, linked_monitoring_alert_id, linked_periodic_review_id, edd_case_id),
     )
-    db.commit()
+    if commit:
+        db.commit()
     after = {
         "origin_context": origin_context,
         "linked_monitoring_alert_id": linked_monitoring_alert_id,
@@ -271,14 +292,15 @@ def set_edd_origin(db, edd_case_id, *,
     }
     _emit_audit(audit_writer, user, "lifecycle.edd.origin_set",
                 f"edd_case:{edd_case_id}", after, db,
-                before_state=before, after_state=after)
+                before_state=before, after_state=after, commit=commit)
 
 
 def mark_edd_assigned(db, edd_case_id, *,
                       priority=None,
                       sla_due_at=None,
                       user=None,
-                      audit_writer=None):
+                      audit_writer=None,
+                      commit=True):
     """Set assigned_at / priority / sla_due_at on an EDD case.
 
     Requires a non-None audit_writer (raises MissingAuditWriter).
@@ -302,11 +324,12 @@ def mark_edd_assigned(db, edd_case_id, *,
         "WHERE id = ?",
         (ts, priority, sla_due_at, edd_case_id),
     )
-    db.commit()
+    if commit:
+        db.commit()
     after = {"assigned_at": ts, "priority": priority, "sla_due_at": sla_due_at}
     _emit_audit(audit_writer, user, "lifecycle.edd.assigned",
                 f"edd_case:{edd_case_id}", after, db,
-                before_state=before, after_state=after)
+                before_state=before, after_state=after, commit=commit)
 
 
 def mark_edd_escalated(db, edd_case_id, *,
@@ -356,7 +379,8 @@ def set_periodic_review_trigger(db, review_id, *,
                                 linked_monitoring_alert_id=None,
                                 linked_edd_case_id=None,
                                 user=None,
-                                audit_writer=None):
+                                audit_writer=None,
+                                commit=True):
     """Record why a periodic review was triggered.
 
     Requires a non-None audit_writer (raises MissingAuditWriter).
@@ -388,7 +412,8 @@ def set_periodic_review_trigger(db, review_id, *,
         "WHERE id = ?",
         (trigger_source, review_reason, linked_monitoring_alert_id, linked_edd_case_id, review_id),
     )
-    db.commit()
+    if commit:
+        db.commit()
     after = {
         "trigger_source": trigger_source,
         "review_reason": review_reason,
@@ -397,14 +422,15 @@ def set_periodic_review_trigger(db, review_id, *,
     }
     _emit_audit(audit_writer, user, "lifecycle.review.trigger_set",
                 f"periodic_review:{review_id}", after, db,
-                before_state=before, after_state=after)
+                before_state=before, after_state=after, commit=commit)
 
 
 def mark_review_assigned(db, review_id, *,
                          priority=None,
                          sla_due_at=None,
                          user=None,
-                         audit_writer=None):
+                         audit_writer=None,
+                         commit=True):
     """Set assigned_at / priority / sla_due_at on a periodic review.
 
     Requires a non-None audit_writer (raises MissingAuditWriter).
@@ -430,11 +456,12 @@ def mark_review_assigned(db, review_id, *,
         "WHERE id = ?",
         (ts, priority, sla_due_at, review_id),
     )
-    db.commit()
+    if commit:
+        db.commit()
     after = {"assigned_at": ts, "priority": priority, "sla_due_at": sla_due_at}
     _emit_audit(audit_writer, user, "lifecycle.review.assigned",
                 f"periodic_review:{review_id}", after, db,
-                before_state=before, after_state=after)
+                before_state=before, after_state=after, commit=commit)
 
 
 def mark_review_closed(db, review_id, *, user=None, audit_writer=None):
@@ -454,7 +481,7 @@ def mark_review_closed(db, review_id, *, user=None, audit_writer=None):
 
 
 # -- Monitoring alert helpers ---------------------------------------
-def mark_alert_triaged(db, alert_id, *, user=None, audit_writer=None):
+def mark_alert_triaged(db, alert_id, *, user=None, audit_writer=None, commit=True):
     """Set triaged_at on a monitoring alert.
 
     Requires a non-None audit_writer (raises MissingAuditWriter).
@@ -467,13 +494,14 @@ def mark_alert_triaged(db, alert_id, *, user=None, audit_writer=None):
         "UPDATE monitoring_alerts SET triaged_at = COALESCE(triaged_at, ?) WHERE id = ?",
         (ts, alert_id),
     )
-    db.commit()
+    if commit:
+        db.commit()
     _emit_audit(audit_writer, user, "lifecycle.alert.triaged",
                 f"monitoring_alert:{alert_id}", {"timestamp": ts}, db,
-                before_state=before, after_state={"triaged_at": ts})
+                before_state=before, after_state={"triaged_at": ts}, commit=commit)
 
 
-def mark_alert_assigned(db, alert_id, *, user=None, audit_writer=None):
+def mark_alert_assigned(db, alert_id, *, user=None, audit_writer=None, commit=True):
     """Set assigned_at on a monitoring alert.
 
     Requires a non-None audit_writer (raises MissingAuditWriter).
@@ -490,13 +518,14 @@ def mark_alert_assigned(db, alert_id, *, user=None, audit_writer=None):
         "UPDATE monitoring_alerts SET assigned_at = COALESCE(assigned_at, ?) WHERE id = ?",
         (ts, alert_id),
     )
-    db.commit()
+    if commit:
+        db.commit()
     _emit_audit(audit_writer, user, "lifecycle.alert.assigned",
                 f"monitoring_alert:{alert_id}", {"timestamp": ts}, db,
-                before_state=before, after_state={"assigned_at": ts})
+                before_state=before, after_state={"assigned_at": ts}, commit=commit)
 
 
-def mark_alert_resolved(db, alert_id, *, user=None, audit_writer=None):
+def mark_alert_resolved(db, alert_id, *, user=None, audit_writer=None, commit=True):
     """Set resolved_at on a monitoring alert.
 
     Requires a non-None audit_writer (raises MissingAuditWriter).
@@ -506,15 +535,16 @@ def mark_alert_resolved(db, alert_id, *, user=None, audit_writer=None):
     ts = _utc_now_iso()
     before = {"resolved_at": _row_get(alert, "resolved_at")}
     db.execute("UPDATE monitoring_alerts SET resolved_at = ? WHERE id = ?", (ts, alert_id))
-    db.commit()
+    if commit:
+        db.commit()
     _emit_audit(audit_writer, user, "lifecycle.alert.resolved",
                 f"monitoring_alert:{alert_id}", {"timestamp": ts}, db,
-                before_state=before, after_state={"resolved_at": ts})
+                before_state=before, after_state={"resolved_at": ts}, commit=commit)
 
 
 # -- Cross-object link helpers --------------------------------------
 def link_alert_to_edd(db, alert_id, edd_case_id, *,
-                      user=None, audit_writer=None):
+                      user=None, audit_writer=None, commit=True):
     """Bidirectionally soft-link an alert and an EDD case.
 
     If the alert is already linked to a DIFFERENT EDD case, the old
@@ -556,7 +586,8 @@ def link_alert_to_edd(db, alert_id, edd_case_id, *,
         "UPDATE edd_cases SET linked_monitoring_alert_id = ? WHERE id = ?",
         (alert_id, edd_case_id),
     )
-    db.commit()
+    if commit:
+        db.commit()
 
     after = {
         "alert.linked_edd_case_id": edd_case_id,
@@ -572,12 +603,13 @@ def link_alert_to_edd(db, alert_id, edd_case_id, *,
                      "displaced_by_relink_to": edd_case_id},
                     db,
                     before_state={"alert.linked_edd_case_id": prior_edd_id},
-                    after_state={"alert.linked_edd_case_id": edd_case_id})
+                    after_state={"alert.linked_edd_case_id": edd_case_id},
+                    commit=commit)
 
     _emit_audit(audit_writer, user, "lifecycle.link.alert_to_edd.created",
                 f"monitoring_alert:{alert_id}",
                 {"alert_id": alert_id, "edd_case_id": edd_case_id},
-                db, before_state=before, after_state=after)
+                db, before_state=before, after_state=after, commit=commit)
 
 
 def unlink_alert_from_edd(db, alert_id, *, user=None, audit_writer=None):
@@ -613,7 +645,7 @@ def unlink_alert_from_edd(db, alert_id, *, user=None, audit_writer=None):
 
 
 def link_alert_to_review(db, alert_id, review_id, *,
-                         user=None, audit_writer=None):
+                         user=None, audit_writer=None, commit=True):
     """Bidirectionally soft-link an alert and a periodic review.
 
     If the alert is already linked to a DIFFERENT periodic review,
@@ -655,7 +687,8 @@ def link_alert_to_review(db, alert_id, review_id, *,
         "UPDATE periodic_reviews SET linked_monitoring_alert_id = ? WHERE id = ?",
         (alert_id, review_id),
     )
-    db.commit()
+    if commit:
+        db.commit()
 
     after = {
         "alert.linked_periodic_review_id": review_id,
@@ -671,12 +704,13 @@ def link_alert_to_review(db, alert_id, review_id, *,
                      "displaced_by_relink_to": review_id},
                     db,
                     before_state={"alert.linked_periodic_review_id": prior_review_id},
-                    after_state={"alert.linked_periodic_review_id": review_id})
+                    after_state={"alert.linked_periodic_review_id": review_id},
+                    commit=commit)
 
     _emit_audit(audit_writer, user, "lifecycle.link.alert_to_review.created",
                 f"monitoring_alert:{alert_id}",
                 {"alert_id": alert_id, "periodic_review_id": review_id},
-                db, before_state=before, after_state=after)
+                db, before_state=before, after_state=after, commit=commit)
 
 
 def unlink_alert_from_review(db, alert_id, *, user=None, audit_writer=None):

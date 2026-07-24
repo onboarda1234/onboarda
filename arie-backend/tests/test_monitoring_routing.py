@@ -99,7 +99,11 @@ def audit_sink():
     events = []
 
     def writer(user, action, target, detail, db=None,
-               before_state=None, after_state=None):
+               before_state=None, after_state=None, commit=True):
+        # RDI-007: routing actions now write audit rows with commit=False so
+        # they join the caller's open transaction. Record `commit` so tests can
+        # assert the audit joined the transaction (was not independently
+        # committed) rather than being flushed early.
         events.append({
             "user": dict(user) if user else {},
             "action": action,
@@ -107,6 +111,7 @@ def audit_sink():
             "detail": detail,
             "before_state": before_state,
             "after_state": after_state,
+            "commit": commit,
         })
 
     writer.events = events
@@ -531,3 +536,192 @@ class TestAuditWriterEnforcement:
             "SELECT COUNT(*) AS c FROM edd_cases"
         ).fetchone()["c"]
         assert after == baseline
+
+
+# ===================================================================
+# RDI-007 — atomicity: status/linkage/downstream + audit are one txn
+# ===================================================================
+def _failing_writer(fail_on):
+    """Audit writer that records actions and raises on a chosen action, to
+    prove a failed audit rolls the whole monitoring action back (RDI-007)."""
+    events = []
+
+    def writer(user, action, target, detail, db=None,
+               before_state=None, after_state=None, commit=True):
+        events.append(action)
+        if action == fail_on:
+            raise RuntimeError("audit store down")
+
+    writer.events = events
+    return writer
+
+
+class TestRdi007Atomicity:
+    def test_audit_joins_transaction_not_committed_early(self, routing_db, audit_sink):
+        from monitoring_routing import dismiss_alert
+        alert_id = _insert_alert(routing_db)  # severity="medium"
+        dismiss_alert(
+            routing_db, alert_id,
+            dismissal_reason="false_positive",
+            dismissal_notes="fp",
+            user=USER, audit_writer=audit_sink,
+        )
+        # Every audit row emitted during the action joined the caller's open
+        # transaction (commit=False) rather than being flushed early.
+        acted = [e for e in audit_sink.events
+                 if e["action"] in ("monitoring.alert.dismissed",
+                                     "lifecycle.alert.resolved")]
+        assert acted, "expected routing + lifecycle audit events"
+        assert all(e["commit"] is False for e in acted), (
+            "RDI-007: routing/lifecycle audit must join the transaction "
+            "(commit=False), not commit independently"
+        )
+
+    def test_dismiss_rolls_back_when_routing_audit_fails(self, routing_db):
+        from monitoring_routing import dismiss_alert
+        alert_id = _insert_alert(routing_db)
+        writer = _failing_writer("monitoring.alert.dismissed")
+        with pytest.raises(RuntimeError, match="audit store down"):
+            dismiss_alert(
+                routing_db, alert_id,
+                dismissal_reason="false_positive",
+                dismissal_notes="fp",
+                user=USER, audit_writer=writer,
+            )
+        # Nothing persisted: the resolved_at + status changes rolled back.
+        row = _alert(routing_db, alert_id)
+        assert row["status"] == "open", (
+            "RDI-007: a dismissal whose final routing audit failed must NOT "
+            "leave the alert dismissed"
+        )
+        assert row["resolved_at"] is None
+
+    def test_route_to_edd_rolls_back_when_routing_audit_fails(self, routing_db):
+        from monitoring_routing import route_alert_to_edd
+        alert_id = _insert_alert(routing_db)
+        baseline = routing_db.execute(
+            "SELECT COUNT(*) AS c FROM edd_cases"
+        ).fetchone()["c"]
+        writer = _failing_writer("monitoring.alert.routed_to_edd")
+        with pytest.raises(RuntimeError, match="audit store down"):
+            route_alert_to_edd(
+                routing_db, alert_id,
+                trigger_notes="n",
+                user=USER, audit_writer=writer,
+            )
+        # The downstream EDD creation and the status transition rolled back.
+        after = routing_db.execute(
+            "SELECT COUNT(*) AS c FROM edd_cases"
+        ).fetchone()["c"]
+        assert after == baseline, (
+            "RDI-007: a route-to-EDD whose routing audit failed must not leave "
+            "a dangling EDD case"
+        )
+        row = _alert(routing_db, alert_id)
+        assert row["status"] == "open"
+        assert row["linked_edd_case_id"] is None
+
+
+# ===================================================================
+# RDI-008 — CRITICAL alerts cannot be dismissed via the ordinary path
+# ===================================================================
+_SENIOR = {"sub": "sco-9", "name": "Senior Officer", "role": "sco"}
+_VALID_CLEARANCE = {"approver": _SENIOR, "evidence_ref": "SAR-ref-123",
+                    "via": "senior_clear"}
+
+
+class TestRdi008CriticalDismissalGate:
+    def test_critical_cannot_dismiss_without_clearance(self, routing_db, audit_sink):
+        from monitoring_routing import dismiss_alert, CriticalAlertDismissalBlocked
+        alert_id = _insert_alert(routing_db, severity="critical")
+        with pytest.raises(CriticalAlertDismissalBlocked):
+            dismiss_alert(
+                routing_db, alert_id,
+                dismissal_reason="false_positive",
+                dismissal_notes="looks fine",
+                user=USER, audit_writer=audit_sink,
+            )
+        # Blocked BEFORE any mutation.
+        row = _alert(routing_db, alert_id)
+        assert row["status"] == "open"
+        assert row["resolved_at"] is None
+
+    def test_critical_requires_documented_notes(self, routing_db, audit_sink):
+        from monitoring_routing import dismiss_alert, CriticalAlertDismissalBlocked
+        alert_id = _insert_alert(routing_db, severity="critical")
+        with pytest.raises(CriticalAlertDismissalBlocked):
+            dismiss_alert(
+                routing_db, alert_id,
+                dismissal_reason="false_positive",
+                dismissal_notes="",  # missing documented justification
+                user=USER, audit_writer=audit_sink,
+                critical_clearance=_VALID_CLEARANCE,
+            )
+
+    def test_critical_clearance_requires_senior_role(self, routing_db, audit_sink):
+        from monitoring_routing import dismiss_alert, CriticalAlertDismissalBlocked
+        alert_id = _insert_alert(routing_db, severity="critical")
+        junior_clearance = {"approver": {"sub": "co-1", "role": "co"},
+                            "evidence_ref": "x"}
+        with pytest.raises(CriticalAlertDismissalBlocked):
+            dismiss_alert(
+                routing_db, alert_id,
+                dismissal_reason="false_positive",
+                dismissal_notes="fp",
+                user=USER, audit_writer=audit_sink,
+                critical_clearance=junior_clearance,
+            )
+
+    def test_critical_clearance_requires_evidence_or_marker(self, routing_db, audit_sink):
+        from monitoring_routing import dismiss_alert, CriticalAlertDismissalBlocked
+        alert_id = _insert_alert(routing_db, severity="critical")
+        # Senior approver but no evidence_ref and no approved-review marker.
+        with pytest.raises(CriticalAlertDismissalBlocked):
+            dismiss_alert(
+                routing_db, alert_id,
+                dismissal_reason="false_positive",
+                dismissal_notes="fp",
+                user=USER, audit_writer=audit_sink,
+                critical_clearance={"approver": _SENIOR},
+            )
+
+    def test_critical_dismissed_with_valid_clearance(self, routing_db, audit_sink):
+        from monitoring_routing import dismiss_alert
+        alert_id = _insert_alert(routing_db, severity="critical")
+        result = dismiss_alert(
+            routing_db, alert_id,
+            dismissal_reason="false_positive",
+            dismissal_notes="senior-reviewed false positive",
+            user=_SENIOR, audit_writer=audit_sink,
+            critical_clearance=_VALID_CLEARANCE,
+        )
+        assert result["status"] == "dismissed"
+        row = _alert(routing_db, alert_id)
+        assert row["status"] == "dismissed"
+        assert row["resolved_at"] is not None
+        detail = json.loads([e for e in audit_sink.events
+                             if e["action"] == "monitoring.alert.dismissed"][0]["detail"])
+        assert detail["critical_gate_applied"] is True
+
+    def test_critical_dismissed_via_approved_review_marker(self, routing_db, audit_sink):
+        from monitoring_routing import dismiss_alert
+        alert_id = _insert_alert(routing_db, severity="critical")
+        result = dismiss_alert(
+            routing_db, alert_id,
+            dismissal_reason="false_positive",
+            dismissal_notes="approved after second review",
+            user=_SENIOR, audit_writer=audit_sink,
+            critical_clearance={"approver": _SENIOR, "via": "approved_review"},
+        )
+        assert result["status"] == "dismissed"
+
+    def test_non_critical_dismissal_unaffected(self, routing_db, audit_sink):
+        from monitoring_routing import dismiss_alert
+        alert_id = _insert_alert(routing_db, severity="medium")
+        result = dismiss_alert(
+            routing_db, alert_id,
+            dismissal_reason="false_positive",
+            dismissal_notes="fp",
+            user=USER, audit_writer=audit_sink,
+        )
+        assert result["status"] == "dismissed"
