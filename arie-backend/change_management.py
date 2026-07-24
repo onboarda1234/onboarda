@@ -766,35 +766,63 @@ def create_change_alert(
     Returns:
         Dict with the created alert data.
     """
+    # RDI-006 (CRITICAL, fail-closed): the server assigns a regulatorily
+    # material `materiality` classification here. It must NEVER be recorded
+    # without an actor and an audit sink — refuse to create the alert if
+    # either is absent rather than committing a materiality decision with no
+    # audit evidence.
+    if log_audit_fn is None or user is None:
+        raise ValueError(
+            "create_change_alert requires a non-null audit writer and actor "
+            "(RDI-006): change-alert materiality must not be recorded without "
+            "audit evidence"
+        )
+
     alert_id = generate_change_alert_id()
     materiality = classify_materiality(alert_type)
     now = datetime.now(timezone.utc).isoformat()
 
-    db.execute(
-        """INSERT INTO change_alerts
-           (id, application_id, alert_type, source_channel, summary,
-            detected_changes, materiality, confidence, source_reference,
-            source_payload, detected_by, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)""",
-        (
-            alert_id, application_id, alert_type, source_channel, summary,
-            json.dumps(detected_changes) if detected_changes else "{}",
-            materiality,
-            confidence,
-            source_reference,
-            json.dumps(source_payload) if source_payload else None,
-            detected_by or "system",
-            now, now,
-        ),
-    )
-    db.commit()
-
-    if log_audit_fn and user:
-        log_audit_fn(
+    # RDI-006: insert the alert (carrying its materiality) and its audit row in
+    # ONE transaction — the audit joins the open transaction via commit=False
+    # and a single commit at the end; any failure rolls back so a materiality
+    # decision can never persist without its audit record. Mirrors the DCI-013
+    # pattern already used by approve/reject/implement_change_request.
+    try:
+        db.execute(
+            """INSERT INTO change_alerts
+               (id, application_id, alert_type, source_channel, summary,
+                detected_changes, materiality, confidence, source_reference,
+                source_payload, detected_by, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)""",
+            (
+                alert_id, application_id, alert_type, source_channel, summary,
+                json.dumps(detected_changes) if detected_changes else "{}",
+                materiality,
+                confidence,
+                source_reference,
+                json.dumps(source_payload) if source_payload else None,
+                detected_by or "system",
+                now, now,
+            ),
+        )
+        _log_audit_compat(
+            log_audit_fn,
             user, "Change Alert Created", alert_id,
             f"Alert type={alert_type}, channel={source_channel}, materiality={materiality}",
             db=db,
+            commit=False,
         )
+        db.commit()
+    except Exception as e:
+        logger.error(
+            "Change alert creation failed for %s (type=%s): %s",
+            application_id, alert_type, e, exc_info=True,
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
 
     return {
         "id": alert_id,

@@ -77,6 +77,11 @@ def _audit_sink(events):
 
 
 def _create_alert(cm, wdb, app_id, *, user=CO_USER, log_audit_fn=None):
+    # RDI-006: create_change_alert is fail-closed and requires a non-null audit
+    # writer. Callers that don't assert on audit output omit log_audit_fn, so
+    # supply an inert sink here to satisfy the guard.
+    if log_audit_fn is None:
+        log_audit_fn = lambda *a, **k: None
     return cm.create_change_alert(
         wdb,
         application_id=app_id,

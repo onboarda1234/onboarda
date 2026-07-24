@@ -25,6 +25,12 @@ def _get_cm():
     return cm
 
 
+def _audit_noop(*args, **kwargs):
+    """Inert audit sink (RDI-006): create_change_alert is fail-closed and
+    requires a non-null audit writer."""
+    return None
+
+
 def _cm_clear_and_approve(cm, wrapper, req_id, log_audit_fn=None, decision_notes="OK"):
     """PR-CM-APPROVAL-PRECONDITIONS-1 helper: record evidence-backed screening/risk
     preconditions and approve with a checker distinct from the creator."""
@@ -182,7 +188,7 @@ class TestChangeTypeValidationAtCreate:
         user = {"sub": "u1", "name": "Officer", "role": "sco"}
 
         alert = cm.create_change_alert(wdb, app_id, "director_change", "companies_house",
-                                       "Test", {}, user=user)
+                                       "Test", {}, user=user, log_audit_fn=_audit_noop)
         cm.update_change_alert_status(wdb, alert["id"], "under_review", user)
 
         bad_items = [{"change_type": "invented_nonsense"}]

@@ -34,6 +34,12 @@ def _get_cm():
     return cm
 
 
+def _audit_noop(*args, **kwargs):
+    """Inert audit sink (RDI-006): create_change_alert is fail-closed and
+    requires a non-null audit writer."""
+    return None
+
+
 class _DBWrapper:
     """Wrap raw sqlite3 connection to match cm module expectations."""
     def __init__(self, conn):
@@ -379,7 +385,7 @@ class TestAlertConvertInvalidChangeType:
         alert = cm.create_change_alert(
             wdb, app_id, "director_change", "companies_house",
             "Director name changed", {"full_name": {"old": "A", "new": "B"}},
-            user=user)
+            user=user, log_audit_fn=_audit_noop)
         cm.update_change_alert_status(wdb, alert["id"], "under_review", user)
 
         # Try to convert with invalid change_type items
@@ -397,7 +403,7 @@ class TestAlertConvertInvalidChangeType:
         alert = cm.create_change_alert(
             wdb, app_id, "ubo_change", "companies_house",
             "UBO changed", {"ownership_pct": {"old": "50", "new": "60"}},
-            user=user)
+            user=user, log_audit_fn=_audit_noop)
         cm.update_change_alert_status(wdb, alert["id"], "under_review", user)
 
         bad_items = [{"change_type": "profile_update"}]
@@ -422,7 +428,7 @@ class TestAlertConvertValidItems:
         alert = cm.create_change_alert(
             wdb, app_id, "director_change", "companies_house",
             "Director name changed", {"full_name": {"old": "Old Name", "new": "New Name"}},
-            user=user)
+            user=user, log_audit_fn=_audit_noop)
         cm.update_change_alert_status(wdb, alert["id"], "under_review", user)
 
         valid_items = [{"change_type": "director_change", "field_name": "full_name",
@@ -446,7 +452,7 @@ class TestAlertConvertValidItems:
             wdb, app_id, "company_details", "companies_house",
             "Company name changed",
             {"company_name": {"old": "Old Co", "new": "New Co"}},
-            user=user)
+            user=user, log_audit_fn=_audit_noop)
         cm.update_change_alert_status(wdb, alert["id"], "under_review", user)
 
         request, err = cm.convert_alert_to_request(wdb, alert["id"], user)

@@ -34,6 +34,12 @@ def _get_cm():
     return cm
 
 
+def _audit_noop(*args, **kwargs):
+    """Inert audit sink (RDI-006): create_change_alert is fail-closed and
+    requires a non-null audit writer."""
+    return None
+
+
 class _DBWrapper:
     """Wrap raw sqlite3 connection to match cm module expectations."""
     def __init__(self, conn):
@@ -165,7 +171,7 @@ class TestAlertConvertWithItems:
             alert_type="company_change", source_channel="backoffice",
             summary="Company name change detected",
             detected_changes={"company_name": {"old": "test", "new": "test2"}},
-            user=user,
+            user=user, log_audit_fn=_audit_noop,
         )
         cm.update_change_alert_status(wdb, alert["id"], "under_review", user)
 

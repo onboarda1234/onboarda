@@ -38,6 +38,13 @@ def _get_cm():
     return cm
 
 
+def _audit_noop(*args, **kwargs):
+    """Inert audit sink (RDI-006): create_change_alert is fail-closed and now
+    requires a non-null audit writer. Tests that don't assert on audit output
+    pass this to satisfy the guard."""
+    return None
+
+
 class _DBWrapper:
     """Wrap raw sqlite3 connection to match cm module expectations."""
     def __init__(self, conn):
@@ -365,7 +372,7 @@ class TestAlertConvertItems:
             wdb, app_id, "director_change", "companies_house",
             "Director appointment detected",
             {"director_name": {"old": None, "new": "Alice Brown"}},
-            user=ADMIN_USER,
+            user=ADMIN_USER, log_audit_fn=_audit_noop,
         )
         cm.update_change_alert_status(wdb, alert["id"], "under_review", ADMIN_USER)
 
@@ -395,7 +402,7 @@ class TestAlertConvertItems:
             wdb, app_id, "address_change", "registry_api",
             "Address change detected",
             {"registered_address": {"old": "123 Old St", "new": "456 New Ave"}},
-            user=ADMIN_USER,
+            user=ADMIN_USER, log_audit_fn=_audit_noop,
         )
         cm.update_change_alert_status(wdb, alert["id"], "under_review", ADMIN_USER)
 
@@ -414,7 +421,7 @@ class TestAlertConvertItems:
             wdb, app_id, "ubo_change", "open_corporates",
             "UBO change",
             {"ownership": {"old": "75%", "new": "60%"}},
-            user=ADMIN_USER,
+            user=ADMIN_USER, log_audit_fn=_audit_noop,
         )
         cm.update_change_alert_status(wdb, alert["id"], "under_review", ADMIN_USER)
 
@@ -431,7 +438,7 @@ class TestAlertConvertItems:
             wdb, app_id, "director_change", "companies_house",
             "Director change",
             {"name": {"old": "A", "new": "B"}},
-            user=ADMIN_USER,
+            user=ADMIN_USER, log_audit_fn=_audit_noop,
         )
         cm.update_change_alert_status(wdb, alert["id"], "under_review", ADMIN_USER)
         cm.convert_alert_to_request(wdb, alert["id"], ADMIN_USER)
@@ -719,7 +726,7 @@ class TestAlertLifecycle:
             "Shareholding structure changed",
             {"ownership": {"old": "75%", "new": "60%"}},
             confidence=0.85,
-            user=ADMIN_USER,
+            user=ADMIN_USER, log_audit_fn=_audit_noop,
         )
         assert alert["status"] == "new"
 
@@ -750,7 +757,7 @@ class TestAlertLifecycle:
         alert = cm.create_change_alert(
             wdb, app_id, "legal_name_change", "companies_house",
             "Name change", {"company_name": {"old": name_before, "new": "Changed Name"}},
-            user=ADMIN_USER,
+            user=ADMIN_USER, log_audit_fn=_audit_noop,
         )
         cm.update_change_alert_status(wdb, alert["id"], "under_review", ADMIN_USER)
         cm.convert_alert_to_request(wdb, alert["id"], ADMIN_USER)
