@@ -407,6 +407,43 @@ def test_original_final_strip_is_conditional_and_uses_persisted_values_verbatim(
     assert "82.2222" in result["adjustedHtml"]
 
 
+def test_breakdown_fails_closed_on_missing_dimension_identifiers_or_weights():
+    result = _run_node(
+        _fixture_script(
+            """
+            function renderCorrupt(mutator) {
+              const stored = evidence();
+              mutator(stored);
+              app.riskReportEvidence = stored;
+              return renderStoredRiskComputationHtml(app);
+            }
+            process.stdout.write(JSON.stringify({
+              emptyIdentifiers:renderCorrupt((stored) => {
+                stored.application.dimensions[0].id = '';
+                stored.dimension_computation_evidence[0].dimension_id = '';
+              }),
+              missingWeight:renderCorrupt((stored) => {
+                delete stored.application.dimensions[0].weight;
+              }),
+              invalidWeight:renderCorrupt((stored) => {
+                stored.application.dimensions[0].weight = 'not-a-number';
+              }),
+              valid:renderCorrupt(() => {})
+            }));
+            """
+        )
+    )
+    error = (
+        "Authoritative dimension evidence is incomplete. "
+        "Recompute risk before using this breakdown."
+    )
+    assert error in result["emptyIdentifiers"]
+    assert error in result["missingWeight"]
+    assert error in result["invalidWeight"]
+    assert "undefined%" not in result["missingWeight"]
+    assert "Risk breakdown" in result["valid"]
+
+
 def test_ui_source_has_no_score_reconstruction_and_pdf_contract_remains_separate():
     html = BACKOFFICE_HTML.read_text(encoding="utf-8")
     ui = _ui_source()

@@ -10986,20 +10986,31 @@ function renderStoredRiskComputationHtml(app) {
     var drivers = buildRiskExecutiveDrivers(evidence);
     var driverHtml = renderRiskExecutiveDriverCards(drivers);
     var rowsHtml = dimensions.map(function(row) {
+      var rowId = String(row && row.id != null ? row.id : '').trim();
+      if (!rowId) {
+        throw new Error('Authoritative dimension evidence is incomplete. Recompute risk before using this breakdown.');
+      }
       var storedDimension = dimensionEvidence.find(function(item) {
-        return String(item.dimension_id || '') === String(row.id || '');
+        var evidenceDimensionId = String(item && item.dimension_id != null ? item.dimension_id : '').trim();
+        return Boolean(evidenceDimensionId) && evidenceDimensionId === rowId;
       });
       if (!storedDimension || !Number.isFinite(Number(storedDimension.composite_contribution))) {
         throw new Error('Authoritative dimension evidence is incomplete. Recompute risk before using this breakdown.');
       }
       var score = Number(row.stored_score);
-      if (!Number.isFinite(score)) {
+      var weight = Number(row.weight);
+      if (
+        !Number.isFinite(score) ||
+        row.weight == null ||
+        String(row.weight).trim() === '' ||
+        !Number.isFinite(weight)
+      ) {
         throw new Error('Authoritative dimension evidence is incomplete. Recompute risk before using this breakdown.');
       }
       var barWidth = Math.max(0, Math.min(100, score / 4 * 100));
       return '<tr><td style="padding:8px 10px;font-weight:700;">' + escapeHtml(row.name || row.id) + '</td>' +
         '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(row.stored_score) + '</td>' +
-        '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(row.weight) + '%</td>' +
+        '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(weight) + '%</td>' +
         '<td style="padding:8px 10px;text-align:center;font-weight:700;">' + escapeHtml(storedDimension.composite_contribution) + '</td>' +
         '<td style="padding:8px 10px;min-width:150px;"><div style="height:7px;border-radius:99px;background:#e8eef6;overflow:hidden;"><div style="height:100%;width:' + barWidth + '%;background:linear-gradient(90deg,#234e7d,#4f83b7);border-radius:99px;"></div></div></td></tr>';
     }).join('');
