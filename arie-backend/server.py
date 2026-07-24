@@ -36023,6 +36023,21 @@ class MonitoringAlertDetailHandler(BaseHandler):
         db.close()
         self.success(result)
 
+    @staticmethod
+    def _critical_clearance(user, evidence_ref):
+        """Build the RDI-008 clearance that certifies the M2.2 senior disposition
+        to monitoring_routing.dismiss_alert's critical-severity gate.
+
+        ``via='senior_clear'`` is set only when the actor is actually senior, so
+        the marker never overstates the disposition; a non-senior actor must
+        rely on a non-empty ``evidence_ref`` instead. (For a non-critical alert
+        the whole clearance is ignored by the service layer.)
+        """
+        clearance = {"approver": dict(user or {}), "evidence_ref": evidence_ref or ""}
+        if _mdc.is_senior(user):
+            clearance["via"] = "senior_clear"
+        return clearance
+
     def _apply_dismissal_control(self, db, user, alert_id, alert_before, *,
                                  action, outcome, dismissal_reason, note,
                                  evidence_ref, send_for_second_review):
@@ -36310,12 +36325,13 @@ class MonitoringAlertDetailHandler(BaseHandler):
                     cfg = MONITORING_DECISION_OUTCOMES[outcome]
                     # M2.2 four-eyes senior-override control (replaces the M1.1
                     # interim guard) for material clearing outcomes.
+                    evidence_ref = str(data.get("evidence_ref") or data.get("evidence_note") or "").strip()
                     disposition, review_request = self._apply_dismissal_control(
                         db, user, alert_id, alert_before,
                         action="save_decision", outcome=outcome,
                         dismissal_reason=cfg.get("dismissal_reason"),
                         note=note,
-                        evidence_ref=str(data.get("evidence_ref") or data.get("evidence_note") or "").strip(),
+                        evidence_ref=evidence_ref,
                         send_for_second_review=bool(data.get("send_for_second_review")),
                     )
                     if disposition == "blocked":
@@ -36339,11 +36355,17 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             user=user, audit_writer=self.log_audit,
                         )
                     elif cfg.get("dismissal_reason"):
+                        # RDI-008 defense-in-depth: with the M2.2 reconciliation a
+                        # CRITICAL alert always requires control, so it reaches
+                        # here only after a senior direct-clear — certify that
+                        # disposition to the service-layer severity gate. (For a
+                        # non-critical alert the clearance is simply ignored.)
                         result = mr.dismiss_alert(
                             db, alert_id,
                             dismissal_reason=cfg["dismissal_reason"],
                             dismissal_notes=note,
                             user=user, audit_writer=self.log_audit,
+                            critical_clearance=self._critical_clearance(user, evidence_ref),
                         )
                     else:
                         result = _execute_monitoring_decision_outcome(
@@ -36360,12 +36382,13 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             400,
                         )
                     dismiss_note = str(reason or data.get("dismissal_notes") or "").strip()
+                    evidence_ref = str(data.get("evidence_ref") or data.get("evidence_note") or "").strip()
                     disposition, review_request = self._apply_dismissal_control(
                         db, user, alert_id, alert_before,
                         action="dismiss", outcome=None,
                         dismissal_reason=str(dismissal_reason).strip().lower(),
                         note=dismiss_note,
-                        evidence_ref=str(data.get("evidence_ref") or data.get("evidence_note") or "").strip(),
+                        evidence_ref=evidence_ref,
                         send_for_second_review=bool(data.get("send_for_second_review")),
                     )
                     if disposition == "blocked":
@@ -36381,11 +36404,17 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             "alert": dict(_monitoring_alert_get(db, alert_id) or {}),
                             "audit_history": _monitoring_alert_audit_history(db, alert_id),
                         })
+                    # RDI-008 defense-in-depth: with the M2.2 reconciliation a
+                    # CRITICAL alert always requires control, so it reaches here
+                    # only after a senior direct-clear — certify that disposition
+                    # to the service-layer severity gate. (For a non-critical
+                    # alert the clearance is simply ignored.)
                     result = mr.dismiss_alert(
                         db, alert_id,
                         dismissal_reason=dismissal_reason,
                         dismissal_notes=reason or data.get("dismissal_notes"),
                         user=user, audit_writer=self.log_audit,
+                        critical_clearance=self._critical_clearance(user, evidence_ref),
                     )
                 elif canonical_action == "route_to_periodic_review":
                     result = mr.route_alert_to_periodic_review(
@@ -36537,12 +36566,17 @@ def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
         return {"alert_id": alert_id, "status": alert_before.get("status"),
                 "outcome": requested_outcome, "already_terminal": True}
 
+    # RDI-008: this runs only after a second-review request was APPROVED, so a
+    # critical alert's four-eyes disposition is already complete — certify it to
+    # the service-layer severity gate via the approved-review marker.
+    approved_clearance = {"approver": dict(user or {}), "via": "approved_review"}
     if requested_outcome == "dismiss" or (dismissal_reason and requested_outcome not in MONITORING_DECISION_OUTCOMES):
         return mr.dismiss_alert(
             db, alert_id,
             dismissal_reason=dismissal_reason or "other",
             dismissal_notes=note,
             user=user, audit_writer=log_audit,
+            critical_clearance=approved_clearance,
         )
     cfg = MONITORING_DECISION_OUTCOMES.get(requested_outcome) or {}
     if cfg.get("dismissal_reason"):
@@ -36551,6 +36585,7 @@ def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
             dismissal_reason=cfg["dismissal_reason"],
             dismissal_notes=note,
             user=user, audit_writer=log_audit,
+            critical_clearance=approved_clearance,
         )
     decision_payload = {
         "alert_id": alert_id,

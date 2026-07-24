@@ -53,6 +53,15 @@ VALID_DISMISSAL_REASONS = (
     "other",
 )
 
+# RDI-008: severities whose dismissal is gated behind a senior/four-eyes
+# disposition. A CRITICAL alert must not be dismissed via the ordinary path.
+CRITICAL_SEVERITIES = ("critical",)
+# Roles accepted as a senior disposition authority for a critical dismissal.
+_SENIOR_DISPOSITION_ROLES = ("admin", "sco")
+# Markers a caller may set on the clearance to certify that the M2.2 control
+# already recorded a senior clear / approved second review for this alert.
+_APPROVED_CLEARANCE_MARKERS = ("approved_review", "senior_clear")
+
 # Alert statuses set by this module. The base `monitoring_alerts.status`
 # column is free-text in the schema (see arie-backend/db.py) so this
 # module is the source of truth for the routing-status vocabulary.
@@ -107,6 +116,18 @@ class AlertAlreadyTerminal(MonitoringRoutingError):
     """
 
 
+class CriticalAlertDismissalBlocked(MonitoringRoutingError):
+    """Raised when a CRITICAL-severity alert is dismissed without the required
+    senior/four-eyes disposition (RDI-008).
+
+    A CRITICAL monitoring alert must NOT be dismissed through the ordinary
+    single-officer path: doing so could suppress an EDD/SAR escalation. It
+    requires a senior (admin/SCO) disposition with documented evidence — the
+    M2.2 monitoring-dismissal control — or must instead be routed to EDD/SAR
+    assessment.
+    """
+
+
 # ── Internal utilities ---------------------------------------------
 def _utcnow_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -127,6 +148,14 @@ def _require_audit_writer(audit_writer):
             "monitoring_routing requires a non-None audit_writer for "
             "every routing action"
         )
+
+
+def _safe_rollback(db):
+    """Best-effort rollback that never masks the original exception (RDI-007)."""
+    try:
+        db.rollback()
+    except Exception:
+        logger.exception("monitoring_routing rollback failed")
 
 
 def _row_get(row, key, default=None):
@@ -167,12 +196,59 @@ def _fetch_alert(db, alert_id):
     return row
 
 
+def _is_critical_severity(alert):
+    return str(_row_get(alert, "severity", "") or "").strip().lower() in CRITICAL_SEVERITIES
+
+
+def _valid_critical_clearance(critical_clearance, user):
+    """Return True when the caller has certified a valid senior/four-eyes
+    disposition for dismissing a CRITICAL alert (RDI-008).
+
+    A valid clearance is a mapping carrying a senior (admin/SCO) ``approver``
+    and either a non-empty ``evidence_ref`` or an explicit approved-review /
+    senior-clear marker (``via``). This is the service-layer enforcement of
+    the M2.2 monitoring-dismissal control; the server supplies it only after
+    that control has recorded the senior clear or approved second review.
+    """
+    if not isinstance(critical_clearance, dict):
+        return False
+    approver = critical_clearance.get("approver") or {}
+    approver_role = str((approver or {}).get("role") or "").strip().lower()
+    if approver_role not in _SENIOR_DISPOSITION_ROLES:
+        return False
+    evidence_ref = str(critical_clearance.get("evidence_ref") or "").strip()
+    via = str(critical_clearance.get("via") or "").strip().lower()
+    return bool(evidence_ref) or via in _APPROVED_CLEARANCE_MARKERS
+
+
+def _enforce_critical_dismissal_gate(alert_id, dismissal_notes, critical_clearance, user):
+    """Refuse dismissal of a CRITICAL alert without documented evidence and a
+    senior/four-eyes disposition (RDI-008)."""
+    if not str(dismissal_notes or "").strip():
+        raise CriticalAlertDismissalBlocked(
+            f"CRITICAL alert id={alert_id} cannot be dismissed without a "
+            f"documented justification (dismissal_notes)."
+        )
+    if not _valid_critical_clearance(critical_clearance, user):
+        raise CriticalAlertDismissalBlocked(
+            f"CRITICAL alert id={alert_id} cannot be dismissed through the "
+            f"ordinary path. It requires a senior (admin/SCO) disposition with "
+            f"documented evidence (the M2.2 monitoring-dismissal control), or "
+            f"must be routed to EDD/SAR assessment instead."
+        )
+
+
 def _set_alert_status(db, alert_id, *, status, officer_action,
                       officer_notes, user):
     """Single SQL update for the alert's officer-facing fields.
 
     Kept narrow so that we never touch lifecycle-linkage columns from
     here -- those are owned by lifecycle_linkage helpers.
+
+    RDI-007: this helper NO LONGER commits. Every public routing action
+    owns a single transaction and commits once at the end, so the status
+    update, lifecycle linkage, downstream row(s) and audit rows land (or
+    roll back) atomically.
     """
     db.execute(
         "UPDATE monitoring_alerts SET "
@@ -185,7 +261,6 @@ def _set_alert_status(db, alert_id, *, status, officer_action,
         (status, officer_action, officer_notes,
          (user or {}).get("sub", ""), alert_id),
     )
-    db.commit()
 
 
 def _emit_routing_audit(audit_writer, user, action, alert_id,
@@ -209,16 +284,15 @@ def _emit_routing_audit(audit_writer, user, action, alert_id,
         "monitoring_routing action=%s alert_id=%s detail=%s",
         action, alert_id, detail,
     )
-    try:
-        audit_writer(
-            user_dict, action, f"monitoring_alert:{alert_id}", detail,
-            db=db, before_state=before_state, after_state=after_state,
-        )
-    except Exception:
-        logger.exception(
-            "monitoring routing audit write failed action=%s alert_id=%s",
-            action, alert_id,
-        )
+    # RDI-007: the routing audit joins the caller's OPEN transaction
+    # (commit=False) and its failure PROPAGATES. A monitoring compliance
+    # action must not persist without its final routing audit evidence — if
+    # this write fails, the public action rolls back the whole unit.
+    audit_writer(
+        user_dict, action, f"monitoring_alert:{alert_id}", detail,
+        db=db, before_state=before_state, after_state=after_state,
+        commit=False,
+    )
 
 
 # ── Public actions -------------------------------------------------
@@ -233,26 +307,34 @@ def triage_alert(db, alert_id, *, user, audit_writer):
     alert = _fetch_alert(db, alert_id)
     prior_status = _row_get(alert, "status", STATUS_OPEN)
 
-    ll.mark_alert_triaged(db, alert_id, user=user, audit_writer=audit_writer)
+    # RDI-007: one transaction — linkage, status and routing audit commit
+    # together or roll back together.
+    try:
+        ll.mark_alert_triaged(db, alert_id, user=user, audit_writer=audit_writer,
+                              commit=False)
 
-    new_status = prior_status
-    if prior_status == STATUS_OPEN:
-        new_status = STATUS_TRIAGED
-        _set_alert_status(
-            db, alert_id,
-            status=new_status,
-            officer_action="triage",
-            officer_notes=_row_get(alert, "officer_notes", "") or "",
-            user=user,
+        new_status = prior_status
+        if prior_status == STATUS_OPEN:
+            new_status = STATUS_TRIAGED
+            _set_alert_status(
+                db, alert_id,
+                status=new_status,
+                officer_action="triage",
+                officer_notes=_row_get(alert, "officer_notes", "") or "",
+                user=user,
+            )
+
+        _emit_routing_audit(
+            audit_writer, user, "monitoring.alert.triaged", alert_id,
+            {"alert_id": alert_id, "status": new_status},
+            db,
+            before_state={"status": prior_status},
+            after_state={"status": new_status},
         )
-
-    _emit_routing_audit(
-        audit_writer, user, "monitoring.alert.triaged", alert_id,
-        {"alert_id": alert_id, "status": new_status},
-        db,
-        before_state={"status": prior_status},
-        after_state={"status": new_status},
-    )
+        db.commit()
+    except Exception:
+        _safe_rollback(db)
+        raise
     return {"alert_id": alert_id, "status": new_status}
 
 
@@ -271,29 +353,37 @@ def assign_alert(db, alert_id, *, user, audit_writer):
             f"cannot assign alert id={alert_id} in terminal status={prior_status!r}"
         )
 
-    ll.mark_alert_assigned(db, alert_id, user=user, audit_writer=audit_writer)
-
     new_status = STATUS_ASSIGNED
-    _set_alert_status(
-        db, alert_id,
-        status=new_status,
-        officer_action="assign",
-        officer_notes=_row_get(alert, "officer_notes", "") or "",
-        user=user,
-    )
+    # RDI-007: single atomic transaction.
+    try:
+        ll.mark_alert_assigned(db, alert_id, user=user, audit_writer=audit_writer,
+                               commit=False)
 
-    _emit_routing_audit(
-        audit_writer, user, "monitoring.alert.assigned", alert_id,
-        {"alert_id": alert_id, "assignee": (user or {}).get("sub", "")},
-        db,
-        before_state={"status": prior_status},
-        after_state={"status": new_status},
-    )
+        _set_alert_status(
+            db, alert_id,
+            status=new_status,
+            officer_action="assign",
+            officer_notes=_row_get(alert, "officer_notes", "") or "",
+            user=user,
+        )
+
+        _emit_routing_audit(
+            audit_writer, user, "monitoring.alert.assigned", alert_id,
+            {"alert_id": alert_id, "assignee": (user or {}).get("sub", "")},
+            db,
+            before_state={"status": prior_status},
+            after_state={"status": new_status},
+        )
+        db.commit()
+    except Exception:
+        _safe_rollback(db)
+        raise
     return {"alert_id": alert_id, "status": new_status}
 
 
 def dismiss_alert(db, alert_id, *, dismissal_reason,
-                  dismissal_notes=None, user, audit_writer):
+                  dismissal_notes=None, user, audit_writer,
+                  critical_clearance=None):
     """Dismiss a monitoring alert with a structured reason.
 
     A dismissed alert is terminal: it records who dismissed it, when,
@@ -301,6 +391,12 @@ def dismiss_alert(db, alert_id, *, dismissal_reason,
     free-text note. Re-dismissing an already-dismissed alert raises
     AlertAlreadyTerminal so the caller cannot silently overwrite the
     original audit trail.
+
+    RDI-008: a CRITICAL-severity alert may NOT be dismissed through the
+    ordinary path. It requires a senior (admin/SCO) disposition with
+    documented evidence — pass ``critical_clearance`` (see
+    ``_valid_critical_clearance``) — or must be routed to EDD/SAR instead;
+    otherwise CriticalAlertDismissalBlocked is raised BEFORE any mutation.
     """
     _require_audit_writer(audit_writer)
     if dismissal_reason not in VALID_DISMISSAL_REASONS:
@@ -316,9 +412,10 @@ def dismiss_alert(db, alert_id, *, dismissal_reason,
             f"cannot dismiss alert id={alert_id} in terminal status={prior_status!r}"
         )
 
-    # Persist the resolved_at timestamp via the PR-01 helper. This
-    # also emits the lifecycle.alert.resolved audit event.
-    ll.mark_alert_resolved(db, alert_id, user=user, audit_writer=audit_writer)
+    # RDI-008: severity gate — fail closed before any mutation.
+    is_critical = _is_critical_severity(alert)
+    if is_critical:
+        _enforce_critical_dismissal_gate(alert_id, dismissal_notes, critical_clearance, user)
 
     structured_notes = json.dumps({
         "dismissal_reason": dismissal_reason,
@@ -327,26 +424,39 @@ def dismiss_alert(db, alert_id, *, dismissal_reason,
         "dismissed_at": _utcnow_iso(),
     }, sort_keys=True)
 
-    _set_alert_status(
-        db, alert_id,
-        status=STATUS_DISMISSED,
-        officer_action="dismiss",
-        officer_notes=structured_notes,
-        user=user,
-    )
+    # RDI-007: resolved_at, dismissed status and the routing audit are one
+    # atomic transaction — they commit together or roll back together.
+    try:
+        # Persist the resolved_at timestamp via the PR-01 helper (also emits
+        # the lifecycle.alert.resolved audit event into the open transaction).
+        ll.mark_alert_resolved(db, alert_id, user=user, audit_writer=audit_writer,
+                               commit=False)
 
-    _emit_routing_audit(
-        audit_writer, user, "monitoring.alert.dismissed", alert_id,
-        {
-            "alert_id": alert_id,
-            "dismissal_reason": dismissal_reason,
-            "has_notes": bool(dismissal_notes),
-        },
-        db,
-        before_state={"status": prior_status},
-        after_state={"status": STATUS_DISMISSED,
-                     "dismissal_reason": dismissal_reason},
-    )
+        _set_alert_status(
+            db, alert_id,
+            status=STATUS_DISMISSED,
+            officer_action="dismiss",
+            officer_notes=structured_notes,
+            user=user,
+        )
+
+        _emit_routing_audit(
+            audit_writer, user, "monitoring.alert.dismissed", alert_id,
+            {
+                "alert_id": alert_id,
+                "dismissal_reason": dismissal_reason,
+                "has_notes": bool(dismissal_notes),
+                "critical_gate_applied": is_critical,
+            },
+            db,
+            before_state={"status": prior_status},
+            after_state={"status": STATUS_DISMISSED,
+                         "dismissal_reason": dismissal_reason},
+        )
+        db.commit()
+    except Exception:
+        _safe_rollback(db)
+        raise
     return {
         "alert_id": alert_id,
         "status": STATUS_DISMISSED,
@@ -535,65 +645,73 @@ def route_alert_to_periodic_review(db, alert_id, *,
     created = False
     reused = False
     review_id = existing_review_id
-
-    if existing_review_id is not None:
-        # Already linked: reuse and short-circuit. We deliberately do
-        # NOT re-emit lifecycle.link.alert_to_review.created because
-        # the link has not changed.
-        reused = True
-    else:
-        # Create the downstream review, then bidirectionally link.
-        review_id = _create_periodic_review_row(
-            db,
-            application_id=application_id,
-            client_name=client_name,
-            risk_level=None,  # severity (Low/Medium/High) is not a risk level
-                              # vocabulary -- leave NULL until the review is
-                              # explicitly classified.
-            review_reason=review_reason or _row_get(alert, "summary", ""),
-        )
-        ll.link_alert_to_review(
-            db, alert_id, review_id,
-            user=user, audit_writer=audit_writer,
-        )
-        ll.set_periodic_review_trigger(
-            db, review_id,
-            trigger_source="monitoring_alert",
-            review_reason=review_reason,
-            linked_monitoring_alert_id=alert_id,
-            user=user,
-            audit_writer=audit_writer,
-        )
-        if priority:
-            ll.mark_review_assigned(
-                db, review_id, priority=priority,
-                user=user, audit_writer=audit_writer,
-            )
-        created = True
-
     new_status = STATUS_ROUTED_REVIEW
-    _set_alert_status(
-        db, alert_id,
-        status=new_status,
-        officer_action="route_to_periodic_review",
-        officer_notes=review_reason or _row_get(alert, "officer_notes", "") or "",
-        user=user,
-    )
 
-    _emit_routing_audit(
-        audit_writer, user, "monitoring.alert.routed_to_review", alert_id,
-        {
-            "alert_id": alert_id,
-            "periodic_review_id": review_id,
-            "created": created,
-            "reused": reused,
-        },
-        db,
-        before_state={"status": prior_status,
-                      "linked_periodic_review_id": existing_review_id},
-        after_state={"status": new_status,
-                     "linked_periodic_review_id": review_id},
-    )
+    # RDI-007: downstream review creation, linkage, status transition and the
+    # routing audit are one atomic transaction.
+    try:
+        if existing_review_id is not None:
+            # Already linked: reuse and short-circuit. We deliberately do
+            # NOT re-emit lifecycle.link.alert_to_review.created because
+            # the link has not changed.
+            reused = True
+        else:
+            # Create the downstream review, then bidirectionally link.
+            review_id = _create_periodic_review_row(
+                db,
+                application_id=application_id,
+                client_name=client_name,
+                risk_level=None,  # severity (Low/Medium/High) is not a risk level
+                                  # vocabulary -- leave NULL until the review is
+                                  # explicitly classified.
+                review_reason=review_reason or _row_get(alert, "summary", ""),
+            )
+            ll.link_alert_to_review(
+                db, alert_id, review_id,
+                user=user, audit_writer=audit_writer, commit=False,
+            )
+            ll.set_periodic_review_trigger(
+                db, review_id,
+                trigger_source="monitoring_alert",
+                review_reason=review_reason,
+                linked_monitoring_alert_id=alert_id,
+                user=user,
+                audit_writer=audit_writer,
+                commit=False,
+            )
+            if priority:
+                ll.mark_review_assigned(
+                    db, review_id, priority=priority,
+                    user=user, audit_writer=audit_writer, commit=False,
+                )
+            created = True
+
+        _set_alert_status(
+            db, alert_id,
+            status=new_status,
+            officer_action="route_to_periodic_review",
+            officer_notes=review_reason or _row_get(alert, "officer_notes", "") or "",
+            user=user,
+        )
+
+        _emit_routing_audit(
+            audit_writer, user, "monitoring.alert.routed_to_review", alert_id,
+            {
+                "alert_id": alert_id,
+                "periodic_review_id": review_id,
+                "created": created,
+                "reused": reused,
+            },
+            db,
+            before_state={"status": prior_status,
+                          "linked_periodic_review_id": existing_review_id},
+            after_state={"status": new_status,
+                         "linked_periodic_review_id": review_id},
+        )
+        db.commit()
+    except Exception:
+        _safe_rollback(db)
+        raise
 
     return {
         "alert_id": alert_id,
@@ -642,25 +760,54 @@ def route_alert_to_edd(db, alert_id, *,
     created = False
     reused = False
     edd_case_id = None
+    new_status = STATUS_ROUTED_EDD
 
-    if existing_link_id is not None:
-        # Check whether the linked case is still active.
-        linked = db.execute(
-            "SELECT id, stage FROM edd_cases WHERE id = ?",
-            (existing_link_id,),
-        ).fetchone()
-        if linked and _row_get(linked, "stage") not in TERMINAL_EDD_STAGES:
-            edd_case_id = existing_link_id
-            reused = True
+    # RDI-007: EDD reuse/link/create, status transition and the routing audit
+    # are one atomic transaction.
+    try:
+        if existing_link_id is not None:
+            # Check whether the linked case is still active.
+            linked = db.execute(
+                "SELECT id, stage FROM edd_cases WHERE id = ?",
+                (existing_link_id,),
+            ).fetchone()
+            if linked and _row_get(linked, "stage") not in TERMINAL_EDD_STAGES:
+                edd_case_id = existing_link_id
+                reused = True
 
-    if edd_case_id is None:
-        # Look for any other active EDD case on the same application.
-        active_id = _find_active_edd_for_application(db, application_id)
-        if active_id is not None:
-            edd_case_id = active_id
+        if edd_case_id is None:
+            # Look for any other active EDD case on the same application.
+            active_id = _find_active_edd_for_application(db, application_id)
+            if active_id is not None:
+                edd_case_id = active_id
+                ll.link_alert_to_edd(
+                    db, alert_id, edd_case_id,
+                    user=user, audit_writer=audit_writer, commit=False,
+                )
+                ll.set_edd_origin(
+                    db, edd_case_id,
+                    origin_context="monitoring_alert",
+                    linked_monitoring_alert_id=alert_id,
+                    user=user,
+                    audit_writer=audit_writer,
+                    commit=False,
+                )
+                reused = True
+
+        if edd_case_id is None:
+            # No active EDD anywhere — create one.
+            edd_case_id = _create_edd_case_row(
+                db,
+                application_id=application_id,
+                client_name=client_name,
+                risk_level=None,  # severity != risk_level; let downstream classify
+                risk_score=None,
+                assigned_officer=(user or {}).get("sub", ""),
+                trigger_notes=trigger_notes,
+            )
             ll.link_alert_to_edd(
                 db, alert_id, edd_case_id,
-                user=user, audit_writer=audit_writer,
+                user=user, audit_writer=audit_writer, commit=False,
             )
             ll.set_edd_origin(
                 db, edd_case_id,
@@ -668,61 +815,41 @@ def route_alert_to_edd(db, alert_id, *,
                 linked_monitoring_alert_id=alert_id,
                 user=user,
                 audit_writer=audit_writer,
+                commit=False,
             )
-            reused = True
+            if priority:
+                ll.mark_edd_assigned(
+                    db, edd_case_id, priority=priority,
+                    user=user, audit_writer=audit_writer, commit=False,
+                )
+            created = True
 
-    if edd_case_id is None:
-        # No active EDD anywhere — create one.
-        edd_case_id = _create_edd_case_row(
-            db,
-            application_id=application_id,
-            client_name=client_name,
-            risk_level=None,  # severity != risk_level; let downstream classify
-            risk_score=None,
-            assigned_officer=(user or {}).get("sub", ""),
-            trigger_notes=trigger_notes,
-        )
-        ll.link_alert_to_edd(
-            db, alert_id, edd_case_id,
-            user=user, audit_writer=audit_writer,
-        )
-        ll.set_edd_origin(
-            db, edd_case_id,
-            origin_context="monitoring_alert",
-            linked_monitoring_alert_id=alert_id,
+        _set_alert_status(
+            db, alert_id,
+            status=new_status,
+            officer_action="route_to_edd",
+            officer_notes=trigger_notes or _row_get(alert, "officer_notes", "") or "",
             user=user,
-            audit_writer=audit_writer,
         )
-        if priority:
-            ll.mark_edd_assigned(
-                db, edd_case_id, priority=priority,
-                user=user, audit_writer=audit_writer,
-            )
-        created = True
 
-    new_status = STATUS_ROUTED_EDD
-    _set_alert_status(
-        db, alert_id,
-        status=new_status,
-        officer_action="route_to_edd",
-        officer_notes=trigger_notes or _row_get(alert, "officer_notes", "") or "",
-        user=user,
-    )
-
-    _emit_routing_audit(
-        audit_writer, user, "monitoring.alert.routed_to_edd", alert_id,
-        {
-            "alert_id": alert_id,
-            "edd_case_id": edd_case_id,
-            "created": created,
-            "reused": reused,
-        },
-        db,
-        before_state={"status": prior_status,
-                      "linked_edd_case_id": existing_link_id},
-        after_state={"status": new_status,
-                     "linked_edd_case_id": edd_case_id},
-    )
+        _emit_routing_audit(
+            audit_writer, user, "monitoring.alert.routed_to_edd", alert_id,
+            {
+                "alert_id": alert_id,
+                "edd_case_id": edd_case_id,
+                "created": created,
+                "reused": reused,
+            },
+            db,
+            before_state={"status": prior_status,
+                          "linked_edd_case_id": existing_link_id},
+            after_state={"status": new_status,
+                         "linked_edd_case_id": edd_case_id},
+        )
+        db.commit()
+    except Exception:
+        _safe_rollback(db)
+        raise
 
     return {
         "alert_id": alert_id,

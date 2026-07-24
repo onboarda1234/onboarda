@@ -68,6 +68,14 @@ def test_requires_control_matrix():
     assert mdc.requires_control(docid, action="dismiss", dismissal_reason="duplicate") is False
     # tier 3 never controlled
     assert mdc.requires_control(lowdoc, action="dismiss", dismissal_reason="false_positive") is False
+    # RDI-008 reconciliation: a CRITICAL alert is ALWAYS controlled, even a
+    # tier-2 obvious-duplicate or an otherwise tier-3 shape, so M2.2 and the
+    # service-layer critical-dismissal gate always agree.
+    crit_dup = {"alert_type": "document_expired", "severity": "critical",
+                "summary": "licence has expired"}
+    assert mdc.requires_control(crit_dup, action="dismiss", dismissal_reason="duplicate") is True
+    crit_odd = {"alert_type": "misc_flag", "severity": "critical", "summary": "n/a"}
+    assert mdc.requires_control(crit_odd, action="dismiss", dismissal_reason="false_positive") is True
 
 
 # ── API harness (isolated sqlite + live tornado) ─────────────────────────────
