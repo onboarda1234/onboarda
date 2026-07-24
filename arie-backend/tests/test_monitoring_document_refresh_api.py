@@ -91,6 +91,7 @@ def _reset_document_refresh_case(conn):
     conn.execute("DELETE FROM audit_log WHERE target = ? OR target = ?", ("monitoring_alert:9301", "ARF-M3"))
     conn.execute("DELETE FROM monitoring_alerts WHERE id = 9301")
     conn.execute("DELETE FROM documents WHERE application_id = ?", ("app_m3",))
+    conn.execute("DELETE FROM directors WHERE application_id = ?", ("app_m3",))
     conn.execute("DELETE FROM applications WHERE id = ?", ("app_m3",))
     conn.execute("DELETE FROM clients WHERE id = ?", ("client_m3",))
 
@@ -118,20 +119,30 @@ def _reset_document_refresh_case(conn):
     )
     conn.execute(
         """
+        INSERT INTO directors
+            (id, application_id, person_key, full_name)
+        VALUES ('director_m3', 'app_m3', 'director_m3', 'Monitoring Director')
+        """
+    )
+    conn.execute(
+        """
         INSERT OR REPLACE INTO documents
-            (id, application_id, doc_type, doc_name, file_path, file_size, mime_type,
-             slot_key, is_current, version, expiry_date, verification_status, review_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, 'verified', 'accepted')
+            (id, application_id, person_id, person_type, doc_type, doc_name,
+             file_path, file_size, mime_type, slot_key, is_current, version,
+             expiry_date, verification_status, review_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, 'verified', 'accepted')
         """,
         (
             "doc_expired_m3",
             "app_m3",
+            "director_m3",
+            "director",
             "passport",
             "Expired passport.pdf",
             "/tmp/expired-passport.pdf",
             20,
             "application/pdf",
-            "passport:company",
+            "person:director:director_m3:passport",
             "2026-01-01",
         ),
     )

@@ -182,11 +182,8 @@ class TestBackendApplicantIdValidation:
         assert result["api_status"] != "simulated"
 
     def test_country_passthrough_to_create_applicant(self):
-        """Backend handler passes country from request body to sumsub_create_applicant."""
+        """The provider adapter normalizes authoritative party countries."""
         import server  # noqa: F401 — ensure module is importable
-        # The SumsubApplicantHandler.post extracts country from data.get("country")
-        # and passes it to sumsub_create_applicant. Verify the screening wrapper
-        # normalizes it.
         from screening import normalize_country_alpha3
         # GB → GBR for Sumsub
         assert normalize_country_alpha3("GB") == "GBR"
@@ -197,13 +194,11 @@ class TestBackendApplicantIdValidation:
         assert normalize_country_alpha3(None) is None
 
     def test_backend_handler_accepts_country(self):
-        """SumsubApplicantHandler extracts country from request body."""
+        """Sumsub uses the scoped party country, never a client override."""
         import inspect
         from server import SumsubApplicantHandler
         src = inspect.getsource(SumsubApplicantHandler.post)
-        assert 'country' in src, (
-            "SumsubApplicantHandler.post does not reference 'country'"
-        )
-        assert 'data.get("country")' in src or "data.get('country')" in src, (
-            "SumsubApplicantHandler.post does not extract country from request data"
-        )
+        assert 'party.get("country_of_residence")' in src
+        assert 'party.get("nationality")' in src
+        assert 'data.get("country")' not in src
+        assert "data.get('country')" not in src

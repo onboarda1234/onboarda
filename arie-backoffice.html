@@ -4960,11 +4960,64 @@ function eddTriggerText(caseRow) {
   return 'Trigger reason unavailable';
 }
 
+function backofficeStatusRequiresCanonicalPartyCollections(status) {
+  var key = String(status || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return [
+    'pricing_review',
+    'pricing_accepted',
+    'pre_approval_review',
+    'pre_approved',
+    'kyc_documents',
+    'kyc_submitted',
+    'compliance_review',
+    'in_review',
+    'under_review',
+    'edd_required',
+    'submitted_to_compliance',
+    'rmi_sent',
+    'approved',
+    'rejected',
+    'withdrawn'
+  ].indexOf(key) >= 0;
+}
+
+function backofficeCanonicalPartyCollectionIntegrityErrors(record) {
+  record = record || {};
+  if (!backofficeStatusRequiresCanonicalPartyCollections(record.statusRaw || record.status)) return [];
+  var errors = [];
+  [
+    { key: 'directors', label: 'Director', required: true },
+    { key: 'ubos', label: 'UBO', required: true },
+    { key: 'intermediaries', label: 'intermediary', required: false }
+  ].forEach(function(collection) {
+    if (!Array.isArray(record[collection.key])) {
+      errors.push({
+        collection: collection.key,
+        reason: 'canonical_party_collection_missing',
+        message: 'Authoritative ' + collection.label + ' collection is missing.'
+      });
+      return;
+    }
+    if (collection.required && record[collection.key].length === 0) {
+      errors.push({
+        collection: collection.key,
+        reason: 'required_canonical_party_collection_empty',
+        message: 'Authoritative ' + collection.label + ' collection is empty.'
+      });
+    }
+  });
+  return errors;
+}
+
 function mapApplicationFromApi(a) {
   var dims = {};
   try { dims = typeof a.risk_dimensions === 'string' ? JSON.parse(a.risk_dimensions) : (a.risk_dimensions || {}); } catch(e) {}
   var riskState = buildRiskDisplayState(a);
   var fixtureInfo = typeof fixtureRecordInfo === 'function' ? fixtureRecordInfo(a || {}) : { isFixture: false, label: '' };
+  var partyIntegrityErrors = backofficeCanonicalPartyCollectionIntegrityErrors(a);
+  var canonicalDirectors = Array.isArray(a.directors) ? a.directors : [];
+  var canonicalUbos = Array.isArray(a.ubos) ? a.ubos : [];
+  var canonicalIntermediaries = Array.isArray(a.intermediaries) ? a.intermediaries : [];
   var backendDocuments = (a.documents || []).map(function(d) {
     return {
       id: d.id,
@@ -4980,6 +5033,10 @@ function mapApplicationFromApi(a) {
       verification_results: d.verification_results,
       verified_at: d.verified_at,
       person_id: d.person_id,
+      person_type: d.person_type || '',
+      slot_key: d.slot_key || '',
+      is_current: d.is_current,
+      version: d.version,
       evidence_class: d.evidence_class || '',
       evidence_class_label: d.evidence_class_label || '',
       evidence_classification_note: d.evidence_classification_note || '',
@@ -5024,17 +5081,18 @@ function mapApplicationFromApi(a) {
     date: (a.created_at || '').split('T')[0].split(' ')[0],
     country: a.country || '',
     brn: a.brn || '',
-    directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: applicationFixtureSafePartyName(d.full_name, 'director'), nat: d.nationality, dob: d.date_of_birth || '', pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
-    ubos: (a.ubos || []).map(function(u) { return { id: u.id || '', person_key: u.person_key || '', name: applicationFixtureSafePartyName(u.full_name, 'ubo'), nat: u.nationality || '', dob: u.date_of_birth || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
-    intermediaries: (a.intermediaries || []).map(function(i) { return { id: i.person_key || i.id, name: applicationFixtureSafePartyName(i.entity_name || i.full_name || '', 'fixture'), jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 }; }),
+    directors: canonicalDirectors.map(function(d) { return { id: d.id || d.person_key || '', person_key: d.person_key || '', name: applicationFixtureSafePartyName(d.full_name, 'director'), nat: d.nationality, dob: d.date_of_birth || '', professional_profile_url: d.professional_profile_url || '', pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
+    ubos: canonicalUbos.map(function(u) { return { id: u.id || '', person_key: u.person_key || '', name: applicationFixtureSafePartyName(u.full_name, 'ubo'), nat: u.nationality || '', dob: u.date_of_birth || '', pct: u.ownership_pct || 0, professional_profile_url: u.professional_profile_url || '', pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
+    intermediaries: canonicalIntermediaries.map(function(i) { return { id: i.id || i.person_key || '', person_key: i.person_key || '', name: applicationFixtureSafePartyName(i.entity_name || i.full_name || '', 'fixture'), jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0, professional_profile_url: i.professional_profile_url || '' }; }),
+    _partyIntegrityErrors: partyIntegrityErrors,
     dims: dims,
     docs: backendDocuments.map(function(d) { return d.doc_type; }),
     _documents: backendDocuments,
     rmiRequests: a.rmi_requests || [],
     enhancedReviewSummary: a.enhanced_review_summary || null,
     pepCount: (function() {
-      return (a.directors || []).filter(personHasDeclaredOrVerifiedPep).length +
-             (a.ubos || []).filter(personHasDeclaredOrVerifiedPep).length;
+      return canonicalDirectors.filter(personHasDeclaredOrVerifiedPep).length +
+             canonicalUbos.filter(personHasDeclaredOrVerifiedPep).length;
     })(),
     screeningPepCount: (function() {
       var sr = (a.prescreening_data || {}).screening_report || {};
@@ -9145,6 +9203,7 @@ function buildPrescreeningPartyFallback(items, personType) {
         residential_address: item.residential_address || '',
         date_of_appointment: item.date_of_appointment || '',
         pct: item.ownership_pct == null || item.ownership_pct === '' ? (item.pct || '') : item.ownership_pct,
+        professional_profile_url: item.professional_profile_url || '',
         pep: declared ? 'Yes' : normalizePepDisplay(item.is_pep),
         pep_declaration: declaration,
         declared_pep: declared,
@@ -9209,8 +9268,194 @@ function getAuthoritativeRiskEvidence(app) {
   return evidence;
 }
 
+function validateBackofficeDocumentSlotIdentity(doc) {
+  var docType = String((doc && doc.doc_type) || '').trim();
+  var personId = String((doc && doc.person_id) || '').trim();
+  var personType = String((doc && doc.person_type) || '').trim().toLowerCase();
+  var storedSlotKey = String((doc && doc.slot_key) || '').trim();
+  var expectedSlotKey = '';
+  var allowedPersonTypes = ['director', 'ubo', 'intermediary'];
+  var specialSlotMatch = storedSlotKey.match(/^(rmi|enhanced_requirement):([^:]+)$/);
+
+  if (!docType) {
+    return { valid: false, reason: 'missing_document_type', expected_slot_key: '' };
+  }
+  if (/^(rmi|enhanced_requirement):/.test(storedSlotKey)) {
+    if (!specialSlotMatch) {
+      return { valid: false, reason: 'malformed_special_document_slot', expected_slot_key: '' };
+    }
+    if (!!personId !== !!personType || (personType && allowedPersonTypes.indexOf(personType) < 0)) {
+      return { valid: false, reason: 'incomplete_special_document_person_identity', expected_slot_key: storedSlotKey };
+    }
+    return {
+      valid: true,
+      reason: '',
+      expected_slot_key: storedSlotKey,
+      stored_slot_key: storedSlotKey,
+      special_slot: true,
+      special_slot_type: specialSlotMatch[1],
+      special_slot_id: specialSlotMatch[2],
+      person_id: personId,
+      person_type: personType,
+      doc_type: docType
+    };
+  }
+
+  if (personId) {
+    if (allowedPersonTypes.indexOf(personType) < 0) {
+      return { valid: false, reason: 'missing_or_invalid_person_type', expected_slot_key: '' };
+    }
+    expectedSlotKey = 'person:' + personType + ':' + personId + ':' + docType;
+  } else {
+    if (personType) {
+      return { valid: false, reason: 'entity_document_has_person_type', expected_slot_key: 'entity:' + docType };
+    }
+    expectedSlotKey = 'entity:' + docType;
+  }
+  if (!storedSlotKey || storedSlotKey !== expectedSlotKey) {
+    return {
+      valid: false,
+      reason: 'conflicting_document_slot_identity',
+      expected_slot_key: expectedSlotKey,
+      stored_slot_key: storedSlotKey
+    };
+  }
+  return {
+    valid: true,
+    reason: '',
+    expected_slot_key: expectedSlotKey,
+    stored_slot_key: storedSlotKey,
+    person_id: personId,
+    person_type: personType,
+    doc_type: docType
+  };
+}
+
+function backofficePartyIdentityMatches(app, personType, personId) {
+  var collectionName = personType === 'director'
+    ? 'directors'
+    : personType === 'ubo'
+      ? 'ubos'
+      : personType === 'intermediary'
+        ? 'intermediaries'
+        : '';
+  if (!collectionName || !personId) return [];
+  return ((app && app[collectionName]) || []).filter(function(item) {
+    return String((item && item.id) || '') === String(personId) ||
+      String((item && item.person_key) || '') === String(personId);
+  });
+}
+
+function validateBackofficeDocumentIntegrity(app, doc) {
+  var identity = validateBackofficeDocumentSlotIdentity(doc);
+  if (!identity.valid) return identity;
+
+  if (identity.person_id) {
+    var ownerMatches = backofficePartyIdentityMatches(
+      app,
+      identity.person_type,
+      identity.person_id
+    );
+    if (ownerMatches.length !== 1) {
+      return Object.assign({}, identity, {
+        valid: false,
+        reason: 'unresolved_or_ambiguous_typed_document_owner'
+      });
+    }
+  }
+
+  if (!identity.special_slot) return identity;
+  var documentId = String((doc && (doc.id || doc.document_id)) || '').trim();
+  var linkMatches = [];
+  if (identity.special_slot_type === 'rmi') {
+    ((app && app.rmiRequests) || []).forEach(function(request) {
+      ((request && request.items) || []).forEach(function(item) {
+        if (String((item && item.id) || '').trim() === identity.special_slot_id &&
+            String((item && item.document_id) || '').trim() === documentId) {
+          linkMatches.push(item);
+        }
+      });
+    });
+  } else if (identity.special_slot_type === 'enhanced_requirement') {
+    var requirements = typeof APPLICATION_ENHANCED_REQUIREMENTS !== 'undefined' &&
+      Array.isArray(APPLICATION_ENHANCED_REQUIREMENTS)
+      ? APPLICATION_ENHANCED_REQUIREMENTS
+      : [];
+    requirements.forEach(function(requirement) {
+      var linkedDocumentId = String(
+        (requirement && requirement.linked_document_id) ||
+        (requirement && requirement.linked_document && requirement.linked_document.id) ||
+        ''
+      ).trim();
+      if (String((requirement && requirement.id) || '').trim() === identity.special_slot_id &&
+          linkedDocumentId === documentId) {
+        linkMatches.push(requirement);
+      }
+    });
+  }
+  if (linkMatches.length !== 1) {
+    return Object.assign({}, identity, {
+      valid: false,
+      reason: 'unlinked_or_ambiguous_special_document_slot'
+    });
+  }
+  return Object.assign({}, identity, { special_linked: true });
+}
+
+function renderBackofficeDocumentIntegrityBanner(failures) {
+  failures = Array.isArray(failures) ? failures : [];
+  if (!failures.length) return '';
+  var affected = failures.slice(0, 5).map(function(entry) {
+    var doc = (entry && entry.doc) || {};
+    return String(doc.doc_name || doc.doc_type || doc.id || 'Unknown document');
+  });
+  var extraCount = Math.max(0, failures.length - affected.length);
+  return '<div id="backoffice-document-integrity-error" role="alert" style="margin-bottom:14px;padding:12px 14px;border:1px solid var(--red);border-radius:10px;background:var(--red-dim,#fff5f5);color:var(--red);font-size:12px;line-height:1.5;">' +
+    '<strong>Document integrity check failed.</strong> Review readiness is blocked and affected documents are not assigned to a party because their stored type, owner, document type, and slot do not agree. Affected: ' +
+    escapeHtml(affected.join(', ') + (extraCount ? ' and ' + extraCount + ' more' : '')) + '.</div>';
+}
+
+function backofficePartyIntegrityErrorsForApplication(app) {
+  if (app && Array.isArray(app._partyIntegrityErrors)) return app._partyIntegrityErrors;
+  return backofficeCanonicalPartyCollectionIntegrityErrors(app || {});
+}
+
+function renderBackofficePartyIntegrityBanner(errors) {
+  errors = Array.isArray(errors) ? errors : [];
+  if (!errors.length) return '';
+  var messages = errors.slice(0, 4).map(function(error) {
+    return String((error && error.message) || 'An authoritative party collection is unavailable.');
+  });
+  var extraCount = Math.max(0, errors.length - messages.length);
+  return '<div id="backoffice-party-integrity-error" role="alert" style="margin-bottom:14px;padding:12px 14px;border:1px solid var(--red);border-radius:10px;background:var(--red-dim,#fff5f5);color:var(--red);font-size:12px;line-height:1.5;">' +
+    '<strong>Party integrity check failed.</strong> Review readiness and approval are blocked. Prescreening ownership data has not been substituted for missing or empty authoritative records. ' +
+    escapeHtml(messages.join(' ') + (extraCount ? ' ' + extraCount + ' additional error(s).' : '')) + '</div>';
+}
+
 function computeDocumentReadinessSummary(app) {
   var docs = Array.isArray(app._documents) ? app._documents : [];
+  var documentIntegrityFailures = docs.filter(function(doc) {
+    return !validateBackofficeDocumentIntegrity(app, doc).valid;
+  });
+  var partyIntegrityErrors = backofficePartyIntegrityErrorsForApplication(app);
+  var partyIntegrityDescriptions = partyIntegrityErrors.map(function(error) {
+    return String((error && error.message) || 'Authoritative party collection is unavailable.');
+  });
+  var enhancedLinkErrors = app === currentApp
+    ? enhancedRequirementDocumentIntegrityErrors(APPLICATION_ENHANCED_REQUIREMENTS)
+    : [];
+  var enhancedServerCount = Number(
+    (app.enhancedReviewSummary && app.enhancedReviewSummary.document_integrity_error_count) || 0
+  );
+  var enhancedLinkIntegrityCount = Math.max(enhancedLinkErrors.length, enhancedServerCount);
+  var enhancedLinkDescriptions = enhancedLinkErrors.map(function(entry) {
+    var req = (entry && entry.requirement) || {};
+    return (req.requirement_label || req.requirement_key || req.id || 'Enhanced requirement') +
+      ': ' + (((entry || {}).integrity || {}).message || 'enhanced evidence association is inconsistent');
+  });
+  while (enhancedLinkDescriptions.length < enhancedLinkIntegrityCount) {
+    enhancedLinkDescriptions.push('Enhanced requirement: persisted evidence association is inconsistent');
+  }
   var psData = app.prescreeningData || {};
   var required = [
     { doc_type: 'cert_inc', label: 'Certificate of Incorporation' },
@@ -9224,29 +9469,36 @@ function computeDocumentReadinessSummary(app) {
   ];
 
   (app.directors || []).forEach(function(person) {
-    required.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, owner: buildPartyDisplayName(person) });
-    required.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, owner: buildPartyDisplayName(person) });
+    required.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'director', owner: buildPartyDisplayName(person) });
+    required.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'director', owner: buildPartyDisplayName(person) });
   });
   (app.ubos || []).forEach(function(person) {
-    required.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, owner: buildPartyDisplayName(person) });
-    required.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, owner: buildPartyDisplayName(person) });
+    required.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'ubo', owner: buildPartyDisplayName(person) });
+    required.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'ubo', owner: buildPartyDisplayName(person) });
   });
   (app.intermediaries || []).forEach(function(person) {
     ['cert_inc', 'reg_dir', 'reg_sh', 'cert_gs', 'fin_stmt'].forEach(function(docType) {
-      required.push({ doc_type: docType, label: docType, person_id: person.person_key || person.id, owner: buildPartyDisplayName(person) });
+      required.push({ doc_type: docType, label: docType, person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'intermediary', owner: buildPartyDisplayName(person) });
     });
   });
 
-  var missing = required.filter(function(expectation) {
-    return !docs.some(function(doc) {
-      var sameType = normalizeDetailValue(doc.doc_type) === normalizeDetailValue(expectation.doc_type);
-      if (!sameType) return false;
-      if (expectation.person_id == null) return !doc.person_id;
-      return doc.person_id === expectation.person_id;
+  var readinessUsedDocumentIds = {};
+  var missing = [];
+  required.forEach(function(expectation) {
+    var matchedDocument = docs.find(function(doc) {
+      var documentId = String((doc && (doc.id || doc.document_id)) || '');
+      if (!documentId || readinessUsedDocumentIds[documentId]) return false;
+      return documentMatchesExpectedSlot(doc, expectation, app);
     });
+    if (matchedDocument) {
+      readinessUsedDocumentIds[String(matchedDocument.id || matchedDocument.document_id)] = true;
+    } else {
+      missing.push(expectation);
+    }
   });
 
   var issueDocs = docs.filter(function(doc) {
+    if (!validateBackofficeDocumentIntegrity(app, doc).valid) return true;
     var verStatus = normalizeDetailValue(doc.verification_state || doc.verification_status).toLowerCase();
     var results = doc.verification_results || {};
     var warnings = Array.isArray(results.warnings) ? results.warnings : [];
@@ -9273,28 +9525,37 @@ function computeDocumentReadinessSummary(app) {
 	    var blockerDescriptions = (Array.isArray(reliance.blockers) ? reliance.blockers : []).map(function(blocker) {
 	      return (blocker.title || blocker.doc_type || 'Document') + ': ' + (blocker.reason || blocker.description || 'document evidence is not reliance-ready');
 	    });
+	    var integrityDescriptions = documentIntegrityFailures.map(function(doc) {
+	      return (doc.doc_name || doc.doc_type || doc.id || 'Document') + ': stored document ownership metadata is inconsistent';
+	    });
 	    return {
 	      missingCount: relianceMissing.length,
-	      issueCount: relianceIssues.length,
-	      blockerCount: reliance.blocker_count || blockerDescriptions.length,
-	      blockerDescriptions: blockerDescriptions,
+	      issueCount: relianceIssues.length + documentIntegrityFailures.length,
+	      partyIntegrityCount: partyIntegrityErrors.length,
+	      enhancedDocumentLinkIntegrityCount: enhancedLinkIntegrityCount,
+	      blockerCount: Number(reliance.blocker_count || blockerDescriptions.length) + documentIntegrityFailures.length + partyIntegrityErrors.length + enhancedLinkIntegrityCount,
+	      blockerDescriptions: blockerDescriptions.concat(integrityDescriptions, partyIntegrityDescriptions, enhancedLinkDescriptions),
 	      pepIncompleteCount: pepIncomplete.length,
 	      requiredCount: reliance.required_count || required.length,
 	      uploadedCount: docs.length,
 	      relianceStatus: reliance.reliance_status || (reliance.passed ? 'ready' : 'blocked'),
-	      isIncomplete: reliance.passed === false || relianceMissing.length > 0 || relianceIssues.length > 0 || pepIncomplete.length > 0
+	      isIncomplete: reliance.passed === false || relianceMissing.length > 0 || relianceIssues.length > 0 || documentIntegrityFailures.length > 0 || partyIntegrityErrors.length > 0 || enhancedLinkIntegrityCount > 0 || pepIncomplete.length > 0
 	    };
 	  }
 
 	  return {
 	    missingCount: missing.length,
 	    issueCount: issueDocs.length,
-	    blockerCount: issueDocs.length,
-	    blockerDescriptions: [],
+	    partyIntegrityCount: partyIntegrityErrors.length,
+	    enhancedDocumentLinkIntegrityCount: enhancedLinkIntegrityCount,
+	    blockerCount: issueDocs.length + partyIntegrityErrors.length + enhancedLinkIntegrityCount,
+	    blockerDescriptions: documentIntegrityFailures.map(function(doc) {
+	      return (doc.doc_name || doc.doc_type || doc.id || 'Document') + ': stored document ownership metadata is inconsistent';
+	    }).concat(partyIntegrityDescriptions, enhancedLinkDescriptions),
 	    pepIncompleteCount: pepIncomplete.length,
 	    requiredCount: required.length,
 	    uploadedCount: docs.length,
-    isIncomplete: missing.length > 0 || issueDocs.length > 0 || pepIncomplete.length > 0
+    isIncomplete: missing.length > 0 || issueDocs.length > 0 || partyIntegrityErrors.length > 0 || enhancedLinkIntegrityCount > 0 || pepIncomplete.length > 0
   };
 }
 
@@ -9308,6 +9569,8 @@ function renderDocumentReadinessBanner(summary) {
 	  var parts = [];
 	  if (summary.missingCount > 0) parts.push(summary.missingCount + ' missing required item(s)');
 	  if (summary.issueCount > 0) parts.push(summary.issueCount + ' uploaded document(s) not reliance-ready');
+	  if (summary.partyIntegrityCount > 0) parts.push(summary.partyIntegrityCount + ' authoritative party collection error(s)');
+	  if (summary.enhancedDocumentLinkIntegrityCount > 0) parts.push(summary.enhancedDocumentLinkIntegrityCount + ' invalid enhanced evidence link(s)');
 	  if (summary.blockerCount > summary.issueCount) parts.push(summary.blockerCount + ' document evidence blocker(s)');
 	  if (summary.pepIncompleteCount > 0) parts.push(summary.pepIncompleteCount + ' incomplete PEP declaration(s)');
 	  return '<div class="ah-alert-banner warning" style="margin-bottom:12px;"><span style="font-size:18px;">⚠️</span><div><strong>Incomplete / warning-state submission:</strong> ' + escapeHtml(parts.join(' · ')) + '. This case is reviewable but should not be treated as clean.</div></div>';
@@ -9519,10 +9782,13 @@ function findEnhancedRequirementForDocument(doc, requirements) {
 }
 
 function findDocumentOwnerLabelForApp(app, doc) {
-  if (!doc || !doc.person_id) return 'Application-level document';
-  var people = (app && app.directors || []).concat(app && app.ubos || []).concat(app && app.intermediaries || []);
-  var person = people.find(function(item) { return item.id === doc.person_id || item.person_key === doc.person_id; });
-  return person ? buildPartyDisplayName(person) : doc.person_id;
+  var identity = validateBackofficeDocumentIntegrity(app, doc);
+  if (!identity.valid) return 'Unresolved document owner — integrity mismatch';
+  if (!identity.person_id) return 'Application-level document';
+  var matches = backofficePartyIdentityMatches(app, identity.person_type, identity.person_id);
+  return matches.length === 1
+    ? buildPartyDisplayName(matches[0])
+    : 'Unresolved ' + identity.person_type + ' owner — ambiguous identity (' + identity.person_id + ')';
 }
 
 function kycDocumentGroupKey(doc, linkedRequirement) {
@@ -9558,6 +9824,7 @@ function kycDocumentNeedsAttention(doc) {
 
 function enhancedRequirementNeedsAttention(req) {
   if (!req) return false;
+  if (enhancedRequirementHasServerIntegrityFailure(req)) return true;
   var status = String(req.status || '').toLowerCase();
   if (['accepted', 'waived', 'completed'].indexOf(status) < 0) return true;
   var doc = enhancedRequirementLinkedDocument(req);
@@ -10503,6 +10770,10 @@ function enhancedRequirementBackOfficeGroup(req) {
 
 function renderIdentityEnhancedRequirementCard(req) {
   var doc = enhancedRequirementLinkedDocument(req);
+  var linkIntegrity = enhancedRequirementLinkIntegrityForDisplay(req);
+  var linkIntegrityHtml = linkIntegrity.valid
+    ? ''
+    : '<div class="enhanced-document-link-integrity-error" role="alert" style="margin-top:9px;padding:8px 10px;border:1px solid var(--red);border-radius:7px;background:var(--red-dim,#fff5f5);color:var(--red);font-size:11px;"><strong>Invalid evidence link:</strong> ' + escapeHtml(linkIntegrity.message || 'The required linked evidence is missing or inconsistent.') + ' Approval is blocked.</div>';
   var filename = doc ? (doc.doc_name || doc.id || 'Document') : 'No uploaded file yet';
   var verification = doc ? enhancedRequirementVerificationBadge(req) : enhancedRequirementDetailBadge('Verification pending upload', 'amber');
   return '<div style="border:1px solid var(--border1);border-radius:10px;padding:16px;margin-bottom:12px;background:var(--surface);">' +
@@ -10514,6 +10785,7 @@ function renderIdentityEnhancedRequirementCard(req) {
           '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Uploaded file: ' + escapeHtml(filename) + '</div>' +
           '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Linked enhanced requirement: ' + escapeHtml(req.requirement_key || req.id || '') + '</div>' +
           (req.subject_name ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Person: ' + escapeHtml(req.subject_name) + '</div>' : '') +
+          linkIntegrityHtml +
         '</div>' +
       '</div>' +
       '<div style="display:flex;gap:4px;align-items:center;flex-shrink:0;flex-wrap:wrap;">' +
@@ -10545,33 +10817,36 @@ function buildExpectedKycDocumentSlots(app) {
   ];
   (app.directors || []).forEach(function(person) {
     var owner = buildPartyDisplayName(person);
-    expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, person_type: 'director', owner: owner, taxonomy_section: 'person' });
-    expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, person_type: 'director', owner: owner, taxonomy_section: 'person' });
+    expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'director', owner: owner, taxonomy_section: 'person' });
+    expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'director', owner: owner, taxonomy_section: 'person' });
     if (highOrVeryHigh || partyIsPep(person)) {
-      expected.push({ doc_type: 'bankref', label: 'Bank Reference Letter', person_id: person.person_key || person.id, person_type: 'director', owner: owner, taxonomy_section: 'person' });
-      expected.push({ doc_type: 'source_wealth', label: 'Source of Wealth evidence', person_id: person.person_key || person.id, person_type: 'director', owner: owner, taxonomy_section: 'person' });
+      expected.push({ doc_type: 'bankref', label: 'Bank Reference Letter', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'director', owner: owner, taxonomy_section: 'person' });
+      expected.push({ doc_type: 'source_wealth', label: 'Source of Wealth evidence', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'director', owner: owner, taxonomy_section: 'person' });
     }
   });
   (app.ubos || []).forEach(function(person) {
     var owner = buildPartyDisplayName(person);
-    expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
-    expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
+    expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
+    expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
     if (highOrVeryHigh || partyIsPep(person)) {
-      expected.push({ doc_type: 'bankref', label: 'Bank Reference Letter', person_id: person.person_key || person.id, person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
-      expected.push({ doc_type: 'source_wealth', label: 'Source of Wealth evidence', person_id: person.person_key || person.id, person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
+      expected.push({ doc_type: 'bankref', label: 'Bank Reference Letter', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
+      expected.push({ doc_type: 'source_wealth', label: 'Source of Wealth evidence', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
     }
   });
   (app.intermediaries || []).forEach(function(person) {
     var owner = buildPartyDisplayName(person);
     ['cert_inc', 'reg_dir', 'reg_sh', 'cert_gs', 'fin_stmt'].forEach(function(docType) {
-      expected.push({ doc_type: docType, label: KYC_DOCUMENT_SLOT_LABELS[docType] || docType, person_id: person.person_key || person.id, person_type: 'intermediary', owner: owner, taxonomy_section: 'person' });
+      expected.push({ doc_type: docType, label: KYC_DOCUMENT_SLOT_LABELS[docType] || docType, person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'intermediary', owner: owner, taxonomy_section: 'person' });
     });
   });
   return expected;
 }
 
-function documentMatchesExpectedSlot(doc, expectedSlot) {
+function documentMatchesExpectedSlot(doc, expectedSlot, app) {
   if (!doc || !expectedSlot) return false;
+  var identity = validateBackofficeDocumentIntegrity(app, doc);
+  if (!identity.valid) return false;
+  if (identity.special_slot) return false;
   var docType = normalizePolicyDocTypeKey(doc.doc_type);
   var expectedType = normalizePolicyDocTypeKey(expectedSlot.doc_type);
   var typeMatches = docType === expectedType;
@@ -10580,7 +10855,14 @@ function documentMatchesExpectedSlot(doc, expectedSlot) {
   }
   if (!typeMatches) return false;
   if (expectedSlot.person_id == null) return !doc.person_id;
-  return String(doc.person_id || '') === String(expectedSlot.person_id);
+  if (expectedSlot.person_type &&
+      String(doc.person_type || '').toLowerCase() !== String(expectedSlot.person_type).toLowerCase()) {
+    return false;
+  }
+  var expectedPersonIds = [expectedSlot.person_id, expectedSlot.legacy_person_key]
+    .filter(function(value) { return value !== undefined && value !== null && String(value).trim(); })
+    .map(function(value) { return String(value); });
+  return expectedPersonIds.indexOf(String(doc.person_id || '')) >= 0;
 }
 
 function renderMissingKycDocumentRow(app, expectedSlot) {
@@ -10661,6 +10943,15 @@ function renderStandardKycDocumentTaxonomy(app) {
   var options = arguments[1] || {};
   var includeIdv = options.includeIdv !== false;
   var docs = (app && Array.isArray(app._documents)) ? app._documents : [];
+  var documentIntegrityFailures = docs.map(function(doc) {
+    return { doc: doc, integrity: validateBackofficeDocumentIntegrity(app, doc) };
+  }).filter(function(entry) {
+    return !entry.integrity.valid;
+  });
+  docs = docs.filter(function(doc) {
+    var identity = validateBackofficeDocumentIntegrity(app, doc);
+    return identity.valid && !identity.special_slot;
+  });
   var requirements = Array.isArray(APPLICATION_ENHANCED_REQUIREMENTS) ? APPLICATION_ENHANCED_REQUIREMENTS : [];
   var expectedSlots = buildExpectedKycDocumentSlots(app || {});
   var usedDocIds = {};
@@ -10672,7 +10963,7 @@ function renderStandardKycDocumentTaxonomy(app) {
   expectedSlots.forEach(function(expectedSlot) {
     var doc = docs.find(function(candidate) {
       if (usedDocIds[candidate.id || candidate.document_id || candidate.doc_name]) return false;
-      return documentMatchesExpectedSlot(candidate, expectedSlot);
+      return documentMatchesExpectedSlot(candidate, expectedSlot, app);
     });
     var sectionKey = kycExpectedSlotSection(expectedSlot);
     var targetGroups = sections[sectionKey] || sections.other;
@@ -10725,7 +11016,13 @@ function renderStandardKycDocumentTaxonomy(app) {
     '',
     documentReviewGroupsNeedAttention(sections.other)
   );
-  return renderPilotEvidenceSummaryBanner(app) + html;
+  return renderPilotEvidenceSummaryBanner(app) +
+    renderBackofficePartyIntegrityBanner(backofficePartyIntegrityErrorsForApplication(app)) +
+    renderEnhancedRequirementDocumentIntegrityBanner(
+      enhancedRequirementDocumentIntegrityErrors(APPLICATION_ENHANCED_REQUIREMENTS)
+    ) +
+    renderBackofficeDocumentIntegrityBanner(documentIntegrityFailures) +
+    html;
 }
 
 function buildEnhancedRequirementsPanelSummary(summary, requirements) {
@@ -11000,6 +11297,7 @@ async function fetchApplicationDetail(ref) {
     return {
       id: doc.id,
       person_id: doc.person_id || '',
+      person_type: doc.person_type || '',
       doc_type: doc.doc_type || '',
       doc_name: doc.doc_name || '',
       file_size: doc.file_size,
@@ -11032,10 +11330,11 @@ async function fetchApplicationDetail(ref) {
       verification_method: doc.verification_method || '',
       manual_acceptance: doc.manual_acceptance || null
 	    };
-	  }
+  }
   var documents = (detail.documents || []).map(normalizeApplicationDocument);
   var documentHistory = (detail.document_history || []).map(normalizeApplicationDocument);
-  var rawDirectors = (detail.directors && detail.directors.length) ? detail.directors : buildPrescreeningPartyFallback(psData.directors || [], 'director');
+  var partyIntegrityErrors = backofficeCanonicalPartyCollectionIntegrityErrors(detail);
+  var rawDirectors = Array.isArray(detail.directors) ? detail.directors : [];
   var directors = rawDirectors.map(function(d) {
     return {
       id: d.id || '',
@@ -11048,6 +11347,7 @@ async function fetchApplicationDetail(ref) {
       country_of_residence: d.country_of_residence || '',
       residential_address: d.residential_address || '',
       date_of_appointment: d.date_of_appointment || '',
+      professional_profile_url: d.professional_profile_url || '',
       pep: d.pep_status_display || d.pep || normalizePepDisplay(d.is_pep),
       pep_declaration: d.pep_declaration || {},
       declared_pep: d.declared_pep,
@@ -11073,7 +11373,7 @@ async function fetchApplicationDetail(ref) {
       imported_by: d.imported_by || ''
     };
   });
-  var rawUbos = (detail.ubos && detail.ubos.length) ? detail.ubos : buildPrescreeningPartyFallback(psData.ubos || [], 'ubo');
+  var rawUbos = Array.isArray(detail.ubos) ? detail.ubos : [];
   var ubos = rawUbos.map(function(u) {
     return {
       id: u.id || '',
@@ -11086,6 +11386,7 @@ async function fetchApplicationDetail(ref) {
       country_of_residence: u.country_of_residence || '',
       residential_address: u.residential_address || '',
       pct: u.ownership_pct == null || u.ownership_pct === '' ? (u.pct || '') : u.ownership_pct,
+      professional_profile_url: u.professional_profile_url || '',
       pep: u.pep_status_display || u.pep || normalizePepDisplay(u.is_pep),
       pep_declaration: u.pep_declaration || {},
       declared_pep: u.declared_pep,
@@ -11112,7 +11413,8 @@ async function fetchApplicationDetail(ref) {
       imported_by: u.imported_by || ''
     };
   });
-  var intermediaries = (detail.intermediaries || []).map(function(i) {
+  var rawIntermediaries = Array.isArray(detail.intermediaries) ? detail.intermediaries : [];
+  var intermediaries = rawIntermediaries.map(function(i) {
     return {
       id: i.id || '',
       person_key: i.person_key || '',
@@ -11124,6 +11426,7 @@ async function fetchApplicationDetail(ref) {
       registered_address: i.registered_address || '',
       owned_or_controlled_by: i.owned_or_controlled_by || '',
       pct: i.ownership_pct == null || i.ownership_pct === '' ? '' : i.ownership_pct,
+      professional_profile_url: i.professional_profile_url || '',
       source: i.source || '',
       source_metadata_json: i.source_metadata_json || '',
       source_metadata: i.source_metadata || null,
@@ -11179,6 +11482,7 @@ async function fetchApplicationDetail(ref) {
     directors: directors,
     ubos: ubos,
     intermediaries: intermediaries,
+    _partyIntegrityErrors: partyIntegrityErrors,
     pepCount: (function() {
       return directors.filter(personHasDeclaredOrVerifiedPep).length + ubos.filter(personHasDeclaredOrVerifiedPep).length;
     })(),
@@ -11546,6 +11850,9 @@ function renderPartyCard(party, partyType, app) {
     renderPartyFact('Date of Birth', partyType === 'intermediary' ? 'N/A' : party.dob, partyType === 'intermediary' ? 'N/A' : 'Missing', partyType === 'intermediary' ? '' : renderPartyRegistryFieldBadge(party, partyType, 'date_of_birth')) +
     renderPartyFact('Ownership', ownershipDisplay, partyType === 'director' ? 'N/A' : 'Missing', ownershipBadge) +
     renderPartyFact('PEP', partyClientDeclaredPepDisplay(party), 'Not captured');
+  if (partyType !== 'intermediary') {
+    facts += renderPartyFact('Professional Profile', party.professional_profile_url, 'Not captured');
+  }
   if (partyType === 'director') {
     facts += renderPartyFact('Country of Residence', party.country_of_residence, 'Missing', renderPartyRegistryFieldBadge(party, partyType, 'country_of_residence')) +
       renderPartyFact('Residential Address', party.residential_address, 'Missing') +
@@ -12294,6 +12601,17 @@ function enhancedRequirementDetailBadge(text, tone) {
 function enhancedRequirementStatusBadge(status, req) {
   var normalized = String(status || 'generated').toLowerCase();
   var displayType = enhancedRequirementPresentationType(req);
+  if (displayType === 'evidence' && enhancedRequirementHasServerIntegrityFailure(req)) {
+    var integrityReason = String(
+      (req.linked_document_integrity && req.linked_document_integrity.reason) || ''
+    );
+    return enhancedRequirementDetailBadge(
+      integrityReason === 'linked_document_missing'
+        ? 'Accepted — evidence missing'
+        : 'Invalid evidence link',
+      'red'
+    );
+  }
   if (req && req.status_display_label) {
     var displayTone = req.status_display_tone === 'green' ? 'green'
       : req.status_display_tone === 'red' ? 'red'
@@ -12430,6 +12748,143 @@ function enhancedRequirementLinkedDocument(req) {
   return docs.find(function(item) { return String(item.id) === String(docId); }) || null;
 }
 
+function enhancedRequirementIsMonitoringRefresh(req) {
+  req = req || {};
+  return String(req.generation_source || '').trim() === 'monitoring_document_expiry_refresh' ||
+    !!(req.monitoring_alert_id || req.monitoring_document_id);
+}
+
+function enhancedRequirementDocumentLinkIntegrity(req, doc) {
+  req = req || {};
+  if (req.linked_document_integrity &&
+      (req.linked_document_integrity.valid === false ||
+       req.linked_document_integrity_valid === false ||
+       req._server_document_integrity_invalid === true)) {
+    return req.linked_document_integrity;
+  }
+  if (req.linked_document_integrity && doc &&
+      String((req.linked_document_id || '')) === String((doc.id || ''))) {
+    return req.linked_document_integrity;
+  }
+  var expectedType = String(
+    req.canonical_doc_type ||
+    (req.document_policy && req.document_policy.document_type) ||
+    ''
+  ).trim().toLowerCase();
+  var expectedSlot = 'enhanced_requirement:' + String(req.id || '').trim();
+  if (!doc) {
+    return { valid: false, reason: 'linked_document_unavailable', message: 'Linked enhanced evidence is missing from this application.' };
+  }
+  if (enhancedRequirementIsMonitoringRefresh(req)) {
+    return { valid: false, reason: 'monitoring_link_requires_server_validation', message: 'Monitoring replacement evidence must be uploaded through its controlled replacement flow.' };
+  }
+  var currentValue = doc.is_current;
+  var isCurrent = currentValue == null ||
+    !(currentValue === false || currentValue === 0 || String(currentValue).toLowerCase() === 'false');
+  if (!isCurrent) {
+    return { valid: false, reason: 'document_not_current', message: 'Linked enhanced evidence is superseded.' };
+  }
+  if (!expectedType || String(doc.doc_type || '').trim().toLowerCase() !== expectedType) {
+    return { valid: false, reason: 'document_type_mismatch', message: 'Linked document type does not match the enhanced requirement policy.' };
+  }
+  if (String(doc.slot_key || '').trim() !== expectedSlot) {
+    return { valid: false, reason: 'document_slot_mismatch', message: 'Base KYC documents cannot be reused as enhanced evidence; the exact enhanced evidence slot is required.' };
+  }
+  if (String(doc.person_id || '').trim() || String(doc.person_type || '').trim()) {
+    return { valid: false, reason: 'document_owner_mismatch', message: 'Enhanced evidence slot contains unexpected party ownership metadata.' };
+  }
+  return { valid: true, reason: '', message: '' };
+}
+
+function enhancedRequirementHasServerIntegrityFailure(req) {
+  return !!(req && (
+    req._server_document_integrity_invalid === true ||
+    req.linked_document_integrity_valid === false
+  ));
+}
+
+function enhancedRequirementLinkIntegrityForDisplay(req) {
+  if (!req || enhancedRequirementPresentationType(req) !== 'evidence') {
+    return { valid: true, reason: '', message: '' };
+  }
+  if (!req.linked_document_id && !enhancedRequirementHasServerIntegrityFailure(req)) {
+    return { valid: true, reason: '', message: '' };
+  }
+  return enhancedRequirementDocumentLinkIntegrity(
+    req,
+    enhancedRequirementLinkedDocument(req)
+  );
+}
+
+function applyEnhancedRequirementServerDocumentIntegrity(requirements, summary) {
+  requirements = Array.isArray(requirements) ? requirements : [];
+  var invalidById = {};
+  ((summary && summary.invalid_document_links) || []).forEach(function(entry) {
+    var requirementId = String((entry && entry.id) || '').trim();
+    if (requirementId) invalidById[requirementId] = entry;
+  });
+  return requirements.map(function(req) {
+    var item = Object.assign({}, req || {});
+    var invalid = invalidById[String(item.id || '').trim()];
+    if (!invalid) {
+      item._server_document_integrity_invalid = false;
+      return item;
+    }
+    var integrity = invalid.document_integrity || {
+      valid: false,
+      reason: 'enhanced_document_link_invalid',
+      message: invalid.action_needed || 'Enhanced requirement evidence association is invalid.'
+    };
+    item._server_document_integrity_invalid = true;
+    item.linked_document_integrity_valid = false;
+    item.linked_document_integrity = Object.assign(
+      { valid: false },
+      integrity,
+      { valid: false }
+    );
+    item.linked_document_integrity_error =
+      item.linked_document_integrity.message ||
+      invalid.action_needed ||
+      'Enhanced requirement evidence association is invalid.';
+    return item;
+  });
+}
+
+function enhancedRequirementDocumentEligibleForLink(req, doc) {
+  if (!doc || !doc.id) return false;
+  if (enhancedRequirementIsMonitoringRefresh(req)) {
+    return String((req && req.linked_document_id) || '') === String(doc.id) &&
+      !!(req.linked_document_integrity && req.linked_document_integrity.valid);
+  }
+  return enhancedRequirementDocumentLinkIntegrity(req, doc).valid === true;
+}
+
+function enhancedRequirementDocumentIntegrityErrors(requirements) {
+  return (Array.isArray(requirements) ? requirements : []).filter(function(req) {
+    if (!req || enhancedRequirementPresentationType(req) !== 'evidence') return false;
+    if (!req.linked_document_id && !enhancedRequirementHasServerIntegrityFailure(req)) return false;
+    return enhancedRequirementLinkIntegrityForDisplay(req).valid !== true;
+  }).map(function(req) {
+    return {
+      requirement: req,
+      integrity: enhancedRequirementLinkIntegrityForDisplay(req)
+    };
+  });
+}
+
+function renderEnhancedRequirementDocumentIntegrityBanner(errors) {
+  errors = Array.isArray(errors) ? errors : [];
+  if (!errors.length) return '';
+  var labels = errors.slice(0, 4).map(function(entry) {
+    var req = (entry && entry.requirement) || {};
+    return String(req.requirement_label || req.requirement_key || req.id || 'Enhanced requirement');
+  });
+  var extraCount = Math.max(0, errors.length - labels.length);
+  return '<div id="backoffice-enhanced-document-link-integrity-error" role="alert" style="margin-bottom:14px;padding:12px 14px;border:1px solid var(--red);border-radius:10px;background:var(--red-dim,#fff5f5);color:var(--red);font-size:12px;line-height:1.5;">' +
+    '<strong>Enhanced evidence link integrity check failed.</strong> Review readiness and approval are blocked. Base KYC identity/entity documents are not accepted as enhanced evidence. Affected: ' +
+    escapeHtml(labels.join(', ') + (extraCount ? ' and ' + extraCount + ' more' : '')) + '.</div>';
+}
+
 function enhancedRequirementVerificationBadge(req) {
   if (enhancedRequirementPresentationType(req) !== 'evidence') return '';
   var doc = enhancedRequirementLinkedDocument(req);
@@ -12537,7 +12992,7 @@ function enhancedRequirementDocumentOptions(req) {
   var options = '<option value="">No document link change</option>';
   docs.forEach(function(doc) {
     var value = String(doc.id || '');
-    if (!value) return;
+    if (!value || !enhancedRequirementDocumentEligibleForLink(req, doc)) return;
     options += '<option value="' + escapeHtml(value) + '"' + (value === selected ? ' selected' : '') + '>' +
       escapeHtml(enhancedRequirementDocumentLabel(doc)) +
     '</option>';
@@ -12636,6 +13091,7 @@ function buildEnhancedOperationalSummaryFallback(requirements) {
     rejected_count: 0,
     accepted_count: 0,
     waived_count: 0,
+    document_integrity_error_count: 0,
     approval_blocked: false,
     next_action: requirements.length ? 'Enhanced review resolved' : 'No enhanced review required',
     next_action_code: requirements.length ? 'resolved' : 'none',
@@ -12650,6 +13106,11 @@ function buildEnhancedOperationalSummaryFallback(requirements) {
     var audience = String(req.audience || '').toLowerCase();
     var blocking = !!req.mandatory || !!req.blocking_approval;
     var clientFacing = ['client','both'].indexOf(audience) >= 0;
+    if (enhancedRequirementPresentationType(req) === 'evidence' &&
+        enhancedRequirementLinkIntegrityForDisplay(req).valid !== true) {
+      summary.document_integrity_error_count++;
+      summary.approval_blocked = true;
+    }
     if (['generated','requested','uploaded','under_review','rejected'].indexOf(status) >= 0) {
       summary.unresolved_count++;
       if (req.mandatory) summary.mandatory_unresolved_count++;
@@ -12670,7 +13131,10 @@ function buildEnhancedOperationalSummaryFallback(requirements) {
     var label = req.trigger_label || req.trigger_key || '';
     if (label && summary.trigger_labels.indexOf(label) < 0) summary.trigger_labels.push(label);
   });
-  if (rejectedClient) {
+  if (summary.document_integrity_error_count) {
+    summary.next_action = 'Repair invalid enhanced-evidence document links';
+    summary.next_action_code = 'repair_document_links';
+  } else if (rejectedClient) {
     summary.next_action = 'Request updated information from client';
     summary.next_action_code = 'request_updated_info';
   } else if (summary.pending_client_count) {
@@ -12704,6 +13168,7 @@ function renderEnhancedReviewOperationalSummary(summary, requirements) {
     enhancedRequirementDetailBadge('Evidence: ' + Number(typeCounts.evidence || 0), ''),
     enhancedRequirementDetailBadge('Portal disclosures: ' + Number(typeCounts.portal_disclosure || 0), 'purple'),
     enhancedRequirementDetailBadge('Internal controls: ' + Number(typeCounts.internal_control || 0), 'amber'),
+    enhancedRequirementDetailBadge('Invalid evidence links: ' + Number(summary.document_integrity_error_count || 0), summary.document_integrity_error_count ? 'red' : ''),
     enhancedRequirementDetailBadge('Approval blocked: ' + blockedText, blockedTone)
   ].join('');
   var summaryLine = 'Enhanced Review Requirements · ' +
@@ -12736,11 +13201,12 @@ function renderApplicationEnhancedRequirementActions(req) {
   var displayType = enhancedRequirementPresentationType(req);
   var linkedLabel = displayType === 'evidence' ? enhancedRequirementLinkedDocumentLabel(req) : '';
   var linkedDoc = enhancedRequirementLinkedDocument(req);
+  var linkedIntegrity = enhancedRequirementLinkIntegrityForDisplay(req);
   var linkedDocWorkflowAccepted = linkedDoc && linkedDoc.workflow_test_acceptance && linkedDoc.workflow_test_acceptance.accepted === true;
   var workflowAcceptHtml = '';
   if (linkedDocWorkflowAccepted) {
     workflowAcceptHtml = '<div style="margin-top:6px;padding:7px 8px;border:1px solid #d9770644;border-radius:7px;background:#d9770612;color:#92400e;font-size:10px;line-height:1.35;">Workflow-only synthetic evidence accepted. Verification truth is unchanged; this cannot count as approval proof.</div>';
-  } else if (canAcceptWorkflowTestEvidence() && linkedDoc && linkedDoc.evidence_class === 'test_only_synthetic') {
+  } else if (canAcceptWorkflowTestEvidence() && linkedIntegrity.valid && linkedDoc && linkedDoc.evidence_class === 'test_only_synthetic') {
     workflowAcceptHtml = '<button class="btn btn-outline btn-sm" onclick="saveWorkflowTestEvidenceAcceptance(\'' + escapeHtml(String(linkedDoc.id)) + '\', \'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;margin-top:6px;">Accept linked synthetic evidence for workflow only</button>';
   }
   if (!canUpdateApplicationEnhancedRequirements()) {
@@ -12851,6 +13317,10 @@ function renderEnhancedEvidenceDocumentsGroupHtml(requirements) {
   }
   var rows = evidence.map(function(req, idx) {
     var doc = enhancedRequirementLinkedDocument(req);
+    var linkIntegrity = enhancedRequirementLinkIntegrityForDisplay(req);
+    var linkIntegrityHtml = linkIntegrity.valid
+      ? ''
+      : '<div class="enhanced-document-link-integrity-error" role="alert" style="margin-top:9px;padding:8px 10px;border:1px solid var(--red);border-radius:7px;background:var(--red-dim,#fff5f5);color:var(--red);font-size:11px;"><strong>Invalid evidence link:</strong> ' + escapeHtml(linkIntegrity.message || 'The linked document does not match this enhanced evidence slot.') + ' Approval is blocked.</div>';
     var filename = doc ? (doc.doc_name || doc.id || 'Document') : 'No uploaded file yet';
     var reviewStatus = doc ? normalizeDetailValue(doc.review_status || 'pending') : 'pending';
     var verification = doc ? enhancedRequirementVerificationBadge(req) : enhancedRequirementDetailBadge('Verification pending upload', 'amber');
@@ -12862,6 +13332,7 @@ function renderEnhancedEvidenceDocumentsGroupHtml(requirements) {
           '<div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(req.requirement_label || req.requirement_key || 'Enhanced evidence document') + '</div>' +
           '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Uploaded file: ' + escapeHtml(filename) + '</div>' +
           '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Linked enhanced requirement: ' + escapeHtml(req.requirement_key || req.id || '') + (req.linked_document_id ? ' · Document ID: ' + escapeHtml(req.linked_document_id) : '') + '</div>' +
+          linkIntegrityHtml +
           '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px;">' + enhancedRequirementTypeBadge(req) + enhancedRequirementStatusBadge(req.status, req) + enhancedRequirementBoolBadge(req.blocking_approval, 'Blocking', 'Non-blocking') + enhancedRequirementBoolBadge(req.mandatory, 'Mandatory', 'Optional') + '</div>' +
         '</div>' +
         '<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">' +
@@ -12992,8 +13463,14 @@ function renderApplicationEnhancedRequirements(requirements, generationResult, o
   if (refreshBtn) refreshBtn.style.display = canManageEnhancedRequirements() ? '' : 'none';
 
   requirements = Array.isArray(requirements) ? requirements : [];
+  operationalSummary = operationalSummary ||
+    (currentApp && currentApp.enhancedReviewSummary) ||
+    buildEnhancedOperationalSummaryFallback(requirements);
+  requirements = applyEnhancedRequirementServerDocumentIntegrity(
+    requirements,
+    operationalSummary
+  );
   APPLICATION_ENHANCED_REQUIREMENTS = requirements;
-  operationalSummary = operationalSummary || (currentApp && currentApp.enhancedReviewSummary) || buildEnhancedOperationalSummaryFallback(requirements);
   if (currentApp) currentApp.enhancedReviewSummary = operationalSummary;
   renderEnhancedReviewOperationalSummary(operationalSummary, requirements);
   renderUnifiedEnhancedRequirementTaxonomy(requirements);

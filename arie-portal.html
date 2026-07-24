@@ -3556,6 +3556,8 @@
               <strong>Important Notice:</strong> The pricing above is based on the information provided in your application. Onboarda reserves the right to revise the applicable pricing if the information changes or if additional information is required before approval. Final pricing will be confirmed in your service agreement following full account approval.
             </div>
 
+            <div id="pricing-party-integrity-error" role="alert" aria-live="assertive" style="display:none;margin-top:16px;padding:12px 14px;border:1px solid #dc2626;border-left:4px solid #dc2626;border-radius:8px;background:#fef2f2;color:#991b1b;font-size:12px;line-height:1.5;"></div>
+
             <div class="consent-section" style="margin-top:16px;">
               <div class="consent-section-title">📋 Terms & Conditions</div>
               <div class="consent-check">
@@ -3598,6 +3600,15 @@
           <div class="progress-fill" id="progress-bar" style="width:0%"></div>
         </div>
         <p class="text-sm mt-2" style="color:var(--text3);">Upload all required documents. Your documents will be reviewed by our team.</p>
+      </div>
+
+      <div id="portal-document-hydration-errors" role="alert" aria-live="assertive" style="display:none;margin-bottom:16px;padding:14px 16px;border:1px solid #dc2626;border-left:4px solid #dc2626;border-radius:8px;background:#fef2f2;color:#991b1b;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px;">Previously uploaded documents could not be matched safely</div>
+        <div id="portal-document-hydration-errors-detail" style="font-size:12px;line-height:1.5;"></div>
+      </div>
+      <div id="portal-party-hydration-errors" role="alert" aria-live="assertive" style="display:none;margin-bottom:16px;padding:14px 16px;border:1px solid #dc2626;border-left:4px solid #dc2626;border-radius:8px;background:#fef2f2;color:#991b1b;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px;">Ownership parties could not be loaded safely</div>
+        <div id="portal-party-hydration-errors-detail" style="font-size:12px;line-height:1.5;"></div>
       </div>
 
       <!-- Section A: Corporate Documents -->
@@ -3974,8 +3985,8 @@
           </div>
         </div>
 
-        <button type="button" class="btn-add" onclick="addKYCPerson()" style="width:100%;margin-bottom:4px;">
-          + Add Another Director / UBO
+        <button type="button" class="btn-add" id="btn-add-kyc-person" onclick="showToast('info','Ownership Update Required','Directors and UBOs must be saved in the ownership section before KYC documents can be attached.')" style="width:100%;margin-bottom:4px;">
+          Ownership parties are managed in the submitted application
         </button>
 
         <!-- AI checks handled in back office only -->
@@ -4967,6 +4978,7 @@ var PORTAL_STATUS_PROJECTIONS = {
     nextAction: 'Review and accept the pricing schedule to continue.',
     progressLabel: 'Pricing available',
     allowsDraftRestore: false,
+    hydrateParties: true,
     autosaveAllowed: false,
     prescreeningEditable: false,
     showSubmitInitialReview: false,
@@ -5488,6 +5500,10 @@ function legalConsentFromStoredFields(fields) {
 // ─── State ───────────────────────────────────────────────
 let appRef = '';
 let uploadedDocs = new Set();
+let portalDocumentHydrationErrors = [];
+let portalPartyHydrationErrors = [];
+let portalEnhancedRequirementIntegrityErrors = [];
+let pricingPartyIntegrityErrors = [];
 let currentRMIRequests = [];
 let currentEnhancedRequirements = [];
 let portalEnhancedRequirementBusy = {};
@@ -5833,6 +5849,7 @@ function resetPortalPricingState() {
   dimScores = {};
   serverPricing = null;
   serverScreening = null;
+  renderPricingPartyIntegrityError([]);
   currentRiskDisplayState = buildRiskDisplayState({ status: 'draft' });
   var pricingRiskLevel = document.getElementById('pricing-risk-level');
   if (pricingRiskLevel) pricingRiskLevel.textContent = 'Status pending';
@@ -5868,6 +5885,7 @@ function resetPortalApplicationState() {
   _autoSaveInFlight = false;
   resetPortalPricingState();
   resetPortalDocumentState();
+  renderPortalPartyHydrationErrors([]);
   var form = document.getElementById('prescreening-form');
   if (form) form.reset();
   ['pricing-tc-accept', 'kyc-final-declaration'].forEach(function(id) {
@@ -6992,6 +7010,185 @@ function getOrAssignOwnershipPersonKey(row, prefix, selector) {
   return row.dataset.personKey;
 }
 
+function getOwnershipPartyIdentity(row, prefix, selector) {
+  var personKey = getOrAssignOwnershipPersonKey(row, prefix, selector);
+  var partyId = String((row.dataset && row.dataset.partyId) || '').trim();
+  return {
+    id: partyId || personKey,
+    partyId: partyId,
+    personKey: personKey
+  };
+}
+
+function canonicalPartyCollectionIntegrityErrors(app) {
+  var errors = [];
+  var collections = [
+    { key: 'directors', type: 'director', required: true },
+    { key: 'ubos', type: 'ubo', required: true },
+    { key: 'intermediaries', type: 'intermediary', required: false }
+  ];
+  collections.forEach(function(collection) {
+    if (!Array.isArray(app && app[collection.key])) {
+      errors.push({
+        person_type: collection.type,
+        reason: 'canonical_party_collection_missing'
+      });
+      return;
+    }
+    if (collection.required && app[collection.key].length === 0) {
+      errors.push({
+        person_type: collection.type,
+        reason: 'required_canonical_party_collection_empty'
+      });
+    }
+  });
+  var canonicalIdOwners = {};
+  var crossTypeCollisionIds = {};
+  collections.forEach(function(collection) {
+    ((app && app[collection.key]) || []).forEach(function(record) {
+      var recordId = String((record && record.id) || '').trim();
+      if (!recordId) return;
+      if (canonicalIdOwners[recordId] &&
+          canonicalIdOwners[recordId] !== collection.type) {
+        crossTypeCollisionIds[recordId] = true;
+      } else {
+        canonicalIdOwners[recordId] = collection.type;
+      }
+    });
+  });
+  Object.keys(crossTypeCollisionIds).forEach(function(recordId) {
+    var involvedTypes = collections.filter(function(collection) {
+      return ((app && app[collection.key]) || []).some(function(record) {
+        return String((record && record.id) || '').trim() === recordId;
+      });
+    }).map(function(collection) {
+      return collection.type;
+    });
+    errors.push({
+      person_type: 'cross_type',
+      party_id: recordId,
+      involved_person_types: involvedTypes,
+      reason: 'canonical_party_id_cross_type_collision'
+    });
+  });
+  return errors;
+}
+
+function bindCanonicalPartyRecordsToRows(app) {
+  var errors = [];
+  [
+    { type: 'director', selector: '#directors-body tr', fields: ['first_name', 'last_name', 'nationality', 'date_of_birth'], records: (app && app.directors) || [] },
+    { type: 'ubo', selector: '#ubos-body tr', fields: ['first_name', 'last_name', 'nationality', 'date_of_birth', 'ownership_pct'], records: (app && app.ubos) || [] },
+    { type: 'intermediary', selector: '#intermediaries-body tr', fields: ['entity_name', 'registration_number', 'ownership_pct'], records: (app && app.intermediaries) || [] }
+  ].forEach(function(group) {
+    var records = Array.isArray(group.records) ? group.records : [];
+    var matchedIds = {};
+    var authoritativeIdentityTokens = {};
+    var authoritativeIdentityCollision = false;
+    records.forEach(function(record, recordIndex) {
+      [
+        String((record && record.id) || '').trim(),
+        String((record && record.person_key) || '').trim()
+      ].filter(Boolean).forEach(function(identityToken) {
+        if (authoritativeIdentityTokens[identityToken] !== undefined &&
+            authoritativeIdentityTokens[identityToken] !== recordIndex) {
+          authoritativeIdentityCollision = true;
+        } else {
+          authoritativeIdentityTokens[identityToken] = recordIndex;
+        }
+      });
+    });
+    if (authoritativeIdentityCollision) {
+      errors.push({
+        person_type: group.type,
+        reason: 'authoritative_party_identity_namespace_collision'
+      });
+      return;
+    }
+    document.querySelectorAll(group.selector).forEach(function(row) {
+      var existingPartyId = String((row.dataset && row.dataset.partyId) || '').trim();
+      var personKey = String((row.dataset && row.dataset.personKey) || '').trim();
+      if (!existingPartyId && !partyRowHasAnyValue(row, group.fields)) return;
+      var idMatches = existingPartyId ? records.filter(function(record) {
+        return String((record && record.id) || '').trim() === existingPartyId;
+      }) : [];
+      var keyMatches = personKey ? records.filter(function(record) {
+        return String((record && record.person_key) || '').trim() === personKey;
+      }) : [];
+      var identityConflict = idMatches.length > 1 || keyMatches.length > 1 ||
+        (existingPartyId && idMatches.length !== 1) ||
+        (personKey && keyMatches.length !== 1) ||
+        (idMatches.length === 1 && keyMatches.length === 1 &&
+          String(idMatches[0].id) !== String(keyMatches[0].id));
+      if (identityConflict) {
+        errors.push({
+          person_type: group.type,
+          person_key: personKey,
+          party_id: existingPartyId,
+          reason: 'conflicting_or_ambiguous_party_identity'
+        });
+        return;
+      }
+      var match = idMatches[0] || keyMatches[0];
+      if (!existingPartyId && keyMatches.length !== 1) {
+        match = null;
+      }
+      if (!match || !isValidPortalPathId(match.id)) {
+        errors.push({ person_type: group.type, person_key: personKey, reason: 'canonical_party_unavailable' });
+        return;
+      }
+      if (matchedIds[String(match.id)]) {
+        errors.push({
+          person_type: group.type,
+          person_key: personKey,
+          party_id: String(match.id),
+          reason: 'duplicate_canonical_party_binding'
+        });
+        return;
+      }
+      row.dataset.partyId = String(match.id);
+      row.dataset.professionalProfileUrl = String(match.professional_profile_url || '');
+      matchedIds[String(match.id)] = true;
+    });
+    records.forEach(function(record) {
+      var recordId = String((record && record.id) || '').trim();
+      if (recordId && !matchedIds[recordId]) {
+        errors.push({
+          person_type: group.type,
+          person_key: String((record && record.person_key) || ''),
+          party_id: recordId,
+          reason: 'canonical_party_not_rendered'
+        });
+      }
+    });
+  });
+  if (!errors.length) syncDirectorsUBOsToKYC();
+  return errors;
+}
+
+function renderPricingPartyIntegrityError(errors) {
+  var normalizedErrors = Array.isArray(errors) ? errors : [];
+  pricingPartyIntegrityErrors = normalizedErrors.slice();
+  var banner = document.getElementById('pricing-party-integrity-error');
+  if (banner) {
+    banner.style.display = normalizedErrors.length ? 'block' : 'none';
+    banner.textContent = normalizedErrors.length
+      ? 'Pricing acceptance is blocked because one or more ownership parties could not be linked to stable server records. Refresh the application or contact support.'
+      : '';
+  }
+  updatePricingAcceptanceAvailability();
+}
+
+function updatePricingAcceptanceAvailability() {
+  var acceptButton = document.getElementById('btn-accept-pricing');
+  if (!acceptButton) return;
+  var terms = document.getElementById('pricing-tc-accept');
+  var enabled = !!serverPricing && !!(terms && terms.checked) && pricingPartyIntegrityErrors.length === 0;
+  acceptButton.disabled = !enabled;
+  acceptButton.style.opacity = enabled ? '1' : '0.5';
+  acceptButton.style.cursor = enabled ? 'pointer' : 'not-allowed';
+}
+
 function partyRowField(row, field) {
   return row ? row.querySelector('[data-field="' + field + '"]') : null;
 }
@@ -7235,10 +7432,93 @@ function buildUploadPanelHTML(p) {
       '</div>' +
       '<div>' +
         '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128196; CV / LinkedIn Profile</label>' +
-        '<input type="url" id="kyc-linkedin-' + p.id + '" placeholder="LinkedIn profile URL or public professional profile" style="width:100%;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />' +
+        '<input type="url" id="kyc-linkedin-' + p.id + '" value="' + escapeHtml(p.professionalProfileUrl || '') + '" data-last-saved-value="' + escapeHtml(p.professionalProfileUrl || '') + '" placeholder="LinkedIn profile URL or public professional profile" onchange="saveKYCProfessionalProfile(\'' + p.id + '\',\'' + p.type + '\',this)" style="width:100%;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />' +
         '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Required profile detail. No document upload is expected.</div>' +
       '</div>' +
     '</div>';
+  }
+}
+
+function updateOwnershipRowProfessionalProfile(card, value) {
+  if (!card) return;
+  var partyId = String((card.dataset && card.dataset.partyId) || '').trim();
+  var personType = normalizePersonType(card.dataset && card.dataset.personType);
+  if (!isValidPortalPathId(partyId) || !personType) return;
+  var matchingRows = Array.prototype.slice.call(
+    document.querySelectorAll('#directors-body tr, #ubos-body tr, #intermediaries-body tr')
+  ).filter(function(row) {
+    var rowPartyId = String((row.dataset && row.dataset.partyId) || '').trim();
+    var parentId = String((row.parentElement && row.parentElement.id) || '');
+    var rowPersonType = parentId === 'directors-body'
+      ? 'director'
+      : parentId === 'ubos-body'
+        ? 'ubo'
+        : parentId === 'intermediaries-body'
+          ? 'intermediary'
+          : '';
+    return rowPartyId === partyId && rowPersonType === personType;
+  });
+  if (matchingRows.length === 1) matchingRows[0].dataset.professionalProfileUrl = value;
+}
+
+async function saveKYCProfessionalProfile(personId, personType, input) {
+  if (!input) return;
+  var card = document.getElementById('kyc-person-' + personId);
+  var stablePartyId = String((card && card.dataset && card.dataset.partyId) || '').trim();
+  var normalizedPersonType = normalizePersonType(
+    (card && card.dataset && card.dataset.personType) || personType
+  );
+  var value = String(input.value || '').trim();
+  var previousValue = String(input.dataset.lastSavedValue || '');
+
+  if (input.dataset.profileSaveInFlight === 'true') return;
+  if (value === previousValue) return;
+  if (value && typeof input.checkValidity === 'function' && !input.checkValidity()) {
+    input.value = previousValue;
+    showToast('error', 'Invalid Profile URL', 'Enter a complete public professional profile URL.');
+    return;
+  }
+  if (!AUTH_TOKEN || !currentApplicationId) {
+    input.value = previousValue;
+    showToast('error', 'Session Required', 'Please sign in again before saving this profile.');
+    return;
+  }
+  if (!isValidPortalPathId(stablePartyId) || !normalizedPersonType) {
+    input.value = previousValue;
+    showToast('error', 'Profile Not Saved', 'This party is not linked to a stable server record. Refresh the application before trying again.');
+    return;
+  }
+
+  input.dataset.profileSaveInFlight = 'true';
+  input.disabled = true;
+  input.setAttribute('aria-busy', 'true');
+  try {
+    var response = await apiCall(
+      'PATCH',
+      '/applications/' + encodeURIComponent(currentApplicationId) + '/kyc/parties/' + encodeURIComponent(stablePartyId) + '/profile',
+      {
+        person_type: normalizedPersonType,
+        professional_profile_url: value
+      }
+    );
+    var persistedValue = value;
+    if (response && response.professional_profile_url !== undefined) {
+      persistedValue = String(response.professional_profile_url || '');
+    } else if (response && response.party && response.party.professional_profile_url !== undefined) {
+      persistedValue = String(response.party.professional_profile_url || '');
+    }
+    input.value = persistedValue;
+    input.dataset.lastSavedValue = persistedValue;
+    card.dataset.professionalProfileUrl = persistedValue;
+    updateOwnershipRowProfessionalProfile(card, persistedValue);
+    showToast('success', 'Profile Saved', 'The professional profile has been saved to this party record.');
+  } catch (err) {
+    input.value = previousValue;
+    showToast('error', 'Profile Not Saved', err.message || 'Could not save this professional profile.');
+  } finally {
+    delete input.dataset.profileSaveInFlight;
+    input.disabled = false;
+    input.removeAttribute('aria-busy');
   }
 }
 
@@ -7304,23 +7584,39 @@ function syncDirectorsUBOsToKYC() {
   if (_suppressKYCSync) return;
   var container = document.getElementById('kyc-persons-list');
   if (!container) return;
+  if (portalPartyHydrationBlocked()) {
+    clearSyncedCanonicalKYCCards();
+    return;
+  }
 
   // Collect current persons from directors table
   var persons = [];
   var dirRows = document.querySelectorAll('#directors-body tr');
   dirRows.forEach(function(row) {
-    var personKey = getOrAssignOwnershipPersonKey(row, 'dir', '#directors-body tr');
+    var identity = getOwnershipPartyIdentity(row, 'dir', '#directors-body tr');
+    if (!identity.partyId && !partyRowHasAnyValue(row, ['first_name', 'last_name', 'nationality', 'date_of_birth'])) return;
     var inputs = row.querySelectorAll('input[type="text"]');
     var first = inputs[0] ? inputs[0].value.trim() : '';
     var last = inputs[1] ? inputs[1].value.trim() : '';
     var pepSel = row.querySelector('.pep-select');
     var isPEP = pepSel ? pepSel.value === 'Yes' : false;
-    persons.push({ id: personKey, type: 'director', first: first, last: last, isPEP: isPEP, pct: '' });
+    persons.push({
+      id: identity.id,
+      partyId: identity.partyId,
+      personKey: identity.personKey,
+      type: 'director',
+      first: first,
+      last: last,
+      isPEP: isPEP,
+      pct: '',
+      professionalProfileUrl: String(row.dataset.professionalProfileUrl || '')
+    });
   });
 
   var uboRows = document.querySelectorAll('#ubos-body tr');
   uboRows.forEach(function(row) {
-    var personKey = getOrAssignOwnershipPersonKey(row, 'ubo', '#ubos-body tr');
+    var identity = getOwnershipPartyIdentity(row, 'ubo', '#ubos-body tr');
+    if (!identity.partyId && !partyRowHasAnyValue(row, ['first_name', 'last_name', 'nationality', 'date_of_birth', 'ownership_pct'])) return;
     var inputs = row.querySelectorAll('input[type="text"]');
     var first = inputs[0] ? inputs[0].value.trim() : '';
     var last = inputs[1] ? inputs[1].value.trim() : '';
@@ -7328,13 +7624,23 @@ function syncDirectorsUBOsToKYC() {
     var pct = pctInput ? pctInput.value : '';
     var pepSel = row.querySelector('.pep-select');
     var isPEP = pepSel ? pepSel.value === 'Yes' : false;
-    persons.push({ id: personKey, type: 'ubo', first: first, last: last, isPEP: isPEP, pct: pct });
+    persons.push({
+      id: identity.id,
+      partyId: identity.partyId,
+      personKey: identity.personKey,
+      type: 'ubo',
+      first: first,
+      last: last,
+      isPEP: isPEP,
+      pct: pct,
+      professionalProfileUrl: String(row.dataset.professionalProfileUrl || '')
+    });
   });
 
   // Collect intermediary shareholders
   var intRows = document.querySelectorAll('#intermediaries-body tr');
   intRows.forEach(function(row) {
-    var personKey = getOrAssignOwnershipPersonKey(row, 'int', '#intermediaries-body tr');
+    var identity = getOwnershipPartyIdentity(row, 'int', '#intermediaries-body tr');
     var nameInput = row.querySelector('input[type="text"]');
     var name = nameInput ? nameInput.value.trim() : '';
     var countrySelect = row.querySelector('.nat-select');
@@ -7342,7 +7648,17 @@ function syncDirectorsUBOsToKYC() {
     var pctInput = row.querySelector('input[type="number"]');
     var pct = pctInput ? pctInput.value : '';
     if (name) {
-      persons.push({ id: personKey, type: 'intermediary', first: name, last: '(' + (country || 'Country N/A') + ')', isPEP: false, pct: pct });
+      persons.push({
+        id: identity.id,
+        partyId: identity.partyId,
+        personKey: identity.personKey,
+        type: 'intermediary',
+        first: name,
+        last: '(' + (country || 'Country N/A') + ')',
+        isPEP: false,
+        pct: pct,
+        professionalProfileUrl: String(row.dataset.professionalProfileUrl || '')
+      });
     }
   });
 
@@ -7354,14 +7670,11 @@ function syncDirectorsUBOsToKYC() {
     }
   });
 
-  // Get the "Add Person" button (insert cards before it)
-  var addBtn = container.parentElement.querySelector('.btn-add[onclick*="addKYCPerson"]');
-
   // Generate KYC person cards for each director/UBO/Intermediary
-  persons.forEach(function(p) {
+  persons.forEach(function(p, personIndex) {
     var cardId = 'kyc-person-' + p.id;
     var fullName = [p.first, p.last].filter(Boolean).join(' ').trim();
-    var fallbackLabel = (p.type === 'director' ? 'Director' : p.type === 'intermediary' ? 'Intermediary Shareholder' : 'UBO') + ' ' + p.id.replace(/[a-z]+/, '');
+    var fallbackLabel = (p.type === 'director' ? 'Director' : p.type === 'intermediary' ? 'Intermediary Shareholder' : 'UBO') + ' ' + (personIndex + 1);
     var name = fullName || fallbackLabel;
     var typeLabel = p.type === 'ubo' ? 'UBO' : p.type === 'intermediary' ? 'Intermediary Shareholder' : 'Director';
     var dirActive = p.type === 'director' ? 'active' : '';
@@ -7369,10 +7682,15 @@ function syncDirectorsUBOsToKYC() {
     var intermediaryActive = p.type === 'intermediary' ? 'active' : '';
     var holdingVisible = (p.type === 'ubo' || p.type === 'intermediary') ? ' visible' : '';
     var holdingVal = p.pct || '';
+    var hasStablePartyId = isValidPortalPathId(p.partyId) && String(p.id) === String(p.partyId);
 
     var card = document.createElement('div');
     card.className = 'kyc-person-card';
     card.id = cardId;
+    card.dataset.partyId = p.partyId || '';
+    card.dataset.personKey = p.personKey || '';
+    card.dataset.personType = p.type;
+    card.dataset.professionalProfileUrl = p.professionalProfileUrl || '';
     card.innerHTML =
       '<div class="kyc-person-header">' +
         '<div>' +
@@ -7403,10 +7721,12 @@ function syncDirectorsUBOsToKYC() {
           '</div>'
       ) +
       '<div class="kyc-upload-panel active" id="kyc-upload-' + p.id + '">' +
-        buildUploadPanelHTML(p) +
+        (hasStablePartyId
+          ? buildUploadPanelHTML(p)
+          : '<div role="alert" style="padding:12px;border:1px solid #dc2626;border-radius:8px;background:#fef2f2;color:#991b1b;font-size:12px;">Uploads are unavailable because this party is not linked to a stable server record. Refresh the application before continuing.</div>') +
       '</div>' +
       (p.isPEP ? '<div class="pep-declaration-panel visible" id="pep-kyc-summary-' + p.id + '"><h4>&#9888;&#65039; Public Role Declaration Captured</h4><p style="font-size:12px;color:var(--text3);margin:0;">Structured public role details are captured in the initial review declaration section and will be reviewed by our team.</p></div>' : '') +
-      (p.type !== 'intermediary'
+      (p.type !== 'intermediary' && hasStablePartyId
         ? '<div class="kyc-link-panel" id="kyc-link-' + p.id + '">' +
             '<div class="kyc-link-form">' +
               '<div class="kyc-link-input-row">' +
@@ -8331,12 +8651,7 @@ function populatePricing(level) {
     }
     return;
   }
-  var pricingAcceptBtn = document.getElementById('btn-accept-pricing');
-  if (pricingAcceptBtn) {
-    pricingAcceptBtn.disabled = false;
-    pricingAcceptBtn.style.opacity = '';
-    pricingAcceptBtn.style.cursor = '';
-  }
+  updatePricingAcceptanceAvailability();
   var onboardingFee = Number(p.onboarding_fee || 0);
   var annualFee = Number(p.annual_monitoring_fee || 0);
   var currency = p.currency || 'USD';
@@ -8348,6 +8663,29 @@ function populatePricing(level) {
 async function acceptPricing() {
   if (!AUTH_TOKEN || !currentApplicationId) {
     showToast('error', 'Session Required', 'Please sign in again before accepting pricing.');
+    return;
+  }
+
+  try {
+    var canonicalApplication = await apiCall('GET', '/applications/' + encodeURIComponent(currentApplicationId));
+    var partyBindingErrors = canonicalPartyCollectionIntegrityErrors(canonicalApplication)
+      .concat(bindCanonicalPartyRecordsToRows(canonicalApplication));
+    renderPricingPartyIntegrityError(partyBindingErrors);
+    renderPortalPartyHydrationErrors(partyBindingErrors);
+    if (partyBindingErrors.length) {
+      showToast('error', 'Party Matching Required', 'Pricing acceptance is blocked until ownership parties can be linked to stable server records.');
+      return;
+    }
+  } catch (partyLoadError) {
+    // The action itself remains fail-closed, but a transient read failure must
+    // remain retryable instead of permanently disabling the pricing control.
+    renderPricingPartyIntegrityError([]);
+    var pricingIntegrityBanner = document.getElementById('pricing-party-integrity-error');
+    if (pricingIntegrityBanner) {
+      pricingIntegrityBanner.style.display = 'block';
+      pricingIntegrityBanner.textContent = 'Ownership parties could not be verified. No pricing acceptance was recorded; retry or refresh the application.';
+    }
+    showToast('error', 'Party Records Unavailable', partyLoadError.message || 'Could not verify the ownership parties before pricing acceptance.');
     return;
   }
 
@@ -8372,6 +8710,13 @@ async function acceptPricing() {
     approvedMessage: 'Pricing accepted. Your application has been approved and activation is in progress.',
     rmiMessage: 'Pricing accepted. Additional information is required to complete your application.'
   });
+  if (getApplicationView(result.status) === 'onboarding' && canonicalApplication) {
+    // The status transition rebuilds the person cards. Rehydrate the canonical
+    // pre-transition document records immediately so existing KYC evidence is
+    // not visually erased until the next full application reload.
+    syncPersistedApplicationDocuments(canonicalApplication);
+    buildReviewScreen();
+  }
   refreshPortalSidebarApplications({
     applicationId: currentApplicationId,
     status: result.status
@@ -8767,11 +9112,52 @@ function isValidPortalPersonId(personId) {
   return isValidPortalPathId(personId);
 }
 
+function getKYCCardIdentity(card) {
+  if (!card) return { personId: '', partyId: '', personKey: '' };
+  var partyId = String((card.dataset && card.dataset.partyId) || '').trim();
+  var personKey = String((card.dataset && card.dataset.personKey) || '').trim();
+  var domPersonId = String(card.id || '').replace(/^kyc-person-/, '');
+  return {
+    personId: partyId || domPersonId || personKey,
+    partyId: partyId,
+    personKey: personKey
+  };
+}
+
+function findKYCPersonCard(personId, explicitType) {
+  var lookupId = String(personId || '').trim();
+  var normalizedType = normalizePersonType(explicitType);
+  if (!lookupId) return null;
+
+  function typeMatches(card) {
+    if (!normalizedType) return true;
+    return normalizePersonType(card && card.dataset && card.dataset.personType) === normalizedType;
+  }
+
+  var cards = document.querySelectorAll('.kyc-person-card');
+  var matches = [];
+  for (var i = 0; i < cards.length; i++) {
+    var identity = getKYCCardIdentity(cards[i]);
+    var domPersonId = String(cards[i].id || '').replace(/^kyc-person-/, '');
+    if (typeMatches(cards[i]) &&
+        (domPersonId === lookupId || identity.partyId === lookupId || identity.personKey === lookupId)) {
+      matches.push(cards[i]);
+    }
+  }
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    console.error('KYC party alias is ambiguous; refusing to match persisted documents', lookupId, normalizedType);
+  }
+  return null;
+}
+
 function getKYCPersonType(personId, explicitType) {
   var normalized = normalizePersonType(explicitType);
   if (normalized) return normalized;
-  var card = document.getElementById('kyc-person-' + personId);
+  var card = findKYCPersonCard(personId);
   if (card) {
+    normalized = normalizePersonType(card.dataset && card.dataset.personType);
+    if (normalized) return normalized;
     var activeBtn = card.querySelector('.kyc-type-btn.active');
     if (activeBtn) {
       normalized = normalizePersonType(activeBtn.textContent || activeBtn.value || '');
@@ -8791,6 +9177,127 @@ function getDocumentSlotKey(documentRecord) {
   var personId = String((documentRecord && documentRecord.person_id) || '').trim();
   var personType = getKYCPersonType(personId, documentRecord && documentRecord.person_type) || 'unknown';
   return personId ? ('person:' + personType + ':' + personId + ':' + docType) : ('entity:' + docType);
+}
+
+function validatePersistedDocumentSlotIdentity(documentRecord) {
+  var docType = String((documentRecord && documentRecord.doc_type) || '').trim();
+  var personId = String((documentRecord && documentRecord.person_id) || '').trim();
+  var rawPersonType = String((documentRecord && documentRecord.person_type) || '').trim();
+  var personType = normalizePersonType(rawPersonType);
+  var storedSlotKey = String((documentRecord && documentRecord.slot_key) || '').trim();
+  var expectedSlotKey = '';
+  var specialSlotMatch = storedSlotKey.match(/^(rmi|enhanced_requirement):([^:]+)$/);
+
+  if (!isValidPortalPathId(docType)) {
+    return { valid: false, reason: 'invalid_document_type', expected_slot_key: '' };
+  }
+  if (/^(rmi|enhanced_requirement):/.test(storedSlotKey)) {
+    if (!specialSlotMatch) {
+      return { valid: false, reason: 'malformed_special_document_slot', expected_slot_key: '' };
+    }
+    if (!!personId !== !!rawPersonType || (rawPersonType && !personType)) {
+      return { valid: false, reason: 'incomplete_special_document_person_identity', expected_slot_key: storedSlotKey };
+    }
+    return {
+      valid: true,
+      reason: '',
+      expected_slot_key: storedSlotKey,
+      stored_slot_key: storedSlotKey,
+      special_slot: true,
+      special_slot_type: specialSlotMatch[1],
+      special_slot_id: specialSlotMatch[2],
+      person_id: personId,
+      person_type: personType,
+      doc_type: docType
+    };
+  }
+
+  if (personId) {
+    if (!isValidPortalPersonId(personId) || !personType) {
+      return { valid: false, reason: 'invalid_person_document_identity', expected_slot_key: '' };
+    }
+    expectedSlotKey = 'person:' + personType + ':' + personId + ':' + docType;
+  } else {
+    if (rawPersonType) {
+      return { valid: false, reason: 'entity_document_has_person_type', expected_slot_key: 'entity:' + docType };
+    }
+    expectedSlotKey = 'entity:' + docType;
+  }
+  if (!storedSlotKey || storedSlotKey !== expectedSlotKey) {
+    return {
+      valid: false,
+      reason: 'conflicting_document_slot_identity',
+      expected_slot_key: expectedSlotKey,
+      stored_slot_key: storedSlotKey
+    };
+  }
+  return {
+    valid: true,
+    reason: '',
+    expected_slot_key: expectedSlotKey,
+    stored_slot_key: storedSlotKey,
+    person_id: personId,
+    person_type: personType,
+    doc_type: docType
+  };
+}
+
+function validatePortalSpecialDocumentOwnership(documentRecord, app, slotIdentity) {
+  var identity = slotIdentity || validatePersistedDocumentSlotIdentity(documentRecord);
+  if (!identity.valid || !identity.special_slot) return identity;
+  var documentId = String((documentRecord && documentRecord.id) || '').trim();
+  var matches = [];
+
+  if (identity.person_id) {
+    var collectionName = identity.person_type === 'director'
+      ? 'directors'
+      : identity.person_type === 'ubo'
+        ? 'ubos'
+        : identity.person_type === 'intermediary'
+          ? 'intermediaries'
+          : '';
+    var ownerMatches = ((app && app[collectionName]) || []).filter(function(party) {
+      return String((party && party.id) || '').trim() === identity.person_id ||
+        String((party && party.person_key) || '').trim() === identity.person_id;
+    });
+    if (ownerMatches.length !== 1) {
+      return Object.assign({}, identity, {
+        valid: false,
+        reason: 'unresolved_or_ambiguous_special_document_owner'
+      });
+    }
+  }
+
+  if (identity.special_slot_type === 'rmi') {
+    ((app && app.rmi_requests) || []).forEach(function(request) {
+      ((request && request.items) || []).forEach(function(item) {
+        if (String((item && item.id) || '').trim() === identity.special_slot_id &&
+            String((item && item.document_id) || '').trim() === documentId) {
+          matches.push(item);
+        }
+      });
+    });
+  } else if (identity.special_slot_type === 'enhanced_requirement') {
+    (currentEnhancedRequirements || []).forEach(function(requirement) {
+      var linkedDocumentId = String(
+        (requirement && requirement.linked_document_id) ||
+        (requirement && requirement.linked_document && requirement.linked_document.id) ||
+        ''
+      ).trim();
+      if (String((requirement && requirement.id) || '').trim() === identity.special_slot_id &&
+          linkedDocumentId === documentId) {
+        matches.push(requirement);
+      }
+    });
+  }
+
+  if (matches.length !== 1) {
+    return Object.assign({}, identity, {
+      valid: false,
+      reason: 'unlinked_or_ambiguous_special_document_slot'
+    });
+  }
+  return Object.assign({}, identity, { special_linked: true });
 }
 
 function isCurrentDocumentRecord(documentRecord) {
@@ -8953,13 +9460,19 @@ function renderPersonVerification(personId, docType, verificationResponse) {
   var docKey = docType.replace(/_/g, '-');
   var area = document.getElementById('kyc-' + docKey + '-area-' + personId);
   if (!area || !verificationResponse) return;
+  var resolvedPersonType = getKYCPersonType(personId, verificationResponse.person_type);
+  var uiSlotKey = getDocumentSlotKey({
+    doc_type: verificationResponse.doc_type || docType,
+    person_id: personId,
+    person_type: resolvedPersonType
+  });
   renderPersistedVerification(area.parentElement, {
     id: verificationResponse.doc_id || verificationResponse.id,
     doc_name: verificationResponse.doc_name,
     doc_type: verificationResponse.doc_type || docType,
-    person_id: verificationResponse.person_id || personId,
-    person_type: verificationResponse.person_type || getKYCPersonType(personId),
-    slot_key: verificationResponse.slot_key,
+    person_id: personId,
+    person_type: resolvedPersonType,
+    slot_key: uiSlotKey,
     is_current: verificationResponse.is_current,
     version: verificationResponse.version,
     verification_status: verificationResponse.verification_status || verificationResponse.status,
@@ -9056,13 +9569,11 @@ function startVerificationStatusPolling(options) {
 document.addEventListener('change', function(e) {
   // Pricing T&C checkbox
   if (e.target.id === 'pricing-tc-accept') {
-    var btn = document.getElementById('btn-accept-pricing');
-    if (btn) { btn.disabled = !e.target.checked; btn.style.opacity = e.target.checked ? '1' : '0.5'; btn.style.cursor = e.target.checked ? 'pointer' : 'not-allowed'; }
+    updatePricingAcceptanceAvailability();
   }
   // KYC final declaration checkbox
   if (e.target.id === 'kyc-final-declaration') {
-    var btn2 = document.getElementById('btn-submit-docs');
-    if (btn2) { btn2.disabled = !e.target.checked; btn2.style.opacity = e.target.checked ? '1' : '0.5'; btn2.style.cursor = e.target.checked ? 'pointer' : 'not-allowed'; }
+    updatePortalDocumentSubmissionAvailability();
   }
   if (e.target.classList && e.target.classList.contains('pep-select')) {
     syncDirectorsUBOsToKYC();
@@ -9210,6 +9721,7 @@ function collectFormData() {
     var personKey = row.dataset.personkey || row.dataset.personKey || getOrAssignOwnershipPersonKey(row, 'dir', '#directors-body tr');
     var pepValue = partyRowValue(row, 'is_pep') || 'No';
     var rowPayload = Object.assign({
+      id: String(row.dataset.partyId || ''),
       first_name: partyRowValue(row, 'first_name'),
       last_name: partyRowValue(row, 'last_name'),
       nationality: partyRowValue(row, 'nationality'),
@@ -9219,6 +9731,7 @@ function collectFormData() {
       date_of_appointment: partyRowValue(row, 'date_of_appointment'),
       is_pep: pepValue,
       person_key: personKey,
+      professional_profile_url: String(row.dataset.professionalProfileUrl || ''),
       pep_declaration: collectPepDeclarationPayload(personKey, pepValue === 'Yes', 'director')
     }, getPartyRowMetadata(row));
     data.directors.push(rowPayload);
@@ -9230,6 +9743,7 @@ function collectFormData() {
     var personKey = row.dataset.personkey || row.dataset.personKey || getOrAssignOwnershipPersonKey(row, 'ubo', '#ubos-body tr');
     var pepValue = partyRowValue(row, 'is_pep') || 'No';
     data.ubos.push(Object.assign({
+      id: String(row.dataset.partyId || ''),
       first_name: partyRowValue(row, 'first_name'),
       last_name: partyRowValue(row, 'last_name'),
       nationality: partyRowValue(row, 'nationality'),
@@ -9239,6 +9753,7 @@ function collectFormData() {
       ownership_pct: partyRowValue(row, 'ownership_pct'),
       is_pep: pepValue,
       person_key: personKey,
+      professional_profile_url: String(row.dataset.professionalProfileUrl || ''),
       pep_declaration: collectPepDeclarationPayload(personKey, pepValue === 'Yes', 'ubo')
     }, getPartyRowMetadata(row)));
   });
@@ -9247,13 +9762,15 @@ function collectFormData() {
   data.intermediaries = [];
   document.querySelectorAll('#intermediaries-body tr').forEach(function(row) {
     data.intermediaries.push(Object.assign({
+      id: String(row.dataset.partyId || ''),
       entity_name: partyRowValue(row, 'entity_name'),
       jurisdiction: partyRowValue(row, 'jurisdiction'),
       registration_number: partyRowValue(row, 'registration_number'),
       registered_address: partyRowValue(row, 'registered_address'),
       ownership_pct: partyRowValue(row, 'ownership_pct'),
       owned_or_controlled_by: partyRowValue(row, 'owned_or_controlled_by'),
-      person_key: row.dataset.personkey || row.dataset.personKey || ''
+      person_key: row.dataset.personkey || row.dataset.personKey || '',
+      professional_profile_url: String(row.dataset.professionalProfileUrl || '')
     }, getPartyRowMetadata(row)));
   });
 
@@ -10306,11 +10823,17 @@ function restorePartyRows(tbodyId, rows, partyType) {
     }
     setPartyRowMetadata(lastRow, rowData);
 
-    // Set person_key if present
+    // Keep the canonical server ID separate from the legacy client person_key.
+    // New uploads and profile writes use partyId; personKey is retained only so
+    // historical documents can still be matched deterministically.
+    if (rowData.id !== undefined && rowData.id !== null && String(rowData.id).trim()) {
+      lastRow.dataset.partyId = String(rowData.id).trim();
+    }
     if (rowData.person_key) {
       lastRow.dataset.personkey = rowData.person_key;
       lastRow.dataset.personKey = rowData.person_key;
     }
+    lastRow.dataset.professionalProfileUrl = String(rowData.professional_profile_url || '');
   });
   _suppressKYCSync = false;
 }
@@ -10655,30 +11178,13 @@ function buildReviewScreen() {
     var nameEl = card.querySelector('.kyc-person-name');
     var personName = nameEl ? nameEl.textContent : personId;
     var personType = getKYCPersonType(personId);
-
-    var passportState = kycDocumentVerificationState(personId, 'passport', personType);
-    var poaState = kycDocumentVerificationState(personId, 'poa', personType);
-    var hasPassport = passportState.uploaded;
-    var hasPoa = poaState.uploaded;
-    var passportVerified = passportState.verified;
-    var poaVerified = poaState.verified;
-
-    if (passportVerified && poaVerified) personsVerified++;
-    if (!hasPassport) missingCount++;
-    if (!hasPoa) missingCount++;
-    if (hasPassport) uploadedCount++;
-    if (hasPoa) uploadedCount++;
-    if (hasPassport && !passportVerified) warningCount++;
-    if (hasPoa && !poaVerified) warningCount++;
-
-    // Check if this is an intermediary (corporate docs) or individual (passport/PoA)
-    var isInter = personId.startsWith('int');
+    var isInter = personType === 'intermediary';
     if (isInter) {
-      // Intermediary shareholder — check corporate docs
       var interDocs = ['cert-inc', 'reg-dir', 'reg-sh', 'cert-gs', 'fin-stmt'];
       var interDocNames = ['Certificate of Incorporation', 'Register of Directors', 'Register of Shareholders', 'Certificate of Good Standing', 'Financial Statements'];
       var interUploaded = 0;
       var interVerified = 0;
+      var intermediaryRows = '';
       interDocs.forEach(function(dKey, di) {
         var state = kycDocumentVerificationState(personId, dKey, personType);
         var isUp = state.uploaded;
@@ -10687,17 +11193,36 @@ function buildReviewScreen() {
         else missingCount++;
         if (isUp && !isVerified) warningCount++;
         if (isVerified) interVerified++;
-        sectionB.innerHTML += '<div class="review-item" style="padding-left:28px;"><span class="review-item-name">↳ ' + escapeHtml(interDocNames[di]) + '</span><span class="review-status ' + (isUp ? (isVerified ? 'uploaded' : 'warning') : 'missing') + '">' + (isUp ? (isVerified ? 'Verified' : '⚠️ Stored — Not verified') : '❌ Missing') + '</span></div>';
+        intermediaryRows += '<div class="review-item" style="padding-left:28px;"><span class="review-item-name">↳ ' + escapeHtml(interDocNames[di]) + '</span><span class="review-status ' + (isUp ? (isVerified ? 'uploaded' : 'warning') : 'missing') + '">' + (isUp ? (isVerified ? 'Verified' : '⚠️ Stored — Not verified') : '❌ Missing') + '</span></div>';
       });
-      sectionB.innerHTML = sectionB.innerHTML.replace(
-        '</strong></span><span class="review-status ' + (hasPassport && hasPoa ? 'uploaded' : 'missing'),
-        '</strong> <em style="font-size:11px;color:var(--text3);">(Intermediary)</em></span><span class="review-status ' + (interVerified === interDocs.length ? 'uploaded' : interUploaded ? 'warning' : 'missing')
-      );
+      var intermediaryReady = interVerified === interDocs.length;
+      sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>' + escapeHtml(personName) + '</strong> <em style="font-size:11px;color:var(--text3);">(Intermediary)</em></span><span class="review-status ' + (intermediaryReady ? 'uploaded' : interUploaded ? 'warning' : 'missing') + '">' + (intermediaryReady ? 'Corporate documents verified' : interUploaded ? '⚠️ Corporate documents incomplete' : '❌ Documents Missing') + '</span></div>' + intermediaryRows;
       if (interVerified === interDocs.length) personsVerified++;
     } else {
+      var passportState = kycDocumentVerificationState(personId, 'passport', personType);
+      var poaState = kycDocumentVerificationState(personId, 'poa', personType);
+      var hasPassport = passportState.uploaded;
+      var hasPoa = poaState.uploaded;
+      var passportVerified = passportState.verified;
+      var poaVerified = poaState.verified;
+      if (!hasPassport) missingCount++;
+      if (!hasPoa) missingCount++;
+      if (hasPassport) uploadedCount++;
+      if (hasPoa) uploadedCount++;
+      if (hasPassport && !passportVerified) warningCount++;
+      if (hasPoa && !poaVerified) warningCount++;
       var personDocsReady = passportVerified && poaVerified;
       var personDocsStored = hasPassport && hasPoa;
+      if (personDocsReady) personsVerified++;
       sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>' + escapeHtml(personName) + '</strong></span><span class="review-status ' + (personDocsReady ? 'uploaded' : personDocsStored ? 'warning' : 'missing') + '">' + (personDocsReady ? 'ID + PoA verified' : personDocsStored ? '⚠️ ID + PoA stored — Not verified' : '❌ Documents Missing') + '</span></div>';
+      var profileInput = document.getElementById('kyc-linkedin-' + personId);
+      var professionalProfileValue = String((profileInput && profileInput.value) || '').trim();
+      var savedProfessionalProfileValue = String((profileInput && profileInput.dataset && profileInput.dataset.lastSavedValue) || '').trim();
+      var professionalProfileSaved = !!professionalProfileValue &&
+        professionalProfileValue === savedProfessionalProfileValue &&
+        isValidPortalPathId(card.dataset && card.dataset.partyId);
+      if (!professionalProfileSaved) missingCount++;
+      sectionB.innerHTML += '<div class="review-item" style="padding-left:28px;"><span class="review-item-name">↳ Professional Profile</span><span class="review-status ' + (professionalProfileSaved ? 'uploaded' : 'missing') + '">' + (professionalProfileSaved ? 'Saved' : '❌ Missing or not saved') + '</span></div>';
     }
 
     // Check PEP declaration
@@ -10708,6 +11233,23 @@ function buildReviewScreen() {
       if (!pepComplete) missingCount++;
     }
   });
+  var hydrationMismatchCount = portalDocumentHydrationBlocked() ? portalDocumentHydrationErrors.length : 0;
+  if (hydrationMismatchCount) {
+    missingCount += hydrationMismatchCount;
+    sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>Persisted document-to-party matching</strong></span><span class="review-status missing">❌ ' + hydrationMismatchCount + ' unsafe match(es)</span></div>';
+  }
+  var partyHydrationMismatchCount = portalPartyHydrationBlocked() ? portalPartyHydrationErrors.length : 0;
+  if (partyHydrationMismatchCount) {
+    missingCount += partyHydrationMismatchCount;
+    sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>Authoritative Director and UBO records</strong></span><span class="review-status missing">❌ ' + partyHydrationMismatchCount + ' collection integrity error(s)</span></div>';
+  }
+  var enhancedRequirementIntegrityMismatchCount = portalEnhancedRequirementIntegrityBlocked()
+    ? portalEnhancedRequirementIntegrityErrors.length
+    : 0;
+  if (enhancedRequirementIntegrityMismatchCount) {
+    missingCount += enhancedRequirementIntegrityMismatchCount;
+    sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>Additional evidence matching</strong></span><span class="review-status missing">❌ ' + enhancedRequirementIntegrityMismatchCount + ' unsafe association(s)</span></div>';
+  }
 
   // Section C (all optional — never blocks submission)
   var sectionC = document.getElementById('review-section-c');
@@ -10780,13 +11322,20 @@ function buildReviewScreen() {
     uploadedCount: uploadedCount,
     missingCount: missingCount,
     warningCount: warningCount,
-    personsVerified: personsVerified
+    personsVerified: personsVerified,
+    hydrationMismatchCount: hydrationMismatchCount,
+    partyHydrationMismatchCount: partyHydrationMismatchCount,
+    enhancedRequirementIntegrityMismatchCount: enhancedRequirementIntegrityMismatchCount
   };
   updateDocsReviewMessaging(lastReviewSummaryState);
 
   var btn = document.getElementById('btn-final-submit');
   var reviewSubmitNote = document.getElementById('review-submit-note');
-  var canSubmit = missingCount === 0 && warningCount === 0;
+  var canSubmit = missingCount === 0 &&
+    warningCount === 0 &&
+    !portalDocumentHydrationBlocked() &&
+    !portalPartyHydrationBlocked() &&
+    !portalEnhancedRequirementIntegrityBlocked();
   if (btn) {
     btn.disabled = !canSubmit;
     btn.style.opacity = canSubmit ? '1' : '0.55';
@@ -10802,6 +11351,9 @@ function buildReviewScreen() {
       var noteParts = [];
       if (missingCount > 0) noteParts.push(missingCount + ' required item(s) are still missing');
       if (warningCount > 0) noteParts.push(warningCount + ' uploaded document(s) are not verified');
+      if (hydrationMismatchCount > 0) noteParts.push(hydrationMismatchCount + ' persisted document(s) could not be matched safely');
+      if (partyHydrationMismatchCount > 0) noteParts.push(partyHydrationMismatchCount + ' authoritative party collection(s) are missing or empty');
+      if (enhancedRequirementIntegrityMismatchCount > 0) noteParts.push(enhancedRequirementIntegrityMismatchCount + ' additional evidence association(s) could not be matched safely');
       reviewSubmitNote.style.display = 'block';
       reviewSubmitNote.innerHTML = '<strong>Submission blocked:</strong> ' + escapeHtml(noteParts.join(' and ')) + '. Only verified required documents can be submitted.';
     } else {
@@ -10814,6 +11366,18 @@ function buildReviewScreen() {
 async function finalSubmitFromReview() {
   if (!AUTH_TOKEN || !currentApplicationId) {
     showToast('error', 'Session Required', 'Please sign in again before submitting your KYC documents.');
+    return;
+  }
+  if (portalDocumentHydrationBlocked()) {
+    showToast('error', 'Document Matching Required', 'Submission is blocked because previously uploaded documents could not be matched safely to their parties.');
+    return;
+  }
+  if (portalPartyHydrationBlocked()) {
+    showToast('error', 'Party Records Required', 'Submission is blocked because the authoritative Director or UBO records are missing or empty.');
+    return;
+  }
+  if (portalEnhancedRequirementIntegrityBlocked()) {
+    showToast('error', 'Evidence Matching Required', 'Submission is blocked because previously submitted additional evidence could not be matched safely.');
     return;
   }
   if (lastReviewSummaryState && (Number(lastReviewSummaryState.missingCount || 0) > 0 || Number(lastReviewSummaryState.warningCount || 0) > 0)) {
@@ -11060,6 +11624,18 @@ function updateProgress() {
 }
 
 function submitDocuments() {
+  if (portalDocumentHydrationBlocked()) {
+    showToast('error', 'Document Matching Required', 'Submission is blocked because previously uploaded documents could not be matched safely to their parties.');
+    return;
+  }
+  if (portalPartyHydrationBlocked()) {
+    showToast('error', 'Party Records Required', 'Submission is blocked because the authoritative Director or UBO records are missing or empty.');
+    return;
+  }
+  if (portalEnhancedRequirementIntegrityBlocked()) {
+    showToast('error', 'Evidence Matching Required', 'Submission is blocked because previously submitted additional evidence could not be matched safely.');
+    return;
+  }
   if (uploadedDocs.size === 0) {
     showToast('error', 'No Documents', 'Please upload at least one document before submitting.');
     return;
@@ -11174,6 +11750,9 @@ function portalEnhancedRequirementTone(status) {
 }
 
 function portalEnhancedRequirementActionText(req) {
+  if (req && req.linked_document_integrity_valid === false) {
+    return 'The earlier evidence association could not be matched safely. Upload the requested document again or contact support.';
+  }
   var type = String(req && req.requirement_type || '').toLowerCase();
   var status = String(req && req.status || '').toLowerCase();
   if (status === 'uploaded') status = 'submitted';
@@ -11192,6 +11771,7 @@ function portalEnhancedRequirementActionText(req) {
 }
 
 function portalEnhancedRequirementNeedsAction(req) {
+  if (req && req.linked_document_integrity_valid === false) return true;
   var status = String(req && req.status || '').toLowerCase();
   return status === 'required' || status === 'requested' || status === 'additional_information_needed' || status === 'rejected';
 }
@@ -11227,6 +11807,7 @@ function portalEnhancedRequirementControlHtml(req) {
 }
 
 function portalEnhancedRequirementDocName(req) {
+  if (req && req.linked_document_integrity_valid === false) return '';
   var linkedDoc = (req && req.linked_document) || {};
   return linkedDoc.doc_name || (req && req.uploaded_file_name) || '';
 }
@@ -11280,12 +11861,13 @@ function portalEnhancedRequirementHolder(panel) {
 }
 
 function portalEnhancedRequirementCardHtml(req) {
+  var integrityInvalid = !!(req && req.linked_document_integrity_valid === false);
   var tone = portalEnhancedRequirementTone(req.status);
   var requestedAt = req && req.requested_at ? new Date(req.requested_at).toLocaleDateString() : '';
   var dueDate = req && req.due_date ? new Date(req.due_date).toLocaleDateString() : '';
   var reason = req && req.request_reason ? String(req.request_reason).replace(/_/g, ' ') : '';
   var docName = portalEnhancedRequirementDocName(req);
-  var statusLabel = req.status_label || tone.text;
+  var statusLabel = integrityInvalid ? 'Action required' : (req.status_label || tone.text);
   var subject = req.owner_label || req.subject_name || '';
   var meta = ['Requested by Compliance'];
   if (subject) meta.push(subject);
@@ -11300,7 +11882,12 @@ function portalEnhancedRequirementCardHtml(req) {
         '<div class="doc-item-desc">' + escapeHtml(meta.join(' · ')) + '</div>' +
       '</div>' +
     '</div>' +
-    '<span class="' + (tone.cls === 'uploaded' ? 'doc-optional' : 'doc-required') + '">' + escapeHtml(statusLabel) + '</span>' +
+    '<span class="' + (!integrityInvalid && tone.cls === 'uploaded' ? 'doc-optional' : 'doc-required') + '">' + escapeHtml(statusLabel) + '</span>' +
+    (integrityInvalid
+      ? '<div class="portal-enhanced-document-link-integrity-error" role="alert" style="margin-top:8px;padding:9px 10px;border:1px solid #dc2626;border-radius:7px;background:#fef2f2;color:#991b1b;font-size:11px;line-height:1.45;"><strong>Evidence matching issue.</strong> ' +
+        escapeHtml(req.linked_document_integrity_error || 'Previously submitted evidence could not be matched safely. Please upload the requested document again or contact support.') +
+        '</div>'
+      : '') +
     (dueDate ? '<div style="font-size:12px;color:var(--text2);margin:8px 0 0;"><strong>Due date:</strong> ' + escapeHtml(dueDate) + '</div>' : '') +
     (docName ? '<div style="font-size:12px;color:var(--text2);margin:8px 0 0;"><strong>Uploaded file:</strong> ' + escapeHtml(docName) + '</div>' : '') +
     '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(portalEnhancedRequirementActionText(req)) + '</div>' +
@@ -11317,6 +11904,10 @@ function clearPortalEnhancedRequirementHolders() {
 
 function renderPortalEnhancedRequirements(requirements) {
   currentEnhancedRequirements = Array.isArray(requirements) ? requirements : [];
+  portalEnhancedRequirementIntegrityErrors = currentEnhancedRequirements.filter(function(req) {
+    return !!(req && req.linked_document_integrity_valid === false);
+  });
+  updatePortalDocumentSubmissionAvailability();
   var card = document.getElementById('additional-info-required-card');
   var container = document.getElementById('additional-info-required-container');
   var disclosureCard = document.getElementById('portal-disclosures-card');
@@ -11330,6 +11921,9 @@ function renderPortalEnhancedRequirements(requirements) {
     disclosureContainer.innerHTML = '';
     return;
   }
+  var globalIntegrityBanner = portalEnhancedRequirementIntegrityErrors.length
+    ? '<div id="portal-enhanced-document-link-integrity-error" role="alert" style="margin-bottom:12px;padding:12px 14px;border:1px solid #dc2626;border-left:4px solid #dc2626;border-radius:8px;background:#fef2f2;color:#991b1b;font-size:12px;line-height:1.5;"><strong>Additional evidence could not be matched safely.</strong> Submission is blocked until the requested evidence is uploaded again or support repairs the association.</div>'
+    : '';
   var applicationLevel = [];
   var disclosureLevel = [];
   currentEnhancedRequirements.forEach(function(req) {
@@ -11350,9 +11944,9 @@ function renderPortalEnhancedRequirements(requirements) {
     }
     applicationLevel.push(html);
   });
-  if (applicationLevel.length) {
+  if (applicationLevel.length || globalIntegrityBanner) {
     card.style.display = '';
-    container.innerHTML = applicationLevel.join('');
+    container.innerHTML = globalIntegrityBanner + applicationLevel.join('');
   } else {
     card.style.display = 'none';
     container.innerHTML = '';
@@ -13603,6 +14197,15 @@ function handleKYCUpload(personId, docType, input, personType) {
     showToast('error', 'Upload Error', 'This person record is unavailable. Please refresh the page and try again.');
     return;
   }
+  var stablePartyId = String((personCard.dataset && personCard.dataset.partyId) || '').trim();
+  if (!isValidPortalPathId(stablePartyId) ||
+      stablePartyId !== String(personId) ||
+      encodeURIComponent(stablePartyId) !== encodeURIComponent(personId)) {
+    if (input) input.value = '';
+    console.error('Cannot upload KYC document without a canonical server party identifier', personId);
+    showToast('error', 'Upload Blocked', 'This party is not linked to a stable server record. Refresh the application before uploading.');
+    return;
+  }
   var resolvedPersonType = getKYCPersonType(personId, personType);
   // docType uses underscores (e.g. cert_inc) but HTML IDs use hyphens (e.g. kyc-cert-inc-lbl-)
   var docKey = docType.replace(/_/g, '-');
@@ -13624,7 +14227,7 @@ function handleKYCUpload(personId, docType, input, personType) {
     var formData = new FormData();
     formData.append('file', input.files[0]);
     var uploadUrl = API_BASE + '/applications/' + currentApplicationId + '/documents?doc_type=' +
-      encodeURIComponent(docType) + '&person_id=' + encodeURIComponent(personId);
+      encodeURIComponent(docType) + '&person_id=' + encodeURIComponent(stablePartyId);
     if (resolvedPersonType) uploadUrl += '&person_type=' + encodeURIComponent(resolvedPersonType);
     var uploadedDocId = null;
     fetch(uploadUrl, {
@@ -13767,6 +14370,13 @@ async function sendKYCLink(personId) {
     showToast('error', 'Registration Unavailable', 'This person record is unavailable. Please refresh the page and try again.');
     return;
   }
+  const stablePartyId = String((card.dataset && card.dataset.partyId) || '').trim();
+  const personType = normalizePersonType(card.dataset && card.dataset.personType);
+  if (stablePartyId !== personId || !personType) {
+    console.error('Cannot register KYC applicant without an exact canonical party identity', personId, stablePartyId, personType);
+    showToast('error', 'Registration Unavailable', 'This party is not linked to an exact typed server record. Refresh the application before trying again.');
+    return;
+  }
   const emailInput = document.getElementById('kyc-email-' + personId);
   const email = emailInput ? emailInput.value.trim() : '';
   if (!email || !email.includes('@')) {
@@ -13782,9 +14392,6 @@ async function sendKYCLink(personId) {
   const nameParts = fullName.split(' ');
   const firstName = nameParts[0] || 'User';
   const lastName = nameParts.slice(1).join(' ') || personId;
-
-  // Derive person type from ID prefix (F-04)
-  const personType = personId.startsWith('dir') ? 'director' : personId.startsWith('ubo') ? 'ubo' : 'individual';
 
   // Set loading state on button
   const sendBtn = card ? card.querySelector('.kyc-send-btn') : null;
@@ -13871,80 +14478,7 @@ function updateKYCBadge(personId) {
 // ─── KYC: add another person card ──────────────────────────────────────
 let kycPersonCount = 2; // already have dir1 + ubo1
 function addKYCPerson() {
-  kycPersonCount++;
-  const id = 'extra' + kycPersonCount;
-  const card = document.createElement('div');
-  card.className = 'kyc-person-card';
-  card.id = 'kyc-person-' + id;
-  card.innerHTML = `
-    <div class="kyc-person-header">
-      <div>
-        <div class="kyc-person-name" id="kyc-name-${id}">Person ${kycPersonCount}</div>
-        <span class="kyc-status-badge pending" id="kyc-badge-${id}">⏳ Pending</span>
-      </div>
-      <div class="kyc-type-toggle">
-        <button type="button" class="kyc-type-btn active" onclick="setKYCType('${id}','director',this)">Director</button>
-        <button type="button" class="kyc-type-btn" onclick="setKYCType('${id}','ubo',this)">UBO</button>
-      </div>
-    </div>
-    <div class="kyc-holding-row" id="kyc-holding-row-${id}">
-      <label>% Holding:</label>
-      <input type="number" id="kyc-holding-${id}" min="0" max="100" placeholder="e.g. 25" />
-      <span>% ownership of the company</span>
-    </div>
-    <div style="margin-bottom:12px;">
-      <input type="text" placeholder="Full name" oninput="document.getElementById('kyc-name-${id}').textContent=this.value||'Person ${kycPersonCount}'" style="width:100%;margin-bottom:6px;"/>
-    </div>
-    <div style="display:flex;gap:10px;margin-bottom:12px;">
-      <div style="flex:1;">
-        <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">Nationality</label>
-        <select class="nat-select" id="kyc-nat-${id}" style="width:100%;"><option value="">Select nationality</option></select>
-      </div>
-      <div style="flex:0 0 120px;">
-        <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">PEP Status</label>
-        <select class="pep-select" id="kyc-pep-${id}" style="width:100%;" onchange="toggleKYCPepPanel('${id}',this.value)"><option value="No">No</option><option value="Yes">Yes</option></select>
-      </div>
-    </div>
-    <div class="kyc-method-tabs">
-      <button type="button" class="kyc-tab active" onclick="switchKYCTab('${id}','upload')">📎 Upload Documents</button>
-      <button type="button" class="kyc-tab" onclick="switchKYCTab('${id}','link')">📧 Send Self-Submission Link</button>
-    </div>
-    <div class="kyc-upload-panel active" id="kyc-upload-${id}">
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        <div>
-          <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">🛂 Passport / Government ID</label>
-          <div class="doc-upload-area" onclick="triggerUploadKYC('kyc-passport-${id}')" id="kyc-passport-area-${id}"><span>📎</span><span id="kyc-passport-lbl-${id}">Click to upload</span></div>
-          <input type="file" id="kyc-passport-${id}" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload('${id}','passport',this)" />
-        </div>
-        <div>
-          <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">🏠 Proof of Address</label>
-          <div class="doc-upload-area" onclick="triggerUploadKYC('kyc-poa-${id}')" id="kyc-poa-area-${id}"><span>📎</span><span id="kyc-poa-lbl-${id}">Click to upload</span></div>
-          <input type="file" id="kyc-poa-${id}" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload('${id}','poa',this)" />
-        </div>
-        <div>
-          <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">📄 CV / LinkedIn Profile</label>
-          <input type="url" id="kyc-linkedin-${id}" placeholder="LinkedIn profile URL or public professional profile" style="width:100%;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />
-          <div style="font-size:11px;color:var(--text3);margin-top:4px;">Required profile detail. No document upload is expected.</div>
-        </div>
-      </div>
-    </div>
-    ${buildPepDeclarationPanelHTML(id, false)}
-        <div class="kyc-link-panel" id="kyc-link-${id}">
-      <div class="kyc-link-form">
-        <div class="kyc-link-input-row">
-          <div style="flex:1">
-            <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">Email Address</label>
-            <input type="email" id="kyc-email-${id}" placeholder="person@company.com" />
-          </div>
-          <button type="button" class="kyc-send-btn" onclick="sendKYCLink('${id}')">🔗 Register</button>
-        </div>
-        <div class="kyc-link-sent" id="kyc-sent-${id}">
-          ✅ Applicant registered. Your compliance officer will coordinate document submission.
-        </div>
-      </div>
-    </div>`;
-  document.getElementById('kyc-persons-list').appendChild(card);
-  populateNationalitySelects();
+  showToast('info', 'Ownership Update Required', 'Directors and UBOs must be saved as ownership parties before KYC documents can be attached.');
 }
 
 function toggleKYCPepPanel(personId, value) {
@@ -13980,6 +14514,8 @@ function updateKYCPersonNames() {
 
 // ─── KYC: toggle Director / UBO type and show/hide % holding ───────────
 function setKYCType(personId, type, btn) {
+  var card = btn && btn.closest ? btn.closest('.kyc-person-card') : null;
+  if (card) card.dataset.personType = normalizePersonType(type);
   // Update toggle button states
   const btns = btn.closest('.kyc-type-toggle').querySelectorAll('.kyc-type-btn');
   btns.forEach(b => b.classList.remove('active'));
@@ -13994,7 +14530,7 @@ function setKYCType(personId, type, btn) {
     }
   }
   // Update role badge label
-  const nameBadge = btn.closest('.kyc-person-card').querySelector('.kyc-person-role');
+  const nameBadge = card ? card.querySelector('.kyc-person-role') : null;
   if (nameBadge) nameBadge.textContent = type === 'ubo' ? 'UBO' : (type === 'intermediary' ? 'Intermediary Shareholder' : 'Director');
 }
 
@@ -14023,10 +14559,80 @@ function getClientPortalStatusClass(status) {
   return getPortalStatusProjection(status).statusClass || 'review';
 }
 
+function portalDocumentHydrationBlocked() {
+  return Array.isArray(portalDocumentHydrationErrors) && portalDocumentHydrationErrors.length > 0;
+}
+
+function portalPartyHydrationBlocked() {
+  return Array.isArray(portalPartyHydrationErrors) && portalPartyHydrationErrors.length > 0;
+}
+
+function portalEnhancedRequirementIntegrityBlocked() {
+  return Array.isArray(portalEnhancedRequirementIntegrityErrors) &&
+    portalEnhancedRequirementIntegrityErrors.length > 0;
+}
+
+function updatePortalDocumentSubmissionAvailability() {
+  var declaration = document.getElementById('kyc-final-declaration');
+  var submitButton = document.getElementById('btn-submit-docs');
+  if (!submitButton) return;
+  var enabled = !!(declaration && declaration.checked) &&
+    !portalDocumentHydrationBlocked() &&
+    !portalPartyHydrationBlocked() &&
+    !portalEnhancedRequirementIntegrityBlocked();
+  submitButton.disabled = !enabled;
+  submitButton.style.opacity = enabled ? '1' : '0.5';
+  submitButton.style.cursor = enabled ? 'pointer' : 'not-allowed';
+}
+
+function renderPortalDocumentHydrationErrors(errors) {
+  portalDocumentHydrationErrors = Array.isArray(errors) ? errors.slice() : [];
+  var banner = document.getElementById('portal-document-hydration-errors');
+  var detail = document.getElementById('portal-document-hydration-errors-detail');
+  if (banner) banner.style.display = portalDocumentHydrationBlocked() ? 'block' : 'none';
+  if (detail) {
+    if (!portalDocumentHydrationBlocked()) {
+      detail.textContent = '';
+    } else {
+      var affected = portalDocumentHydrationErrors.slice(0, 4).map(function(error) {
+        return String((error && (error.doc_name || error.doc_type || error.doc_id)) || 'Unknown document');
+      });
+      var extraCount = Math.max(0, portalDocumentHydrationErrors.length - affected.length);
+      detail.textContent = 'Submission is blocked to prevent a document from appearing under the wrong party. Affected: ' +
+        affected.join(', ') + (extraCount ? ' and ' + extraCount + ' more' : '') +
+        '. Refresh the application or contact support.';
+    }
+  }
+  updatePortalDocumentSubmissionAvailability();
+}
+
+function renderPortalPartyHydrationErrors(errors) {
+  portalPartyHydrationErrors = Array.isArray(errors) ? errors.slice() : [];
+  if (portalPartyHydrationBlocked()) clearSyncedCanonicalKYCCards();
+  var banner = document.getElementById('portal-party-hydration-errors');
+  var detail = document.getElementById('portal-party-hydration-errors-detail');
+  if (banner) banner.style.display = portalPartyHydrationBlocked() ? 'block' : 'none';
+  if (detail) {
+    detail.textContent = portalPartyHydrationBlocked()
+      ? 'Submission is blocked because the authoritative Director or UBO records are missing or empty, or authoritative ownership records reuse the same stable ID across different party types. Ambiguous party cards and documents have not been rendered. Refresh the application or contact support.'
+      : '';
+  }
+  updatePortalDocumentSubmissionAvailability();
+}
+
+function clearSyncedCanonicalKYCCards() {
+  var container = document.getElementById('kyc-persons-list');
+  if (!container) return;
+  container.querySelectorAll('.kyc-person-card').forEach(function(card) {
+    if (!String(card.id || '').includes('extra')) card.remove();
+  });
+}
+
 function resetPortalDocumentState() {
   stopAllVerificationStatusPolling();
   uploadedDocIds = {};
   uploadedDocs.clear();
+  renderPortalDocumentHydrationErrors([]);
   document.querySelectorAll('.doc-item').forEach(function(item) {
     item.classList.remove('uploaded');
     var label = item.querySelector('[id$="-label"]');
@@ -14059,47 +14665,185 @@ function syncPersistedApplicationDocuments(app) {
     return;
   }
 
+  var hydrationErrors = [];
   var docsBySlot = {};
   app.documents.forEach(function(doc) {
-    if (!doc || !isValidPortalPathId(doc.id) || !isCurrentDocumentRecord(doc)) {
-      if (doc && doc.id) console.warn('Skipping persisted document with invalid identifier', doc.id);
+    if (!doc || !isCurrentDocumentRecord(doc)) {
       return;
     }
-    var slotKey = getDocumentSlotKey(doc);
+    if (!isValidPortalPathId(doc.id)) {
+      hydrationErrors.push({
+        doc_id: doc.id,
+        doc_name: doc.doc_name,
+        doc_type: doc.doc_type,
+        reason: 'invalid_document_identity'
+      });
+      return;
+    }
+    var slotIdentity = validatePortalSpecialDocumentOwnership(
+      doc,
+      app,
+      validatePersistedDocumentSlotIdentity(doc)
+    );
+    if (!slotIdentity.valid) {
+      console.error('Persisted document slot identity is inconsistent; refusing to hydrate', doc.id, slotIdentity.reason);
+      hydrationErrors.push({
+        doc_id: doc.id,
+        doc_name: doc.doc_name,
+        doc_type: doc.doc_type,
+        person_id: doc.person_id,
+        person_type: doc.person_type,
+        slot_key: doc.slot_key,
+        reason: slotIdentity.reason
+      });
+      return;
+    }
+    // RMI and enhanced-requirement evidence has a dedicated renderer and must
+    // never be reinterpreted as a base entity/person KYC upload slot.
+    if (slotIdentity.special_slot) return;
+    var slotKey = slotIdentity.expected_slot_key;
     if (docsBySlot[slotKey]) {
       console.warn('Duplicate current documents returned for upload slot', slotKey, docsBySlot[slotKey].id, doc.id);
+      hydrationErrors.push({
+        doc_id: doc.id,
+        doc_name: doc.doc_name,
+        doc_type: doc.doc_type,
+        person_id: doc.person_id,
+        reason: 'duplicate_current_document_slot'
+      });
     }
     if (isNewerDocumentRecord(doc, docsBySlot[slotKey])) {
       docsBySlot[slotKey] = doc;
     }
   });
   var activeDocs = Object.keys(docsBySlot).map(function(slotKey) { return docsBySlot[slotKey]; });
-  var docsByPerson = {};
+  var renderableBySlot = {};
+
   activeDocs.forEach(function(doc) {
     var rawPersonId = doc.person_id;
     if (rawPersonId !== undefined && rawPersonId !== null && String(rawPersonId).trim()) {
       var personId = String(rawPersonId).trim();
-      if (!isValidPortalPersonId(personId)) {
-        console.warn('Skipping persisted person document with invalid person identifier', doc.id, rawPersonId);
+      var storedPersonId = personId;
+      var storedPersonType = normalizePersonType(doc.person_type);
+      if (!isValidPortalPersonId(personId) || !isValidPortalPathId(doc.doc_type)) {
+        hydrationErrors.push({
+          doc_id: doc.id,
+          doc_name: doc.doc_name,
+          doc_type: doc.doc_type,
+          person_id: storedPersonId,
+          reason: 'invalid_person_document_identity'
+        });
         return;
       }
-      if (!isValidPortalPathId(doc.doc_type)) {
-        console.warn('Skipping persisted person document with invalid document type', doc.id, doc.doc_type);
-        return;
-      }
-      var personCard = document.getElementById('kyc-person-' + personId);
+
+      // Canonical server party IDs are primary. person_key remains a strictly
+      // scoped compatibility alias for documents written before canonical IDs
+      // were used by the portal.
+      // Always run the uniqueness-aware matcher. A canonical ID that collides
+      // with another record's legacy person_key must fail closed.
+      var personCard = findKYCPersonCard(storedPersonId, storedPersonType);
       if (!personCard) {
-        console.warn('Skipping persisted person document because the person card is unavailable', doc.id, personId);
+        console.error('Persisted person document cannot be matched safely', doc.id, storedPersonId, storedPersonType);
+        hydrationErrors.push({
+          doc_id: doc.id,
+          doc_name: doc.doc_name,
+          doc_type: doc.doc_type,
+          person_id: storedPersonId,
+          person_type: storedPersonType,
+          reason: 'party_card_unavailable'
+        });
         return;
       }
+
+      var cardIdentity = getKYCCardIdentity(personCard);
+      var uiPersonId = String(cardIdentity.personId || '').trim();
+      var uiPersonType = getKYCPersonType(uiPersonId, storedPersonType);
+      if (!isValidPortalPersonId(uiPersonId) || !uiPersonType) {
+        hydrationErrors.push({
+          doc_id: doc.id,
+          doc_name: doc.doc_name,
+          doc_type: doc.doc_type,
+          person_id: storedPersonId,
+          reason: 'party_type_unavailable'
+        });
+        return;
+      }
+
+      var uiSlotKey = getDocumentSlotKey({
+        doc_type: doc.doc_type,
+        person_id: uiPersonId,
+        person_type: uiPersonType
+      });
+      var uiDocument = Object.assign({}, doc, {
+        person_id: uiPersonId,
+        person_type: uiPersonType,
+        slot_key: uiSlotKey
+      });
+      if (renderableBySlot[uiSlotKey] && String(renderableBySlot[uiSlotKey].document.id) !== String(doc.id)) {
+        console.error('Multiple persisted documents map to the same party slot', uiSlotKey, renderableBySlot[uiSlotKey].document.id, doc.id);
+        hydrationErrors.push({
+          doc_id: doc.id,
+          doc_name: doc.doc_name,
+          doc_type: doc.doc_type,
+          person_id: storedPersonId,
+          reason: 'duplicate_party_document_slot'
+        });
+      }
+      if (!renderableBySlot[uiSlotKey] || isNewerDocumentRecord(uiDocument, renderableBySlot[uiSlotKey].document)) {
+        renderableBySlot[uiSlotKey] = {
+          kind: 'person',
+          personId: uiPersonId,
+          document: uiDocument
+        };
+      }
+      return;
+    }
+
+    var entitySlotId = findPortalDocumentSlot(doc.doc_type);
+    if (!entitySlotId) {
+      hydrationErrors.push({
+        doc_id: doc.id,
+        doc_name: doc.doc_name,
+        doc_type: doc.doc_type,
+        person_id: '',
+        reason: 'document_category_unavailable'
+      });
+      return;
+    }
+    var entityUiSlotKey = getDocumentSlotKey({ doc_type: doc.doc_type });
+    if (!renderableBySlot[entityUiSlotKey] || isNewerDocumentRecord(doc, renderableBySlot[entityUiSlotKey].document)) {
+      renderableBySlot[entityUiSlotKey] = {
+        kind: 'entity',
+        slotId: entitySlotId,
+        document: Object.assign({}, doc, { slot_key: entityUiSlotKey })
+      };
+    }
+  });
+
+  var docsByPerson = {};
+  Object.keys(renderableBySlot).forEach(function(uiSlotKey) {
+    var entry = renderableBySlot[uiSlotKey];
+    var doc = entry.document;
+    if (entry.kind === 'person') {
+      var personId = entry.personId;
       docsByPerson[personId] = docsByPerson[personId] || [];
       docsByPerson[personId].push(doc);
       var docKey = String(doc.doc_type || '').replace(/_/g, '-');
       var area = document.getElementById('kyc-' + docKey + '-area-' + personId);
       var lbl = document.getElementById('kyc-' + docKey + '-lbl-' + personId);
+      if (!area || !lbl) {
+        hydrationErrors.push({
+          doc_id: doc.id,
+          doc_name: doc.doc_name,
+          doc_type: doc.doc_type,
+          person_id: personId,
+          reason: 'document_category_unavailable'
+        });
+        return;
+      }
       if (lbl) lbl.textContent = doc.doc_name || 'Previously uploaded';
       if (area) { area.style.borderColor = 'var(--green)'; area.style.color = 'var(--green)'; }
-      renderPersistedVerification(area ? area.parentElement : null, doc);
+      renderPersistedVerification(area.parentElement, doc);
       startVerificationStatusPolling({
         docId: doc.id,
         initialRecord: doc,
@@ -14109,8 +14853,7 @@ function syncPersistedApplicationDocuments(app) {
         }
       });
     } else {
-      var slotId = findPortalDocumentSlot(doc.doc_type);
-      if (!slotId) return;
+      var slotId = entry.slotId;
       var item = document.getElementById(slotId);
       var label = document.getElementById(slotId + '-label');
       if (item) item.classList.add('uploaded');
@@ -14139,15 +14882,18 @@ function syncPersistedApplicationDocuments(app) {
     badge.innerHTML = hasFlagged ? '⚠️ Review required' : '✅ Verified';
   });
 
+  renderPortalDocumentHydrationErrors(hydrationErrors);
   updateProgress();
 }
 
 async function resumeApplication(ref, stage) {
   var target = getApplicationView(stage);
   var restoredFields = false;
+  var resumedApplication = null;
   try {
     if (AUTH_TOKEN && ref) {
       var app = await apiCall('GET', '/applications/' + encodeURIComponent(ref));
+      resumedApplication = app;
 
       // ── EX-12: Client-side ownership assertion (defence-in-depth) ──
       // Backend enforces ownership via check_app_ownership(); this is a redundant client-side guard.
@@ -14203,15 +14949,35 @@ async function resumeApplication(ref, stage) {
       var dirEmpty = !dirTbody || !dirTbody.querySelector('input[type="text"]') || !dirTbody.querySelector('input[type="text"]').value.trim();
       var uboEmpty = !uboTbody || !uboTbody.querySelector('input[type="text"]') || !uboTbody.querySelector('input[type="text"]').value.trim();
 
-      // Also accept top-level directors/ubos arrays from app data
-      var psDirs = ps.directors || app.directors || [];
-      var psUbos = ps.ubos || app.ubos || [];
-      var psInts = ps.intermediaries || app.intermediaries || [];
-
       var allowPartyHydration = projection.allowsDraftRestore || projection.hydrateParties === true;
+      // Post-submission views must use normalized server party records because
+      // those carry canonical IDs. Drafts may still restore their editable
+      // prescreening arrays before the records have been persisted.
+      var useCanonicalPartyRecords = projection.hydrateParties === true;
+      var canonicalPartyErrors = useCanonicalPartyRecords
+        ? canonicalPartyCollectionIntegrityErrors(app)
+        : [];
+      renderPortalPartyHydrationErrors(canonicalPartyErrors);
+      if (useCanonicalPartyRecords) {
+        renderPricingPartyIntegrityError(canonicalPartyErrors);
+      }
+      // Presence is authoritative, including an empty array. Never revive a
+      // stale prescreening party merely because the normalized collection is
+      // empty or absent.
+      var psDirs = useCanonicalPartyRecords
+        ? (Array.isArray(app.directors) ? app.directors : [])
+        : (ps.directors || app.directors || []);
+      var psUbos = useCanonicalPartyRecords
+        ? (Array.isArray(app.ubos) ? app.ubos : [])
+        : (ps.ubos || app.ubos || []);
+      var psInts = useCanonicalPartyRecords
+        ? (Array.isArray(app.intermediaries) ? app.intermediaries : [])
+        : (ps.intermediaries || app.intermediaries || []);
+
       if (allowPartyHydration && dirEmpty && Array.isArray(psDirs) && psDirs.length) {
         restorePartyRows('directors-body', psDirs.map(function(d) {
           return {
+            id: d.id || '',
             first_name: d.first_name || '',
             last_name: d.last_name || '',
             full_name: d.full_name || d.name || '',
@@ -14222,6 +14988,7 @@ async function resumeApplication(ref, stage) {
             date_of_appointment: d.date_of_appointment || '',
             is_pep: d.is_pep || 'No',
             person_key: d.person_key || '',
+            professional_profile_url: d.professional_profile_url || '',
             pep_declaration: d.pep_declaration || {},
             source: d.source || '',
             officer_role: d.officer_role || '',
@@ -14240,6 +15007,7 @@ async function resumeApplication(ref, stage) {
       if (allowPartyHydration && uboEmpty && Array.isArray(psUbos) && psUbos.length) {
         restorePartyRows('ubos-body', psUbos.map(function(u) {
           return {
+            id: u.id || '',
             first_name: u.first_name || '',
             last_name: u.last_name || '',
             full_name: u.full_name || u.name || '',
@@ -14250,6 +15018,7 @@ async function resumeApplication(ref, stage) {
             ownership_pct: u.ownership_pct || '',
             is_pep: u.is_pep || 'No',
             person_key: u.person_key || '',
+            professional_profile_url: u.professional_profile_url || '',
             pep_declaration: u.pep_declaration || {},
             source: u.source || '',
             psc_state: u.psc_state || '',
@@ -14269,6 +15038,7 @@ async function resumeApplication(ref, stage) {
         if (intEmpty) {
           restorePartyRows('intermediaries-body', psInts.map(function(i) {
             return {
+              id: i.id || '',
               entity_name: i.entity_name || i.full_name || i.name || '',
               jurisdiction: i.jurisdiction || i.country_of_incorporation || '',
               registration_number: i.registration_number || '',
@@ -14276,6 +15046,7 @@ async function resumeApplication(ref, stage) {
               ownership_pct: i.ownership_pct || '',
               owned_or_controlled_by: i.owned_or_controlled_by || '',
               person_key: i.person_key || '',
+              professional_profile_url: i.professional_profile_url || '',
               source: i.source || '',
               psc_state: i.psc_state || '',
               psc_kind: i.psc_kind || '',
@@ -14306,10 +15077,8 @@ async function resumeApplication(ref, stage) {
       renderPrescreeningPepPanels();
       restorePepDeclarationList(psDirs);
       restorePepDeclarationList(psUbos);
-      syncPersistedApplicationDocuments(app);
       renderRMIRequests(app.rmi_requests || []);
-      loadPortalEnhancedRequirements();
-      buildReviewScreen();
+      await loadPortalEnhancedRequirements();
     }
   } catch (err) {
     console.error('Failed to load application detail for resume:', err);
@@ -14319,6 +15088,13 @@ async function resumeApplication(ref, stage) {
   }
   showView(target);
   applyApplicationViewState(target);
+  // applyApplicationViewState rebuilds KYC person cards for KYC-facing views.
+  // Hydrate persisted documents only after that final rebuild so clean-login
+  // restore cannot erase filenames, verification state, or party associations.
+  if (resumedApplication) {
+    syncPersistedApplicationDocuments(resumedApplication);
+    buildReviewScreen();
+  }
   document.querySelectorAll('#global-client-sidebar .dash-nav-item').forEach(b => b.classList.remove('active'));
   const snavId = REF_TO_SNAV[ref];
   if (snavId) {

@@ -23,6 +23,48 @@ class TestPeriodicReviewWorkspace(_PeriodicReviewAttestationBase):
             answers[key] = value
         return {"answers": answers, "declaration_accepted": True}
 
+    def _link_verified_documents(self, requests, prefix):
+        from enhanced_requirements import enhanced_requirement_document_policy
+
+        for idx, requirement in enumerate(requests, start=1):
+            doc_id = f"{prefix}-{idx}"
+            stored_requirement = self._conn.execute(
+                """
+                SELECT requirement_key
+                  FROM application_enhanced_requirements
+                 WHERE id=?
+                """,
+                (requirement["id"],),
+            ).fetchone()
+            assert stored_requirement is not None
+            doc_type = enhanced_requirement_document_policy(
+                stored_requirement["requirement_key"]
+            )["document_type"]
+            self._conn.execute(
+                """
+                INSERT INTO documents
+                (id, application_id, doc_type, doc_name, file_path, slot_key,
+                 is_current, version, uploaded_at, verification_status, review_status)
+                VALUES (?, ?, ?, ?, ?, ?, 1, 1, datetime('now'), 'verified', 'accepted')
+                """,
+                (
+                    doc_id,
+                    "app-owned",
+                    doc_type,
+                    f"{prefix}-{idx}.pdf",
+                    f"/tmp/{prefix}-{idx}.pdf",
+                    f"enhanced_requirement:{requirement['id']}",
+                ),
+            )
+            self._conn.execute(
+                """
+                UPDATE application_enhanced_requirements
+                SET linked_document_id = ?, status = 'uploaded'
+                WHERE id = ?
+                """,
+                (doc_id, requirement["id"]),
+            )
+
     def test_workspace_overview_exposes_core_review_context(self):
         resp = self._get(f"/api/monitoring/reviews/{self._owned_review_id}", self.admin_token)
         assert resp.code == 200
@@ -122,24 +164,7 @@ class TestPeriodicReviewWorkspace(_PeriodicReviewAttestationBase):
         )
         assert submit.code == 200
         requests = json.loads(submit.body)["document_requests"]
-        for idx, requirement in enumerate(requests, start=1):
-            doc_id = f"doc-prs4-ready-{idx}"
-            self._conn.execute(
-                """
-                INSERT INTO documents
-                (id, application_id, doc_type, doc_name, file_path, uploaded_at, verification_status, review_status)
-                VALUES (?, ?, ?, ?, ?, datetime('now'), 'verified', 'accepted')
-                """,
-                (doc_id, "app-owned", "supporting_evidence", f"evidence-{idx}.pdf", f"/tmp/evidence-{idx}.pdf"),
-            )
-            self._conn.execute(
-                """
-                UPDATE application_enhanced_requirements
-                SET linked_document_id = ?, status = 'uploaded'
-                WHERE id = ?
-                """,
-                (doc_id, requirement["id"]),
-            )
+        self._link_verified_documents(requests, "doc-prs4-ready")
         self._conn.commit()
 
         resp = self._get(f"/api/monitoring/reviews/{self._owned_review_id}", self.admin_token)
@@ -160,24 +185,7 @@ class TestPeriodicReviewWorkspace(_PeriodicReviewAttestationBase):
         )
         assert submit.code == 200
         requests = json.loads(submit.body)["document_requests"]
-        for idx, requirement in enumerate(requests, start=1):
-            doc_id = f"doc-prs4-decision-{idx}"
-            self._conn.execute(
-                """
-                INSERT INTO documents
-                (id, application_id, doc_type, doc_name, file_path, uploaded_at, verification_status, review_status)
-                VALUES (?, ?, ?, ?, ?, datetime('now'), 'verified', 'accepted')
-                """,
-                (doc_id, "app-owned", "supporting_evidence", f"decision-{idx}.pdf", f"/tmp/decision-{idx}.pdf"),
-            )
-            self._conn.execute(
-                """
-                UPDATE application_enhanced_requirements
-                SET linked_document_id = ?, status = 'uploaded'
-                WHERE id = ?
-                """,
-                (doc_id, requirement["id"]),
-            )
+        self._link_verified_documents(requests, "doc-prs4-decision")
         self._conn.execute(
             """
             UPDATE periodic_reviews

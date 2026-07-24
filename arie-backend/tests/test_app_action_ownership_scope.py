@@ -417,13 +417,38 @@ class TestOwnershipGateHTTP(tornado.testing.AsyncHTTPTestCase):
         if documents_ready:
             insert_verified_required_documents(self.db, app_id)
         if risk in ("HIGH", "VERY_HIGH"):
+            document_id = f"own_req_doc_{suffix}"
             self.db.execute(
                 "INSERT INTO application_enhanced_requirements "
-                "(application_id, trigger_key, trigger_label, requirement_key, requirement_label, "
-                " requirement_type, waivable, blocking_approval, mandatory, status) "
-                "VALUES (?, 'high_risk', 'High Risk', 'source_wealth', 'Source of Wealth', "
-                " 'document', 1, 1, 1, 'accepted')",
+                "(application_id, trigger_key, trigger_label, requirement_key, "
+                " requirement_label, requirement_type, waivable, blocking_approval, "
+                " mandatory, status) "
+                "VALUES (?, 'high_risk', 'High Risk', 'source_wealth', "
+                " 'Source of Wealth', 'document', 1, 1, 1, 'accepted')",
                 (app_id,),
+            )
+            requirement_id = self.db._cursor.lastrowid
+            self.db.execute(
+                """
+                INSERT INTO documents
+                    (id, application_id, doc_type, doc_name, file_path,
+                     slot_key, is_current, version, verification_status)
+                VALUES (?, ?, 'source_wealth', 'synthetic-source-wealth.pdf',
+                        '/tmp/synthetic-source-wealth.pdf', ?, 1, 1, 'verified')
+                """,
+                (
+                    document_id,
+                    app_id,
+                    f"enhanced_requirement:{requirement_id}",
+                ),
+            )
+            self.db.execute(
+                """
+                UPDATE application_enhanced_requirements
+                   SET linked_document_id=?
+                 WHERE id=?
+                """,
+                (document_id, requirement_id),
             )
         self.db.commit()
         return app_id, ref

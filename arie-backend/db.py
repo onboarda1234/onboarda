@@ -807,6 +807,7 @@ def _get_postgres_schema() -> str:
         date_of_birth TEXT,
         country_of_residence TEXT,
         residential_address TEXT,
+        professional_profile_url TEXT,
         date_of_appointment TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -826,6 +827,7 @@ def _get_postgres_schema() -> str:
         date_of_birth TEXT,
         country_of_residence TEXT,
         residential_address TEXT,
+        professional_profile_url TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -848,6 +850,7 @@ def _get_postgres_schema() -> str:
         id TEXT PRIMARY KEY DEFAULT encode(gen_random_bytes(8), 'hex'),
         application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
         person_id TEXT,
+        person_type TEXT,
         doc_type TEXT NOT NULL,
         doc_name TEXT NOT NULL,
         file_path TEXT NOT NULL,
@@ -2274,6 +2277,7 @@ def _get_sqlite_schema() -> str:
         date_of_birth TEXT,
         country_of_residence TEXT,
         residential_address TEXT,
+        professional_profile_url TEXT,
         date_of_appointment TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
@@ -2293,6 +2297,7 @@ def _get_sqlite_schema() -> str:
         date_of_birth TEXT,
         country_of_residence TEXT,
         residential_address TEXT,
+        professional_profile_url TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -2315,6 +2320,7 @@ def _get_sqlite_schema() -> str:
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
         application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
         person_id TEXT,
+        person_type TEXT,
         doc_type TEXT NOT NULL,
         doc_name TEXT NOT NULL,
         file_path TEXT NOT NULL,
@@ -5929,44 +5935,55 @@ def _document_person_type_from_prefix(person_id):
     return None
 
 
-def _document_person_type_for_ref(db: DBConnection, application_id, person_id):
+def _document_person_type_for_ref(
+    db: DBConnection,
+    application_id,
+    person_id,
+    stored_person_type=None,
+):
+    """Validate an already-typed, stable party reference for startup repair.
+
+    Startup is not an incident-repair boundary.  It must never infer ownership
+    from a prefix or legacy ``person_key`` alias because an alias can collide
+    with another row's stable id (or with a second alias).  Only a persisted
+    canonical type plus exactly one matching row whose *id* equals the stored
+    document reference is safe for automatic slot/version maintenance.
+    """
     person_ref = str(person_id or "").strip()
     if not person_ref:
         return None
 
-    prefix_type = _document_person_type_from_prefix(person_ref)
-    matches = []
-    lookup_sql = {
-        "director": "SELECT 1 FROM directors WHERE application_id = ? AND (id = ? OR person_key = ?) LIMIT 1",
-        "ubo": "SELECT 1 FROM ubos WHERE application_id = ? AND (id = ? OR person_key = ?) LIMIT 1",
-        "intermediary": "SELECT 1 FROM intermediaries WHERE application_id = ? AND (id = ? OR person_key = ?) LIMIT 1",
-    }
-    for person_type, sql in lookup_sql.items():
-        table = {
-            "director": "directors",
-            "ubo": "ubos",
-            "intermediary": "intermediaries",
-        }[person_type]
-        if not _safe_table_exists(db, table):
-            continue
-        if db.execute(sql, (application_id, person_ref, person_ref)).fetchone():
-            matches.append(person_type)
+    person_type = _document_normalize_person_type(stored_person_type)
+    table = {
+        "director": "directors",
+        "ubo": "ubos",
+        "intermediary": "intermediaries",
+    }.get(person_type)
+    if not table or not _safe_table_exists(db, table):
+        return None
 
-    if prefix_type and (not matches or prefix_type in matches):
-        return prefix_type
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
+    matches = db.execute(
+        f"""
+        SELECT id, person_key
+          FROM {table}
+         WHERE application_id = ?
+           AND (id = ? OR person_key = ?)
+         ORDER BY id
+        """,
+        (application_id, person_ref, person_ref),
+    ).fetchall()
+    if len(matches) != 1 or str(_document_row_get(matches[0], "id") or "") != person_ref:
         logger.warning(
-            "document versioning repair found ambiguous person reference; "
-            "application_id=%s person_id=%s matched_types=%s using=%s",
+            "document versioning repair found non-canonical or ambiguous typed "
+            "person reference; application_id=%s person_id=%s person_type=%s "
+            "matched_party_ids=%s; leaving ownership unchanged",
             application_id,
             person_ref,
-            matches,
-            matches[0],
+            person_type,
+            [str(_document_row_get(row, "id") or "") for row in matches],
         )
-        return matches[0]
-    return prefix_type or "unknown"
+        return None
+    return person_type
 
 
 def _document_default_slot_key(doc_type, person_id=None, person_type=None):
@@ -6009,6 +6026,23 @@ def _ensure_document_versioning_columns(db: DBConnection):
         if not _safe_column_exists(db, "documents", column):
             db.execute(f"ALTER TABLE documents ADD COLUMN {column} {definition}")
     db.execute("CREATE INDEX IF NOT EXISTS idx_documents_current_slot ON documents(application_id, slot_key, is_current)")
+
+
+def _ensure_kyc_party_document_integrity_columns(db: DBConnection):
+    """Ensure typed document ownership and encrypted profile storage columns exist."""
+    additions = (
+        ("directors", "professional_profile_url", "TEXT"),
+        ("ubos", "professional_profile_url", "TEXT"),
+        ("documents", "person_type", "TEXT"),
+    )
+    for table_name, column_name, definition in additions:
+        if _safe_table_exists(db, table_name) and not _safe_column_exists(db, table_name, column_name):
+            db.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+    if _safe_table_exists(db, "documents"):
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_documents_application_person "
+            "ON documents(application_id, person_type, person_id)"
+        )
 
 
 def _ensure_document_health_columns(db: DBConnection):
@@ -6140,7 +6174,7 @@ def repair_document_current_versions(db: DBConnection):
                    )
             """)
         slot_rows = db.execute("""
-            SELECT id, application_id, person_id, doc_type, slot_key
+            SELECT id, application_id, person_id, person_type, doc_type, slot_key
               FROM documents
         """).fetchall()
         for row in slot_rows:
@@ -6150,8 +6184,42 @@ def repair_document_current_versions(db: DBConnection):
                 continue
             application_id = _document_row_get(row, "application_id")
             person_id = _document_row_get(row, "person_id")
+            stored_person_type = _document_row_get(row, "person_type")
             doc_type = _document_row_get(row, "doc_type")
-            person_type = _document_person_type_for_ref(db, application_id, person_id) if person_id else None
+            person_type = (
+                _document_person_type_for_ref(
+                    db,
+                    application_id,
+                    person_id,
+                    stored_person_type,
+                )
+                if person_id
+                else None
+            )
+            if person_id and not person_type:
+                logger.warning(
+                    "document versioning repair left unresolved/ambiguous ownership unchanged; "
+                    "application_id=%s document_id=%s",
+                    application_id,
+                    doc_id,
+                )
+                continue
+            slot_parts = current_slot_key.split(":", 3)
+            slot_person_type = (
+                _document_normalize_person_type(slot_parts[1])
+                if len(slot_parts) == 4 and slot_parts[0] == "person"
+                else None
+            )
+            if slot_person_type and person_type and slot_person_type != person_type:
+                logger.warning(
+                    "document versioning repair found conflicting typed ownership; "
+                    "application_id=%s document_id=%s stored_type=%s resolved_type=%s",
+                    application_id,
+                    doc_id,
+                    slot_person_type,
+                    person_type,
+                )
+                continue
             computed_slot_key = _document_default_slot_key(doc_type, person_id, person_type)
             legacy_slot_key = _document_legacy_person_slot_key(doc_type, person_id)
             if (
@@ -6159,7 +6227,6 @@ def repair_document_current_versions(db: DBConnection):
                 or (legacy_slot_key and current_slot_key == legacy_slot_key)
                 or current_slot_key == _document_default_slot_key(doc_type, person_id, "unknown")
                 or (not person_id and current_slot_key.startswith("entity:") and current_slot_key != computed_slot_key)
-                or (person_id and current_slot_key.startswith("person:") and current_slot_key != computed_slot_key)
             ):
                 db.execute(
                     "UPDATE documents SET slot_key = ? WHERE id = ?",
@@ -6171,7 +6238,7 @@ def repair_document_current_versions(db: DBConnection):
         raise
 
     rows = db.execute("""
-        SELECT id, application_id, person_id, doc_type, slot_key,
+        SELECT id, application_id, person_id, person_type, doc_type, slot_key,
                uploaded_at, verified_at, reviewed_at, is_current, version,
                superseded_at
           FROM documents
@@ -6180,17 +6247,29 @@ def repair_document_current_versions(db: DBConnection):
 
     groups = {}
     for row in rows:
+        row_slot_key = _document_row_get(row, "slot_key")
+        row_person_id = _document_row_get(row, "person_id")
+        validated_person_type = (
+            _document_person_type_for_ref(
+                db,
+                _document_row_get(row, "application_id", ""),
+                row_person_id,
+                _document_row_get(row, "person_type"),
+            )
+            if row_person_id else None
+        )
+        if row_person_id and not validated_person_type:
+            # Do not group or supersede a legacy/ambiguous person document even
+            # when it already carries a shared-looking slot key.  The guarded
+            # incident repair owns historical association decisions.
+            continue
         key = (
             _document_row_get(row, "application_id", ""),
-            _document_row_get(row, "slot_key")
+            row_slot_key
             or _document_default_slot_key(
                 _document_row_get(row, "doc_type"),
-                _document_row_get(row, "person_id"),
-                _document_person_type_for_ref(
-                    db,
-                    _document_row_get(row, "application_id", ""),
-                    _document_row_get(row, "person_id"),
-                ) if _document_row_get(row, "person_id") else None,
+                row_person_id,
+                validated_person_type,
             ),
         )
         groups.setdefault(key, []).append(row)
@@ -6290,6 +6369,32 @@ def repair_document_current_versions(db: DBConnection):
             "document versioning repair completed: repaired_groups=%d ambiguous_groups=%d",
             repaired_groups,
             ambiguous_groups,
+        )
+    current_predicate = "is_current IS TRUE" if db.is_postgres else "is_current = 1"
+    unresolved_duplicate = db.execute(
+        f"""
+        SELECT application_id, slot_key, COUNT(*) AS current_count
+          FROM documents
+         WHERE slot_key IS NOT NULL
+           AND slot_key != ''
+           AND {current_predicate}
+         GROUP BY application_id, slot_key
+        HAVING COUNT(*) > 1
+         LIMIT 1
+        """
+    ).fetchone()
+    if unresolved_duplicate:
+        logger.error(
+            "document current-slot invariant cannot be established because guarded "
+            "startup repair left an unresolved duplicate unchanged; application_id=%s "
+            "slot_key=%s current_count=%s",
+            _document_row_get(unresolved_duplicate, "application_id"),
+            _document_row_get(unresolved_duplicate, "slot_key"),
+            _document_row_get(unresolved_duplicate, "current_count"),
+        )
+        raise RuntimeError(
+            "Refusing startup without the one-current-document-per-slot invariant; "
+            "run the approval-gated KYC party/document repair workflow."
         )
     _ensure_document_current_slot_unique_index(db)
 
@@ -6504,6 +6609,11 @@ END;
 
 def _run_migrations(db: DBConnection):
     """Run incremental schema migrations for existing databases."""
+    # P0 KYC persistence integrity: these columns are required by active write
+    # paths, so startup fails closed if they cannot be installed.
+    _ensure_kyc_party_document_integrity_columns(db)
+    db.commit()
+
     _ensure_country_risk_governance(db)
 
     # Committed + verified independently so later failing migration steps
@@ -8145,31 +8255,30 @@ def _run_migrations(db: DBConnection):
     # These were created before the ``f1xed`` namespace was established.
     #
     # Fix: Add an explicit ``is_fixture`` boolean marker column, backfill
-    # all existing ``f1xed%`` rows (belt-and-suspenders), and mark the 8
-    # rogue rows by their stable ``ref`` value.  The fixture_filter module
-    # combines both signals: ``id LIKE 'f1xed%' OR is_fixture``.
+    # all existing ``f1xed%`` rows (belt-and-suspenders), and mark the 9
+    # rogue rows by their exact (ref, company_name) identity.  The
+    # fixture_filter module combines both signals:
+    # ``id LIKE 'f1xed%' OR is_fixture``.
     #
     # IMPORTANT — environment guard on the rogue-ref UPDATE:
-    # The rogue refs share the same sequential ref range as the first real
-    # customer applications created in any environment (since
-    # _REF_BASE_NUMBER = 100421).  Unconditionally marking these refs as
-    # is_fixture=1 on every startup will hide real production/pilot
-    # applications from every Back Office query.
-    # The rogue-ref UPDATE therefore runs ONLY in demo/staging environments
-    # (where those rows are known test data).  In all other environments
-    # (production, development, testing) the code instead resets any rows
-    # that were incorrectly marked by a previous migration run, restoring
-    # Back Office visibility for real applications.
-    _ROGUE_FIXTURE_REFS = (
-        "ARF-2026-100454",  # EX06 DualApproval Test Corp
-        "ARF-2026-100456",  # EX06 Validation TestCo Ltd
-        "ARF-2026-100455",  # HighRisk Dual Approval Test Ltd
-        "ARF-2026-100421",  # Pipeline Test Corp Ltd
-        "ARF-2026-100424",  # Portal Audit Test Ltd
-        "ARF-2026-100430",  # Probe Test Co
-        "ARF-2026-100428",  # test 2
-        "ARF-2026-100427",  # test [QA-R10-mnyuuv7q]
-        "ARF-2026-900372",  # Smoke Holdco Ltd (staging smoke row missed by name patterns)
+    # These refs share the same sequential namespace as real pilot
+    # applications (since _REF_BASE_NUMBER = 100421).  Ref-only matching on
+    # every startup therefore hides a later legitimate application when a
+    # reference is reused.  Match both immutable historical attributes, in
+    # line with file migration 020.
+    _ROGUE_FIXTURE_IDENTITIES = (
+        ("ARF-2026-100454", "EX06 DualApproval Test Corp"),
+        ("ARF-2026-100456", "EX06 Validation TestCo Ltd"),
+        ("ARF-2026-100455", "HighRisk Dual Approval Test Ltd"),
+        ("ARF-2026-100421", "Pipeline Test Corp Ltd"),
+        ("ARF-2026-100424", "Portal Audit Test Ltd"),
+        ("ARF-2026-100430", "Probe Test Co"),
+        ("ARF-2026-100428", "test 2"),
+        ("ARF-2026-100427", "test [QA-R10-mnyuuv7q]"),
+        ("ARF-2026-900372", "Smoke Holdco Ltd"),
+    )
+    _ROGUE_FIXTURE_REFS = tuple(
+        ref for ref, _company_name in _ROGUE_FIXTURE_IDENTITIES
     )
     # Dialect-aware truthy/falsy literals for the is_fixture column.
     # PostgreSQL declares the column as BOOLEAN, SQLite as INTEGER.  Writing
@@ -8218,8 +8327,18 @@ def _run_migrations(db: DBConnection):
             f"UPDATE applications SET is_fixture = {_TRUE_LIT} WHERE id LIKE ?",
             ("f1xed%",),
         )
-        # Rogue-ref marking is ENVIRONMENT-SCOPED to prevent hiding real data.
-        if _ROGUE_FIXTURE_REFS:
+        # Historical fixture marking is ENVIRONMENT-SCOPED and uses exact
+        # identities so a reused pilot ref cannot be hidden.
+        if _ROGUE_FIXTURE_IDENTITIES:
+            identity_clause = " OR ".join(
+                ["(ref = ? AND company_name = ?)"] *
+                len(_ROGUE_FIXTURE_IDENTITIES)
+            )
+            identity_params = [
+                value
+                for identity in _ROGUE_FIXTURE_IDENTITIES
+                for value in identity
+            ]
             placeholders = ",".join(["?"] * len(_ROGUE_FIXTURE_REFS))
             try:
                 from environment import (
@@ -8235,17 +8354,22 @@ def _run_migrations(db: DBConnection):
                 )
                 _is_demo_or_staging_env = False
             if _is_demo_or_staging_env:
-                # demo/staging: mark the 8 known rogue test rows as fixtures.
+                # demo/staging: mark only the 9 known historical identities.
+                # This prevents any new ref-only false positive.  Existing
+                # stale TRUE flags are historical data repair and deliberately
+                # remain untouched here; the approval-gated repair tool must
+                # diagnose/report each row before any staging correction.
                 db.execute(
-                    f"UPDATE applications SET is_fixture = {_TRUE_LIT} WHERE ref IN ({placeholders})",
-                    list(_ROGUE_FIXTURE_REFS),
+                    f"UPDATE applications SET is_fixture = {_TRUE_LIT} "
+                    f"WHERE {identity_clause}",
+                    identity_params,
                 )
                 # NB: db.execute() returns the DBConnection wrapper, not a cursor.
                 # rowcount lives on the underlying cursor (db._cursor); read it via
                 # getattr so this stays safe across DBAPI adapters.
                 rows_updated = getattr(db._cursor, "rowcount", -1)
                 logger.info(
-                    "Migration v2.29: Marked %d rogue historical test row(s) as is_fixture"
+                    "Migration v2.29: Marked %d exact historical test row(s) as is_fixture"
                     " (demo/staging environment)",
                     rows_updated or 0,
                 )
@@ -8503,6 +8627,9 @@ def _run_migrations(db: DBConnection):
             db.rollback()
         except Exception:
             pass
+        raise RuntimeError(
+            "Migration v2.34 could not establish the document current-slot invariant"
+        ) from e
 
     # Migration v2.35: Persist document expiry metadata used by ongoing
     # monitoring and periodic review document-health checks.

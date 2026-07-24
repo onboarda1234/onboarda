@@ -512,13 +512,23 @@ def test_document_upload_completion_suppresses_outstanding_document_reminders(pr
     assert first["sent_events"] == ["periodic_review_documents_required"]
 
     doc_id = "prs6-uploaded-doc"
+    requirement = prs6_db.execute(
+        """
+        SELECT id
+        FROM application_enhanced_requirements
+        WHERE linked_periodic_review_id = ?
+        """,
+        (review["id"],),
+    ).fetchone()
     prs6_db.execute(
         """
         INSERT INTO documents
-            (id, application_id, doc_type, doc_name, file_path, uploaded_at, verification_status, review_status)
-        VALUES (?, 'app-owned', 'supporting_evidence', 'support.pdf', '/tmp/support.pdf', datetime('now'), 'verified', 'accepted')
+            (id, application_id, doc_type, doc_name, file_path, slot_key,
+             is_current, version, uploaded_at, verification_status, review_status)
+        VALUES (?, 'app-owned', 'supporting_document', 'support.pdf',
+                '/tmp/support.pdf', ?, 1, 1, datetime('now'), 'verified', 'accepted')
         """,
-        (doc_id,),
+        (doc_id, f"enhanced_requirement:{requirement['id']}"),
     )
     prs6_db.execute(
         """

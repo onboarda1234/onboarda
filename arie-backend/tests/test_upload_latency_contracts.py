@@ -140,9 +140,9 @@ def test_upload_201_response_document_row_and_audit_shape(
     upload_contract_application,
 ):
     resp = http_requests.post(
-        f"{upload_contract_server}/api/applications/{APPLICATION_ID}/documents?doc_type=passport",
+        f"{upload_contract_server}/api/applications/{APPLICATION_ID}/documents?doc_type=cert_inc",
         headers={"Authorization": f"Bearer {upload_contract_application['token']}"},
-        files={"file": ("passport.pdf", PDF_BYTES, "application/pdf")},
+        files={"file": ("certificate-of-incorporation.pdf", PDF_BYTES, "application/pdf")},
         timeout=5,
     )
 
@@ -154,6 +154,7 @@ def test_upload_201_response_document_row_and_audit_shape(
         "doc_type",
         "file_size",
         "s3_key",
+        "person_id",
         "person_type",
         "slot_key",
         "is_current",
@@ -167,12 +168,13 @@ def test_upload_201_response_document_row_and_audit_shape(
         "verification_terminal",
         "verification_queued",
     }
-    assert body["doc_name"] == "passport.pdf"
-    assert body["doc_type"] == "passport"
+    assert body["doc_name"] == "certificate-of-incorporation.pdf"
+    assert body["doc_type"] == "cert_inc"
     assert body["file_size"] == len(PDF_BYTES)
     assert body["s3_key"] is None
+    assert body["person_id"] is None
     assert body["person_type"] is None
-    assert body["slot_key"] == "entity:passport"
+    assert body["slot_key"] == "entity:cert_inc"
     assert body["is_current"] is True
     assert body["version"] == 1
     assert body["replaced_document_ids"] == []
@@ -198,8 +200,8 @@ def test_upload_201_response_document_row_and_audit_shape(
     assert dict(doc) == {
         "id": body["id"],
         "application_id": APPLICATION_ID,
-        "doc_type": "passport",
-        "doc_name": "passport.pdf",
+        "doc_type": "cert_inc",
+        "doc_name": "certificate-of-incorporation.pdf",
         "file_size": len(PDF_BYTES),
         "mime_type": "application/pdf",
         "file_sha256": hashlib.sha256(PDF_BYTES).hexdigest(),
@@ -266,7 +268,9 @@ def test_upload_201_response_document_row_and_audit_shape(
     assert audit["user_role"] == "client"
     assert audit["action"] == "Upload"
     assert audit["target"] == APPLICATION_REF
-    assert audit["detail"] == "Document uploaded: passport.pdf (passport)"
+    assert audit["detail"] == (
+        "Document uploaded: certificate-of-incorporation.pdf (cert_inc)"
+    )
     assert audit["ip_address"] == "127.0.0.1"
     assert audit["before_state"] is None
     assert audit["after_state"] is None
@@ -459,7 +463,7 @@ def test_upload_size_cap_rejects_before_validation(
     oversized_pdf = b"%PDF" + (b"x" * (1024 * 1024))
 
     resp = http_requests.post(
-        f"{upload_contract_server}/api/applications/{APPLICATION_ID}/documents?doc_type=passport",
+        f"{upload_contract_server}/api/applications/{APPLICATION_ID}/documents?doc_type=cert_inc",
         headers={"Authorization": f"Bearer {upload_contract_application['token']}"},
         files={"file": ("oversized.pdf", oversized_pdf, "application/pdf")},
         timeout=5,

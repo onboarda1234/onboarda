@@ -211,8 +211,15 @@ from enhanced_requirements import (
     serialize_rule as serialize_enhanced_requirement_rule,
     submit_application_enhanced_requirement_response,
     update_application_enhanced_requirement,
+    validate_enhanced_requirement_document_link,
     validate_enhanced_requirements_for_approval,
     validate_rule_payload as validate_enhanced_requirement_rule_payload,
+)
+from document_scope_policy import (
+    ENTITY_BASE_DOCUMENT_TYPES,
+    INDIVIDUAL_BASE_DOCUMENT_TYPES,
+    INTERMEDIARY_BASE_DOCUMENT_TYPES,
+    base_document_scope_error_for_canonical_type,
 )
 import monitoring_status as _monitoring_status
 import monitoring_dismissal_control as _mdc
@@ -2099,13 +2106,207 @@ def _existing_parties_by_person_key(db, table_name, application_id):
     if table_name not in _PARTY_TABLES:
         raise ValueError("Unsupported party table")
     rows = db.execute(f"SELECT * FROM {table_name} WHERE application_id = ?", (application_id,)).fetchall()
-    existing = {}
+    by_id = {}
+    by_person_key = {}
     for row in rows:
         record = dict(row)
-        person_key = record.get("person_key")
+        row_id = str(record.get("id") or "").strip()
+        if not row_id or row_id in by_id:
+            raise ValueError(
+                f"Existing {table_name} data has an invalid server identity; "
+                "party synchronization was refused"
+            )
+        by_id[row_id] = record
+        person_key = _normalize_party_person_key(record.get("person_key"))
+        if person_key and person_key in by_person_key:
+            raise ValueError(
+                f"Existing {table_name} data has a duplicate person_key; "
+                "party synchronization was refused to avoid an ambiguous identity update"
+            )
         if person_key:
-            existing[person_key] = record
-    return existing
+            record["person_key"] = person_key
+            by_person_key[person_key] = record
+    for person_key, key_owner in by_person_key.items():
+        id_owner = by_id.get(person_key)
+        if id_owner and id_owner["id"] != key_owner["id"]:
+            raise ValueError(
+                f"Existing {table_name} data has a server-id/person_key collision; "
+                "party synchronization was refused to avoid ambiguous identity"
+            )
+    return {
+        "rows": list(by_id.values()),
+        "by_id": by_id,
+        "by_person_key": by_person_key,
+    }
+
+
+def _normalize_party_person_key(value):
+    if value is None:
+        return ""
+    person_key = str(value).strip()
+    if (
+        not person_key
+        or len(person_key) > 200
+        or any(ord(char) < 32 or ord(char) == 127 for char in person_key)
+    ):
+        return ""
+    return person_key
+
+
+def _validate_professional_profile_url(value, *, allow_blank=False):
+    profile_url = str(value or "").strip()
+    if not profile_url:
+        if allow_blank:
+            return ""
+        raise ValueError("professional_profile_url is required")
+    if (
+        len(profile_url) > 2048
+        or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in profile_url)
+    ):
+        raise ValueError("professional_profile_url must be blank or a valid HTTP(S) URL")
+    parsed = urlparse(profile_url)
+    try:
+        parsed_port = parsed.port
+    except ValueError:
+        raise ValueError("professional_profile_url must be blank or a valid HTTP(S) URL")
+    if (
+        parsed.scheme.lower() not in ("http", "https")
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError("professional_profile_url must be blank or a valid HTTP(S) URL")
+    return profile_url
+
+
+def _prepare_party_sync_plan(db, table_name, application_id, rows, *, name_builder):
+    if not isinstance(rows, (list, tuple)):
+        raise ValueError(f"{table_name} must be a list")
+    incoming = []
+    seen_keys = set()
+    matched_ids = set()
+    existing_index = _existing_parties_by_person_key(db, table_name, application_id)
+    for raw_row in rows:
+        if not isinstance(raw_row, dict):
+            raise ValueError(f"Each {table_name} row must be an object")
+        row = dict(raw_row)
+        incoming_id = str(row.get("id") or "").strip()
+        person_key = _normalize_party_person_key(row.get("person_key"))
+        display_name = name_builder(row)
+        if not display_name:
+            # Ignore only a newly-added empty UI placeholder. An existing
+            # server identity with missing name data must never silently fall
+            # into stale-row deletion.
+            if incoming_id or (
+                person_key and person_key in existing_index["by_person_key"]
+            ):
+                raise ValueError(
+                    f"Existing {table_name} party is missing its required display name"
+                )
+            continue
+        if not person_key:
+            raise ValueError(
+                f"Each populated {table_name} row requires a stable person_key"
+            )
+        if person_key in seen_keys:
+            raise ValueError(f"Duplicate person_key in {table_name} payload")
+        seen_keys.add(person_key)
+        row["person_key"] = person_key
+        existing = None
+        if incoming_id:
+            existing = existing_index["by_id"].get(incoming_id)
+            if not existing:
+                raise ValueError(
+                    f"Party id in {table_name} does not belong to this application and person_type"
+                )
+            key_owner = existing_index["by_person_key"].get(person_key)
+            if key_owner and key_owner["id"] != incoming_id:
+                raise ValueError(
+                    f"Party id and person_key identify different {table_name} rows"
+                )
+        else:
+            existing = existing_index["by_person_key"].get(person_key)
+        id_alias_owner = existing_index["by_id"].get(person_key)
+        if id_alias_owner and (not existing or id_alias_owner["id"] != existing["id"]):
+            raise ValueError(
+                f"person_key in {table_name} collides with another party's server id"
+            )
+        if existing:
+            if existing["id"] in matched_ids:
+                raise ValueError(f"Duplicate party identity in {table_name} payload")
+            matched_ids.add(existing["id"])
+            old_person_key = _normalize_party_person_key(existing.get("person_key"))
+            if old_person_key and old_person_key != person_key:
+                linked = db.execute(
+                    f"""
+                    SELECT id
+                      FROM documents
+                     WHERE application_id=?
+                       AND person_id=?
+                     LIMIT 1
+                    """,
+                    (application_id, old_person_key),
+                ).fetchone()
+                if linked:
+                    raise ValueError(
+                        f"Cannot change {table_name} person_key while a document history row "
+                        "still references the legacy key"
+                    )
+        incoming.append((row, display_name, existing or {}))
+
+    stale_rows = [
+        record
+        for record in existing_index["rows"]
+        if record["id"] not in matched_ids
+    ]
+    for record in stale_rows:
+        refs = [record["id"]]
+        old_person_key = _normalize_party_person_key(record.get("person_key"))
+        if old_person_key:
+            refs.append(old_person_key)
+        placeholders = ",".join("?" for _ in refs)
+        linked = db.execute(
+            f"""
+            SELECT id
+              FROM documents
+             WHERE application_id=?
+               AND person_id IN ({placeholders})
+             LIMIT 1
+            """,
+            tuple([application_id] + refs),
+        ).fetchone()
+        if linked:
+            raise ValueError(
+                f"Cannot remove a {table_name} row while document history references it"
+            )
+        if not old_person_key:
+            raise ValueError(
+                f"Existing {table_name} data has a missing person_key and was not "
+                "explicitly matched by server id"
+            )
+    return {
+        "incoming": incoming,
+        "existing": existing_index,
+        "incoming_keys": seen_keys,
+        "stale_rows": stale_rows,
+    }
+
+
+def _lock_party_sync_transaction(db, application_id):
+    """Serialize keyed party synchronization for a single application."""
+    if getattr(db, "is_postgres", False):
+        db.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(?)::bigint)",
+            (f"application-parties:{application_id}",),
+        )
+
+
+def _delete_stale_party_rows(db, table_name, application_id, stale_rows):
+    for record in stale_rows:
+        db.execute(
+            f"DELETE FROM {table_name} WHERE id = ? AND application_id = ?",
+            (record["id"], application_id),
+        )
 
 
 def _normalize_iso_date(value):
@@ -2194,16 +2395,44 @@ def _preserved_party_bool(incoming, existing, key, default=False):
 
 
 def store_application_parties(db, application_id, directors=None, ubos=None, intermediaries=None):
-    """Store party records with validation of DOB and ownership_pct."""
+    """Synchronize party records by stable person_key without changing row IDs."""
+    if directors is None and ubos is None and intermediaries is None:
+        return
+
+    _lock_party_sync_transaction(db, application_id)
+
+    # Validate every supplied party collection before changing any row. A
+    # malformed director payload must not partially update UBOs (or vice versa).
+    plans = {}
     if directors is not None:
-        existing_directors = _existing_parties_by_person_key(db, "directors", application_id)
-        db.execute("DELETE FROM directors WHERE application_id = ?", (application_id,))
-        for director in directors:
-            full_name = build_full_name(director)
-            if not full_name:
-                continue
-            person_key = director.get("person_key")
-            existing = existing_directors.get(person_key) if person_key else {}
+        plans["directors"] = _prepare_party_sync_plan(
+            db,
+            "directors",
+            application_id,
+            directors,
+            name_builder=build_full_name,
+        )
+    if ubos is not None:
+        plans["ubos"] = _prepare_party_sync_plan(
+            db,
+            "ubos",
+            application_id,
+            ubos,
+            name_builder=build_full_name,
+        )
+    if intermediaries is not None:
+        plans["intermediaries"] = _prepare_party_sync_plan(
+            db,
+            "intermediaries",
+            application_id,
+            intermediaries,
+            name_builder=lambda row: first_non_empty(row.get("entity_name"), row.get("full_name")),
+        )
+
+    if "directors" in plans:
+        plan = plans["directors"]
+        for director, full_name, existing in plan["incoming"]:
+            person_key = director["person_key"]
             # Validate DOB if provided
             dob = director.get("date_of_birth", "")
             if dob:
@@ -2217,7 +2446,17 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 if canon:
                     director = dict(director)
                     director["nationality"] = canon
+            if director.get("professional_profile_url") not in (None, ""):
+                director = dict(director)
+                director["professional_profile_url"] = _validate_professional_profile_url(
+                    director["professional_profile_url"]
+                )
             encrypted = encrypt_pii_fields(director, PII_FIELDS_DIRECTORS)
+            professional_profile_url = (
+                encrypted.get("professional_profile_url")
+                if director.get("professional_profile_url") not in (None, "")
+                else existing.get("professional_profile_url", "")
+            )
             normalized_pep = normalize_is_pep(director.get("is_pep", "No"))
             pep_declaration = normalize_pep_declaration(
                 director.get("pep_declaration"),
@@ -2225,17 +2464,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 person_type="director",
                 person_key=director.get("person_key"),
             )
-            db.execute("""
-                INSERT INTO directors (
-                    application_id, person_key, first_name, last_name, full_name,
-                    nationality, is_pep, pep_declaration, date_of_birth,
-                    country_of_residence, residential_address, date_of_appointment,
-                    source, officer_role, officer_entity_type, requires_individual_kyc,
-                    requires_corporate_structure_review, registry_lookup_id, response_hash,
-                    source_metadata_json, imported_at, imported_by
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (
-                application_id,
+            values = (
                 person_key,
                 director.get("first_name", ""),
                 director.get("last_name", ""),
@@ -2246,6 +2475,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 dob,
                 encrypted.get("country_of_residence", ""),
                 encrypted.get("residential_address", ""),
+                professional_profile_url,
                 date_of_appointment,
                 _preserved_party_value(director, existing, "source"),
                 _preserved_party_value(director, existing, "officer_role"),
@@ -2257,22 +2487,52 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 _preserved_party_source_metadata_json_text(director, existing),
                 _preserved_party_nullable_value(director, existing, "imported_at"),
                 _preserved_party_value(director, existing, "imported_by"),
-            ))
-    if ubos is not None:
-        existing_ubos = _existing_parties_by_person_key(db, "ubos", application_id)
-        db.execute("DELETE FROM ubos WHERE application_id = ?", (application_id,))
-        for ubo in ubos:
-            full_name = build_full_name(ubo)
-            if not full_name:
-                continue
-            person_key = ubo.get("person_key")
-            existing = existing_ubos.get(person_key) if person_key else {}
+            )
+            if existing:
+                db.execute("""
+                    UPDATE directors SET
+                        person_key=?, first_name=?, last_name=?, full_name=?,
+                        nationality=?, is_pep=?, pep_declaration=?, date_of_birth=?,
+                        country_of_residence=?, residential_address=?,
+                        professional_profile_url=?, date_of_appointment=?, source=?,
+                        officer_role=?, officer_entity_type=?, requires_individual_kyc=?,
+                        requires_corporate_structure_review=?, registry_lookup_id=?,
+                        response_hash=?, source_metadata_json=?, imported_at=?, imported_by=?
+                    WHERE id=? AND application_id=?
+                """, values + (existing["id"], application_id))
+            else:
+                party_id = secrets.token_hex(8)
+                db.execute("""
+                    INSERT INTO directors (
+                        id, application_id, person_key, first_name, last_name, full_name,
+                        nationality, is_pep, pep_declaration, date_of_birth,
+                        country_of_residence, residential_address, professional_profile_url,
+                        date_of_appointment, source, officer_role, officer_entity_type,
+                        requires_individual_kyc, requires_corporate_structure_review,
+                        registry_lookup_id, response_hash, source_metadata_json, imported_at,
+                        imported_by
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (party_id, application_id) + values)
+        _delete_stale_party_rows(
+            db, "directors", application_id, plan["stale_rows"]
+        )
+
+    if "ubos" in plans:
+        plan = plans["ubos"]
+        for ubo, full_name, existing in plan["incoming"]:
+            person_key = ubo["person_key"]
             # Validate DOB if provided
             dob = ubo.get("date_of_birth", "")
             if dob:
                 _check_dob_not_future(dob)
                 dob = _validate_date_of_birth(dob)
-            pct_val = _parse_ownership_pct(ubo.get("ownership_pct"))
+            pct_val = _parse_ownership_pct(
+                _preserved_party_nullable_value(
+                    ubo,
+                    existing,
+                    "ownership_pct",
+                )
+            )
             # W2-6: Normalize nationality if canonical lookup is available
             raw_nat = ubo.get("nationality", "")
             if raw_nat and _canonicalise_country:
@@ -2280,7 +2540,17 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 if canon:
                     ubo = dict(ubo)
                     ubo["nationality"] = canon
+            if ubo.get("professional_profile_url") not in (None, ""):
+                ubo = dict(ubo)
+                ubo["professional_profile_url"] = _validate_professional_profile_url(
+                    ubo["professional_profile_url"]
+                )
             encrypted = encrypt_pii_fields(ubo, PII_FIELDS_UBOS)
+            professional_profile_url = (
+                encrypted.get("professional_profile_url")
+                if ubo.get("professional_profile_url") not in (None, "")
+                else existing.get("professional_profile_url", "")
+            )
             normalized_pep = normalize_is_pep(ubo.get("is_pep", "No"))
             pep_declaration = normalize_pep_declaration(
                 ubo.get("pep_declaration"),
@@ -2288,16 +2558,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 person_type="ubo",
                 person_key=ubo.get("person_key"),
             )
-            db.execute("""
-                INSERT INTO ubos (
-                    application_id, person_key, first_name, last_name, full_name,
-                    nationality, ownership_pct, is_pep, pep_declaration, date_of_birth,
-                    country_of_residence, residential_address, source, psc_state,
-                    registry_statement_type, psc_status_reason, psc_kind, is_candidate_ubo,
-                    registry_lookup_id, response_hash, source_metadata_json, imported_at, imported_by
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (
-                application_id,
+            values = (
                 person_key,
                 ubo.get("first_name", ""),
                 ubo.get("last_name", ""),
@@ -2309,6 +2570,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 dob,
                 encrypted.get("country_of_residence", ""),
                 encrypted.get("residential_address", ""),
+                professional_profile_url,
                 _preserved_party_value(ubo, existing, "source"),
                 _preserved_party_value(ubo, existing, "psc_state"),
                 _preserved_party_value(ubo, existing, "registry_statement_type"),
@@ -2320,31 +2582,48 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 _preserved_party_source_metadata_json_text(ubo, existing),
                 _preserved_party_nullable_value(ubo, existing, "imported_at"),
                 _preserved_party_value(ubo, existing, "imported_by"),
-            ))
-    if intermediaries is not None:
-        existing_intermediaries = _existing_parties_by_person_key(db, "intermediaries", application_id)
-        db.execute("DELETE FROM intermediaries WHERE application_id = ?", (application_id,))
-        for intermediary in intermediaries:
-            entity_name = first_non_empty(intermediary.get("entity_name"), intermediary.get("full_name"))
-            if not entity_name:
-                continue
-            intermediary_id = first_non_empty(intermediary.get("id"), secrets.token_hex(8))
-            person_key = intermediary.get("person_key")
-            existing = existing_intermediaries.get(person_key) if person_key else {}
-            intermediary_pct = _parse_ownership_pct(intermediary.get("ownership_pct"))
-            encrypted = encrypt_pii_fields(intermediary, PII_FIELDS_INTERMEDIARIES)
-            db.execute("""
-                INSERT INTO intermediaries (
-                    id, application_id, person_key, entity_name, jurisdiction,
-                    registration_number, registered_address, ownership_pct,
-                    owned_or_controlled_by, source, psc_state, psc_kind,
-                    is_candidate_intermediary, requires_corporate_structure_review,
-                    registry_lookup_id, response_hash, source_metadata_json, imported_at, imported_by
+            )
+            if existing:
+                db.execute("""
+                    UPDATE ubos SET
+                        person_key=?, first_name=?, last_name=?, full_name=?,
+                        nationality=?, ownership_pct=?, is_pep=?, pep_declaration=?,
+                        date_of_birth=?, country_of_residence=?, residential_address=?,
+                        professional_profile_url=?, source=?, psc_state=?,
+                        registry_statement_type=?, psc_status_reason=?, psc_kind=?,
+                        is_candidate_ubo=?, registry_lookup_id=?, response_hash=?,
+                        source_metadata_json=?, imported_at=?, imported_by=?
+                    WHERE id=? AND application_id=?
+                """, values + (existing["id"], application_id))
+            else:
+                party_id = secrets.token_hex(8)
+                db.execute("""
+                    INSERT INTO ubos (
+                        id, application_id, person_key, first_name, last_name, full_name,
+                        nationality, ownership_pct, is_pep, pep_declaration, date_of_birth,
+                        country_of_residence, residential_address, professional_profile_url,
+                        source, psc_state, registry_statement_type, psc_status_reason,
+                        psc_kind, is_candidate_ubo, registry_lookup_id, response_hash,
+                        source_metadata_json, imported_at, imported_by
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (party_id, application_id) + values)
+        _delete_stale_party_rows(
+            db, "ubos", application_id, plan["stale_rows"]
+        )
+
+    if "intermediaries" in plans:
+        plan = plans["intermediaries"]
+        for intermediary, entity_name, existing in plan["incoming"]:
+            person_key = intermediary["person_key"]
+            intermediary_pct = _parse_ownership_pct(
+                _preserved_party_nullable_value(
+                    intermediary,
+                    existing,
+                    "ownership_pct",
                 )
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (
-                intermediary_id,
-                application_id,
+            )
+            encrypted = encrypt_pii_fields(intermediary, PII_FIELDS_INTERMEDIARIES)
+            values = (
                 person_key,
                 entity_name,
                 intermediary.get("jurisdiction", ""),
@@ -2362,7 +2641,32 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 _preserved_party_source_metadata_json_text(intermediary, existing),
                 _preserved_party_nullable_value(intermediary, existing, "imported_at"),
                 _preserved_party_value(intermediary, existing, "imported_by"),
-            ))
+            )
+            if existing:
+                db.execute("""
+                    UPDATE intermediaries SET
+                        person_key=?, entity_name=?, jurisdiction=?, registration_number=?,
+                        registered_address=?, ownership_pct=?, owned_or_controlled_by=?,
+                        source=?, psc_state=?, psc_kind=?, is_candidate_intermediary=?,
+                        requires_corporate_structure_review=?, registry_lookup_id=?,
+                        response_hash=?, source_metadata_json=?, imported_at=?, imported_by=?
+                    WHERE id=? AND application_id=?
+                """, values + (existing["id"], application_id))
+            else:
+                party_id = secrets.token_hex(8)
+                db.execute("""
+                    INSERT INTO intermediaries (
+                        id, application_id, person_key, entity_name, jurisdiction,
+                        registration_number, registered_address, ownership_pct,
+                        owned_or_controlled_by, source, psc_state, psc_kind,
+                        is_candidate_intermediary, requires_corporate_structure_review,
+                        registry_lookup_id, response_hash, source_metadata_json, imported_at,
+                        imported_by
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (party_id, application_id) + values)
+        _delete_stale_party_rows(
+            db, "intermediaries", application_id, plan["stale_rows"]
+        )
 
 
 PERSON_TYPE_ALIASES = {
@@ -2392,40 +2696,40 @@ def _resolve_application_person_by_type(db, application_id, person_ref, person_t
         return None
     person_type = normalize_person_type(person_type)
     if person_type == "director":
-        director = db.execute("""
+        directors = db.execute("""
             SELECT id, person_key, first_name, last_name, full_name, nationality,
                    is_pep, pep_declaration, date_of_birth, country_of_residence,
-                   residential_address, date_of_appointment
+                   residential_address, professional_profile_url, date_of_appointment
             FROM directors WHERE application_id = ? AND (id = ? OR person_key = ?)
-            LIMIT 1
-        """, (application_id, person_ref, person_ref)).fetchone()
-        if director:
-            result = hydrate_party_record(director, PII_FIELDS_DIRECTORS)
+            LIMIT 2
+        """, (application_id, person_ref, person_ref)).fetchall()
+        if len(directors) == 1:
+            result = hydrate_party_record(directors[0], PII_FIELDS_DIRECTORS)
             result["person_type"] = "director"
             result["entity_type"] = "Person"
             return result
     elif person_type == "ubo":
-        ubo = db.execute("""
+        ubos = db.execute("""
             SELECT id, person_key, first_name, last_name, full_name, nationality,
                    ownership_pct, is_pep, pep_declaration, date_of_birth,
-                   country_of_residence, residential_address
+                   country_of_residence, residential_address, professional_profile_url
             FROM ubos WHERE application_id = ? AND (id = ? OR person_key = ?)
-            LIMIT 1
-        """, (application_id, person_ref, person_ref)).fetchone()
-        if ubo:
-            result = hydrate_party_record(ubo, PII_FIELDS_UBOS)
+            LIMIT 2
+        """, (application_id, person_ref, person_ref)).fetchall()
+        if len(ubos) == 1:
+            result = hydrate_party_record(ubos[0], PII_FIELDS_UBOS)
             result["person_type"] = "ubo"
             result["entity_type"] = "Person"
             return result
     elif person_type == "intermediary":
-        intermediary = db.execute("""
+        intermediaries = db.execute("""
             SELECT id, person_key, entity_name, jurisdiction, ownership_pct,
                    registration_number, registered_address, owned_or_controlled_by
             FROM intermediaries WHERE application_id = ? AND (id = ? OR person_key = ?)
-            LIMIT 1
-        """, (application_id, person_ref, person_ref)).fetchone()
-        if intermediary:
-            result = decrypt_pii_fields(dict(intermediary), PII_FIELDS_INTERMEDIARIES)
+            LIMIT 2
+        """, (application_id, person_ref, person_ref)).fetchall()
+        if len(intermediaries) == 1:
+            result = decrypt_pii_fields(dict(intermediaries[0]), PII_FIELDS_INTERMEDIARIES)
             result["full_name"] = result.get("entity_name", "")
             result["person_type"] = "intermediary"
             result["entity_type"] = "Company"
@@ -2440,43 +2744,41 @@ def resolve_application_person(db, application_id, person_ref, person_type=None)
     if requested_type:
         return _resolve_application_person_by_type(db, application_id, person_ref, requested_type)
 
+    matches = []
     for candidate_type in ("director", "ubo", "intermediary"):
         result = _resolve_application_person_by_type(db, application_id, person_ref, candidate_type)
         if result:
-            return result
+            matches.append(result)
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        logger.warning(
+            "untyped party resolution refused ambiguous reference; "
+            "application_id=%s matched_types=%s",
+            application_id,
+            sorted(match["person_type"] for match in matches),
+        )
 
     return None
 
 
 def resolve_document_subject_context(db, app, doc):
     person_record = None
-    if app and doc.get("person_id"):
-        person_record = resolve_application_person(db, app["id"], doc["person_id"])
-    if not person_record and app:
-        dir_match = re.search(r'_dir(\d+)$', doc.get("doc_type", ""))
-        ubo_match = re.search(r'_ubo(\d+)$', doc.get("doc_type", ""))
-        int_match = re.search(r'_int(\d+)$', doc.get("doc_type", ""))
-        if dir_match:
-            idx = int(dir_match.group(1)) - 1
-            directors = get_application_parties(db, app["id"])[0]
-            if 0 <= idx < len(directors):
-                person_record = directors[idx]
-                person_record["person_type"] = "director"
-                person_record["entity_type"] = "Person"
-        elif ubo_match:
-            idx = int(ubo_match.group(1)) - 1
-            ubos = get_application_parties(db, app["id"])[1]
-            if 0 <= idx < len(ubos):
-                person_record = ubos[idx]
-                person_record["person_type"] = "ubo"
-                person_record["entity_type"] = "Person"
-        elif int_match:
-            idx = int(int_match.group(1)) - 1
-            intermediaries = get_application_parties(db, app["id"])[2]
-            if 0 <= idx < len(intermediaries):
-                person_record = intermediaries[idx]
-                person_record["person_type"] = "intermediary"
-                person_record["entity_type"] = "Company"
+    person_type = normalize_person_type(doc.get("person_type"))
+    if app and doc.get("person_id") and person_type:
+        person_record = resolve_application_person(
+            db,
+            app["id"],
+            doc["person_id"],
+            person_type,
+        )
+    elif app and doc.get("person_id"):
+        logger.warning(
+            "document subject resolution refused untyped person reference; "
+            "application_id=%s document_id=%s",
+            app["id"],
+            doc.get("id", ""),
+        )
 
     raw_doc_type = doc.get("doc_type", "general")
     base_doc_type = raw_doc_type
@@ -5458,7 +5760,11 @@ class ApplicationsHandler(BaseHandler):
             query += " AND a.client_id = ?"
             params.append(user["sub"])
         if not show_fx:
-            fx_excl, fx_params = fixture_app_exclude_clause(include_text_patterns=True)
+            # Applications are regulated records.  Fixture visibility must use
+            # the authoritative reserved-id / is_fixture markers; broad
+            # company-name heuristics such as "%e2e%" hide legitimate pilot
+            # applications and their pre-approval queue entries.
+            fx_excl, fx_params = fixture_app_exclude_clause()
             query += f" AND {fx_excl}"
             params.extend(fx_params)
 
@@ -5649,7 +5955,7 @@ class ApplicationsHandler(BaseHandler):
             doc_placeholders = ",".join("?" for _ in app_ids)
             doc_rows = db.execute(
                 "SELECT id, doc_type, doc_name, file_size, verification_status, "
-                "verification_results, verified_at, person_id, review_status, "
+                "verification_results, verified_at, person_id, person_type, review_status, "
                 "review_comment, reviewed_by, reviewer_role, reviewed_at, application_id, "
                 "slot_key, is_current, version, superseded_at, superseded_by_document_id, "
                 "evidence_class, evidence_classification_note, evidence_classified_by, evidence_classified_at, "
@@ -10422,27 +10728,48 @@ class PricingAcceptHandler(BaseHandler):
             or str(app_snapshot.get("onboarding_lane") or "").strip().upper() == "EDD"
         )
 
-        # Update status: accepted pricing
-        db.execute("UPDATE applications SET status='pricing_accepted', updated_at=datetime('now') WHERE id=?", (real_id,))
-
         # Route based on risk level after pricing acceptance:
         # LOW/MEDIUM → proceed directly to KYC & Documents (straight-through)
         # HIGH/VERY_HIGH → pre-approval review (KYC blocked until officer pre-approves)
         if requires_pre_approval:
             next_status = "pre_approval_review"
-            db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
             message = "Pricing accepted. Your application is now undergoing an initial compliance review before document submission."
-            # Notify compliance officers
+        else:
+            next_status = "kyc_documents"
+            message = "Pricing accepted. Please proceed with KYC verification and document upload."
+
+        # Claim the transition with one compare-and-set write. PostgreSQL
+        # re-checks the WHERE predicate after waiting for a concurrent updater;
+        # SQLite serializes the writes and does the same before reporting
+        # rowcount. Therefore exactly one request can move this application out
+        # of pricing_review even when multiple workers read the old state.
+        #
+        # Side effects remain below this winning claim and in the same
+        # transaction. A losing request returns the existing fail-closed
+        # response without inserting notifications or an audit event.
+        db.execute(
+            """
+            UPDATE applications
+               SET status=?, updated_at=datetime('now')
+             WHERE id=? AND status='pricing_review'
+            """,
+            (next_status, real_id),
+        )
+        transitioned = getattr(getattr(db, "_cursor", None), "rowcount", 0)
+        if transitioned != 1:
+            db.rollback()
+            db.close()
+            return self.error("Application is not in pricing review stage", 400)
+
+        if requires_pre_approval:
+            # Notify compliance officers only after this request has won the
+            # exact-once transition claim.
             compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
             for cu in compliance_users:
                 db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
                           (cu["id"], f"PRE-APPROVAL REQUIRED: {app['ref']}",
                            f"{app['company_name']} — Risk: {risk_level}. Client accepted pricing. "
                            f"Pre-approval required before KYC proceeds."))
-        else:
-            next_status = "kyc_documents"
-            db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
-            message = "Pricing accepted. Please proceed with KYC verification and document upload."
 
         self.log_audit(
             user,
@@ -10572,7 +10899,7 @@ def _truthy_prescreening_value(value) -> bool:
 
 
 def _party_requirement_key(person):
-    return (person or {}).get("person_key") or (person or {}).get("id")
+    return (person or {}).get("id")
 
 
 def _kyc_party_is_pep(person):
@@ -10606,6 +10933,34 @@ def _kyc_required_document_expectations(db, app):
         {"doc_type": "structure_chart", "label": "Company Structure Chart", "person_id": None},
     ]
     directors, ubos, intermediaries = get_application_parties(db, app_dict.get("id"))
+    all_parties = list(directors or []) + list(ubos or []) + list(intermediaries or [])
+    identity_owners = {}
+    typed_parties = (
+        [("director", party) for party in directors or []]
+        + [("ubo", party) for party in ubos or []]
+        + [("intermediary", party) for party in intermediaries or []]
+    )
+    for party_type, party in typed_parties:
+        stable_id = str((party or {}).get("id") or "").strip()
+        owner = (party_type, stable_id)
+        for identifier in (
+            stable_id,
+            str((party or {}).get("person_key") or "").strip(),
+        ):
+            if identifier:
+                identity_owners.setdefault(identifier, set()).add(owner)
+
+    def legacy_key_for(person, person_id, person_type):
+        person_key = str((person or {}).get("person_key") or "").strip()
+        expected_owner = (person_type, str(person_id))
+        if (
+            not person_key
+            or person_key == str(person_id)
+            or identity_owners.get(person_key) != {expected_owner}
+        ):
+            return None
+        return person_key
+
     for party_type, people in (("director", directors or []), ("ubo", ubos or [])):
         for person in people:
             person_id = _party_requirement_key(person)
@@ -10617,12 +10972,14 @@ def _kyc_required_document_expectations(db, app):
                 "label": f"Passport / Government ID for {owner}",
                 "person_id": person_id,
                 "person_type": party_type,
+                "legacy_person_key": legacy_key_for(person, person_id, party_type),
             })
             expectations.append({
                 "doc_type": "poa",
                 "label": f"Proof of Address for {owner}",
                 "person_id": person_id,
                 "person_type": party_type,
+                "legacy_person_key": legacy_key_for(person, person_id, party_type),
             })
             if high_or_very_high or _kyc_party_is_pep(person):
                 expectations.append({
@@ -10630,12 +10987,14 @@ def _kyc_required_document_expectations(db, app):
                     "label": f"Bank Reference Letter for {owner}",
                     "person_id": person_id,
                     "person_type": party_type,
+                    "legacy_person_key": legacy_key_for(person, person_id, party_type),
                 })
                 expectations.append({
                     "doc_type": "source_wealth",
                     "label": f"Source of Wealth evidence for {owner}",
                     "person_id": person_id,
                     "person_type": party_type,
+                    "legacy_person_key": legacy_key_for(person, person_id, party_type),
                 })
     for person in intermediaries or []:
         person_id = _party_requirement_key(person)
@@ -10654,6 +11013,7 @@ def _kyc_required_document_expectations(db, app):
                 "label": f"{label} for {owner}",
                 "person_id": person_id,
                 "person_type": "intermediary",
+                "legacy_person_key": legacy_key_for(person, person_id, "intermediary"),
             })
 
     for expectation in expectations:
@@ -10774,6 +11134,53 @@ def _decorate_document_workflow_test_acceptance(db, doc):
     return doc
 
 
+def _pilot_document_for_expectation(expectation, documents, docs_by_id):
+    linked_document_id = expectation.get("linked_document_id")
+    if linked_document_id:
+        return docs_by_id.get(linked_document_id)
+
+    expected_doc_type = _normalize_document_type(expectation.get("doc_type"))
+    expected_person_id = str(expectation.get("person_id") or "").strip()
+    expected_person_type = normalize_person_type(expectation.get("person_type"))
+    legacy_person_key = str(expectation.get("legacy_person_key") or "").strip()
+    allowed_refs = {expected_person_id}
+    if legacy_person_key:
+        allowed_refs.add(legacy_person_key)
+    allowed_slots = {expectation.get("slot_key")}
+    if expected_person_id:
+        allowed_slots.add(_document_legacy_person_slot_key(expected_doc_type, expected_person_id))
+    if legacy_person_key:
+        allowed_slots.add(
+            _document_slot_key(
+                expected_doc_type,
+                legacy_person_key,
+                person_type=expected_person_type,
+            )
+        )
+        allowed_slots.add(_document_legacy_person_slot_key(expected_doc_type, legacy_person_key))
+    allowed_slots.discard(None)
+
+    candidates = []
+    for raw_doc in documents or []:
+        doc = dict(raw_doc)
+        if _normalize_document_type(doc.get("doc_type")) != expected_doc_type:
+            continue
+        actual_person_id = str(doc.get("person_id") or "").strip()
+        actual_person_type = normalize_person_type(doc.get("person_type"))
+        actual_slot = str(doc.get("slot_key") or "").strip()
+        if expected_person_id:
+            if actual_person_id not in allowed_refs or actual_person_type != expected_person_type:
+                continue
+            if actual_slot and actual_slot not in allowed_slots:
+                continue
+        elif actual_person_id or actual_person_type:
+            continue
+        elif actual_slot and actual_slot != expectation.get("slot_key"):
+            continue
+        candidates.append(doc)
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _pilot_evidence_classification_summary(db, app, documents=None):
     """Derive whether required evidence can support pilot approval-proof claims.
 
@@ -10791,19 +11198,18 @@ def _pilot_evidence_classification_summary(db, app, documents=None):
                 (app_id,),
             ).fetchall()
         ]
-    docs_by_slot = {}
+    else:
+        documents = [dict(doc) for doc in documents]
     docs_by_id = {}
     for doc in documents or []:
         doc_dict = dict(doc)
-        slot_key = doc_dict.get("slot_key") or _document_slot_key(doc_dict.get("doc_type"), doc_dict.get("person_id"))
-        docs_by_slot[slot_key] = doc_dict
         if doc_dict.get("id"):
             docs_by_id[doc_dict.get("id")] = doc_dict
 
     try:
         enhanced_rows = db.execute(
             """
-            SELECT id, requirement_key, requirement_label, linked_document_id, status
+            SELECT *
             FROM application_enhanced_requirements
             WHERE application_id = ?
               AND active = 1
@@ -10817,9 +11223,10 @@ def _pilot_evidence_classification_summary(db, app, documents=None):
     except Exception:
         enhanced_rows = []
     for row in enhanced_rows:
-        item = dict(row)
+        item = serialize_application_requirement(row)
+        policy_info = enhanced_requirement_document_policy(item.get("requirement_key"))
         expectations.append({
-            "doc_type": item.get("requirement_key") or "enhanced_requirement",
+            "doc_type": policy_info.get("document_type") or "supporting_document",
             "label": item.get("requirement_label") or item.get("requirement_key") or "Enhanced requirement evidence",
             "person_id": None,
             "person_type": None,
@@ -10828,6 +11235,7 @@ def _pilot_evidence_classification_summary(db, app, documents=None):
             "enhanced_requirement_id": item.get("id"),
             "linked_document_id": item.get("linked_document_id"),
             "requirement_status": item.get("status"),
+            "_enhanced_requirement": item,
         })
 
     missing_required = []
@@ -10840,7 +11248,21 @@ def _pilot_evidence_classification_summary(db, app, documents=None):
     for expectation in expectations:
         slot_key = expectation["slot_key"]
         linked_document_id = expectation.get("linked_document_id")
-        doc = docs_by_id.get(linked_document_id) if linked_document_id else docs_by_slot.get(slot_key)
+        link_integrity = None
+        if expectation.get("source") == "enhanced_requirement":
+            doc = None
+            if linked_document_id:
+                doc, link_integrity = validate_enhanced_requirement_document_link(
+                    db,
+                    app_id,
+                    expectation.get("_enhanced_requirement") or {},
+                    linked_document_id,
+                    document=docs_by_id.get(linked_document_id),
+                )
+                if not link_integrity.get("valid"):
+                    doc = None
+        else:
+            doc = _pilot_document_for_expectation(expectation, documents, docs_by_id)
         base = {
             "slot_key": slot_key,
             "doc_type": expectation.get("doc_type"),
@@ -10851,9 +11273,13 @@ def _pilot_evidence_classification_summary(db, app, documents=None):
             "enhanced_requirement_id": expectation.get("enhanced_requirement_id"),
             "linked_document_id": linked_document_id,
             "requirement_status": expectation.get("requirement_status"),
+            "document_link_integrity": link_integrity,
         }
         if not doc:
-            missing_required.append(base)
+            if link_integrity and not link_integrity.get("valid"):
+                invalid_required.append(base)
+            else:
+                missing_required.append(base)
             continue
         evidence_class = _normalize_evidence_class(doc.get("evidence_class"))
         item = {
@@ -11385,6 +11811,157 @@ class PreApprovalDecisionHandler(BaseHandler):
 # DOCUMENT UPLOAD ENDPOINTS
 # ══════════════════════════════════════════════════════════
 
+class KYCPartyProfileHandler(BaseHandler):
+    """PATCH /api/applications/:app/kyc/parties/:party/profile."""
+
+    def patch(self, app_id, party_ref):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            self.log_authz_denial(
+                user,
+                "authz_denied_role",
+                app_id,
+                {
+                    "source": "kyc_party_profile_update",
+                    "required_actor_type": "client",
+                },
+            )
+            return self.error("Only the owning client can update a KYC party profile", 403)
+
+        db = get_db()
+        app_query = (
+            "SELECT id, ref, client_id, status "
+            "FROM applications WHERE id=? OR ref=?"
+        )
+        if getattr(db, "is_postgres", False):
+            # Serialize profile writes with workflow transitions. A pricing/KYC
+            # state change that starts after this lock must wait until the
+            # profile write and its audit record commit.
+            app_query += " FOR UPDATE"
+        app = db.execute(
+            app_query,
+            (app_id, app_id),
+        ).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+        if str(app.get("status") or "").lower() != "kyc_documents":
+            db.close()
+            return self.error(
+                "KYC party profiles can only be updated while documents are being collected",
+                409,
+            )
+
+        data = self.get_json()
+        if not isinstance(data, dict):
+            db.close()
+            return self.error("JSON object required", 400)
+        person_type = normalize_person_type(data.get("person_type"))
+        if person_type not in ("director", "ubo"):
+            db.close()
+            return self.error("person_type must be explicitly set to director or ubo", 400)
+        try:
+            professional_profile_url = _validate_professional_profile_url(
+                data.get("professional_profile_url"),
+                allow_blank=True,
+            )
+        except ValueError as exc:
+            db.close()
+            return self.error(str(exc), 400)
+
+        party = _resolve_application_person_by_type(
+            db,
+            app["id"],
+            str(party_ref or "").strip(),
+            person_type,
+        )
+        if not party:
+            db.close()
+            return self.error(
+                "Party was not found for the specified application and person_type",
+                404,
+            )
+
+        encrypted = encrypt_pii_fields(
+            {"professional_profile_url": professional_profile_url},
+            PII_FIELDS_DIRECTORS if person_type == "director" else PII_FIELDS_UBOS,
+        )
+        table_name = "directors" if person_type == "director" else "ubos"
+        db.execute(
+            f"""
+            UPDATE {table_name}
+               SET professional_profile_url=?
+             WHERE id=? AND application_id=?
+               AND EXISTS (
+                   SELECT 1
+                     FROM applications
+                    WHERE id=?
+                      AND client_id=?
+                      AND status='kyc_documents'
+               )
+            """,
+            (
+                encrypted["professional_profile_url"],
+                party["id"],
+                app["id"],
+                app["id"],
+                user["sub"],
+            ),
+        )
+        if getattr(db._cursor, "rowcount", 0) != 1:
+            db.rollback()
+            db.close()
+            return self.error(
+                "KYC workflow state changed before the profile update could be saved",
+                409,
+            )
+        audit_state = {
+            "person_id": party["id"],
+            "person_key": party.get("person_key") or "",
+            "person_type": person_type,
+            "professional_profile_present": bool(professional_profile_url),
+        }
+        self.log_audit(
+            user,
+            "KYC Party Profile Updated",
+            app["ref"],
+            json.dumps(
+                {
+                    "event": "kyc_party_profile_updated",
+                    **audit_state,
+                },
+                sort_keys=True,
+            ),
+            db=db,
+            commit=False,
+            application_id=app["id"],
+            before_state={
+                **audit_state,
+                "professional_profile_present": bool(
+                    party.get("professional_profile_url")
+                ),
+            },
+            after_state=audit_state,
+        )
+        db.commit()
+        db.close()
+        self.success(
+            {
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "person_id": party["id"],
+                "person_key": party.get("person_key") or "",
+                "person_type": person_type,
+                "professional_profile_url": professional_profile_url,
+            }
+        )
+
+
 class DocumentUploadHandler(BaseHandler):
     """GET/POST /api/applications/:id/documents"""
 
@@ -11445,7 +12022,7 @@ class DocumentUploadHandler(BaseHandler):
         include_history = self.get_argument("include_history", "false").lower() == "true"
         where_active = "" if include_history else f" AND {ACTIVE_DOCUMENT_SQL}"
         docs = [dict(d) for d in db.execute(
-            "SELECT id, application_id, person_id, doc_type, doc_name, file_size, mime_type, "
+            "SELECT id, application_id, person_id, person_type, doc_type, doc_name, file_size, mime_type, "
             "slot_key, is_current, version, superseded_at, superseded_by_document_id, "
             "expiry_date, valid_until, expiry_source, expiry_confidence, expiry_extracted_at, "
             "verification_status, verification_results, verified_at, review_status, "
@@ -11571,6 +12148,25 @@ class DocumentUploadHandler(BaseHandler):
                 db.close()
                 return self.error("Uploaded document type does not match the requested document slot", 400)
 
+        if not rmi_item_id and not screening_evidence_upload_allowed:
+            canonical_base_type = _document_type_base(requested_doc_type)
+            if requested_doc_type != canonical_base_type:
+                message = (
+                    "Non-canonical document type suffixes are not accepted for "
+                    f"ordinary uploads; use '{canonical_base_type}' with an explicit "
+                    "person_id and person_type where applicable"
+                )
+                self._audit_upload_rejected(
+                    user,
+                    app["ref"],
+                    "noncanonical_doc_type",
+                    message,
+                    doc_type=requested_doc_type,
+                    db=db,
+                )
+                db.close()
+                return self.error(message, 400)
+
         rmi_status_allowed = str(app.get("status") or "").lower() == "rmi_sent"
         if not rmi_status_allowed and not screening_evidence_upload_allowed:
             reason_code, prerequisite_error = _kyc_prerequisite_error(app, action="upload")
@@ -11587,6 +12183,165 @@ class DocumentUploadHandler(BaseHandler):
                 )
                 db.close()
                 return self.error(prerequisite_error, 409)
+
+        raw_person_id = str(self.get_argument("person_id", "") or "").strip()
+        raw_person_type = str(self.get_argument("person_type", "") or "").strip()
+        if bool(raw_person_id) != bool(raw_person_type):
+            message = "person_id and an explicit person_type must be supplied together"
+            self._audit_upload_rejected(
+                user,
+                app["ref"],
+                "incomplete_person_identity",
+                message,
+                doc_type=requested_doc_type,
+                rmi_item_id=rmi_item_id,
+                db=db,
+            )
+            db.close()
+            return self.error(message, 400)
+
+        person_id = None
+        person_type = None
+        person_resolved = None
+        if raw_person_id:
+            person_type = normalize_person_type(raw_person_type)
+            if person_type not in ("director", "ubo", "intermediary"):
+                message = "person_type must be explicitly set to director, ubo, or intermediary"
+                self._audit_upload_rejected(
+                    user,
+                    app["ref"],
+                    "invalid_person_type",
+                    message,
+                    doc_type=requested_doc_type,
+                    rmi_item_id=rmi_item_id,
+                    db=db,
+                )
+                db.close()
+                return self.error(message, 400)
+            person_resolved = _resolve_application_person_by_type(
+                db,
+                app["id"],
+                raw_person_id,
+                person_type,
+            )
+            if not person_resolved:
+                message = "Person was not found for the specified application and person_type"
+                self._audit_upload_rejected(
+                    user,
+                    app["ref"],
+                    "unresolved_person_identity",
+                    message,
+                    doc_type=requested_doc_type,
+                    rmi_item_id=rmi_item_id,
+                    db=db,
+                )
+                db.close()
+                return self.error(message, 400)
+            person_id = person_resolved["id"]
+            person_type = person_resolved["person_type"]
+
+        if not rmi_item_id and not screening_evidence_upload_allowed:
+            scope_error = _base_document_scope_error(requested_doc_type, person_type)
+            if scope_error:
+                self._audit_upload_rejected(
+                    user,
+                    app["ref"],
+                    "invalid_document_scope",
+                    scope_error,
+                    doc_type=requested_doc_type,
+                    db=db,
+                )
+                db.close()
+                return self.error(scope_error, 400)
+
+        rmi_upload_target = _resolve_rmi_upload_slot(
+            db,
+            app,
+            rmi_target,
+            requested_doc_type,
+            person_id=person_id,
+            person_type=person_type,
+        )
+        if rmi_upload_target.get("canonical_slot_key"):
+            target_person_id = str(rmi_upload_target.get("person_id") or "").strip()
+            target_person_type = normalize_person_type(rmi_upload_target.get("person_type"))
+            if bool(target_person_id) != bool(target_person_type):
+                message = "Requested document slot has incomplete person identity metadata"
+                self._audit_upload_rejected(
+                    user,
+                    app["ref"],
+                    "invalid_rmi_person_identity",
+                    message,
+                    doc_type=requested_doc_type,
+                    rmi_item_id=rmi_item_id,
+                    db=db,
+                )
+                db.close()
+                return self.error(message, 400)
+            if target_person_id:
+                target_person = _resolve_application_person_by_type(
+                    db,
+                    app["id"],
+                    target_person_id,
+                    target_person_type,
+                )
+                if not target_person:
+                    message = "Requested document slot person could not be resolved"
+                    self._audit_upload_rejected(
+                        user,
+                        app["ref"],
+                        "unresolved_rmi_person_identity",
+                        message,
+                        doc_type=requested_doc_type,
+                        rmi_item_id=rmi_item_id,
+                        db=db,
+                    )
+                    db.close()
+                    return self.error(message, 400)
+                if person_resolved and (
+                    person_resolved["id"] != target_person["id"]
+                    or person_resolved["person_type"] != target_person["person_type"]
+                ):
+                    message = "Uploaded person identity does not match the requested document slot"
+                    self._audit_upload_rejected(
+                        user,
+                        app["ref"],
+                        "person_identity_slot_mismatch",
+                        message,
+                        doc_type=requested_doc_type,
+                        rmi_item_id=rmi_item_id,
+                        db=db,
+                    )
+                    db.close()
+                    return self.error(message, 400)
+                person_resolved = target_person
+                person_id = target_person["id"]
+                person_type = target_person["person_type"]
+                canonical_slot_key = _document_slot_key(
+                    requested_doc_type,
+                    person_id,
+                    person_type=person_type,
+                )
+                rmi_upload_target["person_id"] = person_id
+                rmi_upload_target["person_type"] = person_type
+                rmi_upload_target["slot_key"] = canonical_slot_key
+                rmi_upload_target["canonical_slot_key"] = canonical_slot_key
+            elif person_resolved:
+                message = "A person-specific upload does not match the requested entity document slot"
+                self._audit_upload_rejected(
+                    user,
+                    app["ref"],
+                    "person_identity_slot_mismatch",
+                    message,
+                    doc_type=requested_doc_type,
+                    rmi_item_id=rmi_item_id,
+                    db=db,
+                )
+                db.close()
+                return self.error(message, 400)
+            else:
+                person_id = None
+                person_type = None
 
         if "file" not in self.request.files:
             self._audit_upload_rejected(
@@ -11698,35 +12453,6 @@ class DocumentUploadHandler(BaseHandler):
                 503
             )
 
-        person_id = self.get_argument("person_id", None)
-        requested_person_type = normalize_person_type(self.get_argument("person_type", None))
-
-        # Validate person_id refers to an existing person if provided
-        person_resolved = None
-        person_type = requested_person_type
-        if person_id:
-            person_resolved = resolve_application_person(db, app["id"], person_id, requested_person_type)
-            if not person_resolved:
-                logger.warning(
-                    f"[doc-upload] person_id={person_id!r} not found in application={app['id']} "
-                    f"person_type={requested_person_type!r} doc_type={doc_type} file={filename} "
-                    f"— storing document with unresolved person_id"
-                )
-            else:
-                person_type = person_resolved.get("person_type") or requested_person_type
-
-        rmi_upload_target = _resolve_rmi_upload_slot(
-            db,
-            app,
-            rmi_target,
-            doc_type,
-            person_id=person_id,
-            person_type=person_type,
-        )
-        if rmi_upload_target.get("canonical_slot_key"):
-            person_id = rmi_upload_target.get("person_id")
-            person_type = rmi_upload_target.get("person_type")
-
         logger.info(
             f"[doc-upload] app={app['id']} doc_id={doc_id} doc_type={doc_type} "
             f"person_id={person_id!r} person_type={person_type!r} person_resolved={'yes' if person_resolved else 'no'} "
@@ -11766,18 +12492,22 @@ class DocumentUploadHandler(BaseHandler):
                 slot_key=slot_key,
                 actor_user=user,
                 replaced_reason="upload_replacement",
+                allowed_extra_slot_keys=[
+                    rmi_upload_target.get("rmi_trace_slot_key")
+                    or (f"rmi:{rmi_item_id}" if rmi_item_id else "")
+                ],
                 extra_document_ids=[rmi_target.get("document_id")] if rmi_target and rmi_target.get("document_id") else None,
             )
             previous_documents = replacement["previous_documents"]
             db.execute("""
                 INSERT INTO documents
-                (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
+                (id, application_id, person_id, person_type, doc_type, doc_name, file_path, s3_key,
                  file_size, mime_type, slot_key, is_current, version, verification_status,
                  verification_results, file_sha256, uploaded_by, uploaded_by_actor_type,
                  uploaded_by_actor_id, uploaded_by_display, upload_source)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
-                doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key,
+                doc_id, app["id"], person_id, person_type, doc_type, filename, file_path, s3_key,
                 len(body), content_type, replacement["slot_key"], True, replacement["version"],
                 STATE_PENDING, json.dumps(verification_metadata, sort_keys=True), file_sha256,
                 upload_actor["uploaded_by"], upload_actor["uploaded_by_actor_type"],
@@ -11927,6 +12657,7 @@ class DocumentUploadHandler(BaseHandler):
             "doc_type": doc_type,
             "file_size": len(body),
             "s3_key": s3_key,
+            "person_id": person_id,
             "person_type": person_type,
             "slot_key": replacement["slot_key"],
             "is_current": True,
@@ -11991,6 +12722,17 @@ class DocumentDeleteHandler(BaseHandler):
             db.close()
             return self.error("Accepted requested documents cannot be deleted.", 403)
 
+        linked_enhanced_requirements = db.execute(
+            """
+            SELECT id, status
+            FROM application_enhanced_requirements
+            WHERE application_id = ?
+              AND linked_document_id = ?
+              AND active = 1
+            """,
+            (app["id"], doc_id),
+        ).fetchall()
+
         agent_evidence = db.execute(
             "SELECT COUNT(*) AS count FROM agent_executions WHERE document_id=?",
             (doc_id,),
@@ -12006,6 +12748,8 @@ class DocumentDeleteHandler(BaseHandler):
             evidence_reasons.append("agent_execution")
         if linked_rmi_items:
             evidence_reasons.append("rmi_request")
+        if linked_enhanced_requirements:
+            evidence_reasons.append("enhanced_requirement")
 
         if evidence_reasons:
             from regulated_deletion import log_regulated_delete_denied
@@ -12477,6 +13221,24 @@ class DocumentVerifyHandler(BaseHandler):
         directors_list = verification_context["directors_list"]
         ubos_list = verification_context["ubos_list"]
         verify_name = entity_name if doc_category == "company" else person_name
+        identity_doc_types = {
+            "passport", "national_id", "id_card", "drivers_license",
+            "director_id", "ubo_id",
+        }
+        person_identity_error = None
+        verified_person = None
+        if base_doc_type in identity_doc_types:
+            stored_person_type = normalize_person_type(doc.get("person_type"))
+            if not doc.get("person_id") or not stored_person_type:
+                person_identity_error = (
+                    "Identity document is missing an explicit typed party association"
+                )
+            elif not person_record:
+                person_identity_error = (
+                    "Identity document party association does not resolve within this application"
+                )
+            else:
+                verified_person = person_record
 
         # Diagnostic logging for verification context
         logger.info(
@@ -12616,46 +13378,55 @@ class DocumentVerifyHandler(BaseHandler):
                        "message": f"Verification error: {str(e)[:100]}. Manual review required."}]
             all_passed = False
 
+        if person_identity_error:
+            checks.append({
+                "label": "Party Association Integrity",
+                "type": "identity",
+                "rule": "Identity evidence must reference one typed party in the same application",
+                "result": "fail",
+                "message": f"{person_identity_error}. Manual review required.",
+            })
+            all_passed = False
+
         # If it's an identity document, run sanctions/PEP screening
         sanctions_result = None
-        id_doc_types = ["passport", "national_id", "id_card", "drivers_license", "director_id", "ubo_id"]
-        if doc["doc_type"] in id_doc_types and doc["person_id"]:
+        if base_doc_type in identity_doc_types and verified_person:
             try:
-                person = resolve_application_person(db, doc["application_id"], doc["person_id"])
-                if person:
-                    person_name = person.get("full_name") or ""
-                    if not person_name:
-                        logger.warning(f"[verify] doc={doc_id} person_id={doc['person_id']} resolved but full_name is empty — skipping sanctions screening")
-                    else:
-                        sanctions_result = screen_sumsub_aml(
-                            person_name,
-                            nationality=person.get("nationality"),
-                            entity_type="Person"
-                        )
-                        if sanctions_result["matched"]:
-                            all_passed = False
-                            checks.append({
-                                "label": "Sanctions/PEP Screening",
-                                "type": "sanctions",
-                                "rule": "Screened against configured screening provider watchlists and PEP databases",
-                                "result": "fail",
-                                "message": f"MATCH FOUND — {len(sanctions_result['results'])} hit(s) on sanctions/PEP lists",
-                                "details": sanctions_result["results"],
-                                "source": sanctions_result["source"]
-                            })
-                        else:
-                            checks.append({
-                                "label": "Sanctions/PEP Screening",
-                                "type": "sanctions",
-                                "rule": "Screened against configured screening provider watchlists and PEP databases",
-                                "result": "pass",
-                                "message": "No matches found on sanctions or PEP lists",
-                                "source": sanctions_result["source"]
-                            })
+                person_name = verified_person.get("full_name") or ""
+                if not person_name:
+                    checks.append({
+                        "label": "Sanctions/PEP Screening",
+                        "type": "sanctions",
+                        "result": "warn",
+                        "message": "Party name is unavailable. Manual screening review required.",
+                    })
+                    all_passed = False
                 else:
-                    logger.warning(
-                        f"[verify] doc={doc_id} person_id={doc['person_id']} not found in application={doc['application_id']} — skipping sanctions screening"
+                    sanctions_result = screen_sumsub_aml(
+                        person_name,
+                        nationality=verified_person.get("nationality"),
+                        entity_type="Person"
                     )
+                    if sanctions_result["matched"]:
+                        all_passed = False
+                        checks.append({
+                            "label": "Sanctions/PEP Screening",
+                            "type": "sanctions",
+                            "rule": "Screened against configured screening provider watchlists and PEP databases",
+                            "result": "fail",
+                            "message": f"MATCH FOUND — {len(sanctions_result['results'])} hit(s) on sanctions/PEP lists",
+                            "details": sanctions_result["results"],
+                            "source": sanctions_result["source"]
+                        })
+                    else:
+                        checks.append({
+                            "label": "Sanctions/PEP Screening",
+                            "type": "sanctions",
+                            "rule": "Screened against configured screening provider watchlists and PEP databases",
+                            "result": "pass",
+                            "message": "No matches found on sanctions or PEP lists",
+                            "source": sanctions_result["source"]
+                        })
             except Exception as screening_err:
                 logger.error(f"[verify] Sanctions screening failed for doc={doc_id} person_id={doc.get('person_id')}: {screening_err}")
                 checks.append({
@@ -12681,6 +13452,8 @@ class DocumentVerifyHandler(BaseHandler):
         system_warning = None
         if file_source == "none":
             system_warning = "file_not_accessible"
+        elif person_identity_error:
+            system_warning = "person_identity_unresolved"
         elif not verify_name and doc_category == "company":
             system_warning = "entity_context_missing"
 
@@ -13378,6 +14151,20 @@ class DocumentWorkflowTestAcceptanceHandler(BaseHandler):
                 if linked_doc and linked_doc != doc_id:
                     db.close()
                     return self.error("Enhanced requirement is already linked to a different document", 409)
+                _validated_doc, link_integrity = validate_enhanced_requirement_document_link(
+                    db,
+                    app["id"],
+                    requirement_before,
+                    doc_id,
+                    document=doc,
+                )
+                if not link_integrity.get("valid"):
+                    db.close()
+                    return self.error(
+                        link_integrity.get("message")
+                        or "Document does not match the enhanced requirement evidence slot",
+                        400,
+                    )
 
             before_state = {
                 "document": {
@@ -13620,9 +14407,18 @@ class DocumentAIVerifyHandler(BaseHandler):
         file_path = None
         if doc_id:
             db = get_db()
-            doc_record = db.execute("SELECT file_path, s3_key, doc_name, application_id, person_id FROM documents WHERE id=?", (doc_id,)).fetchone()
+            doc_record = db.execute(
+                "SELECT file_path, s3_key, doc_name, application_id, person_id, person_type "
+                "FROM documents WHERE id=?",
+                (doc_id,),
+            ).fetchone()
             db.close()
             if doc_record:
+                if app_id and app_id != doc_record.get("application_id"):
+                    return self.error(
+                        "Document does not belong to the specified application",
+                        400,
+                    )
                 fp = doc_record.get("file_path", "")
                 if fp and not os.path.isabs(fp):
                     file_path = os.path.join(UPLOAD_DIR, os.path.basename(fp))
@@ -13649,19 +14445,29 @@ class DocumentAIVerifyHandler(BaseHandler):
                 if not app_id and doc_record.get("application_id"):
                     app_id = doc_record["application_id"]
 
-                # Auto-resolve person_name from document record if not provided
-                if not person_name and doc_record.get("person_id"):
+                # Person context is authoritative server data, never a
+                # client-supplied name or an unscoped UNION lookup.
+                if doc_record.get("person_id"):
+                    stored_person_type = normalize_person_type(doc_record.get("person_type"))
+                    db2 = get_db()
                     try:
-                        db2 = get_db()
-                        person_row = db2.execute(
-                            "SELECT full_name FROM directors WHERE id=? UNION SELECT full_name FROM ubos WHERE id=?",
-                            (doc_record["person_id"], doc_record["person_id"])
-                        ).fetchone()
+                        person_row = (
+                            _resolve_application_person_by_type(
+                                db2,
+                                doc_record.get("application_id"),
+                                doc_record.get("person_id"),
+                                stored_person_type,
+                            )
+                            if stored_person_type else None
+                        )
+                    finally:
                         db2.close()
-                        if person_row:
-                            person_name = person_row.get("full_name", "")
-                    except Exception:
-                        pass
+                    if not person_row:
+                        return self.error(
+                            "Document has an unresolved typed party association; manual review is required",
+                            409,
+                        )
+                    person_name = person_row.get("full_name", "")
 
         # Load check_overrides and prescreening_context from DB so that the helper path
         # uses the same canonical check IDs as the authoritative DocumentVerifyHandler.
@@ -16059,10 +16865,46 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 return self.error("This enhanced requirement does not accept document uploads", 400)
             if str(before.get("status") or "").lower() in ("accepted", "waived", "cancelled"):
                 return self.error("This enhanced requirement is already resolved and cannot accept uploads", 409)
+            is_monitoring_refresh = _is_monitoring_document_refresh_requirement(before)
             policy_info = enhanced_requirement_document_policy(before.get("requirement_key"))
-            upload_doc_type = policy_info.get("document_type") or "supporting_document"
-            upload_runtime_executable = bool(policy_info.get("runtime_executable"))
-            upload_verification_status = STATE_PENDING if upload_runtime_executable else STATE_SKIPPED
+            mapped_doc_type = policy_info.get("document_type") or "supporting_document"
+            if is_monitoring_refresh:
+                try:
+                    upload_target = _monitoring_refresh_upload_target(
+                        db,
+                        app["id"],
+                        before,
+                    )
+                except ValueError as exc:
+                    message = (
+                        "Monitoring refresh target requires repair before replacement: "
+                        f"{exc}"
+                    )
+                    self._audit_inline_upload_rejected(
+                        user,
+                        app["ref"],
+                        "monitoring_refresh_target_requires_repair",
+                        message,
+                        db=db,
+                        status_code=409,
+                    )
+                    return self.error(message, 409)
+            else:
+                upload_target = {
+                    "doc_type": mapped_doc_type,
+                    "person_id": None,
+                    "person_type": None,
+                    "slot_key": _document_slot_key(mapped_doc_type, enhanced_requirement_id=requirement_id),
+                    "allowed_extra_slot_keys": [],
+                    "extra_document_ids": _valid_enhanced_replacement_document_ids(
+                        db,
+                        app["id"],
+                        before,
+                    ),
+                }
+            upload_doc_type = upload_target["doc_type"]
+            upload_runtime_executable = bool(policy_info.get("runtime_executable")) and not is_monitoring_refresh
+            upload_verification_status = STATE_PENDING if upload_runtime_executable or is_monitoring_refresh else STATE_SKIPPED
 
             if "file" not in self.request.files:
                 self._audit_inline_upload_rejected(user, app["ref"], "missing_file", "No file provided", db=db)
@@ -16156,12 +16998,15 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 return self.error("Document upload failed: S3 storage is not available. Contact administrator.", 500)
 
             verification_metadata = {
-                "source": "enhanced_requirement_upload",
-                "source_surface": "kyc_enhanced_requirement_row",
+                "source": "monitoring_document_refresh_upload" if is_monitoring_refresh else "enhanced_requirement_upload",
+                "source_surface": "backoffice_monitoring_document_refresh" if is_monitoring_refresh else "kyc_enhanced_requirement_row",
                 "enhanced_requirement_id": str(requirement_id),
                 "requirement_key": before.get("requirement_key"),
                 "canonical_document_type": upload_doc_type,
                 "document_policy": policy_info,
+                "monitoring_alert_id": before.get("monitoring_alert_id") or "",
+                "monitoring_document_id": upload_target.get("old_document_id") or "",
+                "previous_document_id": upload_target.get("old_document_id") or "",
                 "officer_uploaded": True,
                 "verification_queued": upload_runtime_executable,
                 "verification_triggered": upload_runtime_executable,
@@ -16173,26 +17018,30 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 application_id=app["id"],
                 new_document_id=document_id,
                 doc_type=upload_doc_type,
-                person_id=None,
-                slot_key=_document_slot_key(upload_doc_type, enhanced_requirement_id=requirement_id),
+                person_id=upload_target.get("person_id"),
+                person_type=upload_target.get("person_type"),
+                slot_key=upload_target["slot_key"],
                 actor_user=user,
-                replaced_reason="enhanced_requirement_replacement",
-                extra_document_ids=[before.get("linked_document_id")] if before.get("linked_document_id") else None,
+                replaced_reason="monitoring_document_refresh_replacement" if is_monitoring_refresh else "enhanced_requirement_replacement",
+                allowed_extra_slot_keys=upload_target.get("allowed_extra_slot_keys"),
+                extra_document_ids=upload_target.get("extra_document_ids"),
             )
             previous_documents = replacement["previous_documents"]
             db.execute(
                 """
                 INSERT INTO documents
-                (id, application_id, doc_type, doc_name, file_path, s3_key,
+                (id, application_id, person_id, person_type, doc_type, doc_name, file_path, s3_key,
                  file_size, mime_type, slot_key, is_current, version,
                  verification_status, verification_results, review_status, file_sha256,
                  uploaded_by, uploaded_by_actor_type, uploaded_by_actor_id,
                  uploaded_by_display, upload_source)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     document_id,
                     app["id"],
+                    upload_target.get("person_id"),
+                    upload_target.get("person_type"),
                     upload_doc_type,
                     filename,
                     file_path,
@@ -16263,6 +17112,17 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     (before["id"], app["id"]),
                 ).fetchone()
             )
+            _, uploaded_link_integrity = validate_enhanced_requirement_document_link(
+                db,
+                app["id"],
+                after,
+                document_id,
+            )
+            if not uploaded_link_integrity.get("valid"):
+                raise RuntimeError(
+                    "enhanced_requirement_upload_integrity_failed:"
+                    + str(uploaded_link_integrity.get("reason") or "unknown")
+                )
             changes = {
                 "status": {"before": before.get("status"), "after": "under_review"},
                 "linked_document_id": {"before": before.get("linked_document_id"), "after": document_id},
@@ -29561,35 +30421,85 @@ class SumsubApplicantHandler(BaseHandler):
             return
 
         data = self.get_json()
-        external_user_id = data.get("external_user_id", "").strip()
+        external_user_id = str(data.get("external_user_id", "") or "").strip()
         if not external_user_id:
             return self.error("external_user_id is required")
         application_id = str(data.get("application_id", "") or "").strip()
+        if not application_id:
+            return self.error("application_id is required")
+        person_type = normalize_person_type(data.get("person_type"))
+        if person_type not in ("director", "ubo"):
+            return self.error("person_type must be explicitly set to director or ubo", 400)
 
-        if _a1f_is_client_user(user):
-            auth_db = get_db()
-            try:
-                if not _a1f_authorize_application_identifier(
-                    self,
-                    auth_db,
+        auth_db = get_db()
+        try:
+            app = auth_db.execute(
+                "SELECT id, ref, client_id FROM applications WHERE id=? OR ref=?",
+                (application_id, application_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            if (
+                user.get("type") == "client"
+                and app["client_id"] != user.get("sub")
+            ):
+                self.log_authz_denial(
                     user,
-                    application_id,
-                    resource_type="sumsub_applicant",
-                    reason="sumsub_applicant_application_owner_mismatch",
-                    deny_missing_for_client=True,
-                ):
-                    return
-            finally:
-                auth_db.close()
+                    "authz_denied_not_owner",
+                    app["id"],
+                    {
+                        "actual_owner": app["client_id"],
+                        "resource_type": "sumsub_applicant",
+                        "source": "sumsub_applicant_create",
+                    },
+                )
+                return self.error("Unauthorized", 403)
+            if not self.check_app_ownership(user, app):
+                return
+            party = _resolve_application_person_by_type(
+                auth_db,
+                app["id"],
+                external_user_id,
+                person_type,
+            )
+            if not party:
+                return self.error(
+                    "Party was not found for the specified application and person_type",
+                    400,
+                )
+            application_id = app["id"]
+            external_user_id = party["id"]
+            person_type = party["person_type"]
+            authoritative_full_name = str(party.get("full_name") or "").strip()
+            authoritative_first_name = str(party.get("first_name") or "").strip()
+            authoritative_last_name = str(party.get("last_name") or "").strip()
+            if not authoritative_first_name and authoritative_full_name:
+                name_parts = authoritative_full_name.split(None, 1)
+                authoritative_first_name = name_parts[0]
+                authoritative_last_name = name_parts[1] if len(name_parts) > 1 else ""
+            if not authoritative_first_name:
+                return self.error("Party name is incomplete; applicant creation was refused", 400)
+            # Never substitute client-supplied identity attributes after the
+            # stable party has resolved. Missing authoritative data is passed
+            # as absent so a request cannot create the right applicant ID with
+            # another person's DOB/country.
+            authoritative_dob = party.get("date_of_birth") or None
+            authoritative_country = (
+                party.get("country_of_residence")
+                or party.get("nationality")
+                or None
+            )
+        finally:
+            auth_db.close()
 
         result = sumsub_create_applicant(
             external_user_id=external_user_id,
-            first_name=data.get("first_name"),
-            last_name=data.get("last_name"),
+            first_name=authoritative_first_name,
+            last_name=authoritative_last_name,
             email=data.get("email"),
             phone=data.get("phone"),
-            dob=data.get("dob"),
-            country=data.get("country"),
+            dob=authoritative_dob,
+            country=authoritative_country,
             level_name=data.get("level_name"),
         )
 
@@ -29603,8 +30513,9 @@ class SumsubApplicantHandler(BaseHandler):
                     (application_id, applicant_id, external_user_id, person_name, person_type)
                     VALUES (?, ?, ?, ?, ?)
                 """, (application_id, applicant_id, external_user_id,
-                      (data.get("first_name", "") + " " + data.get("last_name", "")).strip(),
-                      data.get("person_type", "")))
+                      authoritative_full_name
+                      or f"{authoritative_first_name} {authoritative_last_name}".strip(),
+                      person_type))
 
                 # Also store applicant_id in prescreening_data so the legacy fallback
                 # substring scan in the webhook handler can find it even if the
@@ -31800,7 +32711,6 @@ DOCUMENT_TYPE_ALLOWLIST = {
     "ubo_id",
 }
 
-
 def _is_enhanced_requirement_gate_error(message):
     return "enhanced review requirement" in str(message or "").lower()
 
@@ -31930,6 +32840,15 @@ def _document_type_base(doc_type):
     return re.sub(r"_(dir|ubo|inter)\d+$", "", base)
 
 
+def _base_document_scope_error(doc_type, person_type=None):
+    """Return a fail-closed error for an ordinary non-special upload slot."""
+    canonical_type = _document_type_base(_normalize_document_type(doc_type))
+    return base_document_scope_error_for_canonical_type(
+        canonical_type,
+        person_type,
+    )
+
+
 def _validate_document_type(value, *, allow_general=False):
     """Normalize and validate a document type against the canonical allowlist."""
     normalized = _normalize_document_type(value)
@@ -31991,36 +32910,124 @@ def _lock_document_slot_transaction(db, application_id, slot_key):
         pass
 
 
-def _load_document_slot_rows(db, application_id, doc_type, person_id, slot_key, extra_document_ids=None):
+def _load_document_slot_rows(
+    db,
+    application_id,
+    doc_type,
+    person_id,
+    person_type,
+    slot_key,
+    *,
+    legacy_person_refs=None,
+    allowed_extra_slot_keys=None,
+    extra_document_ids=None,
+):
     """Load all rows that belong to a logical document slot.
 
     The fallback doc_type/person predicate keeps legacy rows in scope until
     their slot_key has been backfilled.
     """
-    legacy_slot_key = _document_legacy_person_slot_key(doc_type, person_id)
+    normalized_person_type = normalize_person_type(person_type)
+    if person_id and not normalized_person_type:
+        raise ValueError("Person-scoped document slots require an explicit valid person_type")
+
+    normalized_doc_type = _normalize_document_type(doc_type)
+    person_refs = [str(person_id or "").strip()] if person_id else []
+    for legacy_ref in legacy_person_refs or []:
+        legacy_ref = str(legacy_ref or "").strip()
+        if legacy_ref and legacy_ref not in person_refs:
+            person_refs.append(legacy_ref)
+
+    slot_candidates = [slot_key]
+    canonical_person_slot = (
+        _document_slot_key(
+            normalized_doc_type,
+            person_id,
+            person_type=normalized_person_type,
+        )
+        if person_id else None
+    )
+    canonical_slot = canonical_person_slot or _document_slot_key(normalized_doc_type)
+    allowed_row_slots = {slot_key, canonical_slot}
+    allowed_row_slots.update(
+        str(candidate or "").strip()
+        for candidate in (allowed_extra_slot_keys or [])
+        if str(candidate or "").strip()
+    )
+    if person_id and slot_key == canonical_person_slot:
+        for person_ref in person_refs:
+            for candidate in (
+                _document_slot_key(
+                    normalized_doc_type,
+                    person_ref,
+                    person_type=normalized_person_type,
+                ),
+                _document_legacy_person_slot_key(normalized_doc_type, person_ref),
+            ):
+                if candidate and candidate not in slot_candidates:
+                    slot_candidates.append(candidate)
+                if candidate:
+                    allowed_row_slots.add(candidate)
+    elif person_id:
+        for person_ref in person_refs:
+            allowed_row_slots.add(
+                _document_slot_key(
+                    normalized_doc_type,
+                    person_ref,
+                    person_type=normalized_person_type,
+                )
+            )
+            allowed_row_slots.add(
+                _document_legacy_person_slot_key(normalized_doc_type, person_ref)
+            )
+    allowed_row_slots.discard(None)
+
+    slot_placeholders = ",".join("?" for _ in slot_candidates)
+    ref_predicate = ""
+    params = [application_id] + slot_candidates
+    if person_refs:
+        ref_placeholders = ",".join("?" for _ in person_refs)
+        ref_predicate = (
+            f" OR ((slot_key IS NULL OR slot_key = '') "
+            f"AND doc_type = ? AND person_id IN ({ref_placeholders}))"
+        )
+        params.extend([normalized_doc_type] + person_refs)
+    elif not person_id:
+        ref_predicate = (
+            " OR ((slot_key IS NULL OR slot_key = '') "
+            "AND doc_type = ? AND COALESCE(person_id, '') = '')"
+        )
+        params.append(normalized_doc_type)
+
     rows = db.execute(
-        """
-        SELECT id, doc_name, doc_type, person_id, slot_key, is_current, version,
+        f"""
+        SELECT id, doc_name, doc_type, person_id, person_type, slot_key, is_current, version,
                uploaded_at, verification_status
           FROM documents
          WHERE application_id = ?
            AND (
-                slot_key = ?
-                OR (? IS NOT NULL AND slot_key = ?)
-                OR ((slot_key IS NULL OR slot_key = '')
-                    AND doc_type = ?
-                    AND COALESCE(person_id, '') = ?)
+                slot_key IN ({slot_placeholders})
+                {ref_predicate}
            )
         """,
-        (application_id, slot_key, legacy_slot_key, legacy_slot_key, doc_type, str(person_id or "")),
+        tuple(params),
     ).fetchall()
     by_id = {row["id"]: dict(row) for row in rows}
-    extra_ids = [doc_id for doc_id in (extra_document_ids or []) if doc_id and doc_id not in by_id]
+    requested_extra_ids = {
+        str(doc_id)
+        for doc_id in (extra_document_ids or [])
+        if doc_id
+    }
+    extra_ids = [
+        doc_id
+        for doc_id in requested_extra_ids
+        if doc_id not in by_id
+    ]
     if extra_ids:
         placeholders = ",".join("?" for _ in extra_ids)
         extra_rows = db.execute(
             f"""
-            SELECT id, doc_name, doc_type, person_id, slot_key, is_current, version,
+            SELECT id, doc_name, doc_type, person_id, person_type, slot_key, is_current, version,
                    uploaded_at, verification_status
               FROM documents
              WHERE application_id = ? AND id IN ({placeholders})
@@ -32029,6 +33036,55 @@ def _load_document_slot_rows(db, application_id, doc_type, person_id, slot_key, 
         ).fetchall()
         for row in extra_rows:
             by_id[row["id"]] = dict(row)
+    missing_extra_ids = requested_extra_ids.difference(by_id)
+    if missing_extra_ids:
+        raise ValueError(
+            "Linked replacement document was not found in this application"
+        )
+
+    for row in by_id.values():
+        if _normalize_document_type(row.get("doc_type")) != normalized_doc_type:
+            raise ValueError(
+                "Existing replacement link has conflicting document category metadata"
+            )
+        row_slot = str(row.get("slot_key") or "").strip()
+        if row_slot and row_slot not in allowed_row_slots:
+            raise ValueError(
+                "Existing replacement link has conflicting slot metadata"
+            )
+
+    if person_id:
+        stable_person_id = str(person_id).strip()
+        for row in by_id.values():
+            row_ref = str(row.get("person_id") or "").strip()
+            row_type = normalize_person_type(row.get("person_type"))
+            row_slot = str(row.get("slot_key") or "").strip()
+            row_slot_parts = row_slot.split(":", 3)
+            row_slot_type = (
+                normalize_person_type(row_slot_parts[1])
+                if len(row_slot_parts) == 4 and row_slot_parts[0] == "person"
+                else None
+            )
+            if row_ref not in person_refs:
+                raise ValueError("Existing document slot has conflicting party identity metadata")
+            if row_type and row_type != normalized_person_type:
+                raise ValueError("Existing document slot has conflicting person_type metadata")
+            if row_slot_type and row_slot_type != normalized_person_type:
+                raise ValueError("Existing document slot has conflicting typed ownership")
+            if not row_type and not row_slot_type:
+                resolved = resolve_application_person(db, application_id, row_ref)
+                if (
+                    not resolved
+                    or resolved.get("id") != stable_person_id
+                    or resolved.get("person_type") != normalized_person_type
+                ):
+                    raise ValueError(
+                        "Legacy document ownership is ambiguous; run the guarded repair before replacement"
+                    )
+    else:
+        for row in by_id.values():
+            if row.get("person_id") or normalize_person_type(row.get("person_type")):
+                raise ValueError("Entity document slot has conflicting party identity metadata")
     return list(by_id.values())
 
 
@@ -32043,6 +33099,7 @@ def _prepare_document_slot_replacement(
     slot_key=None,
     actor_user=None,
     replaced_reason="document_replaced",
+    allowed_extra_slot_keys=None,
     extra_document_ids=None,
 ):
     """Mark prior current rows in this logical slot as superseded.
@@ -32051,13 +33108,40 @@ def _prepare_document_slot_replacement(
     ``_finalize_document_slot_replacement`` before committing.
     """
     slot_key = slot_key or _document_slot_key(doc_type, person_id, person_type=person_type)
+    legacy_person_refs = []
+    normalized_person_type = normalize_person_type(person_type)
+    if person_id:
+        if not normalized_person_type:
+            raise ValueError("Person-scoped document replacement requires person_type")
+        party = _resolve_application_person_by_type(
+            db,
+            application_id,
+            person_id,
+            normalized_person_type,
+        )
+        if not party or str(party.get("id") or "") != str(person_id):
+            raise ValueError(
+                "Person-scoped document replacement requires a canonical party id"
+            )
+        person_key = str(party.get("person_key") or "").strip()
+        if person_key and person_key != str(person_id):
+            untyped_match = resolve_application_person(db, application_id, person_key)
+            if (
+                untyped_match
+                and untyped_match.get("id") == party.get("id")
+                and untyped_match.get("person_type") == normalized_person_type
+            ):
+                legacy_person_refs.append(person_key)
     _lock_document_slot_transaction(db, application_id, slot_key)
     slot_rows = _load_document_slot_rows(
         db,
         application_id,
         doc_type,
         person_id,
+        normalized_person_type,
         slot_key,
+        legacy_person_refs=legacy_person_refs,
+        allowed_extra_slot_keys=allowed_extra_slot_keys,
         extra_document_ids=extra_document_ids,
     )
     max_version = 0
@@ -32114,26 +33198,121 @@ def _is_monitoring_document_refresh_requirement(requirement):
     )
 
 
+def _valid_enhanced_replacement_document_ids(db, application_id, requirement):
+    """Return only a currently valid same-slot enhanced document to supersede."""
+    requirement = requirement or {}
+    linked_document_id = str(requirement.get("linked_document_id") or "").strip()
+    if not linked_document_id:
+        return []
+    _, integrity = validate_enhanced_requirement_document_link(
+        db,
+        application_id,
+        requirement,
+        linked_document_id,
+    )
+    if not integrity.get("valid"):
+        logger.warning(
+            "enhanced_requirement_invalid_historical_link_left_untouched=true "
+            "application_id=%s requirement_id=%s reason=%s",
+            application_id,
+            requirement.get("id"),
+            integrity.get("reason"),
+        )
+        return []
+    return [linked_document_id]
+
+
 def _monitoring_refresh_upload_target(db, application_id, requirement):
-    """Return the document slot metadata for a monitoring document refresh upload."""
+    """Return a canonical ordinary slot for a monitoring refresh upload.
+
+    Historical aliases, legacy party keys, special request slots, and invalid
+    entity/person document scopes must be repaired explicitly.  A replacement
+    upload is not a data-repair mechanism.
+    """
     requirement = requirement or {}
     context = requirement.get("trigger_context") if isinstance(requirement.get("trigger_context"), dict) else {}
     old_doc = None
     old_doc_id = requirement.get("monitoring_document_id") or context.get("document_id")
+    if not old_doc_id:
+        raise ValueError(
+            "Monitoring refresh requirement is missing its target document"
+        )
     if old_doc_id:
         old_doc = db.execute(
             "SELECT * FROM documents WHERE id = ? AND application_id = ?",
             (old_doc_id, application_id),
         ).fetchone()
         old_doc = dict(old_doc) if old_doc else None
+    if not old_doc:
+        raise ValueError(
+            "Monitoring refresh target document does not exist in this application"
+        )
 
-    doc_type = (
-        (old_doc or {}).get("doc_type")
-        or context.get("document_type")
-        or "enhanced_requirement"
-    )
-    person_id = (old_doc or {}).get("person_id")
-    slot_key = (old_doc or {}).get("slot_key") or _document_slot_key(doc_type, person_id)
+    raw_doc_type = str(old_doc.get("doc_type") or "").strip()
+    doc_type = _document_type_base(_normalize_document_type(raw_doc_type))
+    if not raw_doc_type or raw_doc_type != doc_type:
+        raise ValueError(
+            "stored document type is not canonical"
+        )
+
+    old_document_slot = str(old_doc.get("slot_key") or "").strip()
+    if old_document_slot.startswith(("rmi:", "enhanced_requirement:")):
+        raise ValueError(
+            "request-specific document slots are not supported monitoring targets"
+        )
+
+    person_id = str(old_doc.get("person_id") or "").strip()
+    stored_person_type = str(old_doc.get("person_type") or "").strip()
+    person_type = normalize_person_type(stored_person_type)
+    if person_id:
+        if not person_type:
+            raise ValueError(
+                "Monitoring refresh target has an untyped party association; "
+                "repair it before replacement"
+            )
+        if stored_person_type != person_type:
+            raise ValueError(
+                "stored party type metadata is not canonical"
+            )
+        party = _resolve_application_person_by_type(
+            db,
+            application_id,
+            person_id,
+            person_type,
+        )
+        if not party:
+            raise ValueError(
+                "Monitoring refresh target party does not resolve within the application"
+            )
+        stable_person_id = str(party.get("id") or "").strip()
+        if person_id != stable_person_id:
+            raise ValueError(
+                "stored party association does not use the stable row ID"
+            )
+        person_id = stable_person_id
+        person_type = party["person_type"]
+        slot_key = _document_slot_key(
+            doc_type,
+            person_id,
+            person_type=person_type,
+        )
+        if old_document_slot != slot_key:
+            raise ValueError(
+                "stored party document slot is not canonical"
+            )
+    else:
+        if stored_person_type:
+            raise ValueError("Monitoring refresh target has person_type without person_id")
+        person_type = None
+        slot_key = _document_slot_key(doc_type)
+        if old_document_slot != slot_key:
+            raise ValueError(
+                "stored entity document slot is not canonical"
+            )
+    scope_error = _base_document_scope_error(doc_type, person_type)
+    if scope_error:
+        raise ValueError(scope_error)
+
     extra_ids = []
     if old_doc_id:
         extra_ids.append(old_doc_id)
@@ -32142,9 +33321,11 @@ def _monitoring_refresh_upload_target(db, application_id, requirement):
     return {
         "doc_type": doc_type,
         "person_id": person_id,
+        "person_type": person_type,
         "slot_key": slot_key,
         "old_document_id": old_doc_id or "",
         "old_document": old_doc,
+        "allowed_extra_slot_keys": [],
         "extra_document_ids": extra_ids,
     }
 
@@ -32448,6 +33629,7 @@ def _client_safe_rmi_request(req):
             "label": label,
             "description": description,
             "status": item.get("status") or "requested",
+            "document_id": item.get("document_id"),
         })
     return {
         "id": req.get("id"),
@@ -36770,7 +37952,22 @@ class MonitoringAlertDocumentReplacementUploadHandler(BaseHandler):
             if not is_valid:
                 return self.error(f"File rejected: {upload_error}", 400)
 
-            target = _monitoring_refresh_upload_target(db, app["id"], requirement)
+            try:
+                target = _monitoring_refresh_upload_target(
+                    db,
+                    app["id"],
+                    requirement,
+                )
+            except ValueError as exc:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                return self.error(
+                    "Monitoring refresh target requires repair before replacement: "
+                    f"{exc}",
+                    409,
+                )
             upload_doc_type = target["doc_type"]
             document_id = uuid.uuid4().hex[:16]
             ext = os.path.splitext(filename)[1].lower()
@@ -36830,24 +38027,27 @@ class MonitoringAlertDocumentReplacementUploadHandler(BaseHandler):
                 new_document_id=document_id,
                 doc_type=upload_doc_type,
                 person_id=target.get("person_id"),
+                person_type=target.get("person_type"),
                 slot_key=target["slot_key"],
                 actor_user=user,
                 replaced_reason="monitoring_document_refresh_replacement",
+                allowed_extra_slot_keys=target.get("allowed_extra_slot_keys"),
                 extra_document_ids=target.get("extra_document_ids"),
             )
             previous_documents = replacement["previous_documents"]
             db.execute(
                 """
                 INSERT INTO documents
-                    (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
+                    (id, application_id, person_id, person_type, doc_type, doc_name, file_path, s3_key,
                      file_size, mime_type, slot_key, is_current, version,
                      verification_status, verification_results, review_status, file_sha256)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     document_id,
                     app["id"],
                     target.get("person_id"),
+                    target.get("person_type"),
                     upload_doc_type,
                     filename,
                     file_path,
@@ -36886,6 +38086,17 @@ class MonitoringAlertDocumentReplacementUploadHandler(BaseHandler):
                     (requirement.get("id"), app["id"]),
                 ).fetchone()
             )
+            _, uploaded_link_integrity = validate_enhanced_requirement_document_link(
+                db,
+                app["id"],
+                after_req,
+                document_id,
+            )
+            if not uploaded_link_integrity.get("valid"):
+                raise RuntimeError(
+                    "monitoring_replacement_upload_integrity_failed:"
+                    + str(uploaded_link_integrity.get("reason") or "unknown")
+                )
             _mark_monitoring_backoffice_upload_received(
                 db,
                 alert_id,
@@ -38339,6 +39550,11 @@ def _periodic_review_baseline_snapshot(review_row) -> dict:
 
 def _periodic_review_doc_request_ready(requirement) -> bool:
     requirement = dict(requirement or {})
+    if (
+        requirement.get("linked_document_id")
+        and requirement.get("linked_document_integrity_valid") is not True
+    ):
+        return False
     linked = requirement.get("linked_document") if isinstance(requirement.get("linked_document"), dict) else {}
     verification_status = str(
         linked.get("verification_status") or requirement.get("document_verification_status") or ""
@@ -42032,17 +43248,32 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
             is_monitoring_refresh = _is_monitoring_document_refresh_requirement(raw_req)
             policy_info = enhanced_requirement_document_policy((raw_req or {}).get("requirement_key"))
             mapped_doc_type = policy_info.get("document_type") or "supporting_document"
-            upload_target = (
-                _monitoring_refresh_upload_target(db, app["id"], raw_req)
-                if is_monitoring_refresh
-                else {
+            if is_monitoring_refresh:
+                try:
+                    upload_target = _monitoring_refresh_upload_target(
+                        db,
+                        app["id"],
+                        raw_req,
+                    )
+                except ValueError as exc:
+                    return self.error(
+                        "Monitoring refresh target requires repair before replacement: "
+                        f"{exc}",
+                        409,
+                    )
+            else:
+                upload_target = {
                     "doc_type": mapped_doc_type,
                     "person_id": None,
+                    "person_type": None,
                     "slot_key": _document_slot_key(mapped_doc_type, enhanced_requirement_id=requirement_id),
                     "old_document_id": "",
-                    "extra_document_ids": [safe_req.get("linked_document_id")] if safe_req.get("linked_document_id") else [],
+                    "extra_document_ids": _valid_enhanced_replacement_document_ids(
+                        db,
+                        app["id"],
+                        raw_req,
+                    ),
                 }
-            )
             upload_doc_type = upload_target["doc_type"]
             upload_runtime_executable = bool(policy_info.get("runtime_executable")) and not is_monitoring_refresh
             upload_verification_status = STATE_PENDING if upload_runtime_executable or is_monitoring_refresh else STATE_SKIPPED
@@ -42128,26 +43359,29 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 new_document_id=document_id,
                 doc_type=upload_doc_type,
                 person_id=upload_target.get("person_id"),
+                person_type=upload_target.get("person_type"),
                 slot_key=upload_target["slot_key"],
                 actor_user=user,
                 replaced_reason="monitoring_document_refresh_replacement" if is_monitoring_refresh else "enhanced_requirement_replacement",
+                allowed_extra_slot_keys=upload_target.get("allowed_extra_slot_keys"),
                 extra_document_ids=upload_target.get("extra_document_ids"),
             )
             previous_documents = replacement["previous_documents"]
             db.execute(
                 """
                 INSERT INTO documents
-                (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
+                (id, application_id, person_id, person_type, doc_type, doc_name, file_path, s3_key,
                  file_size, mime_type, slot_key, is_current, version,
                  verification_status, verification_results, review_status, file_sha256,
                  uploaded_by, uploaded_by_actor_type, uploaded_by_actor_id,
                  uploaded_by_display, upload_source)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     document_id,
                     app["id"],
                     upload_target.get("person_id"),
+                    upload_target.get("person_type"),
                     upload_doc_type,
                     filename,
                     file_path,
@@ -42638,6 +43872,7 @@ def make_app():
         (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)/request", ApplicationEnhancedRequirementRequestHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)", ApplicationEnhancedRequirementDetailHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements", ApplicationEnhancedRequirementsHandler),
+        (r"/api/applications/([^/]+)/kyc/parties/([^/]+)/profile", KYCPartyProfileHandler),
         (r"/api/applications/([^/]+)/documents/([^/]+)", DocumentDeleteHandler),
         (r"/api/applications/([^/]+)/documents", DocumentUploadHandler),
         (r"/api/applications/([^/]+)", ApplicationDetailHandler),

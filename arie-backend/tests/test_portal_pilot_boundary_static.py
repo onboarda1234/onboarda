@@ -494,7 +494,7 @@ def test_person_document_polling_rejects_invalid_person_identifiers():
     sync_body = _extract_js_function(html, "syncPersistedApplicationDocuments")
     assert "var personId = String(rawPersonId).trim();" in sync_body
     assert "isValidPortalPersonId(personId)" in sync_body
-    assert "document.getElementById('kyc-person-' + personId)" in sync_body
+    assert "findKYCPersonCard(storedPersonId, storedPersonType)" in sync_body
     assert "renderPersonVerification(personId" in sync_body
     assert "renderPersonVerification(personId, doc.doc_type, updatedRecord)" in sync_body
 
