@@ -108,7 +108,7 @@ class TestBackofficeRiskSourceOfTruth:
 
     def test_backoffice_risk_card_uses_only_authoritative_backend_evidence(self):
         html = _backoffice_html()
-        start = html.index("function renderStoredRiskComputationHtml(app)")
+        start = html.index("function riskExecutiveStoredOutcomeCodes(risk)")
         end = html.index("\nfunction setMemoDownloadState", start)
         risk_card = html[start:end]
 
@@ -117,6 +117,16 @@ class TestBackofficeRiskSourceOfTruth:
         assert "Evidence at a glance" in risk_card
         assert "risk-executive-dashboard" in risk_card
         assert "Configuration:" in risk_card
+        assert "factor_evidence" in risk_card
+        assert "weighted_factor_contribution" in risk_card
+        assert "dimension_computation_evidence" in risk_card
+        assert "composite_contribution" in risk_card
+        assert "computation_evidence" in risk_card
+        assert "app.sector" not in risk_card
+        assert "app.country" not in risk_card
+        assert "app.entityType" not in risk_card
+        assert "score * weight * 0.25" not in risk_card
+        assert ".reduce(" not in risk_card
         assert "Latest recomputed score" not in risk_card
         assert "Weighted average" not in risk_card
         assert "Formula:" not in risk_card

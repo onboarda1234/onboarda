@@ -212,9 +212,12 @@ process.stdout.write(JSON.stringify({{
 
 def test_risk_assessment_uses_compact_executive_dashboard_and_collapsed_technical_details():
     html = _html()
-    region = _region(html, "function renderStoredRiskComputationHtml", "function setMemoDownloadState")
+    region = _region(html, "function riskExecutiveStoredOutcomeCodes", "function setMemoDownloadState")
     assert "risk-executive-dashboard" in region
-    assert "Why this risk?" in region
+    assert "Primary Risk Drivers" in region
+    assert "Persisted risk factors only" in region
+    assert "Executive Recommendation" not in region
+    assert "risk-score-adjustment" in region
     assert "Risk breakdown" in region
     assert "Rule outcomes" in region
     assert "Evidence at a glance" in region
@@ -226,6 +229,7 @@ def test_risk_assessment_uses_compact_executive_dashboard_and_collapsed_technica
         "function downloadRiskPDF",
     )
     assert "Executive Summary" in pdf
+    assert "Executive Recommendation" in pdf
     assert "Primary Risk Drivers" in pdf
     assert "Rule Outcomes" in pdf
     assert "Detailed Dimension Computation" in pdf
