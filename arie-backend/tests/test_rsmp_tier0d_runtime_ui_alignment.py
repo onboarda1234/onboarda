@@ -480,19 +480,58 @@ def test_csv_pdf_exports_use_authoritative_evidence_and_fail_closed():
             function dimension(id, score, subcriteria) {
               return {id:id,name:id + ' risk',weight:20,stored_score:score,source:'applications.risk_dimensions.' + id.toLowerCase(),subcriteria:subcriteria || []};
             }
+            function factor(dimensionId, key, label, raw, score, weight, contribution) {
+              return {
+                dimension_id:dimensionId, factor_key:key, factor_label:label,
+                raw_value:raw, normalized_value:String(raw).toLowerCase(),
+                rule_score:score, factor_weight:weight,
+                weighted_factor_contribution:contribution,
+                resolution_status:'resolved', rule_identifier:key + '_runtime_score',
+                evidence_source:'rule_engine.' + key
+              };
+            }
+            const factorEvidence = [
+              factor('D1','entity_type','Entity Type','Family Office',3,20,0.6),
+              factor('D1','ownership_structure','Ownership Structure','Simple',1,20,0.2),
+              factor('D1','pep_status','PEP Status','foreign_pep',4,25,1),
+              factor('D1','adverse_media','Adverse Media','No adverse media',1,15,0.15),
+              factor('D1','source_of_wealth','Source of Wealth','Verified',1,10,0.1),
+              factor('D1','source_of_funds','Source of Funds','Verified',1,10,0.1),
+              factor('D2','country_of_incorporation','Country of Incorporation','Mauritius',2,25,0.5),
+              factor('D2','ubo_nationalities','UBO / Director Nationalities','Mauritius',2,20,0.4),
+              factor('D2','intermediary_jurisdictions','Intermediary Shareholder Jurisdictions','None',1,20,0.2),
+              factor('D2','countries_of_operation','Countries of Operation','Mauritius',2,20,0.4),
+              factor('D2','target_markets','Target Markets','Mauritius',2,15,0.3),
+              factor('D3','service_type','Service Type','Cross-border payments',3,40,1.2),
+              factor('D3','monthly_volume','Monthly Volume','USD 500,000 to USD 5m',3,35,1.05),
+              factor('D3','transaction_complexity','Transaction Complexity','Complex',3,25,0.75),
+              factor('D4','industry_sector','Industry Sector','Private Banking',4,100,4),
+              factor('D5','introduction_method','Introduction Method','Direct application',1,50,0.5),
+              factor('D5','delivery_channel','Delivery Channel','Video',2,50,1)
+            ];
+            const dimensionEvidence = [
+              {dimension_id:'D1',dimension_score:2.15,dimension_weight:30,rounding_adjustment:0,composite_contribution:11.5,factor_keys:['entity_type','ownership_structure','pep_status','adverse_media','source_of_wealth','source_of_funds']},
+              {dimension_id:'D2',dimension_score:1.8,dimension_weight:25,rounding_adjustment:0,composite_contribution:6.6667,factor_keys:['country_of_incorporation','ubo_nationalities','intermediary_jurisdictions','countries_of_operation','target_markets']},
+              {dimension_id:'D3',dimension_score:3,dimension_weight:20,rounding_adjustment:0,composite_contribution:13.3333,factor_keys:['service_type','monthly_volume','transaction_complexity']},
+              {dimension_id:'D4',dimension_score:4,dimension_weight:15,rounding_adjustment:0,composite_contribution:15,factor_keys:['industry_sector']},
+              {dimension_id:'D5',dimension_score:1.5,dimension_weight:10,rounding_adjustment:0,composite_contribution:1.6667,factor_keys:['introduction_method','delivery_channel']}
+            ];
             var currentApp = {
               ref:'ARF-TEST', company:'Evidence Ltd', brn:'BRN-1', country:'Mauritius', sector:'Private Banking', date:'2026-07-15',
+              entityType:'Family Office', dims:{canonical_dataset:{dataset_version:'v1',dataset_hash:'manifest-hash'}},
               riskReportEvidence:{
                 available:true, authoritative:true, read_only:true, status:'ready',
                 source:'stored application risk evidence + validated runtime configuration',
                 config_version:'risk_config:v1', risk_computed_at:'2026-07-15T10:00:00Z',
                 application:{
                   score:64.5, tier:'HIGH', edd_route:'EDD',
-                  approval_route:{route:'compliance_required',reasons:['declared_pep_present']},
+                  approval_route:{route:'dual_control_required',approval_route:'dual_control_required',decision_eligibility:'eligible',eligibility_reason:'',reasons:['declared_pep_present']},
                   floor_reasons:['floor_rule_declared_pep'], escalations:['floor_rule_declared_pep'],
                   dimensions:[dimension('D1',4),dimension('D2',2),dimension('D3',3,d3Subcriteria),dimension('D4',2),dimension('D5',1)]
                 },
-                factor_evidence:[{family:'pep',label:'foreign_pep',score:4,source:'runtime PEP evidence'}]
+                factor_evidence:factorEvidence,
+                dimension_computation_evidence:dimensionEvidence,
+                computation_evidence:{schema_version:'risk-factor-evidence-v1',base_composite_score:48.1667,policy_adjustment:16.3333,final_composite_score:64.5}
               }
             };
             """
@@ -510,7 +549,13 @@ def test_csv_pdf_exports_use_authoritative_evidence_and_fail_closed():
               currentApp.riskReportEvidence.config_version = 'risk_config:old';
               downloadRiskCSV();
               downloadRiskPDF();
-              console.log(JSON.stringify({csv,pdf,beforeBlocked,afterBlocked:{blobs:blobs.length,pdfs:pdfDocuments.length,clicks:clicked.length},toasts}));
+              const afterStale = {blobs:blobs.length,pdfs:pdfDocuments.length,clicks:clicked.length};
+              currentApp.riskReportEvidence.config_version = 'risk_config:v1';
+              currentApp.riskReportEvidence.available = false;
+              currentApp.riskReportEvidence.status = 'blocked';
+              downloadRiskCSV();
+              downloadRiskPDF();
+              console.log(JSON.stringify({csv,pdf,beforeBlocked,afterStale,afterBlocked:{blobs:blobs.length,pdfs:pdfDocuments.length,clicks:clicked.length},toasts}));
             })().catch(error => { console.error(error); process.exit(1); });
             """
         ),
@@ -529,14 +574,47 @@ def test_csv_pdf_exports_use_authoritative_evidence_and_fail_closed():
         assert "64.5" in rendered
         assert "HIGH" in rendered
         assert "EDD" in rendered
-        assert "compliance_required" in rendered
-        assert "floor_rule_declared_pep" in rendered
-        assert "foreign_pep" in rendered
-        assert ">4<" in rendered if rendered == result["pdf"] else '"4"' in rendered
+    assert "Foreign PEP" in result["pdf"]
+    assert "foreign_pep" not in result["pdf"]
+    assert "High (4/4)" in result["pdf"]
+    assert "dual_control_required" in result["csv"]
+    assert "floor_rule_declared_pep" in result["csv"]
+    assert "Dual Control - SCO and Admin" in result["pdf"]
+    assert "Declared PEP" in result["pdf"]
+    assert "Detailed Dimension Computation" in result["pdf"]
+    assert "Risk Rating" in result["pdf"]
+    assert "<th>Evidence</th>" not in result["pdf"]
+    assert "<th>Explanation</th>" not in result["pdf"]
+    assert "Runtime Subcriteria Configuration Reference" not in result["pdf"]
+    assert "rule_engine." not in result["pdf"]
+    assert "floor_rule_declared_pep" not in result["pdf"]
     assert '"Monthly Volume","35"' in result["csv"]
     assert '"Transaction Complexity","25"' in result["csv"]
+    assert "<span>Composite Score</span><strong>48.1667</strong>" in result["pdf"]
+    assert "<span>Policy Adjustment</span><strong>16.3333</strong>" in result["pdf"]
+    assert "<span>Final Score</span><strong>64.5</strong>" in result["pdf"]
+    for contribution in ("11.5", "6.6667", "13.3333", "15", "1.6667"):
+        assert (
+            f'<div class="summary-value">{contribution}</div>'
+            '<div class="summary-helper">Stored contribution</div>'
+        ) in result["pdf"]
+    assert (
+        "<td><strong>PEP Status</strong></td><td>Foreign PEP</td>"
+        "<td>PEP Status Assessment</td><td><strong>High (4/4)</strong></td>"
+        '<td class="numeric">25%</td><td class="numeric"><strong>1</strong></td>'
+    ) in result["pdf"]
+    assert (
+        "<td><strong>Industry Sector</strong></td><td>Private Banking</td>"
+        "<td>Business Sector Classification</td><td><strong>High (4/4)</strong></td>"
+        '<td class="numeric">100%</td><td class="numeric"><strong>4</strong></td>'
+    ) in result["pdf"]
+    assert result["beforeBlocked"] == result["afterStale"]
     assert result["beforeBlocked"] == result["afterBlocked"]
-    assert any("stale relative to the current runtime configuration" in message for message in result["toasts"])
+    assert any(
+        "stale relative to the current runtime configuration" in message
+        for message in result["toasts"]
+    )
+    assert any("Authoritative risk evidence" in message for message in result["toasts"])
 
 
 def test_backoffice_risk_model_has_no_ui_score_source_or_editor():

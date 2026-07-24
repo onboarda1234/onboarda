@@ -220,12 +220,22 @@ def test_risk_assessment_uses_compact_executive_dashboard_and_collapsed_technica
     assert "Evidence at a glance" in region
     assert "<details style=\"margin-top:12px" in region
     assert "applications.risk_dimensions" not in region
-    pdf = _region(html, "function downloadRiskPDF", "</script>")
+    pdf = _region(
+        html,
+        "function buildAuthoritativeRiskPdfHtml",
+        "function downloadRiskPDF",
+    )
     assert "Executive Summary" in pdf
-    assert "Key Risk Drivers" in pdf
-    assert "Risk Breakdown" in pdf
+    assert "Primary Risk Drivers" in pdf
     assert "Rule Outcomes" in pdf
-    assert "Evidence at a glance" in pdf
+    assert "Detailed Dimension Computation" in pdf
+    assert "Decision Eligibility" in pdf
+    assert "Risk Rating" in pdf
+    assert "<th>Evidence</th>" not in pdf
+    assert "<th>Explanation</th>" not in pdf
+    assert "Evidence Status" not in pdf
+    assert "Runtime Subcriteria Configuration Reference" not in pdf
+    assert "Evidence Source" not in pdf
 
 
 def test_supervisor_scope_guard_is_confined_to_canonical_ui_projection():
