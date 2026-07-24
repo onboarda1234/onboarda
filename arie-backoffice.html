@@ -16557,6 +16557,11 @@ function agent3TriageNarrativeHtml(narrative, subjectName) {
       if (reasons.length) sentence += ' — ' + escapeHtml(reasons.join('; '));
       sentence += index === 0 ? '; review it first.' : '.';
     }
+    // Server-computed advisory next-step (display only; browser never derives
+    // it). Rendered as a soft trailing clause so the callout stays one compact
+    // paragraph while carrying a concrete "what to do".
+    var action = hit.action != null ? String(hit.action).trim() : '';
+    if (action) sentence += ' <span style="color:var(--text3);">→ ' + escapeHtml(action) + '</span>';
     sentences.push(sentence);
   });
   if (!subjectName) {
