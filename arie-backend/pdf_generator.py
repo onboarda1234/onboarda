@@ -765,6 +765,43 @@ def _screening_report_hits(screening_report: Dict) -> list:
     return hits
 
 
+def _summarize_overall_flags(overall_flags, max_distinct: int = 12) -> str:
+    """Collapse the per-match overall_flags list into a deduped, counted rollup.
+
+    overall_flags carries one summary string PER provider match, so a 200-hit
+    screen repeats the same handful of strings ~200 times. Joining the raw list
+    spilled ~13 pages of duplicate noise into the header "Overall Flags" cell.
+    Dedup in first-seen order, count each distinct flag, and cap the distinct
+    count so the header stays a one-glance rollup. Content-preserving: distinct
+    flag text is shown verbatim (only trailing separators/whitespace trimmed for
+    display); nothing is invented, reordered by weight, or dropped silently — an
+    overflow beyond the cap is reported as a residual count.
+    """
+    if not overall_flags:
+        return "None recorded"
+    counts: Dict[str, int] = {}
+    order: list = []
+    for flag in overall_flags:
+        text = str(flag).strip().rstrip(",").strip()
+        if not text:
+            continue
+        if text not in counts:
+            counts[text] = 0
+            order.append(text)
+        counts[text] += 1
+    if not order:
+        return "None recorded"
+    parts = []
+    for text in order[:max_distinct]:
+        n = counts[text]
+        parts.append(f"{text} (×{n})" if n > 1 else text)
+    display = "; ".join(parts)
+    remaining = len(order) - max_distinct
+    if remaining > 0:
+        display += f"; …and {remaining} more distinct flag(s)"
+    return display
+
+
 def build_screening_report_html(
     application: Dict,
     screening_report: Dict,
@@ -781,7 +818,7 @@ def build_screening_report_html(
     screened_at = (str(screening_report.get("screened_at") or "Not recorded")).replace("T", " ")[:19]
     total_hits = screening_report.get("total_hits", 0)
     overall_flags = screening_report.get("overall_flags") or []
-    flags_display = ", ".join(str(f) for f in overall_flags) if overall_flags else "None recorded"
+    flags_display = _summarize_overall_flags(overall_flags)
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     content_hash = hashlib.sha256(

@@ -107,6 +107,68 @@ def test_uuid_detector():
     assert not pdf_generator._looks_like_uuid("")
 
 
+def test_summarize_overall_flags_dedup_and_count():
+    # A 200-hit screen repeats the same handful of flag strings ~200 times.
+    # The rollup must dedup (first-seen order), count, and trim trailing commas
+    # — NOT spill 200 near-identical lines into the header (the 13-page bug).
+    flags = (
+        ["ComplyAdvantage adverse media hit: wirecard,"] * 180
+        + ["ComplyAdvantage adverse media hit: jan marsalek,"] * 20
+    )
+    out = pdf_generator._summarize_overall_flags(flags)
+    assert out == (
+        "ComplyAdvantage adverse media hit: wirecard (×180); "
+        "ComplyAdvantage adverse media hit: jan marsalek (×20)"
+    )
+    # deduped to two distinct lines, not 200
+    assert out.count("(×") == 2
+    assert "wirecard,;" not in out  # trailing comma trimmed for display
+
+
+def test_summarize_overall_flags_singletons_unchanged():
+    # Distinct one-off flags render verbatim, no count suffix.
+    out = pdf_generator._summarize_overall_flags(["sanctions", "adverse_media"])
+    assert out == "sanctions; adverse_media"
+    assert "(×" not in out
+
+
+def test_summarize_overall_flags_empty_and_blank():
+    assert pdf_generator._summarize_overall_flags([]) == "None recorded"
+    assert pdf_generator._summarize_overall_flags(None) == "None recorded"
+    assert pdf_generator._summarize_overall_flags(["", "  ", ","]) == "None recorded"
+
+
+def test_summarize_overall_flags_trailing_comma_variants_merge():
+    # Trailing-comma provider-format artifacts are noise, not distinct meaning:
+    # "A," and "A" collapse to one counted entry (intent lock for the rstrip).
+    out = pdf_generator._summarize_overall_flags(["sanctions,", "sanctions"])
+    assert out == "sanctions (×2)"
+
+
+def test_summarize_overall_flags_coerces_non_str_members():
+    # Non-string members must not raise (matches the prior str() contract).
+    out = pdf_generator._summarize_overall_flags([None, 7, None])
+    assert "None" in out and "7" in out
+
+
+def test_summarize_overall_flags_caps_distinct_with_residual():
+    # Many DISTINCT flags are capped; the overflow is reported, never dropped silently.
+    flags = [f"flag {i}" for i in range(20)]
+    out = pdf_generator._summarize_overall_flags(flags, max_distinct=12)
+    assert "flag 0" in out and "flag 11" in out
+    assert "flag 12" not in out
+    assert "…and 8 more distinct flag(s)" in out
+
+
+def test_build_html_header_not_flooded_by_repeated_flags():
+    # End-to-end: a 200-repeat report must NOT put 200 flag lines in the HTML.
+    report = _report()
+    report["overall_flags"] = ["ComplyAdvantage adverse media hit: wirecard,"] * 200
+    html = pdf_generator.build_screening_report_html(_app(), report)
+    assert "(×200)" in html
+    assert html.count("adverse media hit: wirecard") == 1
+
+
 def test_generate_screening_report_pdf_uses_weasyprint(monkeypatch):
     # The render entrypoint must build the HTML and hand it to WeasyPrint's
     # HTML(...).write_pdf(), returning the produced bytes. Mock WeasyPrint so
