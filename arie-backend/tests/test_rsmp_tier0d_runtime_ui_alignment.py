@@ -547,11 +547,15 @@ def test_csv_pdf_exports_use_authoritative_evidence_and_fail_closed():
               const pdf = pdfDocuments[0].html;
               const beforeBlocked = {blobs:blobs.length,pdfs:pdfDocuments.length,clicks:clicked.length};
               currentApp.riskReportEvidence.config_version = 'risk_config:old';
+              downloadRiskCSV();
+              downloadRiskPDF();
+              const afterStale = {blobs:blobs.length,pdfs:pdfDocuments.length,clicks:clicked.length};
+              currentApp.riskReportEvidence.config_version = 'risk_config:v1';
               currentApp.riskReportEvidence.available = false;
               currentApp.riskReportEvidence.status = 'blocked';
               downloadRiskCSV();
               downloadRiskPDF();
-              console.log(JSON.stringify({csv,pdf,beforeBlocked,afterBlocked:{blobs:blobs.length,pdfs:pdfDocuments.length,clicks:clicked.length},toasts}));
+              console.log(JSON.stringify({csv,pdf,beforeBlocked,afterStale,afterBlocked:{blobs:blobs.length,pdfs:pdfDocuments.length,clicks:clicked.length},toasts}));
             })().catch(error => { console.error(error); process.exit(1); });
             """
         ),
@@ -586,7 +590,30 @@ def test_csv_pdf_exports_use_authoritative_evidence_and_fail_closed():
     assert "floor_rule_declared_pep" not in result["pdf"]
     assert '"Monthly Volume","35"' in result["csv"]
     assert '"Transaction Complexity","25"' in result["csv"]
+    assert "<span>Composite Score</span><strong>48.1667</strong>" in result["pdf"]
+    assert "<span>Policy Adjustment</span><strong>16.3333</strong>" in result["pdf"]
+    assert "<span>Final Score</span><strong>64.5</strong>" in result["pdf"]
+    for contribution in ("11.5", "6.6667", "13.3333", "15", "1.6667"):
+        assert (
+            f'<div class="summary-value">{contribution}</div>'
+            '<div class="summary-helper">Stored contribution</div>'
+        ) in result["pdf"]
+    assert (
+        "<td><strong>PEP Status</strong></td><td>Foreign PEP</td>"
+        "<td>PEP Status Assessment</td><td><strong>High (4/4)</strong></td>"
+        '<td class="numeric">25%</td><td class="numeric"><strong>1</strong></td>'
+    ) in result["pdf"]
+    assert (
+        "<td><strong>Industry Sector</strong></td><td>Private Banking</td>"
+        "<td>Business Sector Classification</td><td><strong>High (4/4)</strong></td>"
+        '<td class="numeric">100%</td><td class="numeric"><strong>4</strong></td>'
+    ) in result["pdf"]
+    assert result["beforeBlocked"] == result["afterStale"]
     assert result["beforeBlocked"] == result["afterBlocked"]
+    assert any(
+        "stale relative to the current runtime configuration" in message
+        for message in result["toasts"]
+    )
     assert any("Authoritative risk evidence" in message for message in result["toasts"])
 
 

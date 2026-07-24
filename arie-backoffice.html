@@ -35578,6 +35578,12 @@ function requireAuthoritativeRiskPdfEvidence(app) {
     var blocked = app.riskReportEvidence || app.risk_report_evidence || {};
     throw new Error(blocked.message || 'Authoritative risk evidence is missing, incomplete, or stale. Recompute risk before exporting.');
   }
+  var projectionVersion = RUNTIME_RISK_MODEL && RUNTIME_RISK_MODEL.runtime_source
+    ? String(RUNTIME_RISK_MODEL.runtime_source.config_version || '')
+    : '';
+  if (!projectionVersion || projectionVersion !== String(evidence.config_version || '')) {
+    throw new Error('Authoritative risk evidence is stale relative to the current runtime configuration. Recompute risk before exporting.');
+  }
   var risk = evidence.application || {};
   var route = risk.approval_route || {};
   var factors = evidence.factor_evidence;
@@ -36055,20 +36061,21 @@ function downloadRiskPDF() {
   if (!currentApp) { showToast('No application selected'); return; }
   var app = currentApp;
   var evidence;
+  var html;
   try {
     evidence = requireAuthoritativeRiskPdfEvidence(app);
+    html = buildAuthoritativeRiskPdfHtml(
+      app,
+      evidence,
+      (currentUser && currentUser.name) || '',
+      new Date().toISOString()
+    );
   } catch (error) {
     showToast(error.message || 'Authoritative risk evidence is unavailable');
     return;
   }
   var reportWindow = window.open('', '_blank', 'width=1200,height=900');
   if (!reportWindow) { showToast('Pop-up blocked - please allow pop-ups for this site'); return; }
-  var html = buildAuthoritativeRiskPdfHtml(
-    app,
-    evidence,
-    currentUser.name || '',
-    new Date().toISOString()
-  );
   reportWindow.document.write(html);
   reportWindow.document.close();
   showToast('Authoritative PDF risk report opened - use Print / Save as PDF');

@@ -26,6 +26,7 @@ def _run_node(script: str) -> dict:
         text=True,
         capture_output=True,
         check=False,
+        timeout=30,
     )
     assert result.returncode == 0, result.stderr or result.stdout
     return json.loads(result.stdout)
@@ -44,6 +45,9 @@ def _fixture_script(assertion: str) -> str:
           if (!evidence || evidence.available !== true || evidence.authoritative !== true || evidence.status !== 'ready') return null;
           return evidence;
         }
+        const RUNTIME_RISK_MODEL = {
+          runtime_source:{config_version:'risk_config:2026-07-17 11:16:03.481284'}
+        };
         function factor(dimensionId, key, label, raw, score, weight, contribution) {
           return {
             dimension_id:dimensionId, factor_key:key, factor_label:label,
@@ -234,9 +238,9 @@ def test_low_medium_high_and_very_high_reports_render_the_persisted_ledger_only(
         assert "dual_control_required" not in rendered
 
 
-def test_pdf_renderer_has_no_scoring_or_contribution_recalculation_and_no_runtime_dependency():
+def test_pdf_renderer_has_no_scoring_or_contribution_recalculation():
     source = _pdf_source()
-    assert "RUNTIME_RISK_MODEL" not in source
+    assert "RUNTIME_RISK_MODEL.runtime_source.config_version" in source
     assert "compute_risk_score" not in source
     assert "weighted_factor_contribution =" not in source
     assert "rule_score *" not in source
