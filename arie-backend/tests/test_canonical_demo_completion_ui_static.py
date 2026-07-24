@@ -226,10 +226,14 @@ def test_risk_assessment_uses_compact_executive_dashboard_and_collapsed_technica
         "function downloadRiskPDF",
     )
     assert "Executive Summary" in pdf
-    assert "Key Risk Drivers" in pdf
+    assert "Primary Risk Drivers" in pdf
     assert "Rule Outcomes" in pdf
     assert "Detailed Dimension Computation" in pdf
     assert "Decision Eligibility" in pdf
+    assert "Risk Rating" in pdf
+    assert "<th>Evidence</th>" not in pdf
+    assert "<th>Explanation</th>" not in pdf
+    assert "Evidence Status" not in pdf
     assert "Runtime Subcriteria Configuration Reference" not in pdf
     assert "Evidence Source" not in pdf
 

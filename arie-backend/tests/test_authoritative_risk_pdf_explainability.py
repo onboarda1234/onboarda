@@ -90,7 +90,11 @@ def _fixture_script(assertion: str) -> str:
           weight:row.dimension_weight,
           stored_score:row.dimension_score
         }));
-        function evidence(tier, score, route, eligibility, edd) {
+        function evidence(tier, score, route, eligibility, edd, options) {
+          options = options || {};
+          const has = (key) => Object.prototype.hasOwnProperty.call(options, key);
+          const storedFactors = factors.map((row) => ({...row}));
+          const storedDimensions = dimensionRows.map((row) => ({...row, factor_keys:[...row.factor_keys]}));
           return {
             available:true, authoritative:true, read_only:true, status:'ready',
             config_version:'risk_config:2026-07-17 11:16:03.481284',
@@ -102,20 +106,20 @@ def _fixture_script(assertion: str) -> str:
                 approval_route:route,
                 decision_eligibility:eligibility,
                 eligibility_reason:eligibility === 'blocked' ? 'terminal_state' : '',
-                reasons:[],
-                escalation_reasons:tier === 'HIGH' || tier === 'VERY_HIGH' ? ['high_or_very_high_risk'] : []
+                reasons:options.approval_reasons || [],
+                escalation_reasons:options.approval_escalations || []
               },
-              floor_reasons:tier === 'HIGH' || tier === 'VERY_HIGH' ? ['floor_rule_declared_pep'] : [],
-              escalations:tier === 'HIGH' || tier === 'VERY_HIGH' ? ['floor_rule_declared_pep'] : [],
+              floor_reasons:options.floor_reasons || [],
+              escalations:options.escalations || [],
               dimensions
             },
-            factor_evidence:factors,
-            dimension_computation_evidence:dimensionRows,
+            factor_evidence:storedFactors,
+            dimension_computation_evidence:storedDimensions,
             computation_evidence:{
               schema_version:'risk-factor-evidence-v1',
-              base_composite_score:35.6667,
-              policy_adjustment:score - 35.6667,
-              final_composite_score:score
+              base_composite_score:has('base') ? options.base : score,
+              policy_adjustment:has('adjustment') ? options.adjustment : 0,
+              final_composite_score:has('final') ? options.final : score
             }
           };
         }
@@ -155,10 +159,10 @@ def test_low_medium_high_and_very_high_reports_render_the_persisted_ledger_only(
     )
 
     route_labels = {
-        "LOW": "Onboarding Officer approval",
-        "MEDIUM": "Compliance approval",
-        "HIGH": "Dual control - SCO and Admin",
-        "VERY_HIGH": "Dual control - SCO and Admin",
+        "LOW": "Onboarding Officer Approval",
+        "MEDIUM": "Compliance Approval",
+        "HIGH": "Dual Control - SCO and Admin",
+        "VERY_HIGH": "Dual Control - SCO and Admin",
     }
     tier_labels = {"LOW": "LOW", "MEDIUM": "MEDIUM", "HIGH": "HIGH", "VERY_HIGH": "VERY HIGH"}
     scores = {"LOW": "12", "MEDIUM": "43.3", "HIGH": "55", "VERY_HIGH": "70"}
@@ -191,11 +195,15 @@ def test_low_medium_high_and_very_high_reports_render_the_persisted_ledger_only(
         assert "Executive Summary" in rendered
         assert "Decision Eligibility" in rendered
         assert "Executive Recommendation" in rendered
+        assert "Primary Risk Drivers" in rendered
         assert "Detailed Dimension Computation" in rendered
         assert all(dimension in rendered for dimension in ("D1 -", "D2 -", "D3 -", "D4 -", "D5 -"))
-        assert factor_labels <= {label for label in factor_labels if label in rendered}
-        assert "Rule Score" in rendered
-        assert "Weighted Contribution" in rendered
+        assert all(label in rendered for label in factor_labels)
+        assert (
+            "<th>Factor</th><th>Input Value</th><th>Rule Applied</th>"
+            "<th>Risk Rating</th><th>Weight</th><th>Weighted Contribution</th>"
+        ) in rendered
+        assert all(rating in rendered for rating in ("Very Low (1/4)", "Low (2/4)", "Medium (3/4)"))
         assert "Rounding Adjustment" in rendered
         assert "Composite Score" in rendered
         assert "Policy Adjustment" in rendered
@@ -206,10 +214,24 @@ def test_low_medium_high_and_very_high_reports_render_the_persisted_ledger_only(
         assert "Evidence Hash" in rendered
         assert "Computation Hash" in rendered
         assert "Not separately recorded" in rendered
+        assert "Original Score" not in rendered
+        assert "Evidence Status" not in rendered
+        assert "Complete factor ledger" not in rendered
+        assert "Dimension reconciliation verified" not in rendered
+        assert "Authoritative and read-only" not in rendered
+        assert "Key Risk Drivers" not in rendered
+        assert "<th>Rule Score</th>" not in rendered
+        assert "<th>Evidence</th>" not in rendered
+        assert "<th>Explanation</th>" not in rendered
+        assert "Stored evidence" not in rendered
+        assert "Resolved as" not in rendered
         assert "Runtime Subcriteria Configuration Reference" not in rendered
         assert "<th>Source</th>" not in rendered
         assert "applications.risk_dimensions" not in rendered
         assert "rule_engine." not in rendered
+        assert "direct_low_medium" not in rendered
+        assert "compliance_required" not in rendered
+        assert "dual_control_required" not in rendered
 
 
 def test_pdf_renderer_has_no_scoring_or_contribution_recalculation_and_no_runtime_dependency():
@@ -220,6 +242,8 @@ def test_pdf_renderer_has_no_scoring_or_contribution_recalculation_and_no_runtim
     assert "rule_score *" not in source
     assert "factor_weight /" not in source
     assert "composite_contribution =" not in source
+    assert "policy_adjustment +" not in source
+    assert "base_composite_score +" not in source
     assert ".reduce(" not in source
     assert "evidence.factor_evidence" in source
     assert "evidence.dimension_computation_evidence" in source
@@ -246,6 +270,259 @@ def test_pdf_export_fails_closed_when_the_persisted_factor_ledger_is_incomplete(
     )
 
 
+def test_pdf_export_fails_closed_when_dimension_factor_order_is_partial_or_malformed():
+    result = _run_node(
+        _fixture_script(
+            """
+            const variants = [
+              'not-an-array',
+              ['entity_type','ownership_structure','pep_status','adverse_media','source_of_wealth'],
+              ['entity_type','ownership_structure','pep_status','adverse_media','source_of_wealth','source_of_wealth']
+            ];
+            const messages = variants.map((factorKeys) => {
+              const stored = evidence('MEDIUM',43.3,'compliance_required','eligible','Standard Review');
+              stored.dimension_computation_evidence[0].factor_keys = factorKeys;
+              app.riskReportEvidence = stored;
+              try { requireAuthoritativeRiskPdfEvidence(app); return ''; }
+              catch (error) { return error.message; }
+            });
+            const duplicateDimension = evidence('MEDIUM',43.3,'compliance_required','eligible','Standard Review');
+            duplicateDimension.dimension_computation_evidence[1] = {
+              ...duplicateDimension.dimension_computation_evidence[0],
+              factor_keys:[...duplicateDimension.dimension_computation_evidence[0].factor_keys]
+            };
+            app.riskReportEvidence = duplicateDimension;
+            try { requireAuthoritativeRiskPdfEvidence(app); messages.push(''); }
+            catch (error) { messages.push(error.message); }
+            process.stdout.write(JSON.stringify({messages}));
+            """
+        )
+    )
+    assert set(result["messages"]) == {
+        "Authoritative dimension evidence is incomplete. Recompute risk before exporting."
+    }
+
+
+def test_pdf_risk_rating_mapping_is_exact_and_malformed_scores_fail_closed():
+    result = _run_node(
+        _fixture_script(
+            """
+            const valid = evidence('MEDIUM',43.3,'compliance_required','eligible','Standard Review');
+            [1,2,3,4].forEach((rating, index) => { valid.factor_evidence[index].rule_score = rating; });
+            const html = buildAuthoritativeRiskPdfHtml(app, valid, 'Test Officer', '2026-07-23T16:00:00Z');
+            const invalidValues = [null, '', 0, 5, 2.5, '4', 'high', NaN];
+            const messages = invalidValues.map((value) => {
+              const stored = evidence('MEDIUM',43.3,'compliance_required','eligible','Standard Review');
+              stored.factor_evidence[0].rule_score = value;
+              app.riskReportEvidence = stored;
+              try { requireAuthoritativeRiskPdfEvidence(app); return ''; }
+              catch (error) { return error.message; }
+            });
+            const missing = evidence('MEDIUM',43.3,'compliance_required','eligible','Standard Review');
+            delete missing.factor_evidence[0].rule_score;
+            app.riskReportEvidence = missing;
+            let missingMessage = '';
+            try { requireAuthoritativeRiskPdfEvidence(app); }
+            catch (error) { missingMessage = error.message; }
+            process.stdout.write(JSON.stringify({html, messages, missingMessage}));
+            """
+        )
+    )
+    assert all(
+        rating in result["html"]
+        for rating in ("Very Low (1/4)", "Low (2/4)", "Medium (3/4)", "High (4/4)")
+    )
+    assert set(result["messages"]) == {
+        "Authoritative factor risk rating is invalid. Recompute risk before exporting."
+    }
+    assert result["missingMessage"] == (
+        "Authoritative factor evidence is incomplete. Recompute risk before exporting."
+    )
+
+
+def test_original_score_is_conditional_and_uses_only_persisted_values():
+    result = _run_node(
+        _fixture_script(
+            """
+            const roundingOnly = evidence(
+              'MEDIUM',43.3,'compliance_required','eligible','Standard Review',
+              {base:43.3, adjustment:-0.0333, final:43.3}
+            );
+            const elevated = evidence(
+              'HIGH',55,'dual_control_required','eligible','EDD',
+              {
+                base:13, adjustment:42, final:55,
+                floor_reasons:['floor_rule_opaque_ownership'],
+                escalations:['floor_rule_opaque_ownership']
+              }
+            );
+            const before = JSON.stringify(elevated);
+            const roundingHtml = buildAuthoritativeRiskPdfHtml(app, roundingOnly, 'Test Officer', '2026-07-23T16:00:00Z');
+            const elevatedHtml = buildAuthoritativeRiskPdfHtml(app, elevated, 'Test Officer', '2026-07-23T16:00:00Z');
+            process.stdout.write(JSON.stringify({
+              roundingHtml, elevatedHtml, unmodified:before === JSON.stringify(elevated)
+            }));
+            """
+        )
+    )
+    assert "Original Score" not in result["roundingHtml"]
+    assert "Original Score" in result["elevatedHtml"]
+    assert ">13<" in result["elevatedHtml"]
+    assert ">55<" in result["elevatedHtml"]
+    assert "Reason for Elevation or Floor" in result["elevatedHtml"]
+    assert "Opaque Ownership Structure" in result["elevatedHtml"]
+    assert "floor_rule_opaque_ownership" not in result["elevatedHtml"]
+    assert result["unmodified"] is True
+
+
+def test_rm_pilot_028_opaque_ownership_floor_driver_is_first_despite_lower_contribution():
+    result = _run_node(
+        _fixture_script(
+            """
+            app.ref = 'RM-PILOT-028';
+            const stored = evidence(
+              'HIGH',55,'dual_control_required','eligible','EDD',
+              {
+                base:13, adjustment:42, final:55,
+                floor_reasons:['floor_rule_opaque_ownership'],
+                escalations:['floor_rule_opaque_ownership']
+              }
+            );
+            const ownership = stored.factor_evidence.find((item) => item.factor_key === 'ownership_structure');
+            ownership.raw_value = '3+ ownership layers / nominee shareholders';
+            ownership.normalized_value = '3+ ownership layers / nominee shareholders';
+            ownership.rule_score = 3;
+            ownership.weighted_factor_contribution = 0.6;
+            const industry = stored.factor_evidence.find((item) => item.factor_key === 'industry_sector');
+            industry.weighted_factor_contribution = 3;
+            const html = buildAuthoritativeRiskPdfHtml(app, stored, 'Test Officer', '2026-07-23T16:00:00Z');
+            const driverStart = html.indexOf('Primary Risk Drivers');
+            const drivers = html.slice(driverStart, html.indexOf('<div class="report-footer"', driverStart));
+            process.stdout.write(JSON.stringify({html, drivers}));
+            """
+        )
+    )
+    assert result["drivers"].index("Ownership Structure") < result["drivers"].index("Industry Sector")
+    assert "3+ ownership layers / nominee shareholders" in result["drivers"]
+    assert "Opaque Ownership Structure" in result["drivers"]
+    assert "floor_rule_opaque_ownership" not in result["html"]
+
+
+def test_persisted_afghanistan_nationality_floor_driver_is_prominent_without_canonical_rewrite():
+    result = _run_node(
+        _fixture_script(
+            """
+            app.ref = 'QA-PDF-GEOGRAPHY-FLOOR';
+            const stored = evidence(
+              'VERY_HIGH',70,'dual_control_required','eligible','EDD',
+              {
+                base:46.2, adjustment:23.8, final:70,
+                floor_reasons:['floor_rule_sanctioned_nationality:afghanistan'],
+                escalations:['floor_rule_sanctioned_nationality:afghanistan']
+              }
+            );
+            const nationality = stored.factor_evidence.find((item) => item.factor_key === 'ubo_nationalities');
+            nationality.raw_value = ['Afghanistan'];
+            nationality.normalized_value = ['afghanistan'];
+            nationality.rule_score = 4;
+            nationality.weighted_factor_contribution = 0.8;
+            const html = buildAuthoritativeRiskPdfHtml(app, stored, 'Test Officer', '2026-07-23T16:00:00Z');
+            const driverStart = html.indexOf('Primary Risk Drivers');
+            const drivers = html.slice(driverStart, html.indexOf('<div class="report-footer"', driverStart));
+            process.stdout.write(JSON.stringify({html, drivers}));
+            """
+        )
+    )
+    assert result["drivers"].index("UBO / Director Nationalities") < result["drivers"].index("Industry Sector")
+    assert "Afghanistan" in result["drivers"]
+    assert "Sanctioned or FATF High-Risk UBO or Director Nationality - Afghanistan" in result["html"]
+    assert "floor_rule_sanctioned_nationality" not in result["html"]
+
+
+def test_all_floor_and_elevation_drivers_remain_visible_when_more_than_eight_are_recorded():
+    result = _run_node(
+        _fixture_script(
+            """
+            const stored = evidence(
+              'VERY_HIGH',70,'dual_control_required','eligible','EDD',
+              {
+                base:32, adjustment:38, final:70,
+                floor_reasons:[
+                  'floor_rule_declared_pep',
+                  'floor_rule_high_risk_sector',
+                  'floor_rule_elevated_jurisdiction',
+                  'floor_rule_opaque_ownership',
+                  'floor_rule_sanctioned_nationality:afghanistan'
+                ],
+                escalations:[
+                  'elevation_screening_concern',
+                  'elevation_severe_combination',
+                  'floor_rule_edd_routing',
+                  'material_screening_disposition_floor'
+                ]
+              }
+            );
+            const html = buildAuthoritativeRiskPdfHtml(app, stored, 'Test Officer', '2026-07-23T16:00:00Z');
+            const driverStart = html.indexOf('Primary Risk Drivers');
+            const drivers = html.slice(driverStart, html.indexOf('<div class="report-footer"', driverStart));
+            const driverCount = (drivers.match(/<div class="driver/g) || []).length;
+            process.stdout.write(JSON.stringify({html, drivers, driverCount}));
+            """
+        )
+    )
+    assert result["driverCount"] > 8
+    assert all(
+        label in result["drivers"]
+        for label in (
+            "Declared PEP",
+            "High-Risk Sector",
+            "Elevated Jurisdiction",
+            "Opaque Ownership Structure",
+            "Sanctioned or FATF High-Risk UBO or Director Nationality - Afghanistan",
+            "Material Screening Concern",
+            "Severe Combined Risk Factors",
+            "Enhanced Due Diligence Requirement",
+            "Confirmed Material Screening Concern",
+        )
+    )
+    assert "floor_rule_" not in result["html"]
+    assert "elevation_" not in result["html"]
+
+
+def test_rule_outcomes_use_business_labels_and_never_leak_internal_identifiers():
+    result = _run_node(
+        _fixture_script(
+            """
+            const stored = evidence(
+              'HIGH',55,'dual_control_required','blocked','EDD',
+              {
+                base:13, adjustment:42, final:55,
+                floor_reasons:['floor_rule_opaque_ownership'],
+                escalations:['floor_rule_opaque_ownership'],
+                approval_escalations:['high_or_very_high_risk','developer_only_internal_rule']
+              }
+            );
+            const html = buildAuthoritativeRiskPdfHtml(app, stored, 'Test Officer', '2026-07-23T16:00:00Z');
+            process.stdout.write(JSON.stringify({html}));
+            """
+        )
+    )
+    rendered = result["html"]
+    assert all(
+        label in rendered
+        for label in ("Risk Floor Applied", "Reason for Elevation", "Approval Basis", "Decision Eligibility")
+    )
+    assert "Opaque Ownership Structure" in rendered
+    assert "High or Very High Risk Rating" in rendered
+    assert "Recorded Compliance Control" in rendered
+    assert "Terminal Application State" in rendered
+    assert "floor_rule_opaque_ownership" not in rendered
+    assert "high_or_very_high_risk" not in rendered
+    assert "developer_only_internal_rule" not in rendered
+    assert "terminal_state" not in rendered
+    assert "dual_control_required" not in rendered
+
+
 def test_pdf_uses_underlying_policy_route_and_reports_lifecycle_eligibility_separately():
     result = _run_node(
         _fixture_script(
@@ -258,10 +535,12 @@ def test_pdf_uses_underlying_policy_route_and_reports_lifecycle_eligibility_sepa
         )
     )
     rendered = result["html"]
-    assert "Compliance approval" in rendered
+    assert "Compliance Approval" in rendered
     assert "Blocked from decision" in rendered
-    assert "Terminal State" in rendered
-    assert "The underlying approval route remains Compliance approval" in rendered
+    assert "Terminal Application State" in rendered
+    assert "The underlying approval route remains Compliance Approval" in rendered
+    assert "compliance_required" not in rendered
+    assert "terminal_state" not in rendered
 
 
 def test_pdf_print_layout_is_explicit_and_dimension_tables_are_not_split():
@@ -270,6 +549,12 @@ def test_pdf_print_layout_is_explicit_and_dimension_tables_are_not_split():
     assert "page-break-before:always" in source
     assert "break-inside:avoid" in source
     assert "thead{display:table-header-group}" in source
+    assert "table.factor-table{table-layout:fixed}" in source
+    assert ".dimension-page-break{break-before:page;page-break-before:always}" in source
+    assert (
+        '<col style="width:17%"><col style="width:29%"><col style="width:21%">'
+        '<col style="width:14%"><col style="width:8%"><col style="width:11%">'
+    ) in source
     assert 'data-pdf-page="executive"' in source
     assert 'data-pdf-page="detailed"' in source
     assert 'data-pdf-page="report-information"' in source

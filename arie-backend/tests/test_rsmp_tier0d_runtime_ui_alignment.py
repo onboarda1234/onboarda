@@ -570,15 +570,20 @@ def test_csv_pdf_exports_use_authoritative_evidence_and_fail_closed():
         assert "64.5" in rendered
         assert "HIGH" in rendered
         assert "EDD" in rendered
-    assert "foreign_pep" in result["pdf"]
-    assert ">4<" in result["pdf"]
+    assert "Foreign PEP" in result["pdf"]
+    assert "foreign_pep" not in result["pdf"]
+    assert "High (4/4)" in result["pdf"]
     assert "dual_control_required" in result["csv"]
     assert "floor_rule_declared_pep" in result["csv"]
-    assert "Dual control - SCO and Admin" in result["pdf"]
+    assert "Dual Control - SCO and Admin" in result["pdf"]
     assert "Declared PEP" in result["pdf"]
     assert "Detailed Dimension Computation" in result["pdf"]
+    assert "Risk Rating" in result["pdf"]
+    assert "<th>Evidence</th>" not in result["pdf"]
+    assert "<th>Explanation</th>" not in result["pdf"]
     assert "Runtime Subcriteria Configuration Reference" not in result["pdf"]
     assert "rule_engine." not in result["pdf"]
+    assert "floor_rule_declared_pep" not in result["pdf"]
     assert '"Monthly Volume","35"' in result["csv"]
     assert '"Transaction Complexity","25"' in result["csv"]
     assert result["beforeBlocked"] == result["afterBlocked"]
