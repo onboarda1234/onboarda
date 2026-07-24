@@ -22657,6 +22657,17 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
     unavailable_source_count = sum(1 for item in evidence_items if not item.get("source_url"))
     categories = sorted({item.get("category") for item in evidence_items if item.get("category")})
     providers = sorted({item.get("provider") for item in evidence_items if item.get("provider")})
+    # Item-1 honesty (evidence-cap flag): the monitoring-evidence batch caps each
+    # application at _SCREENING_QUEUE_EVIDENCE_PER_APP_CAP and carries the true
+    # pre-cap count in application_evidence_total. When the true count exceeds the
+    # cap this row's evidence is truncated — flag it so a capped scan is never
+    # presented as the complete evidence set (previously only a page-wide
+    # metrics boolean existed, which the UI never surfaced).
+    application_evidence_total = max(
+        (int(item.get("application_evidence_total") or 0) for item in (monitoring_evidence or [])),
+        default=0,
+    )
+    evidence_capped = application_evidence_total > _SCREENING_QUEUE_EVIDENCE_PER_APP_CAP
     provider_references = _screening_evidence_reference_summary(evidence_items, row)
     summary = {
         "evidence_status": evidence_status,
@@ -22688,6 +22699,9 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
         "provider_references": provider_references,
         "officer_disposition": row.get("review_disposition"),
         "review_history_summary": _screening_review_summary(row),
+        "evidence_capped": evidence_capped,
+        "application_evidence_total": application_evidence_total if evidence_capped else None,
+        "evidence_cap": _SCREENING_QUEUE_EVIDENCE_PER_APP_CAP if evidence_capped else None,
         **risk_rollup,
     }
     row["provider_evidence"] = legacy_provider_evidence
@@ -22697,6 +22711,7 @@ def _enrich_screening_queue_evidence(row, monitoring_evidence):
     row["missing_reason_label"] = summary["missing_reason_label"]
     row["next_action"] = next_action
     row.update(risk_rollup)
+    row["evidence_capped"] = evidence_capped
     row["evidence_summary"] = summary
     row["screening_evidence"] = {
         **summary,
