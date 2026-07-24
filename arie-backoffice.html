@@ -12182,6 +12182,13 @@ async function openAppDetail(ref, options) {
   options = options || {};
   try {
     var detailApp = await fetchApplicationDetail(ref);
+    // Two-reviewer sync: a case re-open must pull the latest per-hit dispositions
+    // from the server (the hydration single-flights on 'done', so a second
+    // reviewer's clearances/undos are otherwise invisible until a hard reload).
+    // Re-arm the per-app flag so the panel re-hydrates fresh on this open;
+    // dispositions persist server-side on each action, so there is no local edit
+    // to lose.
+    if (detailApp && detailApp.ref) SCREENING_HIT_DISPOSITION_HYDRATED[detailApp.ref] = null;
     return renderAuthoritativeAppDetail(detailApp, options);
   } catch (err) {
     console.error('Failed to load application detail:', err);
@@ -17282,8 +17289,22 @@ function screeningPersistHitDisposition(appRef, subjectType, subjectName, hitIds
   });
 }
 
-// Hydrate stored per-hit decisions once per application so decisions survive a
-// refresh and are shared across reviewers. Single-flight; a re-render follows.
+// Clear this app's cached per-hit disposition state (keyed subjectKey =
+// appRef|type|name) so an authoritative re-hydrate reflects another reviewer's
+// removals/undos, not only their additions. The trailing '|' prevents one app
+// ref from prefix-matching another (e.g. APP-1 vs APP-12).
+function screeningClearAppHitDispositionState(appRef) {
+  var prefix = (appRef || '') + '|';
+  Object.keys(SCREENING_HIT_DISPOSITION_STATE).forEach(function(key) {
+    if (key.indexOf(prefix) === 0) delete SCREENING_HIT_DISPOSITION_STATE[key];
+  });
+}
+
+// Hydrate stored per-hit decisions for an application so decisions survive a
+// refresh and stay in sync across reviewers. Single-flight per app; re-armed on
+// case re-open / Screening-tab re-entry (see openAppDetail / switchDetailTab) so
+// a second reviewer's changes are pulled without a hard reload. A re-render
+// follows on load. Does NOT touch the server-authoritative finalize gate.
 function ensureScreeningHitDispositionsHydrated(appRef, force) {
   if (!appRef) return;
   var state = SCREENING_HIT_DISPOSITION_HYDRATED[appRef];
@@ -17291,6 +17312,11 @@ function ensureScreeningHitDispositionsHydrated(appRef, force) {
   SCREENING_HIT_DISPOSITION_HYDRATED[appRef] = 'loading';
   boApiCall('GET', '/screening/hit-disposition?application_id=' + encodeURIComponent(appRef))
     .then(function(resp) {
+      // Authoritative refresh: rebuild this app's per-hit state from the server
+      // so another reviewer's removals/undos are reflected, not only additions.
+      // Cleared+applied synchronously before the re-render (no flash), and only
+      // on a successful response (never wiped on failure — see .catch).
+      screeningClearAppHitDispositionState(appRef);
       var list = (resp && resp.dispositions) || [];
       list.forEach(function(d) {
         if (!d || !d.hit_id) return;
@@ -26997,6 +27023,12 @@ function switchDetailTab(tab) {
     tabEl.style.fontWeight = active ? '600' : '400';
     panelEl.style.display = active ? '' : 'none';
   });
+  if (tab === 'screening' && typeof currentApp !== 'undefined' && currentApp && currentApp.ref) {
+    // Two-reviewer sync: re-entering the Screening tab pulls the latest per-hit
+    // dispositions so another reviewer's changes are reflected without a reload.
+    SCREENING_HIT_DISPOSITION_HYDRATED[currentApp.ref] = null;
+    ensureScreeningHitDispositionsHydrated(currentApp.ref);
+  }
   if (tab === 'supervisor') loadSupervisorForApp();
   if (tab === 'lifecycle') loadLifecycleDetailTab();
   if (tab === 'alerts') loadApplicationAlertsDetailTab();
