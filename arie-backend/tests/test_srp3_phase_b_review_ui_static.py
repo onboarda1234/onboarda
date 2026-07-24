@@ -454,8 +454,8 @@ def test_phase_f_narrative_helper_renders_grouped_entries():
     assert "agent3NarrativeEntriesForSubject" in helper
     assert "hit.kind === 'group'" in helper
     assert "near-identical " in helper
-    assert "no single one stands out." in helper
-    assert "review it first." in helper
+    assert "grouped as duplicates by identical name, score and reason." in helper
+    assert "Priority match — review first: the " in helper
     assert "escapeHtml(String(hit.count))" in helper
     assert "data-agent3-triage-narrative" in helper
 

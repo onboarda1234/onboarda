@@ -16700,12 +16700,17 @@ function agent3TriageNarrativeHtml(narrative, subjectName) {
     }
     if (isGroup) {
       sentence += (index === 0 ? 'All ' : 'The remaining ') + escapeHtml(String(hit.count));
-      sentence += ' are near-identical ' + (word ? escapeHtml(word) + ' ' : '') + 'hits (all triage ' + escapeHtml(score) + ') on ‘' + escapeHtml(hit.matched_name || 'Stored hit') + '’ — no single one stands out.';
+      // Homogeneity-confirmation instead of the dismissive "no single one
+      // stands out": state the FACTUAL grouping basis (matched name + score +
+      // reason-set are identical — how the server actually groups them).
+      sentence += ' are near-identical ' + (word ? escapeHtml(word) + ' ' : '') + 'hits (all triage ' + escapeHtml(score) + ') on ‘' + escapeHtml(hit.matched_name || 'Stored hit') + '’ — grouped as duplicates by identical name, score and reason.';
     } else {
-      sentence += (index === 0 ? 'Start with the ' : 'Then the ') + (word ? escapeHtml(word) + ' ' : '') + 'match <b>' + escapeHtml(hit.matched_name || 'Stored hit') + '</b>';
+      // Priority framing for the lead standout: "Priority match — review first"
+      // reads as a compliance action, not an AI aside.
+      sentence += (index === 0 ? 'Priority match — review first: the ' : 'Then the ') + (word ? escapeHtml(word) + ' ' : '') + 'match <b>' + escapeHtml(hit.matched_name || 'Stored hit') + '</b>';
       sentence += ' (triage ' + escapeHtml(score) + (bandWord ? ', ' + escapeHtml(bandWord) : '') + ')';
       if (reasons.length) sentence += ' — ' + escapeHtml(reasons.join('; '));
-      sentence += index === 0 ? '; review it first.' : '.';
+      sentence += '.';
     }
     // Server-computed advisory next-step (display only; browser never derives
     // it). Rendered as a soft trailing clause so the callout stays one compact
@@ -16723,6 +16728,13 @@ function agent3TriageNarrativeHtml(narrative, subjectName) {
     }
     if (Number(narrative.unscored_count || 0) > 0) {
       sentences.push(escapeHtml(String(narrative.unscored_count)) + ' hit(s) were screened before triage scoring existed and are unscored — review them individually.');
+    }
+    // Negative-space (server-computed): state the absence of the highest-risk
+    // categories explicitly when none were found, so the officer sees "no
+    // sanctions/PEP" rather than inferring it. Absence of hits is not proof of
+    // no risk — the server phrasing scopes it to "these screening results".
+    if (narrative.no_risk_exposure) {
+      sentences.push(escapeHtml(String(narrative.no_risk_exposure)));
     }
   }
   if (!sentences.length && narrative.headline) sentences.push(escapeHtml(String(narrative.headline)));

@@ -26109,27 +26109,56 @@ _AGENT3_ENTRY_NEXT_STEP_BY_BUCKET = {
     "adverse_media": "Assess source reliability, recency, and name-match quality before relying on it.",
 }
 _AGENT3_ENTRY_NEXT_STEP_DEFAULT = "Disambiguate identity against the provider profile before disposition."
+# Safety-first framing (co-founder review): a near-identical mass is NOT a
+# licence to skip — sample AND confirm the cluster is genuinely homogeneous
+# (no distinct allegation/entity hiding among the duplicates) before relying
+# on it. No count here — the count is already stated in the mass sentence.
 _AGENT3_ENTRY_NEXT_STEP_MASS = (
-    "Near-identical — likely one underlying story; review a representative "
-    "sample rather than re-reading all {count} rows individually."
+    "Review one representative row and confirm the cluster contains no distinct "
+    "allegation or entity."
 )
 
 
 def _agent3_entry_next_step(kind, categories, count):
     """Advisory next-step clause for one where-to-start entry (display only).
 
-    A homogeneous mass gets the materiality/sampling steer; a distinct hit gets
-    the category-appropriate identity/relevance step. Pure over the entry's own
-    stored fields — no provider call, no mutation.
+    A homogeneous mass gets the sample-and-verify-homogeneity steer; a distinct
+    hit gets the category-appropriate identity/relevance step. Pure over the
+    entry's own stored fields — no provider call, no mutation.
     """
     try:
         count_int = int(count)
     except (TypeError, ValueError):
         count_int = 0
     if kind == "group" and count_int > 1:
-        return _AGENT3_ENTRY_NEXT_STEP_MASS.format(count=count_int)
+        return _AGENT3_ENTRY_NEXT_STEP_MASS
     bucket = _agent3_primary_count_bucket(categories or [])
     return _AGENT3_ENTRY_NEXT_STEP_BY_BUCKET.get(bucket, _AGENT3_ENTRY_NEXT_STEP_DEFAULT)
+
+
+# Negative-space: when no sanctions/PEP hit is present anywhere in the screened
+# results, say so explicitly rather than leaving the officer to infer it.
+# Absence of a provider hit is never proof of no exposure — hence "found in
+# these screening results", not an absolute clearance.
+_AGENT3_NO_RISK_EXPOSURE_TEXT = "No sanctions or PEP exposure found in these screening results."
+
+
+def _agent3_no_risk_exposure(hits):
+    """Return the negative-space line when neither sanctions nor PEP appears in
+    ANY passed hit (scored, weak, or unscored); '' otherwise. Display-only."""
+    has_sanctions = False
+    has_pep = False
+    for hit in hits or []:
+        if not isinstance(hit, dict):
+            continue
+        cats = hit.get("categories") or []
+        if "sanctions" in cats:
+            has_sanctions = True
+        if "pep" in cats:
+            has_pep = True
+        if has_sanctions and has_pep:
+            break
+    return "" if (has_sanctions or has_pep) else _AGENT3_NO_RISK_EXPOSURE_TEXT
 
 
 def _agent3_provider_results(section, source_hint=""):
@@ -26925,6 +26954,7 @@ def _agent3_triage_narrative(hits):
         "priority_count": priority_count,
         "weak_tail_count": weak_tail_count,
         "unscored_count": unscored_count,
+        "no_risk_exposure": _agent3_no_risk_exposure(hits),
         "headline": headline,
         "priority_hits": priority_hits,
         # Phase F (F1): grouped display entries for the "Where to start"

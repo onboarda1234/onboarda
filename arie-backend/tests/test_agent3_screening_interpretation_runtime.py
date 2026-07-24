@@ -789,8 +789,9 @@ def test_backoffice_agent3_compact_panel_renders_prose_and_honest_states():
             };
             const scopedHtml = renderAgent3ScreeningInterpretationPanel({id: 'a', output: hitOutput}, 'Jan Marsalek');
             assertIncludes('scoped chip', scopedHtml, 'scoped to Jan Marsalek');
-            assertIncludes('prose standout', scopedHtml, 'Start with the sanctions + PEP match <b>MARSALEK, Jan</b> (triage 92, STRONG)');
+            assertIncludes('prose standout', scopedHtml, 'Priority match — review first: the sanctions + PEP match <b>MARSALEK, Jan</b> (triage 92, STRONG)');
             assertIncludes('prose mass', scopedHtml, 'The remaining 99 are near-identical adverse-media hits (all triage 58)');
+            assertIncludes('prose mass homogeneity basis', scopedHtml, 'grouped as duplicates by identical name, score and reason.');
             assertEquals('advisory caption once', count(scopedHtml, advisory), 1);
             assertExcludes('no hit table', scopedHtml, 'Hit-by-hit');
             assertExcludes('no provider chips', scopedHtml, 'Provider result rows');
