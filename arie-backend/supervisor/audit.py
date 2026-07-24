@@ -40,6 +40,17 @@ from .schemas import (
 # supervisor verdict hash chain (audit finding H12 / B3).
 _SUPERVISOR_CHAIN_LOCK_KEY = 8674309921
 
+
+class AuditPersistenceError(Exception):
+    """Raised when a supervisor audit entry cannot be durably committed.
+
+    RDI-004: the audit logger must fail CLOSED — a supervisor event that cannot
+    be written to the legal hash chain must block/roll back the decision
+    pipeline rather than being silently swallowed while the in-memory head
+    advances past it. Callers (the supervisor pipeline, human-review service)
+    let this propagate to a blocked/error outcome instead of a false success.
+    """
+
 # ---------------------------------------------------------------------------
 # Standalone transactional helper — does NOT open its own connection
 # ---------------------------------------------------------------------------
@@ -338,20 +349,35 @@ class AuditLogger:
             data=data or {},
             ip_address=ip_address,
             session_id=session_id,
-            previous_hash=self._last_hash,
+            previous_hash=None,  # RDI-004: set from the committed DB tail at persist time
         )
 
-        # Compute hash chain
-        entry.entry_hash = entry.compute_hash(self._last_hash)
-        self._last_hash = entry.entry_hash
+        # RDI-004 — persist BEFORE advancing the chain head.
+        #
+        # Previously the in-memory head (self._last_hash) advanced and the entry
+        # was buffered BEFORE _persist ran, while _persist swallowed a None db
+        # and any exception. A supervisor event could therefore be lost while
+        # the process head moved past it, and the next entry could reference a
+        # hash that was never committed. Now, when persistence is configured,
+        # the row is written transactionally: previous_hash is derived from the
+        # COMMITTED DB tail under the chain advisory lock, the entry hash is
+        # computed with the frozen AuditEntry.compute_hash, and the in-memory
+        # head advances ONLY after a successful commit. Any failure rolls back
+        # and raises AuditPersistenceError (fail-closed) so the supervisor
+        # pipeline is blocked rather than continuing without its legal record.
+        if self.db_path:
+            self._persist(entry)  # sets entry.previous_hash + entry.entry_hash, or raises
+            self._last_hash = entry.entry_hash
+        else:
+            # Memory-only mode (no persistence configured): preserve the
+            # historical in-memory chaining for non-persistent construction.
+            entry.previous_hash = self._last_hash
+            entry.entry_hash = entry.compute_hash(self._last_hash)
+            self._last_hash = entry.entry_hash
 
-        # Buffer in memory
+        # Buffer in memory only after the durable write (if any) has committed.
         self._buffer.append(entry)
         self._total_entries += 1
-
-        # Persist to DB via shared layer
-        if self.db_path:
-            self._persist(entry)
 
         logger.info(
             "AUDIT: [%s] %s | %s | app=%s run=%s",
@@ -364,13 +390,62 @@ class AuditLogger:
         return entry
 
     def _persist(self, entry: AuditEntry):
-        """Write entry to database via the shared get_db() layer."""
+        """Transactionally persist one audit entry, chained to the committed DB
+        tail (RDI-004).
+
+        Derives ``previous_hash`` from the current committed chain tail (the row
+        whose entry_hash is not referenced by any other row's previous_hash) —
+        the SAME committed-tail query and advisory lock the frozen
+        ``append_verdict_chain_entry`` path uses — computes the entry hash with
+        the frozen ``AuditEntry.compute_hash``, then INSERTs and COMMITs in one
+        transaction. On ANY failure it rolls back and raises
+        ``AuditPersistenceError``; it never swallows a None db or an exception,
+        so the caller fails closed instead of advancing past a lost record.
+
+        Mutates ``entry.previous_hash`` and ``entry.entry_hash`` in place; the
+        caller advances the in-memory head only after this returns successfully.
+        """
         db = None
         try:
             db = _get_db()
             if db is None:
-                logger.warning("Cannot persist audit entry: DB not available")
-                return
+                raise AuditPersistenceError(
+                    "Cannot persist supervisor audit entry: DB not available"
+                )
+
+            # Serialize concurrent appends so two transactions cannot select the
+            # same tail and insert successors with the same previous_hash — a
+            # fork. On PostgreSQL a transaction-scoped advisory lock (released at
+            # this function's commit) makes the tail-select + insert atomic
+            # across sessions; SQLite serializes writers already, and the unique
+            # partial index on previous_hash is the structural backstop on both.
+            if getattr(db, "is_postgres", False):
+                db.execute(
+                    "SELECT pg_advisory_xact_lock(?)", (_SUPERVISOR_CHAIN_LOCK_KEY,)
+                )
+
+            # Committed chain tail = the entry whose hash is not referenced as
+            # any other entry's previous_hash. Identical to the query used by
+            # append_verdict_chain_entry / _recover_last_hash, so appends from
+            # AuditLogger.log and the frozen memo-verdict path stay chained.
+            row = db.execute(
+                """
+                SELECT s.entry_hash
+                  FROM supervisor_audit_log s
+                 WHERE NOT EXISTS (
+                       SELECT 1 FROM supervisor_audit_log t
+                        WHERE t.previous_hash = s.entry_hash
+                   )
+                 ORDER BY s.timestamp DESC, s.id DESC
+                 LIMIT 1
+                """
+            ).fetchone()
+            previous_hash = row["entry_hash"] if row else None
+
+            # Chain to the committed tail and hash with the FROZEN algorithm.
+            entry.previous_hash = previous_hash
+            entry.entry_hash = entry.compute_hash(previous_hash)
+
             db.execute("""
                 INSERT INTO supervisor_audit_log (
                     id, timestamp, event_type, severity,
@@ -394,9 +469,21 @@ class AuditLogger:
             ))
             db.commit()
         except Exception as e:
-            logger.error("Failed to persist audit entry %s: %s", entry.audit_id, e)
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            logger.error(
+                "Failed to persist supervisor audit entry %s: %s", entry.audit_id, e
+            )
+            if isinstance(e, AuditPersistenceError):
+                raise
+            raise AuditPersistenceError(
+                f"Failed to persist supervisor audit entry {entry.audit_id}: {e}"
+            ) from e
         finally:
-            if db:
+            if db is not None:
                 try:
                     db.close()
                 except Exception:
@@ -697,6 +784,220 @@ class AuditLogger:
 
         except Exception as e:
             return {"verified": False, "reason": str(e)}
+        finally:
+            if db:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+
+    def verify_full_chain(self, batch_size: int = 500) -> Dict[str, Any]:
+        """RDI-014 — verify the ENTIRE supervisor audit chain with NO record cap.
+
+        The windowed ``verify_chain_integrity(limit=...)`` mode (and the API's
+        historical 5,000-row ceiling) could never *fully* verify a chain longer
+        than the window, leaving corruption outside it undetectable. This mode
+        covers EVERY row, in two bounded passes so memory stays bounded even for
+        very long chains:
+
+          1. A lightweight structural pass fetches only the linkage columns
+             (id, timestamp, previous_hash, entry_hash) and reconstructs order by
+             FOLLOWING THE HASH LINKS (not timestamp), detecting duplicate
+             hashes, genesis count, forks, cycles and orphans — the same rules as
+             the frozen windowed verifier.
+          2. A content pass re-fetches FULL rows in ``batch_size`` batches and
+             recomputes each entry_hash with the FROZEN ``supervisor_entry_hash``,
+             checking the stored previous_hash linkage.
+
+        Returns ``chain_root_hash`` (genesis hash), ``chain_head_hash`` (tail
+        hash), ``total_entries``, ``entries_verified`` and a ``verified_at``
+        timestamp. If coverage is bounded for any reason (broken genesis, a row
+        vanishing mid-verification, etc.) it LOGS and reports exactly what was
+        and was not covered — it never silently truncates.
+
+        The hashing is unchanged; this only adds an uncapped, batched traversal.
+        """
+        verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if not isinstance(batch_size, int) or batch_size < 1:
+            batch_size = 500
+        db = None
+        try:
+            db = _get_db()
+            if db is None:
+                return {
+                    "verified": False,
+                    "mode": "full_chain",
+                    "reason": "DB connection not available",
+                    "verified_at": verified_at,
+                }
+
+            count_row = db.execute(
+                "SELECT COUNT(*) AS c FROM supervisor_audit_log"
+            ).fetchone()
+            total_entries = (count_row["c"] if count_row else 0) or 0
+            if total_entries == 0:
+                return {
+                    "verified": False,
+                    "mode": "full_chain",
+                    "status": "no_entries",
+                    "total_entries": 0,
+                    "entries_verified": 0,
+                    "entries_checked": 0,
+                    "chain_root_hash": None,
+                    "chain_head_hash": None,
+                    "coverage_complete": False,
+                    "verified_at": verified_at,
+                    "reason": "Audit chain is empty — no entries to verify.",
+                }
+
+            # ── Pass 1: lightweight linkage / structural reconstruction ──
+            link_rows = [dict(r) for r in db.execute(
+                "SELECT id, timestamp, previous_hash, entry_hash "
+                "FROM supervisor_audit_log"
+            ).fetchall()]
+
+            broken_links: List[Dict[str, Any]] = []
+            by_hash: Dict[Any, Dict[str, Any]] = {}
+            for r in link_rows:
+                h = r.get("entry_hash")
+                if h in by_hash:
+                    broken_links.append({"entry_id": r.get("id"), "issue": "duplicate_entry_hash"})
+                by_hash[h] = r
+
+            successors: Dict[Any, List[Dict[str, Any]]] = {}
+            genesis: List[Dict[str, Any]] = []
+            for r in link_rows:
+                ph = r.get("previous_hash") or None
+                if ph is None:
+                    genesis.append(r)
+                else:
+                    successors.setdefault(ph, []).append(r)
+
+            ordered_ids: List[Any] = []
+            single_genesis = len(genesis) == 1
+            if not single_genesis:
+                broken_links.append({
+                    "issue": "genesis_count",
+                    "detail": f"expected exactly one genesis entry, found {len(genesis)}",
+                })
+
+            if single_genesis:
+                seen = set()
+                current = genesis[0]
+                while current is not None:
+                    ch = current.get("entry_hash")
+                    if ch in seen:
+                        broken_links.append({"entry_id": current.get("id"), "issue": "cycle_detected"})
+                        break
+                    seen.add(ch)
+                    ordered_ids.append(current.get("id"))
+                    nxts = successors.get(ch, [])
+                    if len(nxts) > 1:
+                        broken_links.append({
+                            "issue": "chain_fork",
+                            "after_entry_id": current.get("id"),
+                            "successor_count": len(nxts),
+                        })
+                    current = nxts[0] if nxts else None
+                for r in link_rows:
+                    if r.get("entry_hash") not in seen:
+                        broken_links.append({"entry_id": r.get("id"), "issue": "orphan_entry"})
+                chain_root_hash = genesis[0].get("entry_hash")
+            else:
+                # Order cannot be reconstructed from a single genesis. Fall back
+                # to a stable ordering so per-row content tampering is still
+                # recomputed, and REPORT that structural coverage is bounded.
+                ordered_ids = [
+                    r.get("id") for r in sorted(
+                        link_rows, key=lambda r: (str(r.get("timestamp")), str(r.get("id")))
+                    )
+                ]
+                chain_root_hash = None
+                logger.error(
+                    "verify_full_chain: genesis_count=%d — order reconstructed by "
+                    "fallback sort; structural coverage is bounded",
+                    len(genesis),
+                )
+
+            # ── Pass 2: recompute hashes over FULL rows in bounded batches ──
+            entries_verified = 0
+            prev_hash: Optional[str] = None
+            for start in range(0, len(ordered_ids), batch_size):
+                batch_ids = ordered_ids[start:start + batch_size]
+                placeholders = ",".join(["?"] * len(batch_ids))
+                full_rows: Dict[Any, Dict[str, Any]] = {}
+                for fr in db.execute(
+                    f"SELECT * FROM supervisor_audit_log WHERE id IN ({placeholders})",
+                    tuple(batch_ids),
+                ).fetchall():
+                    frd = dict(fr)
+                    full_rows[frd.get("id")] = frd
+
+                for rid in batch_ids:
+                    row = full_rows.get(rid)
+                    if row is None:
+                        broken_links.append({
+                            "entry_id": rid,
+                            "issue": "row_vanished_during_verification",
+                        })
+                        continue
+                    if entries_verified == 0 and not single_genesis:
+                        # Fallback ordering: anchor on the first row's stored
+                        # previous_hash so a legitimately anchored head verifies.
+                        prev_hash = row.get("previous_hash") or None
+                    expected_hash = supervisor_entry_hash(row, prev_hash)
+                    if row.get("entry_hash") != expected_hash:
+                        broken_links.append({
+                            "entry_id": rid,
+                            "expected_hash": expected_hash,
+                            "actual_hash": row.get("entry_hash"),
+                        })
+                    if (row.get("previous_hash") or None) != (prev_hash or None):
+                        broken_links.append({
+                            "entry_id": rid,
+                            "issue": "previous_hash mismatch",
+                            "expected_previous": prev_hash,
+                            "actual_previous": row.get("previous_hash"),
+                        })
+                    prev_hash = row.get("entry_hash")
+                    entries_verified += 1
+
+            chain_head_hash = prev_hash
+            coverage_complete = single_genesis and entries_verified == total_entries
+            result = {
+                "verified": len(broken_links) == 0,
+                "mode": "full_chain",
+                "total_entries": total_entries,
+                "entries_verified": entries_verified,
+                "entries_checked": entries_verified,  # compat with windowed consumers
+                "coverage_complete": coverage_complete,
+                "chain_root_hash": chain_root_hash,
+                "chain_head_hash": chain_head_hash,
+                "broken_links": broken_links,
+                "chain_intact": len(broken_links) == 0,
+                "verified_at": verified_at,
+            }
+            if entries_verified != total_entries:
+                # Never silently truncate — say exactly what was NOT covered.
+                result["coverage_complete"] = False
+                result["coverage_note"] = (
+                    f"verified {entries_verified} of {total_entries} rows; "
+                    f"{total_entries - entries_verified} not covered by hash-link ordering"
+                )
+                logger.error(
+                    "verify_full_chain coverage bounded: verified %d of %d rows",
+                    entries_verified, total_entries,
+                )
+            return result
+
+        except Exception as e:
+            logger.exception("verify_full_chain failed")
+            return {
+                "verified": False,
+                "mode": "full_chain",
+                "reason": str(e),
+                "verified_at": verified_at,
+            }
         finally:
             if db:
                 try:

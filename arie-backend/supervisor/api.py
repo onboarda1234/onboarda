@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from base_handler import BaseHandler
@@ -65,12 +66,41 @@ def _get_db():
         return None
 
 
-def persist_pipeline_result(result: SupervisorPipelineResult, trigger_type: str = None, trigger_source: str = None):
-    """Persist a pipeline result to the database."""
+class PipelinePersistError(Exception):
+    """Raised when a supervisor pipeline result cannot be durably committed.
+
+    RDI-005: the supervisor API must never return a decision-equivalent result
+    without a committed durable record. Persistence raises this on failure so
+    the handler surfaces a non-2xx error instead of a success body.
+    """
+
+
+@dataclass
+class PipelinePersistResult:
+    """Typed success returned by ``persist_pipeline_result`` after commit."""
+
+    pipeline_id: str
+    application_id: Optional[str]
+    persisted: bool = True
+
+
+def persist_pipeline_result(
+    result: SupervisorPipelineResult,
+    trigger_type: str = None,
+    trigger_source: str = None,
+) -> PipelinePersistResult:
+    """Persist a pipeline result to the database (RDI-005).
+
+    Returns a typed :class:`PipelinePersistResult` ONLY after the row is
+    committed. On any failure — including an unavailable DB — it rolls back and
+    raises :class:`PipelinePersistError`; it never silently returns, so a caller
+    can never treat an unpersisted result as a success.
+    """
     db = _get_db()
     if db is None:
-        logger.warning("Cannot persist pipeline result: DB not available")
-        return
+        raise PipelinePersistError(
+            f"Cannot persist pipeline result {result.pipeline_id}: DB not available"
+        )
     try:
         result_dict = result.to_dict()
         # Include agent_results in the persisted JSON for the detail tab
@@ -134,8 +164,19 @@ def persist_pipeline_result(result: SupervisorPipelineResult, trigger_type: str 
             )
         db.commit()
         logger.info("Pipeline result %s persisted to DB for app %s", result.pipeline_id, result.application_id)
+        return PipelinePersistResult(
+            pipeline_id=result.pipeline_id,
+            application_id=result.application_id,
+        )
     except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         logger.error("Failed to persist pipeline result %s: %s", result.pipeline_id, e)
+        raise PipelinePersistError(
+            f"Failed to persist pipeline result {result.pipeline_id}: {e}"
+        ) from e
     finally:
         try:
             db.close()
@@ -160,6 +201,34 @@ def load_latest_pipeline_result(application_id: str) -> Optional[Dict[str, Any]]
         return None
     except Exception as e:
         logger.error("Failed to load pipeline result for app %s: %s", application_id, e)
+        return None
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+def load_pipeline_result_by_id(pipeline_id: str) -> Optional[Dict[str, Any]]:
+    """Load a single pipeline result from the durable store by its id.
+
+    RDI-005: the read paths must resolve from the durable store, not the
+    non-authoritative in-memory ``_pipeline_cache``.
+    """
+    db = _get_db()
+    if db is None:
+        return None
+    try:
+        row = db.execute(
+            """SELECT result_json FROM supervisor_pipeline_results
+               WHERE pipeline_id = ? OR id = ? LIMIT 1""",
+            (pipeline_id, pipeline_id),
+        ).fetchone()
+        if row:
+            return json.loads(row["result_json"])
+        return None
+    except Exception as e:
+        logger.error("Failed to load pipeline result %s: %s", pipeline_id, e)
         return None
     finally:
         try:
@@ -334,10 +403,41 @@ class PipelineRunHandler(SupervisorBaseHandler):
             logger.exception("Pipeline run failed for %s: %s", application_id, e)
             return self.write_error_json(500, f"Pipeline execution error: {type(e).__name__}: {e}")
 
-        # Cache in memory + persist to database
-        _pipeline_cache[result.pipeline_id] = result
-        persist_pipeline_result(result, trigger_type=trigger_type, trigger_source=trigger_source)
+        # RDI-016: the pipeline await above can run up to 120s. Re-validate the
+        # actor against CURRENT state (revocation store, active status, role)
+        # BEFORE any privileged mutation / audit persistence, so a session
+        # killed or demoted mid-run cannot persist or return a supervisor result
+        # with stale authority. Same roles as the initial require_auth.
+        user = self.revalidate_actor_post_await(roles=["admin", "sco", "co"])
+        if not user:
+            logger.warning(
+                "Supervisor pipeline result NOT persisted for %s: actor failed "
+                "post-await re-validation",
+                application_id,
+            )
+            return
 
+        # RDI-005: no decision-equivalent success without a committed durable
+        # record. Persist FIRST (raises on failure); only populate the
+        # non-authoritative convenience cache and return AFTER the commit. A
+        # persistence failure returns a non-2xx error, never a result body.
+        try:
+            persist_pipeline_result(
+                result, trigger_type=trigger_type, trigger_source=trigger_source
+            )
+        except Exception as persist_err:
+            logger.error(
+                "Supervisor pipeline result persistence failed for %s: %s",
+                application_id, persist_err,
+            )
+            return self.write_error_json(
+                500,
+                "Pipeline result could not be persisted; no durable record was written",
+            )
+
+        # Convenience cache only — populated strictly AFTER the durable commit
+        # so it can never mask a missing durable row.
+        _pipeline_cache[result.pipeline_id] = result
         self.write_json(result.to_dict())
 
 
@@ -348,10 +448,13 @@ class PipelineDetailHandler(SupervisorBaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
             return
-        result = _pipeline_cache.get(pipeline_id)
-        if not result:
+        # RDI-005: the durable store is the source of truth. The in-memory
+        # cache is a non-authoritative convenience layer only and must never be
+        # served as a fallback that masks a missing durable row.
+        record = load_pipeline_result_by_id(pipeline_id)
+        if not record:
             return self.write_error_json(404, "Pipeline not found")
-        self.write_json(result.to_dict())
+        self.write_json(record)
 
 
 class PipelineReviewPackageHandler(SupervisorBaseHandler):
@@ -552,15 +655,31 @@ class AuditLogHandler(SupervisorBaseHandler):
 
 
 class AuditVerifyHandler(SupervisorBaseHandler):
-    """GET /api/supervisor/audit/verify — Verify audit chain integrity."""
+    """GET /api/supervisor/audit/verify — Verify audit chain integrity.
+
+    Default (windowed) mode verifies the most recent ``limit`` entries (bounded
+    1..5000). RDI-014: ``?full=true`` runs an admin/SCO-only FULL-chain
+    verification with NO artificial record cap — it covers every row (batched
+    internally to bound memory) and returns chain root/head hashes, the total
+    count verified and a verification timestamp.
+    """
 
     def get(self):
         user = self.require_auth(roles=["admin", "sco"])
         if not user:
             return
-        limit = self.get_bounded_int_argument("limit", 1000, min_value=1, max_value=5000)
         supervisor = get_supervisor()
-        result = supervisor.audit.verify_chain_integrity(limit=limit)
+        full = str(self.get_argument("full", "")).strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        if full:
+            # RDI-014: full-chain verification, no 5,000-row ceiling.
+            result = supervisor.audit.verify_full_chain()
+        else:
+            limit = self.get_bounded_int_argument(
+                "limit", 1000, min_value=1, max_value=5000
+            )
+            result = supervisor.audit.verify_chain_integrity(limit=limit)
         self.write_json(result)
 
 

@@ -330,7 +330,11 @@ class HumanReviewService:
         finally:
             db.close()
 
-        # Audit log
+        # Audit log. RDI-004: AuditLogger.log now fails CLOSED — if the audit
+        # chain entry cannot be durably committed it raises AuditPersistenceError
+        # instead of swallowing the failure. These calls are intentionally left
+        # uncaught so that error propagates to the supervisor handler's error
+        # path (HTTP 5xx), never a silent success.
         self.audit.log_human_review(
             review_id=review.review_id,
             application_id=review.application_id,
