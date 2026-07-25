@@ -13,15 +13,30 @@ passed vacuously — one of the harness's advertised 53 checks was a false
 positive from the day #733 merged. `TestHarnessCrossTenantSeedInvariant`
 pins the invariant so it cannot silently revert.
 
-**Runtime coverage of the five named cells.** The existing role-boundary test
-probes action entrypoints against a *non-existent* application id, which
-proves only that the `require_auth` decorator fires. The in-handler authority
-checks — the ones that run after the row is loaded, and that carry the real
-policy (dual-control pairing, memo-approve peer-supervisor ownership,
-screening second-review escalation, IDV outcome escalation, reassignment
-authority) — were never exercised at runtime. Each class below drives its cell
-against a REAL seeded application, so a regression in the in-handler check is
-caught even when the decorator still passes.
+**Runtime coverage — what is and is NOT covered here.** The pre-existing
+entrypoint test probes actions against a *non-existent* application id, so it
+proves only that the `require_auth` decorator fires. This file adds probes
+against REAL seeded rows, which reach in-handler rules the decorator cannot.
+Adversarial review mutation-tested an earlier revision and proved two of its
+tests passed with the very gate they named deleted; the honest ledger is:
+
+  COVERED (mutation-verified to fail when the rule is removed):
+    * decision authority — CO refused approve on HIGH. The probed row is
+      assigned TO that CO deliberately: assigned elsewhere,
+      authorize_signoff_ownership refuses first and the authority rule is
+      never reached (that was the earlier false pass).
+    * IDV senior-outcome escalation (`_idv_resolution_role_error`).
+    * reassignment authority (senior-only `assigned_to` change).
+    * cross-tenant isolation, both directions, with a positive control.
+
+  NOT COVERED, deliberately and stated rather than implied:
+    * dual control — see the note above `_approve_payload`.
+    * memo approve, screening review admission, IDV read: these reach only
+      the decorator, duplicating coverage that already exists in
+      test_application_role_matrix.py. They are kept as cheap regression
+      pins, not claimed as new in-handler coverage.
+    * the two deepest screening role rules — pinned statically by
+      TestScreeningRoleRulesArePinned below.
 
 These are role-boundary assertions only: every probe asserts an authorization
 outcome, never a workflow result, so nothing here depends on (or pins) the
@@ -206,7 +221,10 @@ class RuntimeRoleCoverageTest(AsyncHTTPTestCase):
 
         self.apps = {}
         # Real rows, in the stage each cell actually runs in.
-        self._seed_app("high_risk", status="compliance_review", risk="HIGH", assigned_to="p13_sco")
+        # Assigned to the CO we probe with: otherwise authorize_signoff_ownership
+        # fires FIRST and the test passes even with the authority gate deleted
+        # (proven by mutation testing in review).
+        self._seed_app("high_risk", status="compliance_review", risk="HIGH", assigned_to="p13_co")
         self._seed_app("memo_stage", status="compliance_review", assigned_to="p13_sco")
         self._seed_app("idv_stage", status="kyc_documents", risk="HIGH", assigned_to="p13_sco")
         self._seed_app("assign_stage", status="compliance_review", assigned_to="p13_co")
@@ -259,51 +277,48 @@ class RuntimeRoleCoverageTest(AsyncHTTPTestCase):
             kwargs["body"] = json.dumps(payload or {})
         return self.fetch(path, **kwargs)
 
-    # ── Cell 1: approval / dual control ────────────────────────────────────
-    def test_decision_authority_holds_on_a_real_high_risk_application(self):
-        """Against a REAL row the decorator alone is not the gate: CO must be
-        refused approve on HIGH, and analyst/client refused outright."""
+    # ── Cell 1: approval authority ─────────────────────────────────────────
+    def test_co_cannot_approve_high_risk_on_its_own_case(self):
+        """The HIGH/VERY_HIGH authority rule in can_decide_application.
+
+        The probed application is assigned to this CO on purpose: with it
+        assigned elsewhere, authorize_signoff_ownership refuses first and the
+        test would pass even with the authority gate removed.
+        """
         app_id = self.apps["high_risk"]["id"]
-        payload = {
-            "decision": "approve",
-            "decision_reason": "Synthetic role-boundary probe: authority check only.",
-            "officer_signoff": {"acknowledged": True, "scope": "decision",
-                                "source_context": "ai_advisory"},
-        }
+        resp = self._request("co", f"/api/applications/{app_id}/decision",
+                             method="POST", payload=self._approve_payload())
+        assert resp.code == 403, (resp.code, resp.body[:300])
+        body = resp.body.decode()
+        assert "HIGH" in body and "approve" in body.lower(), body
+        # Not the ownership refusal — that would mean the authority rule was
+        # never reached.
+        assert "assigned to another officer" not in body, body
+
+    def test_analyst_and_client_are_refused_the_decision_route(self):
+        app_id = self.apps["high_risk"]["id"]
         for role in ("analyst", "client"):
             resp = self._request(role, f"/api/applications/{app_id}/decision",
-                                 method="POST", payload=payload)
+                                 method="POST", payload=self._approve_payload())
             assert resp.code == 403, (role, resp.code, resp.body[:200])
-        co = self._request("co", f"/api/applications/{app_id}/decision",
-                           method="POST", payload=payload)
-        assert co.code == 403, (co.code, co.body[:300])
 
-    def test_dual_control_pairing_is_enforced_for_senior_roles(self):
-        """A senior role must not be able to satisfy BOTH legs alone: the
-        second leg from the same officer cannot approve."""
-        app_id = self.apps["high_risk"]["id"]
-        payload = {
+    def _approve_payload(self):
+        return {
             "decision": "approve",
             "decision_reason": "Synthetic role-boundary probe: authority check only.",
             "officer_signoff": {"acknowledged": True, "scope": "decision",
                                 "source_context": "ai_advisory"},
         }
-        first = self._request("sco", f"/api/applications/{app_id}/decision",
-                              method="POST", payload=payload)
-        # Whatever gate fires first (blockers, dual-control staging), the one
-        # outcome that must never occur is a single-officer approval.
-        assert first.code != 200 or self._status(app_id) != "approved", (
-            "single officer must not reach approved on a HIGH-risk file")
-        second = self._request("sco", f"/api/applications/{app_id}/decision",
-                               method="POST", payload=payload)
-        assert self._status(app_id) != "approved", (
-            f"same officer completed both dual-control legs (codes "
-            f"{first.code}/{second.code})")
 
-    def _status(self, app_id):
-        row = self.db.execute(
-            "SELECT status FROM applications WHERE id = ?", (app_id,)).fetchone()
-        return row["status"] if row else None
+    # NOTE — dual control is NOT covered here. Reaching the second-leg pairing
+    # rule requires passing risk-staleness, memo-exists, memo-freshness,
+    # validate_approval and the document-reliance gate first; against a bare
+    # fixture every attempt dies at risk staleness (409), so a "status never
+    # became approved" assertion holds even with dual control deleted. Review
+    # mutation-tested exactly that and proved the assertion tautological, so
+    # the test was removed rather than left as false coverage. The dual-control
+    # state machine is exercised by test_dual_approval_race.py and
+    # test_e2e_authority_matrix.py, which seed the full precondition chain.
 
     # ── Cell 2: memo approve ───────────────────────────────────────────────
     def test_memo_approve_role_boundary_on_a_real_application(self):
@@ -407,10 +422,18 @@ class TestScreeningRoleRulesArePinned:
 
         source = Path(__file__).resolve().parents[1].joinpath(
             "server.py").read_text(encoding="utf-8")
+        # Terminate at the next COLUMN-0 statement, not the next `class`: the
+        # loose pattern captured ~1900 extra lines of module-level helpers, so
+        # the guard could bind to a string or a db.commit() outside the class
+        # (review demonstrated both false-pass modes).
         match = re.search(
-            r"class ScreeningReviewHandler\b.*?(?=\nclass )", source, re.S)
+            r"^class ScreeningReviewHandler\b.*?(?=^\S)", source, re.S | re.M)
         assert match, "ScreeningReviewHandler not found"
-        return match.group(0)
+        body = match.group(0)
+        # Sanity-bound the window so a future refactor cannot silently widen it.
+        assert len(body.splitlines()) < 900, (
+            f"class window looks over-captured: {len(body.splitlines())} lines")
+        return body
 
     def test_second_review_is_restricted_to_senior_roles(self):
         body = self._handler_source()
@@ -423,8 +446,10 @@ class TestScreeningRoleRulesArePinned:
             'and user.get("role") not in ("admin", "sco", "co"):'
         ) in body
 
-    def test_both_role_checks_precede_the_review_write(self):
-        """A role check after the INSERT would authorize nothing."""
+    def test_both_role_checks_precede_the_commit(self):
+        """A role check after the write would authorize nothing. The write
+        itself is upsert_screening_review(); the commit is the durable point
+        and is what this measures."""
         body = self._handler_source()
         second_review = body.index('if is_second_review and user.get("role")')
         clearance = body.index('if canonical_disposition == "false_positive_cleared"')

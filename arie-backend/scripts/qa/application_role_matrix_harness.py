@@ -316,6 +316,15 @@ def _read_json(path: str) -> Dict[str, Any]:
 
 
 def disable_staging_users(manifest_path: str) -> Dict[str, Any]:
+    """Deactivate every synthetic account from one seed run.
+
+    NOTE (APP-CONF-003 migration): the actor set is checked for EXACT equality,
+    so a manifest from a PRE-second-tenant run (5 actors) is refused here. That
+    is the right fail-closed default, but it means a pre-fix run still live on
+    staging cannot be cleaned up by this code path — disable it from the
+    pre-fix commit, or deactivate those accounts manually. Leaving synthetic
+    logins active on staging is tracked separately on the register.
+    """
     manifest = _read_json(manifest_path)
     run_id = str(manifest.get("run_id") or "")
     if not RUN_ID_RE.fullmatch(run_id):
