@@ -98,11 +98,24 @@ with TWO end-to-end checks:
    TRIGGER privilege was preserved.
 
 **Sanctioned purge procedure changes with these grants** (update your copy of
-`docs/compliance/MANUAL_PURGE_PROCEDURE.md` habits): the manual
-`purge_expired_data("audit_logs", dry_run=False)` run must now execute over an
-**admin DSN** with `SET ROLE regmind_audit_maint;` first — the app DSN no
-longer holds DELETE. The #837 trigger maintenance window is a table marker
-(role-agnostic), so the purge works unchanged under the maintenance role.
+`docs/compliance/MANUAL_PURGE_PROCEDURE.md` habits): the manual audit-log
+retention purge must now execute over an **admin DSN** with
+`SET ROLE regmind_audit_maint` on the SAME connection — the app DSN no longer
+holds DELETE. The script grants the maintenance role the complete purge-path
+set (policy read, window marker INSERT/DELETE + sequence, audit_log
+SELECT+DELETE, data_purge_log evidence INSERT + sequence — Codex validation
+2026-07-25 item 5(b)), and `tests/test_audit_log_grants_pg.py` proves the
+literal script + this exact invocation end-to-end on PostgreSQL in CI.
+Run it from a one-off task container (app code present):
+
+```python
+import os, psycopg2, db, gdpr
+conn = psycopg2.connect(os.environ["ADMIN_DATABASE_URL"])   # RDS master DSN
+dbw = db.DBConnection(conn, is_postgres=True, database_identity="admin-maint")
+dbw.execute('SET ROLE regmind_audit_maint')                  # session role; one connection throughout
+print(gdpr.purge_expired_data(dbw, "audit_logs", purged_by="<operator>", dry_run=True))
+# review the dry-run counts, then repeat with dry_run=False
+```
 
 Rollback (emergency only): `GRANT UPDATE, DELETE, TRUNCATE ON TABLE audit_log
 TO <app_role>;`
