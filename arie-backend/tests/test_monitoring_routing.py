@@ -703,7 +703,10 @@ class TestRdi008CriticalDismissalGate:
                              if e["action"] == "monitoring.alert.dismissed"][0]["detail"])
         assert detail["critical_gate_applied"] is True
 
-    def test_critical_dismissed_via_approved_review_marker(self, routing_db, audit_sink):
+    def test_critical_dismissed_via_approved_review_with_evidence(self, routing_db, audit_sink):
+        # Codex round-2 hardening: even an approved second review must carry
+        # the stored request evidence (the server threads it after the
+        # approval-time recheck) — the marker alone is no longer sufficient.
         from monitoring_routing import dismiss_alert
         alert_id = _insert_alert(routing_db, severity="critical")
         result = dismiss_alert(
@@ -711,7 +714,8 @@ class TestRdi008CriticalDismissalGate:
             dismissal_reason="false_positive",
             dismissal_notes="approved after second review",
             user=_SENIOR, audit_writer=audit_sink,
-            critical_clearance={"approver": _SENIOR, "via": "approved_review"},
+            critical_clearance={"approver": _SENIOR, "via": "approved_review",
+                                "evidence_ref": "registry extract"},
         )
         assert result["status"] == "dismissed"
 
@@ -743,16 +747,20 @@ class TestRdi008CriticalDismissalGate:
         row = _alert(routing_db, alert_id)
         assert row["status"] == "open"
 
-    def test_approved_review_marker_still_passes_marker_only(self, routing_db, audit_sink):
-        # A COMPLETED second review validated evidence at request creation, so
-        # the approved_review marker alone remains sufficient.
-        from monitoring_routing import dismiss_alert
+    def test_approved_review_marker_without_evidence_rejected(self, routing_db, audit_sink):
+        # Codex round-2 hardening: the approved_review marker WITHOUT evidence
+        # no longer passes — this closes the residual race where a severity
+        # escalation lands between the approval-time evidence recheck and this
+        # gate's fresh alert fetch.
+        from monitoring_routing import dismiss_alert, CriticalAlertDismissalBlocked
         alert_id = _insert_alert(routing_db, severity="critical")
-        result = dismiss_alert(
-            routing_db, alert_id,
-            dismissal_reason="false_positive",
-            dismissal_notes="approved via second review",
-            user=_SENIOR, audit_writer=audit_sink,
-            critical_clearance={"approver": _SENIOR, "via": "approved_review"},
-        )
-        assert result["status"] == "dismissed"
+        with pytest.raises(CriticalAlertDismissalBlocked):
+            dismiss_alert(
+                routing_db, alert_id,
+                dismissal_reason="false_positive",
+                dismissal_notes="approved via second review",
+                user=_SENIOR, audit_writer=audit_sink,
+                critical_clearance={"approver": _SENIOR, "via": "approved_review"},
+            )
+        row = _alert(routing_db, alert_id)
+        assert row["status"] == "open"

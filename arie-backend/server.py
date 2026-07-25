@@ -36712,8 +36712,9 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
                     "audit_history": _monitoring_alert_audit_history(db, alert_id),
                 })
             except _mdc.DismissalControlError as exc:
-                # Self-approval / wrong role → audited blocked signal + error.
-                if exc.status_code == 403:
+                # Self-approval / wrong role (403) and approval-time evidence
+                # refusal (409, Codex round-2) → audited blocked signal + error.
+                if exc.status_code in (403, 409):
                     _mdc.audit_blocked(
                         db, alert_id=alert_id, user=user,
                         reason=str(exc),

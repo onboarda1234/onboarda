@@ -1093,10 +1093,13 @@ class AuditLogger:
                 "broken_links": broken_links,
                 # TRUE total (structural classes counted by uncapped COUNT(*),
                 # walk violations counted per row, every orphan counted).
-                # NOTE: totals are per-class sums — a row may contribute to
-                # more than one class (e.g. dangling AND unreachable).
                 "total_violations": total_violations,
                 "violation_totals": dict(violation_totals),
+                "totals_note": (
+                    "totals are per-class sums; a row may contribute to more "
+                    "than one class (e.g. a dangling row is usually also "
+                    "unreachable)"
+                ),
                 "chain_intact": total_violations == 0,
                 "verified_at": verified_at,
             }

@@ -508,6 +508,8 @@ class TestRDI014FullChainVerification:
         assert any(
             b.get("entry_id") == target_id for b in full["broken_links"]
         ), full["broken_links"]
+        # Leave the shared chain clean for later suites (belt-and-braces).
+        _clear_chain()
 
     def test_full_chain_reports_root_head_count_and_timestamp(self, temp_db):
         _clear_chain()
