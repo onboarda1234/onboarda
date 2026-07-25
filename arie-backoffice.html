@@ -16709,6 +16709,21 @@ function screeningSubjectWorkspaceBody(config) {
   return body;
 }
 
+function screeningNoProviderHitsNote(statusKey, hasDisposition) {
+  // Honesty (pilot-audit finding): a zero-hit provider result carries the
+  // canonical status "Clear", which can read as an OFFICER decision rather than
+  // "the provider returned no matches". When there are no provider hits AND no
+  // officer disposition is recorded yet, state explicitly that this is a
+  // provider result, not a clearance — officer review and sign-off remain
+  // separate. Additive note only; the status label/state is unchanged.
+  var key = String(statusKey || '').toLowerCase();
+  var noMatch = key === 'screened_no_match' || key === 'clear' || key === 'completed_clear' || key === 'no_match';
+  if (!noMatch || hasDisposition) return '';
+  return '<div data-screening-no-provider-hits-note="true" style="margin:0 0 12px;padding:9px 13px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text2);line-height:1.5;">' +
+    'Provider returned no matches for this subject. This is a <strong>provider result, not an officer clearance</strong> — officer review and sign-off remain separate.' +
+  '</div>';
+}
+
 function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus) {
   var company = screeningSummary.company_screening || {};
   var companySanctions = company.sanctions || {};
@@ -16828,7 +16843,10 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
     ' <span class="badge draft" style="vertical-align:2px;">Entity</span>' +
     (app.ref ? '<div style="font-size:11px;font-weight:400;color:var(--text3);margin-top:3px;font-family:ui-monospace,Menlo,monospace;">' + escapeHtml(app.ref) + '</div>' : '') +
     screeningFreshnessLineHtml(screeningSummary);
-  return screeningReviewCard(entityTitle, badges.join(''), body, screeningFocusMatches(focus, 'entity', app.company));
+  var entityNoHitsNote = screeningNoProviderHitsNote(
+    reviewRow ? reviewRow.status_key : companyFallbackStatusKey,
+    !!(reviewRow && reviewRow.review_disposition));
+  return screeningReviewCard(entityTitle, badges.join(''), entityNoHitsNote + body, screeningFocusMatches(focus, 'entity', app.company));
 }
 
 function screeningSubjectJoinName(value) {
@@ -17005,7 +17023,10 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
       screened_at: facts.screened_at || screeningSummary.screened_at,
       screening_valid_until: screeningSummary.screening_valid_until
     });
-  return screeningReviewCard(personTitle, badges.join(''), body, screeningFocusMatches(focus, person.subject_type, person.name));
+  var personNoHitsNote = screeningNoProviderHitsNote(
+    reviewRow ? reviewRow.status_key : personFallbackStatusKey,
+    !!(reviewRow && reviewRow.review_disposition));
+  return screeningReviewCard(personTitle, badges.join(''), personNoHitsNote + body, screeningFocusMatches(focus, person.subject_type, person.name));
 }
 
 function buildScreeningTriageSubjects(app, screeningSummary, queueMap, reviewMap) {
