@@ -4330,6 +4330,20 @@ async function readApiResponseBody(res) {
       return { error: 'Malformed JSON in server response', _parseError: true };
     }
   }
+  // A response object without a usable text() must NOT silently become {}.
+  // Several test harnesses (and any minimal stub) expose only json(); falling
+  // back to it keeps this helper a drop-in for a plain res.json() rather than
+  // a silent data-loss path.
+  if (typeof res.text !== 'function') {
+    if (typeof res.json === 'function') {
+      try {
+        return await res.json();
+      } catch (_e) {
+        return { error: 'Malformed JSON in server response', _parseError: true };
+      }
+    }
+    return {};
+  }
   var text = '';
   try {
     text = await res.text();

@@ -71,18 +71,28 @@ def _run(scenario_js):
 
 
 def _response(*, status=200, ok=None, content_type="application/json",
-              body="", json_throws=False):
+              body="", json_throws=False, omit_text=False):
+    """Build a mock Response.
+
+    `body` is passed through VERBATIM — an earlier version coerced "" to "{}",
+    which made the 204 test pass against a mutant that removed the 204 guard
+    (caught in review). `omit_text` reproduces the repo's house `okJson()` mock
+    shape, which exposes only json().
+    """
     ok_js = "true" if (status < 400 if ok is None else ok) else "false"
     throws = "throw new SyntaxError('Unexpected token');" if json_throws else ""
     headers_js = ("null" if content_type is None
                   else "{ get(name) { return %s; } }" % json.dumps(content_type))
+    json_body = body if body else "{}"
+    text_member = "" if omit_text else (
+        "async text() { return %s; }" % json.dumps(body))
     return textwrap.dedent(f"""
         {{
           ok: {ok_js},
           status: {status},
           headers: {headers_js},
-          async json() {{ {throws} return JSON.parse({json.dumps(body or "{}")}); }},
-          async text() {{ return {json.dumps(body)}; }}
+          async json() {{ {throws} return JSON.parse({json.dumps(json_body)}); }}{"," if text_member else ""}
+          {text_member}
         }}
     """)
 
@@ -176,14 +186,33 @@ class TestSuccessPathUnchanged:
         assert result["data"] == payload
 
     def test_204_no_content_returns_an_empty_object_not_a_throw(self):
+        """A real 204 carries a JSON content-type and an EMPTY body, so
+        res.json() throws. Without the 204 guard this yields a spurious
+        "Malformed JSON" error object."""
         result = _run(textwrap.dedent(f"""
-            global.fetch = async () => ({_response(status=204, body="")});
+            global.fetch = async () => ({_response(
+                status=204, body="", json_throws=True)});
             (async () => {{
               const data = await boApiCall('DELETE', '/x');
               console.log(JSON.stringify({{ data }}));
             }})();
         """))
         assert result["data"] == {}
+
+    def test_a_response_exposing_only_json_still_works(self):
+        """The repo's house mock shape (`{ json: async () => ... }`). Returning
+        {} for these would be silent data loss — and it broke a pre-existing
+        XSS guard test whose renderer reads through this helper."""
+        payload = {"entries": [{"id": 1}]}
+        result = _run(textwrap.dedent(f"""
+            global.fetch = async () => ({_response(
+                content_type=None, body=json.dumps(payload), omit_text=True)});
+            (async () => {{
+              const data = await boApiCall('GET', '/x');
+              console.log(JSON.stringify({{ data }}));
+            }})();
+        """))
+        assert result["data"] == payload
 
 
 class TestSessionExpiryStillWorks:

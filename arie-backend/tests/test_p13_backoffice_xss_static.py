@@ -20,6 +20,14 @@ def _security_helpers(source: str) -> str:
     return _slice_between(source, "function escapeHtml", "var TEST_SMOKE_RECORD_TOGGLE_STORAGE_KEY")
 
 
+def _defensive_reader(source: str) -> str:
+    """P13-3 / FEO-004: the renderers below now read their body through this
+    helper, which lives outside every region sliced here — without it the
+    fetch-driven assertions silently ReferenceError inside the renderer's own
+    try/catch and assert against an empty list."""
+    return _slice_between(source, "async function readApiResponseBody", "async function boApiCall")
+
+
 def _run_node(script: str) -> str:
     result = subprocess.run(
         ["node", "-"],
@@ -188,6 +196,7 @@ global.document = {{ getElementById: element }};
 global.BO_API_BASE = '/api';
 global.BO_AUTH_TOKEN = '';
 {_security_helpers(source)}
+{_defensive_reader(source)}
 {audit_region}
 {supervisor_audit_region}
 const card = renderAuditEventCard({{
