@@ -71,10 +71,17 @@ def grants_env():
 
     # Build the full schema AS the app role — staging's ownership layout —
     # via the real boot path (init_db creates tables, seeds retention
-    # policies, and installs the append-only triggers).
+    # policies, and installs the append-only triggers). config must be
+    # reloaded BEFORE db: db reads DATABASE_URL through `from config import
+    # DATABASE_URL`, and config captures the env var once at first import —
+    # in a full pytest session config is already cached, so reloading only
+    # db would silently fall back to SQLite and leave the scratch PG
+    # database empty (same idiom as test_fresh_install_pg_chain.py).
     prev_url = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = app_dsn
+    import config as config_module
     import db as db_module
+    importlib.reload(config_module)
     importlib.reload(db_module)
     try:
         db_module.init_db()
@@ -91,6 +98,11 @@ def grants_env():
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = prev_url
+        try:
+            db_module.close_pg_pool()
+        except Exception:
+            pass
+        importlib.reload(config_module)
         importlib.reload(db_module)
         with root.cursor() as cur:
             cur.execute(f'DROP DATABASE IF EXISTS "{dbname}" WITH (FORCE)')
