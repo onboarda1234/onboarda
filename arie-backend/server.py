@@ -44337,6 +44337,22 @@ if __name__ == "__main__":
     _boot_lock_lease.release()
     logger.info("startup: boot-migration lock released (+%s)", _elapsed())
 
+    # P12-4 second half / DCI-004: schema-drift DETECTION (warn-only). Runs
+    # after init_db + migrations, compares live table/column names against
+    # schema_expected.json, logs warnings + a metric, and NEVER blocks boot —
+    # check_and_log swallows every internal failure by contract.
+    logger.info("startup: schema drift check (+%s)", _elapsed())
+    try:
+        import schema_drift as _schema_drift
+        _drift_db = get_db()
+        try:
+            _schema_drift.check_and_log(_drift_db)
+        finally:
+            _drift_db.close()
+    except Exception:
+        logger.exception("startup: schema drift check unavailable (non-fatal)")
+    logger.info("startup: schema drift check done (+%s)", _elapsed())
+
     # Initialize supervisor framework
     if SUPERVISOR_AVAILABLE:
         logger.info("startup: entering setup_supervisor (+%s)", _elapsed())
