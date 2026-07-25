@@ -8,10 +8,12 @@ ALREADY emit have no metric filter and no alarm at all:
     ScreeningQueueDepth                  ScreeningFailedJobsLastHour
     ScreeningInProgressJobs              ScreeningEndToEndJobMs
     ScreeningOldestPendingAgeSeconds     ScreeningWorkerFailures
-    SchemaDriftMissingObjects
+    SchemaDriftMissingObjects (emitted once per BOOT, not on a timer — its
+    alarm therefore only sees data after a restart, by design)
 
-plus ``VerificationWorkerFailures``, which has a filter but no alarm. This
-script closes that gap — no application change is required, the telemetry is
+plus ``VerificationWorkerFailures`` and ``VerificationFailedJobsLastHour``,
+which have filters but no alarm (this script alarms the first; the second is
+left to the PR-6 baseline that owns it). This script closes that gap — no application change is required, the telemetry is
 already being written.
 
 It also adds the two signals the register calls out that infra alarms cannot
@@ -20,10 +22,12 @@ see:
 * **Worker liveness.** ``staging-verification-worker-live-task-count-low``
   alarms when no ECS task is running, but not when a task is running and its
   loop is wedged. The workers emit their gauge metrics at least once per ~60s
-  even when idle (``DEFAULT_OBSERVABILITY_INTERVAL_SECONDS``), so a
+  even when idle (``DEFAULT_OBSERVABILITY_INTERVAL_SECONDS``; the emitter has
+  no empty-queue early return and coalesces via ``or 0``), so a
   ``TreatMissingData: breaching`` alarm on the queue-depth SampleCount is a
-  true heartbeat. NOTE this deliberately OVERRIDES the ``notBreaching``
-  posture the PR-6 depth alarm uses: for a heartbeat, absence IS the alarm.
+  true heartbeat. NOTE this is deliberately the OPPOSITE posture to the
+  backlog alarm THIS script creates on the same metric: for a threshold,
+  missing data is not a breach; for a heartbeat, absence IS the alarm.
 * **Application error rate.** The only 5xx signal today is the ALB metric. A
   log-based filter on ``$.level = "ERROR"`` catches failures that never reach
   the load balancer (worker exceptions, boot-path errors) and gives the
@@ -59,7 +63,14 @@ UNALARMED_METRICS = (
 )
 
 ERROR_METRIC_NAME = "ApplicationErrorCount"
+
+
 HEARTBEAT_METRIC = "ScreeningQueueDepth"
+
+
+def error_metric_name(environment: str) -> str:
+    """Environment goes in the NAME because the metric carries no dimensions."""
+    return f"{ERROR_METRIC_NAME}-{environment}"
 
 
 def build_metric_filter(*, environment: str, log_group: str, metric_name: str,
@@ -98,10 +109,16 @@ def build_error_rate_filter(*, environment: str, log_group: str) -> Dict[str, An
 
     4xx is logged at WARNING on purpose (base_handler: a client mistake is not
     a service error and must not give an unauthenticated caller an ERROR-log
-    spam vector), so this filter counts only genuine 5xx/server-side failures.
-    No Service dimension: the stdlib logger path does not always attach
-    structured_data, and a dimension that is sometimes absent silently drops
-    the datapoint.
+    spam vector), so this filter counts only genuine server-side failures.
+
+    NO DIMENSIONS, deliberately (adversarial review B1). ERROR records carry
+    only timestamp/level/logger/message — `environment` is injected solely by
+    emit_cloudwatch_metric_log, so a `{"Environment": "$.environment"}`
+    dimension would match nothing and leave a dead alarm sitting in OK,
+    indistinguishable from healthy. Dimensions and `defaultValue` are also
+    mutually exclusive in PutMetricFilter, so that pairing fails at --apply.
+    Environment scoping comes from the metric NAME instead, since each
+    environment has its own log group.
     """
     return {
         "filterName": f"{environment}-{ERROR_METRIC_NAME}",
@@ -109,12 +126,13 @@ def build_error_rate_filter(*, environment: str, log_group: str) -> Dict[str, An
         "filterPattern": '{ $.level = "ERROR" }',
         "metricTransformations": [
             {
-                "metricName": ERROR_METRIC_NAME,
+                "metricName": error_metric_name(environment),
                 "metricNamespace": CUSTOM_NAMESPACE,
                 "metricValue": "1",
+                # Safe now that there are no dimensions: makes "no errors"
+                # publish a 0 rather than a gap, so the alarm is evaluable.
                 "defaultValue": 0,
                 "unit": "Count",
-                "dimensions": {"Environment": "$.environment"},
             }
         ],
     }
@@ -124,14 +142,19 @@ def _alarm(*, name: str, description: str, metric_name: str, environment: str,
            service: str, statistic: str, period: int, evaluation_periods: int,
            datapoints: int, threshold: float, comparison: str,
            treat_missing: str, alarm_action_arn: str,
+           dimensionless: bool = False,
            managed_by: str = "production-monitoring") -> Dict[str, Any]:
     actions = [alarm_action_arn] if alarm_action_arn else []
+    # An alarm's dimensions must match the metric's exactly; a dimensionless
+    # metric with a dimensioned alarm resolves to nothing.
+    dimensions = ([] if dimensionless
+                  else [{"Name": "Environment", "Value": environment}])
     spec: Dict[str, Any] = {
         "AlarmName": name,
         "AlarmDescription": description,
         "Namespace": CUSTOM_NAMESPACE,
         "MetricName": metric_name,
-        "Dimensions": [{"Name": "Environment", "Value": environment}],
+        "Dimensions": dimensions,
         "Statistic": statistic,
         "Period": period,
         "EvaluationPeriods": evaluation_periods,
@@ -222,8 +245,8 @@ def build_alarm_specs(*, environment: str, alarm_action_arn: str,
                 f"More than {error_threshold} ERROR log records in a 5-minute "
                 "period. Catches server-side failures that never reach the "
                 "ALB (worker exceptions, boot-path errors)."),
-            metric_name=ERROR_METRIC_NAME, environment=environment,
-            service="", statistic="Sum", period=300,
+            metric_name=error_metric_name(environment), environment=environment,
+            service="", statistic="Sum", period=300, dimensionless=True,
             evaluation_periods=1, datapoints=1, threshold=error_threshold,
             comparison="GreaterThanThreshold", treat_missing="notBreaching",
             alarm_action_arn=alarm_action_arn,
@@ -254,7 +277,14 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--error-threshold", type=int, default=5)
     parser.add_argument("--apply", action="store_true",
                         help="Create/update AWS resources (default: dry-run)")
+    parser.add_argument("--confirm-production", action="store_true",
+                        help="Required with --apply when --environment=production")
     args = parser.parse_args(argv)
+
+    if args.apply and args.environment == "production" and not args.confirm_production:
+        print("REFUSED: --apply against production requires --confirm-production.",
+              file=sys.stderr)
+        return 2
 
     filters = [
         build_metric_filter(environment=args.environment,

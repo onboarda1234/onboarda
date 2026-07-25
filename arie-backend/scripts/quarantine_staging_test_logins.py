@@ -5,22 +5,29 @@ Origin: ADMIN-AUDIT-006 ("several test-like users in staging"; recommended fix
 "remove or quarantine stale test accounts"). The before/after-state audit half
 shipped with the user handlers; this is the account half.
 
-**Quarantine, not delete — deliberately.** `users` and `clients` are not in
-REGULATED_TABLES, so a hard DELETE would not be refused by the deletion
-interceptor, but ~20 tables carry `REFERENCES users(id)`: deleting an officer
-who ever acted either fails on the FK or orphans referential history that AML
-recordkeeping depends on. Setting `status='inactive'` blocks login while
-preserving every audit and decision linkage. Hard deletion is offered ONLY for
-accounts with no activity anywhere (`--delete-unused`), and even then it is
-opt-in and reports what it would remove first.
+**Quarantine ONLY — this script never deletes.** `users` and `clients` are not
+in REGULATED_TABLES, so a hard DELETE would NOT be refused by the deletion
+interceptor and (under SQLite's `PRAGMA foreign_keys=0`) would silently
+succeed. But 22 tables carry 48 `REFERENCES users(id)` columns — memo
+approver, SAR reviewer, screening second reviewer, EDD decider, periodic-review
+decider, `applications.pre_approval_officer_id` — and orphaning any of them
+destroys the attribution AML recordkeeping depends on. An earlier revision of
+this script offered `--delete-unused` behind a three-table activity check;
+adversarial review proved it would hard-delete an officer who had approved
+compliance memos. There is no delete path here at all. Deactivation satisfies
+ADMIN-AUDIT-006 ("remove **or quarantine**").
 
-Default mode is DRY-RUN. Never targets production: the same identity guard the
-role-matrix harness uses is applied here.
+Every status change writes an `audit_log` row with before/after state, matching
+what the application's own user-status control records.
+
+Default mode is DRY-RUN, and `--apply` requires the same class of positive
+guard the role-matrix harness uses (explicit staging environment + confirm
+token + a database identity check against the connection actually in use).
 
 Usage:
-    python scripts/quarantine_staging_test_logins.py                  # dry-run
-    python scripts/quarantine_staging_test_logins.py --apply
-    python scripts/quarantine_staging_test_logins.py --apply --delete-unused
+    python scripts/quarantine_staging_test_logins.py     # dry-run
+    ALLOW_TEST_LOGIN_QUARANTINE=1 python scripts/quarantine_staging_test_logins.py \
+        --apply --confirm I-UNDERSTAND-STAGING-LOGIN-QUARANTINE
 """
 
 from __future__ import annotations
@@ -36,6 +43,8 @@ from urllib.parse import urlparse
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 PRODUCTION_MARKERS = ("production", "prod-db", "prod_", "-prod", ".prod.")
+CONFIRM_TOKEN = "I-UNDERSTAND-STAGING-LOGIN-QUARANTINE"
+ALLOW_ENV = "ALLOW_TEST_LOGIN_QUARANTINE"
 
 # Seeded demo personas. These are fictional and must not survive a pilot
 # window; the founder account is protected below and never appears here.
@@ -65,23 +74,34 @@ PROTECTED_EMAILS = (
     "github-actions-day6-staging-smoke@onboarda.internal",
 )
 
-# Tables whose presence proves an officer acted (so the row must be kept).
-ACTIVITY_TABLES = (
-    ("audit_log", "user_id"),
-    ("applications", "assigned_to"),
-    ("applications", "decision_by"),
-)
+def assert_quarantine_allowed(database_url: str, environment: str,
+                              allow_value: str = None, confirm: str = None) -> None:
+    """Fail CLOSED — positive checks only, mirroring enforce_staging_seed_guard.
 
-
-def assert_not_production(database_url: str, environment: str) -> None:
-    """Fail closed unless this is clearly a non-production database."""
-    if environment.lower() in ("production", "prod"):
-        raise RuntimeError("REFUSED: this script never runs against production.")
-    parsed = urlparse(database_url or "")
+    An earlier revision checked only "environment is not production" plus a
+    denylist, which passed with BOTH variables unset and passed for the live
+    demo environment (whose `demo@onboarda.com` client is a real login behind
+    demo.regmind.co). Absence of evidence is not evidence of staging.
+    """
+    environment = str(environment or "").lower()
+    if environment != "staging":
+        raise RuntimeError(
+            f"REFUSED: ENVIRONMENT must be exactly 'staging' (got {environment or 'unset'}).")
+    if (allow_value if allow_value is not None else os.environ.get(ALLOW_ENV, "")) != "1":
+        raise RuntimeError(f"REFUSED: {ALLOW_ENV}=1 is required.")
+    if confirm != CONFIRM_TOKEN:
+        raise RuntimeError(f"REFUSED: --confirm must equal {CONFIRM_TOKEN!r}.")
+    if not database_url:
+        raise RuntimeError("REFUSED: no database identity resolved — refusing to guess.")
+    parsed = urlparse(database_url)
+    if parsed.scheme.lower() not in ("postgres", "postgresql"):
+        raise RuntimeError(
+            "REFUSED: the staging database must be PostgreSQL; refusing to run "
+            f"against {parsed.scheme or 'an unidentified engine'}.")
     identity = f"{(parsed.hostname or '').lower()}/{parsed.path.lstrip('/').lower()}"
     if any(marker in identity for marker in PRODUCTION_MARKERS):
         raise RuntimeError(
-            f"REFUSED: DATABASE_URL identity {identity!r} contains a production marker.")
+            f"REFUSED: database identity {identity!r} contains a production marker.")
 
 
 def _matches_synthetic(email: str) -> bool:
@@ -112,20 +132,6 @@ def classify_client(email: str) -> str:
     return "keep"
 
 
-def _has_activity(db, user_id: str) -> bool:
-    for table, column in ACTIVITY_TABLES:
-        try:
-            row = db.execute(
-                f"SELECT COUNT(*) AS c FROM {table} WHERE {column} = ?", (user_id,)
-            ).fetchone()
-        except Exception:
-            # A missing table must never be read as "no activity".
-            return True
-        if row and row["c"]:
-            return True
-    return False
-
-
 def plan_quarantine(db) -> Dict[str, Any]:
     """Build the plan without mutating anything."""
     officers: List[Dict[str, Any]] = []
@@ -134,10 +140,14 @@ def plan_quarantine(db) -> Dict[str, Any]:
         verdict = classify_officer(row["email"])
         if verdict in ("protected", "keep"):
             continue
+        # Already-quarantined accounts are NOT re-planned: the runbook tells
+        # the operator to re-run the dry-run and expect an empty list, and a
+        # status-blind plan would report "failed" after a successful run.
+        if str(row["status"]).lower() != "active":
+            continue
         officers.append({
             "id": row["id"], "email": row["email"], "role": row["role"],
             "status": row["status"], "reason": verdict,
-            "has_activity": _has_activity(db, row["id"]),
         })
 
     clients: List[Dict[str, Any]] = []
@@ -145,6 +155,8 @@ def plan_quarantine(db) -> Dict[str, Any]:
             "SELECT id, email, company_name, status FROM clients").fetchall():
         verdict = classify_client(row["email"])
         if verdict in ("protected", "keep"):
+            continue
+        if str(row["status"]).lower() != "active":
             continue
         clients.append({
             "id": row["id"], "email": row["email"],
@@ -154,61 +166,93 @@ def plan_quarantine(db) -> Dict[str, Any]:
     return {"officers": officers, "clients": clients}
 
 
-def apply_quarantine(db, plan: Dict[str, Any], *, delete_unused: bool = False) -> Dict[str, Any]:
-    """Deactivate every planned account; optionally hard-delete inactive ones
-    that have no activity anywhere."""
-    deactivated_officers, deleted_officers = [], []
+def apply_quarantine(db, plan: Dict[str, Any], *, actor: str = "ops-quarantine-script") -> Dict[str, Any]:
+    """Deactivate every planned account, writing an audit row for each.
+
+    B5 (adversarial review): a bulk status change on a regulated system with no
+    audit trail is itself a finding — the application's own control for this
+    exact change records before/after state, so this must too. The audit write
+    shares the transaction with the status change: no silent status flip.
+    """
+    deactivated_officers, deactivated_clients = [], []
+
     for officer in plan["officers"]:
-        if delete_unused and not officer["has_activity"]:
-            db.execute("DELETE FROM users WHERE id = ?", (officer["id"],))
-            deleted_officers.append(officer["id"])
-            continue
         db.execute("UPDATE users SET status='inactive' WHERE id = ?", (officer["id"],))
+        _write_audit(db, actor, "User Status Change", f"user:{officer['id']}", {
+            "target_email": officer["email"],
+            "target_role": officer["role"],
+            "before_state": {"status": officer["status"]},
+            "after_state": {"status": "inactive"},
+            "reason": f"staging test-login quarantine ({officer['reason']})",
+            "source": "scripts/quarantine_staging_test_logins.py",
+        })
         deactivated_officers.append(officer["id"])
 
-    deactivated_clients = []
     for client in plan["clients"]:
         db.execute("UPDATE clients SET status='inactive' WHERE id = ?", (client["id"],))
+        _write_audit(db, actor, "Client Status Change", f"client:{client['id']}", {
+            "target_email": client["email"],
+            "before_state": {"status": client["status"]},
+            "after_state": {"status": "inactive"},
+            "reason": f"staging test-login quarantine ({client['reason']})",
+            "source": "scripts/quarantine_staging_test_logins.py",
+        })
         deactivated_clients.append(client["id"])
 
     db.commit()
     return {
         "deactivated_officers": deactivated_officers,
-        "deleted_officers": deleted_officers,
         "deactivated_clients": deactivated_clients,
     }
+
+
+def _write_audit(db, actor: str, action: str, target: str, detail: Dict[str, Any]) -> None:
+    db.execute(
+        """
+        INSERT INTO audit_log
+            (user_id, user_name, user_role, action, target, detail, ip_address, request_id)
+        VALUES (?,?,?,?,?,?,?,?)
+        """,
+        (actor, "Test Login Quarantine (ops script)", "system", action, target,
+         json.dumps(detail, sort_keys=True), "local-operator", f"quarantine:{actor}"),
+    )
 
 
 def main(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true",
                         help="Perform the quarantine (default: dry-run)")
-    parser.add_argument("--delete-unused", action="store_true",
-                        help="Hard-delete accounts with no activity anywhere "
-                             "(requires --apply)")
+    parser.add_argument("--confirm", default="",
+                        help=f"Must equal {CONFIRM_TOKEN!r} when --apply is used")
+    parser.add_argument("--actor", default="ops-quarantine-script",
+                        help="Attribution recorded on the audit rows")
     args = parser.parse_args(argv)
 
-    assert_not_production(os.environ.get("DATABASE_URL", ""),
-                          os.environ.get("ENVIRONMENT", ""))
-
     from db import get_db
+    import db as db_module
+
+    # Guard the identity ACTUALLY connected to, not whatever DATABASE_URL
+    # happens to say — db resolves its target at import time.
+    resolved = getattr(db_module, "DATABASE_URL", "") or ""
+
+    if args.apply:
+        assert_quarantine_allowed(
+            resolved, os.environ.get("ENVIRONMENT", ""), confirm=args.confirm)
 
     db = get_db()
     try:
         plan = plan_quarantine(db)
         print(json.dumps(plan, indent=2))
         print(f"\n{len(plan['officers'])} officer account(s) and "
-              f"{len(plan['clients'])} client account(s) match.")
-        for officer in plan["officers"]:
-            if officer["has_activity"]:
-                print(f"  KEEP ROW (has activity): {officer['email']} — "
-                      "deactivate only, never delete")
+              f"{len(plan['clients'])} client account(s) will be DEACTIVATED "
+              "(no account is ever deleted by this script).")
         if not args.apply:
-            print("\nDRY-RUN — pass --apply to deactivate. "
-                  "Nothing was changed.")
+            print("\nDRY-RUN — nothing was changed. Re-run with --apply "
+                  f"--confirm {CONFIRM_TOKEN} and {ALLOW_ENV}=1 to deactivate.")
             return 0
-        result = apply_quarantine(db, plan, delete_unused=args.delete_unused)
+        result = apply_quarantine(db, plan, actor=args.actor)
         print("\n" + json.dumps(result, indent=2))
+        print("\nEach change wrote an audit_log row with before/after state.")
         return 0
     finally:
         db.close()

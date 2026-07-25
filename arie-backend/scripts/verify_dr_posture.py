@@ -44,7 +44,13 @@ MAX_RESTORE_LAG_SECONDS = 3600
 
 
 def _aws_json(args: List[str]) -> Any:
-    proc = subprocess.run(args, capture_output=True, text=True, timeout=120)
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=120)
+    except FileNotFoundError:
+        raise RuntimeError(
+            "REFUSED: the aws CLI is not installed or not on PATH.") from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("aws call timed out after 120s") from None
     if proc.returncode != 0:
         raise RuntimeError(f"aws call failed: {' '.join(args)}\n{proc.stderr.strip()}")
     return json.loads(proc.stdout or "null")
@@ -110,14 +116,29 @@ def evaluate_posture(instance: Dict[str, Any], *, now_iso: Optional[str] = None,
                 datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
                 if now_iso else datetime.now(timezone.utc)
             )
+            # A naive timestamp (aws CLI output, some botocore paths) against
+            # an aware reference raises TypeError, not ValueError — catching
+            # only ValueError crashed the real code path, which is the one no
+            # test covered because every test injects now_iso.
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            if reference.tzinfo is None:
+                reference = reference.replace(tzinfo=timezone.utc)
             lag_seconds = (reference - parsed).total_seconds()
-        except ValueError:
+        except (ValueError, TypeError):
             lag_seconds = None
+    # A NEGATIVE lag means the restore point is in the future — clock skew or a
+    # misparsed timestamp. Treating that as "very fresh" would pass the check
+    # on bad data, so it fails.
+    pitr_ok = (
+        lag_seconds is not None
+        and 0 <= lag_seconds <= max_restore_lag_seconds
+    )
     checks.append({
         "check": "pitr_latest_restorable_recent",
         "observed": {"latest_restorable_time": latest, "lag_seconds": lag_seconds},
-        "required": f"lag <= {max_restore_lag_seconds}s",
-        "passed": lag_seconds is not None and lag_seconds <= max_restore_lag_seconds,
+        "required": f"0 <= lag <= {max_restore_lag_seconds}s",
+        "passed": pitr_ok,
         "blocking": True,
     })
 

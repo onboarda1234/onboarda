@@ -64,6 +64,36 @@ class TestProductionMonitoringAlarms:
         assert transformation["dimensions"] == {
             "Environment": "$.environment", "Service": "$.service"}
 
+    def test_error_filter_has_no_dimensions_and_targets_a_named_metric(self):
+        """B1: ERROR records carry no `environment` field, so a dimensioned
+        filter matches nothing and leaves a dead alarm sitting in OK. Dimensions
+        and defaultValue are also mutually exclusive in PutMetricFilter, so the
+        pairing failed at --apply."""
+        spec = monitoring.build_error_rate_filter(
+            environment="staging", log_group="/ecs/regmind-staging")
+        transformation = spec["metricTransformations"][0]
+        assert "dimensions" not in transformation
+        assert transformation["metricName"] == monitoring.error_metric_name("staging")
+        assert monitoring.error_metric_name("staging") != monitoring.error_metric_name("production")
+
+    def test_error_alarm_is_dimensionless_to_match_its_metric(self):
+        alarms = {a["AlarmName"]: a for a in monitoring.build_alarm_specs(
+            environment="staging", alarm_action_arn="",
+            screening_backlog_threshold=50, screening_age_threshold_s=1800,
+            error_threshold=5)}
+        error_alarm = alarms["staging-application-error-rate-high"]
+        assert error_alarm["Dimensions"] == []
+        assert error_alarm["MetricName"] == monitoring.error_metric_name("staging")
+
+    def test_apply_against_production_requires_explicit_confirmation(self):
+        proc = subprocess.run(
+            [sys.executable,
+             str(BACKEND / "scripts" / "provision_production_monitoring.py"),
+             "--environment", "production", "--apply"],
+            capture_output=True, text=True, timeout=120)
+        assert proc.returncode == 2, proc.stdout
+        assert "REFUSED" in proc.stderr
+
     def test_error_filter_counts_only_error_level(self):
         """4xx is logged at WARNING on purpose, so an ERROR-level filter counts
         genuine server-side failures and cannot be driven by unauthenticated
@@ -73,9 +103,8 @@ class TestProductionMonitoringAlarms:
         assert spec["filterPattern"] == '{ $.level = "ERROR" }'
         transformation = spec["metricTransformations"][0]
         assert transformation["defaultValue"] == 0
-        # No Service dimension: the stdlib logger path does not always attach
-        # structured_data, and a sometimes-absent dimension drops datapoints.
-        assert "Service" not in transformation["dimensions"]
+        # Dimensionless entirely — see the B1 test above.
+        assert "dimensions" not in transformation
 
     def test_heartbeat_alarm_treats_missing_data_as_breaching(self):
         """The whole point of a liveness alarm — and the opposite of the
@@ -112,7 +141,11 @@ class TestProductionMonitoringAlarms:
                 screening_backlog_threshold=50, screening_age_threshold_s=1800,
                 error_threshold=5):
             assert alarm["AlarmName"].startswith("production-")
-            assert {"Name": "Environment", "Value": "production"} in alarm["Dimensions"]
+            if alarm["Dimensions"]:
+                assert {"Name": "Environment", "Value": "production"} in alarm["Dimensions"]
+            else:
+                # The dimensionless error metric scopes by metric NAME instead.
+                assert alarm["MetricName"].endswith("-production")
 
     def test_dry_run_is_the_default_and_succeeds_without_aws(self):
         proc = subprocess.run(
@@ -178,6 +211,26 @@ class TestDrPostureEvaluation:
         assert report["rpo_seconds_observed"] == 300.0
         assert report["rto_seconds_observed"] is None
 
+    def test_future_restore_time_does_not_pass(self):
+        """Clock skew produced a negative lag that read as 'very fresh'."""
+        instance = dict(self.HEALTHY, LatestRestorableTime="2026-07-25T18:00:00Z")
+        report = dr.evaluate_posture(instance, now_iso=self.NOW)
+        assert report["verdict"] == "FAIL"
+        assert "pitr_latest_restorable_recent" in report["blocking_failures"]
+
+    def test_naive_timestamp_on_the_real_path_does_not_crash(self):
+        """main() never passes now_iso, so this is the path production takes —
+        and the one no test covered. A naive timestamp against an aware `now`
+        raised TypeError, which the handler did not catch."""
+        instance = dict(self.HEALTHY, LatestRestorableTime="2026-07-25T11:55:00")
+        report = dr.evaluate_posture(instance)  # no now_iso — real path
+        assert report["verdict"] in ("PASS", "FAIL")
+
+    def test_unparseable_timestamp_fails_closed(self):
+        instance = dict(self.HEALTHY, LatestRestorableTime="not-a-timestamp")
+        report = dr.evaluate_posture(instance, now_iso=self.NOW)
+        assert report["verdict"] == "FAIL"
+
     def test_report_is_json_serialisable_for_evidence(self):
         report = dr.evaluate_posture(self.HEALTHY, now_iso=self.NOW)
         assert json.loads(json.dumps(report, default=str))["verdict"] == "PASS"
@@ -207,40 +260,152 @@ class TestTestLoginQuarantine:
         assert quarantine.classify_officer("new.officer@onboarda.com") == "keep"
         assert quarantine.classify_client("realbank@example.com") == "keep"
 
-    def test_production_identity_is_refused(self):
-        with pytest.raises(RuntimeError):
-            quarantine.assert_not_production(
-                "postgresql://u@host/db", "production")
-        with pytest.raises(RuntimeError):
-            quarantine.assert_not_production(
-                "postgresql://u@prod-db.example/regmind", "staging")
-        # A clearly non-production identity is allowed.
-        quarantine.assert_not_production(
-            "postgresql://u@regmind-staging-db.example/regmind", "staging")
-
     def test_dry_run_is_the_default(self):
         source = (BACKEND / "scripts" / "quarantine_staging_test_logins.py").read_text(
             encoding="utf-8")
         assert '"--apply"' in source
         assert "DRY-RUN" in source
-        # --delete-unused must never act on its own.
-        assert "delete_unused=args.delete_unused" in source
 
-    def test_accounts_with_activity_are_never_hard_deleted(self):
-        """~20 tables reference users(id); deleting an officer who ever acted
-        would orphan referential history AML recordkeeping depends on."""
+    def test_script_has_no_delete_path_at_all(self):
+        """An earlier revision offered --delete-unused behind a three-table
+        activity check; review proved it would hard-delete an officer who had
+        approved compliance memos (22 tables carry 48 REFERENCES users(id)
+        columns). The flag was removed entirely rather than completed."""
         source = (BACKEND / "scripts" / "quarantine_staging_test_logins.py").read_text(
             encoding="utf-8")
-        assert 'if delete_unused and not officer["has_activity"]:' in source
+        assert "delete_unused" not in source
+        assert "DELETE FROM users" not in source
+        assert "DELETE FROM clients" not in source
 
-    def test_missing_activity_table_is_treated_as_activity(self):
-        """A missing table must never be read as 'no activity' — that would
-        turn a schema change into silent data loss."""
-        class _RaisingDb:
-            def execute(self, *_args, **_kwargs):
-                raise RuntimeError("no such table")
+    @pytest.mark.parametrize("environment,allow,confirm", [
+        ("", "1", quarantine.CONFIRM_TOKEN),          # env unset
+        ("demo", "1", quarantine.CONFIRM_TOKEN),      # live demo environment
+        ("production", "1", quarantine.CONFIRM_TOKEN),
+        ("staging", "", quarantine.CONFIRM_TOKEN),    # allowlist var missing
+        ("staging", "1", ""),                          # confirm token missing
+        ("staging", "1", "wrong-token"),
+    ])
+    def test_guard_refuses_everything_but_a_fully_declared_staging_run(
+            self, environment, allow, confirm):
+        with pytest.raises(RuntimeError):
+            quarantine.assert_quarantine_allowed(
+                "postgresql://u@regmind-staging-db.example/regmind",
+                environment, allow_value=allow, confirm=confirm)
 
-        assert quarantine._has_activity(_RaisingDb(), "any") is True
+    def test_guard_refuses_when_no_database_identity_resolves(self):
+        """Absence of evidence is not evidence of staging."""
+        with pytest.raises(RuntimeError):
+            quarantine.assert_quarantine_allowed(
+                "", "staging", allow_value="1", confirm=quarantine.CONFIRM_TOKEN)
+
+    def test_guard_refuses_sqlite_and_production_markers(self):
+        for dsn in ("sqlite:///arie.db",
+                    "postgresql://u@prod-db.example/regmind",
+                    "postgresql://u@host/regmind_production"):
+            with pytest.raises(RuntimeError):
+                quarantine.assert_quarantine_allowed(
+                    dsn, "staging", allow_value="1",
+                    confirm=quarantine.CONFIRM_TOKEN)
+
+    def test_guard_accepts_a_fully_declared_staging_run(self):
+        quarantine.assert_quarantine_allowed(
+            "postgresql://u@regmind-staging-db.example/regmind",
+            "staging", allow_value="1", confirm=quarantine.CONFIRM_TOKEN)
+
+
+class TestQuarantineBehaviour:
+    """Behavioural tests over plan/apply against a real SQLite database —
+    review finding: the previous suite asserted source substrings and never
+    called either function."""
+
+    @pytest.fixture()
+    def db(self, tmp_path):
+        import sqlite3
+
+        conn = sqlite3.connect(tmp_path / "quarantine.db")
+        conn.row_factory = sqlite3.Row
+        conn.executescript("""
+            CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT, full_name TEXT,
+                                role TEXT, status TEXT);
+            CREATE TABLE clients (id TEXT PRIMARY KEY, email TEXT,
+                                  company_name TEXT, status TEXT);
+            CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    user_id TEXT, user_name TEXT, user_role TEXT,
+                                    action TEXT, target TEXT, detail TEXT,
+                                    ip_address TEXT, request_id TEXT);
+        """)
+        conn.executemany(
+            "INSERT INTO users (id,email,full_name,role,status) VALUES (?,?,?,?,?)",
+            [
+                ("u_founder", "asudally@onboarda.com", "Founder", "admin", "active"),
+                ("u_smoke", "github-actions-day6-staging-smoke@onboarda.internal",
+                 "CI Smoke", "sco", "active"),
+                ("u_raj", "raj.patel@onboarda.com", "Raj Patel", "sco", "active"),
+                ("u_fix", "probe@example.test", "Fixture", "analyst", "active"),
+                ("u_real", "new.officer@onboarda.com", "Real Officer", "co", "active"),
+            ])
+        conn.executemany(
+            "INSERT INTO clients (id,email,company_name,status) VALUES (?,?,?,?)",
+            [
+                ("c_demo", "demo@onboarda.com", "Demo Client", "active"),
+                ("c_real", "realbank@example.com", "Real Bank", "active"),
+            ])
+        conn.commit()
+
+        class _Wrapper:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def execute(self, sql, params=()):
+                self._cur = self.conn.execute(sql.replace("?", "?"), params)
+                return self._cur
+
+            def commit(self):
+                self.conn.commit()
+
+        return _Wrapper(conn)
+
+    def test_plan_selects_only_synthetic_active_accounts(self, db):
+        plan = quarantine.plan_quarantine(db)
+        assert {o["email"] for o in plan["officers"]} == {
+            "raj.patel@onboarda.com", "probe@example.test"}
+        assert {c["email"] for c in plan["clients"]} == {"demo@onboarda.com"}
+
+    def test_apply_deactivates_and_leaves_protected_and_real_accounts_active(self, db):
+        quarantine.apply_quarantine(db, quarantine.plan_quarantine(db))
+        statuses = {r["email"]: r["status"] for r in
+                    db.execute("SELECT email, status FROM users").fetchall()}
+        assert statuses["raj.patel@onboarda.com"] == "inactive"
+        assert statuses["probe@example.test"] == "inactive"
+        assert statuses["asudally@onboarda.com"] == "active"
+        assert statuses["github-actions-day6-staging-smoke@onboarda.internal"] == "active"
+        assert statuses["new.officer@onboarda.com"] == "active"
+
+    def test_rerunning_the_plan_after_apply_is_empty(self, db):
+        """The runbook tells the operator to re-run the dry-run and expect an
+        empty list; a status-blind plan reported 'failed' after success and
+        pushed them toward the destructive flag."""
+        quarantine.apply_quarantine(db, quarantine.plan_quarantine(db))
+        second = quarantine.plan_quarantine(db)
+        assert second["officers"] == []
+        assert second["clients"] == []
+
+    def test_no_row_is_ever_deleted(self, db):
+        before = db.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+        quarantine.apply_quarantine(db, quarantine.plan_quarantine(db))
+        after = db.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+        assert after == before
+
+    def test_every_status_change_writes_an_audit_row_with_before_and_after(self, db):
+        result = quarantine.apply_quarantine(db, quarantine.plan_quarantine(db))
+        rows = db.execute("SELECT action, target, detail FROM audit_log").fetchall()
+        assert len(rows) == (len(result["deactivated_officers"])
+                             + len(result["deactivated_clients"]))
+        for row in rows:
+            detail = json.loads(row["detail"])
+            assert detail["before_state"] == {"status": "active"}
+            assert detail["after_state"] == {"status": "inactive"}
+            assert "quarantine" in detail["reason"]
 
 
 class TestRunbookDocumentsEachOpsStep:
