@@ -36315,10 +36315,18 @@ document.addEventListener('DOMContentLoaded', async function() {
       // test_approval_ux_gates_static.py. Safe to start before setBoAuth:
       // the loader passes suppressAuthReset, so a 401 cannot bounce the
       // session out from under the login it is racing.
+      // Reset FIRST. resetBackofficeSessionData() nulls ROLE_PERMISSIONS, and
+      // it used to run BETWEEN the kick-off and the await — so whenever the
+      // matrix resolved before /auth/me (the common case: it is dispatched
+      // first and both handlers are equal-cost) the freshly-loaded matrix was
+      // wiped, the shell painted with ROLE_PERMISSIONS null anyway, and the
+      // settle still reported success, suppressing the degraded banner. On a
+      // fresh page load this reset is a no-op — every global it clears is
+      // still at its initial value — so hoisting it is safe.
+      resetBackofficeSessionData();
       var rolePermissionsReady = ensureRolePermissionsLoaded();
       var me = await boApiCall('GET', '/auth/me');
       setBoAuth(BO_AUTH_TOKEN, (me && (me.user || me)) || BO_AUTH_USER);
-      resetBackofficeSessionData();
       syncCurrentUserUI();
       var rolePermissionsLoadedOk = await settleRolePermissionsBeforeShell(rolePermissionsReady);
       activateAuthenticatedShell();

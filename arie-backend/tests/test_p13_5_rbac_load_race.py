@@ -103,6 +103,106 @@ class TestMatrixSettlesBeforeTheShellPaints:
             assert "showDashboardLoadWarning(failedModules)" in block
 
 
+class TestAutoLoginSequenceRuntime:
+    """Drive the REAL statement sequence, not its shape.
+
+    Review finding: the auto-login coverage was static index() ordering only —
+    which is exactly the shape that carried the bug. resetBackofficeSessionData()
+    nulls ROLE_PERMISSIONS, and it ran BETWEEN the kick-off and the await, so
+    whenever the matrix resolved first (the common case) it was wiped, the shell
+    painted with a null matrix anyway, and the settle still reported success.
+    """
+
+    def _run(self, matrix_delay_ms, authme_delay_ms):
+        script = textwrap.dedent(f"""
+            {SETTLE}
+            let ROLE_PERMISSIONS = null;
+            let ROLE_PERMISSIONS_PROMISE = null;
+            let painted = null;
+            let reported = null;
+
+            function resetBackofficeSessionData() {{
+              // The single line that mattered.
+              ROLE_PERMISSIONS = null;
+              ROLE_PERMISSIONS_PROMISE = null;
+            }}
+            function ensureRolePermissionsLoaded() {{
+              if (ROLE_PERMISSIONS) return Promise.resolve(true);
+              ROLE_PERMISSIONS_PROMISE = new Promise(function(resolve) {{
+                setTimeout(function() {{
+                  ROLE_PERMISSIONS = {{ permissions: [{{ id: 'approve_low_medium', roles: ['co'] }}] }};
+                  resolve(true);
+                }}, {matrix_delay_ms});
+              }});
+              return ROLE_PERMISSIONS_PROMISE;
+            }}
+            function authMe() {{
+              return new Promise(function(r) {{ setTimeout(r, {authme_delay_ms}); }});
+            }}
+            function setBoAuth() {{}}
+            function syncCurrentUserUI() {{}}
+            function activateAuthenticatedShell() {{
+              painted = ROLE_PERMISSIONS ? 'LOADED' : 'NULL';
+            }}
+
+            (async () => {{
+              // Mirrors the shipped auto-login order.
+              resetBackofficeSessionData();
+              var rolePermissionsReady = ensureRolePermissionsLoaded();
+              await authMe();
+              setBoAuth();
+              syncCurrentUserUI();
+              reported = await settleRolePermissionsBeforeShell(rolePermissionsReady);
+              activateAuthenticatedShell();
+              console.log(JSON.stringify({{ painted, reported }}));
+            }})();
+        """)
+        proc = subprocess.run(["node", "-e", script], capture_output=True,
+                              text=True, timeout=60)
+        assert proc.returncode == 0, proc.stderr
+        import json as _json
+        return _json.loads(proc.stdout.strip())
+
+    def test_matrix_wins_the_race_and_survives_to_the_paint(self):
+        """The case that was broken: matrix resolves BEFORE /auth/me."""
+        result = self._run(matrix_delay_ms=0, authme_delay_ms=30)
+        assert result["painted"] == "LOADED", (
+            "the preloaded matrix was wiped before the shell painted")
+        assert result["reported"] is True
+
+    def test_auth_me_wins_the_race(self):
+        result = self._run(matrix_delay_ms=30, authme_delay_ms=0)
+        assert result["painted"] == "LOADED"
+        assert result["reported"] is True
+
+    def test_simultaneous_resolution(self):
+        result = self._run(matrix_delay_ms=5, authme_delay_ms=5)
+        assert result["painted"] == "LOADED"
+
+    def test_reset_precedes_the_kickoff_in_the_shipped_source(self):
+        block = re.search(
+            r"document\.addEventListener\('DOMContentLoaded', async function\(\).*?^\}\);",
+            HTML, re.S | re.M).group(0)
+        # Match STATEMENTS, not the comment that explains them: an earlier
+        # version of this assertion found the call name inside the explanatory
+        # comment and passed against the buggy order.
+        statements = [
+            line.strip() for line in block.splitlines()
+            if line.strip() and not line.strip().startswith("//")
+        ]
+        reset_at = next(
+            (i for i, line in enumerate(statements)
+             if line.startswith("resetBackofficeSessionData()")), None)
+        kickoff_at = next(
+            (i for i, line in enumerate(statements)
+             if "ensureRolePermissionsLoaded()" in line), None)
+        assert reset_at is not None, "reset statement not found"
+        assert kickoff_at is not None, "matrix kick-off not found"
+        assert reset_at < kickoff_at, (
+            "resetBackofficeSessionData() nulls ROLE_PERMISSIONS — running it "
+            "after the kick-off silently discards the preloaded matrix")
+
+
 class TestBoundedWaitRuntime:
     """The wait must never hold sign-in hostage."""
 
