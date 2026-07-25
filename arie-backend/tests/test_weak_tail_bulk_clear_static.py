@@ -52,7 +52,12 @@ def test_bulk_bar_is_inside_the_permission_and_lock_guard():
     # guard clause literally wraps the bar, not merely that the tokens appear.
     fn = _fn("screeningTriageWeakTailSection")
     assert "var locked = (!row.review_required || (row.review_disposition && row.review_actionable === false));" in fn
-    assert "if (canDispositionScreeningDisposition() && !locked && (pending > 0 || cleared > 0)) {" in fn
+    # 'selectable' folds the permission + lock check; both the summary bulk bar
+    # and the multi-select bar/checkboxes render only when selectable.
+    assert "var selectable = canDispositionScreeningDisposition() && !locked;" in fn
+    assert "if (selectable && (pending > 0 || cleared > 0)) {" in fn
+    assert "if (selectable && pending > 0) {" in fn        # selection bar
+    assert "if (!selectable) return card;" in fn           # no checkbox when not selectable
     # falsy hit ids are filtered out of the bulk set
     assert ".filter(Boolean)" in fn
 
@@ -81,6 +86,49 @@ def test_undo_reverts_only_cleared_never_a_true_match():
 def test_reuses_shared_disposition_persistence_path():
     # No bespoke endpoint — reuse the same persistence helper the per-hit and
     # near-identical-group actions use.
-    for name in ("screeningWeakTailBulkClear", "screeningWeakTailUndoAll"):
+    for name in ("screeningWeakTailBulkClear", "screeningWeakTailUndoAll", "screeningWeakTailClearSelected"):
         fn = _fn(name)
         assert "screeningPersistHitDisposition(reg.appRef, reg.subjType, reg.subjName, changed," in fn
+
+
+# --- multi-select (tick a subset, clear just those) --------------------------
+
+def test_multi_select_registry_and_handlers_declared():
+    assert "var SCREENING_WEAK_TAIL_SEL = {}" in HTML
+    for name in ("screeningWeakTailToggleSel", "screeningWeakTailSelectAll", "screeningWeakTailClearSelected"):
+        assert "function " + name in HTML
+
+
+def test_section_renders_selection_bar_and_per_pending_checkbox():
+    fn = _fn("screeningTriageWeakTailSection")
+    # selection bar mirrors the near-identical group
+    assert 'data-screening-weak-tail-select="true"' in fn
+    assert "Select all undecided" in fn
+    assert "Clear ' + selCount + ' selected as false positive" in fn
+    assert "screeningWeakTailSelectAll(" in fn
+    assert "screeningWeakTailClearSelected(" in fn
+    # a checkbox renders per selectable hit, toggling selection
+    assert 'type="checkbox"' in fn
+    assert "screeningWeakTailToggleSel(" in fn
+    assert "escapeJsAttr(hid)" in fn
+    # only PENDING, stamped hits are selectable
+    assert "!== 'pending'" in fn
+    # "Clear all" is kept alongside multi-select
+    assert "Clear all ' + pending + ' as false positive" in fn
+
+
+def test_select_all_selects_pending_only():
+    fn = _fn("screeningWeakTailSelectAll")
+    # Only undecided (pending) hits are added to the selection — a decided hit
+    # is never auto-selected.
+    assert "status === 'pending'" in fn
+    assert "sel[hid] = true" in fn
+
+
+def test_clear_selected_only_clears_ticked_pending_and_resets_selection():
+    fn = _fn("screeningWeakTailClearSelected")
+    assert "Object.keys(sel)" in fn
+    assert "st.status === 'pending'" in fn          # never overrides a decision
+    assert "st.status = 'cleared'" in fn
+    assert "SCREENING_WEAK_TAIL_SEL[weakRegId] = {}" in fn   # selection reset after
+    assert "'cleared', null" in fn

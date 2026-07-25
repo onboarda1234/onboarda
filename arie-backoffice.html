@@ -18427,10 +18427,14 @@ function screeningTriageWeakTailSection(row, weakEntries, triage) {
     if (st === 'pending') pending++; else if (st === 'cleared') cleared++;
   });
   // Same read-only lock the per-hit cards use: a recorded / locked subject is
-  // governed through the audit trail, so the bulk bar must not stay live there.
+  // governed through the audit trail, so the actions must not stay live there.
   var locked = (!row.review_required || (row.review_disposition && row.review_actionable === false));
+  var selectable = canDispositionScreeningDisposition() && !locked;
+  var selState = SCREENING_WEAK_TAIL_SEL[weakRegId] || {};
+  var selCount = 0; hitIds.forEach(function(hid) { if (selState[hid]) selCount++; });
+  // Always-visible summary actions: clear/undo the WHOLE weak tail in one click.
   var bulkBar = '';
-  if (canDispositionScreeningDisposition() && !locked && (pending > 0 || cleared > 0)) {
+  if (selectable && (pending > 0 || cleared > 0)) {
     bulkBar += '<span data-screening-weak-tail-actions="true" style="display:inline-flex;gap:8px;flex-wrap:wrap;">';
     if (pending > 0) bulkBar += '<button type="button" class="btn btn-outline btn-sm" onclick="event.stopPropagation();event.preventDefault();screeningWeakTailBulkClear(\'' + weakRegId + '\')">Clear all ' + pending + ' as false positive</button>';
     // Undo reverts only the false-positive CLEARS — a weak hit an officer
@@ -18438,15 +18442,39 @@ function screeningTriageWeakTailSection(row, weakEntries, triage) {
     if (cleared > 0) bulkBar += '<button type="button" class="btn btn-outline btn-sm" onclick="event.stopPropagation();event.preventDefault();screeningWeakTailUndoAll(\'' + weakRegId + '\')">↺ Undo all ' + cleared + '</button>';
     bulkBar += '</span>';
   }
+  // Multi-select (founder request): tick a SUBSET and clear just those, mirroring
+  // the near-identical group's Select-all / Clear-N-selected. Shown inside the
+  // expanded body; a checkbox renders on each PENDING card only.
+  var selBar = '';
+  if (selectable && pending > 0) {
+    selBar = '<div data-screening-weak-tail-select="true" style="margin:2px 14px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--border2);border-radius:9px;background:var(--surface2);">' +
+      '<button type="button" class="btn btn-outline btn-sm" onclick="screeningWeakTailSelectAll(\'' + weakRegId + '\')">Select all undecided</button>' +
+      '<span style="font-size:12px;color:var(--text3);">' + (selCount ? selCount + ' selected' : 'Tick matches to clear several at once') + '</span>' +
+      (selCount ? '<button type="button" class="btn btn-primary btn-sm" style="margin-left:auto;" onclick="screeningWeakTailClearSelected(\'' + weakRegId + '\')">Clear ' + selCount + ' selected as false positive</button>' : '') +
+    '</div>';
+  }
+  var body = selBar + weakEntries.map(function(entry) {
+    var card = screeningTriageHitCard(row, entry.item, entry.index, triage.weak_threshold);
+    if (!selectable) return card;
+    var hid = screeningHitId(entry.item, entry.index);
+    // Only PENDING, stamped hits are selectable; non-pending rows reserve the
+    // gutter so the list stays aligned but offer no checkbox.
+    if (!hid || screeningHitDispositionState(appRef, subjType, subjName, hid).status !== 'pending') {
+      return '<div style="display:flex;gap:8px;align-items:flex-start;"><span style="width:16px;flex-shrink:0;"></span><div style="flex:1;min-width:0;">' + card + '</div></div>';
+    }
+    var checked = !!selState[hid];
+    return '<div style="display:flex;gap:8px;align-items:flex-start;">' +
+      '<input type="checkbox" aria-label="Select match" ' + (checked ? 'checked ' : '') + 'onclick="screeningWeakTailToggleSel(\'' + weakRegId + '\',\'' + escapeJsAttr(hid) + '\')" style="width:16px;height:16px;margin-top:14px;cursor:pointer;accent-color:var(--brand);flex-shrink:0;">' +
+      '<div style="flex:1;min-width:0;">' + card + '</div>' +
+    '</div>';
+  }).join('');
   return '<details data-screening-triage-weak-tail="true" data-section-open-key="' + escapeHtml(weakKey) + '"' + (weakOpen ? ' open' : '') + ' ontoggle="screeningTriageSectionToggled(this)" style="margin-top:16px;border:1px solid var(--border1);border-radius:10px;background:#fff;">' +
     '<summary style="list-style:none;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:11px 14px;cursor:pointer;">' +
       '<span style="font-size:12px;color:var(--text2);"><strong style="color:var(--text1);">' + escapeHtml(tailLine) + '</strong></span>' +
       bulkBar +
       '<span style="margin-left:auto;font-size:11px;color:var(--text3);">Expand ▾</span>' +
     '</summary>' +
-    '<div>' + weakEntries.map(function(entry) {
-      return screeningTriageHitCard(row, entry.item, entry.index, triage.weak_threshold);
-    }).join('') + '</div>' +
+    '<div>' + body + '</div>' +
   '</details>';
 }
 
@@ -18461,6 +18489,40 @@ var SCREENING_HIT_GROUP_UI = {};   // groupId -> { expanded, sel:{hitId:true} }
 var SCREENING_HIT_GROUP_REG = {};  // groupId -> { appRef, subjType, subjName, hitIds:[] }
 var SCREENING_HIT_GROUP_MIN = 4;
 var SCREENING_WEAK_TAIL_REG = {};  // weakRegId -> { appRef, subjType, subjName, hitIds:[] }
+var SCREENING_WEAK_TAIL_SEL = {};  // weakRegId -> { hitId: true } (multi-select)
+
+function screeningWeakTailToggleSel(weakRegId, hitId) {
+  if (!SCREENING_WEAK_TAIL_SEL[weakRegId]) SCREENING_WEAK_TAIL_SEL[weakRegId] = {};
+  var sel = SCREENING_WEAK_TAIL_SEL[weakRegId];
+  if (sel[hitId]) delete sel[hitId]; else sel[hitId] = true;
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+
+function screeningWeakTailSelectAll(weakRegId) {
+  var reg = SCREENING_WEAK_TAIL_REG[weakRegId]; if (!reg) return;
+  if (!SCREENING_WEAK_TAIL_SEL[weakRegId]) SCREENING_WEAK_TAIL_SEL[weakRegId] = {};
+  var sel = SCREENING_WEAK_TAIL_SEL[weakRegId];
+  reg.hitIds.forEach(function(hid) {
+    if (screeningHitDispositionState(reg.appRef, reg.subjType, reg.subjName, hid).status === 'pending') sel[hid] = true;
+  });
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+}
+
+function screeningWeakTailClearSelected(weakRegId) {
+  // Clear only the TICKED pending hits as false positives (never overrides a
+  // decision); persisted; the selection is reset afterwards.
+  var reg = SCREENING_WEAK_TAIL_REG[weakRegId]; if (!reg) return;
+  var sel = SCREENING_WEAK_TAIL_SEL[weakRegId] || {};
+  var changed = [];
+  Object.keys(sel).forEach(function(hid) {
+    if (!sel[hid]) return;
+    var st = screeningHitDispositionState(reg.appRef, reg.subjType, reg.subjName, hid);
+    if (st.status === 'pending') { st.status = 'cleared'; changed.push(hid); }
+  });
+  SCREENING_WEAK_TAIL_SEL[weakRegId] = {};
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  if (changed.length) screeningPersistHitDisposition(reg.appRef, reg.subjType, reg.subjName, changed, 'cleared', null);
+}
 
 function screeningWeakTailBulkClear(weakRegId) {
   // Clear every PENDING weak-tail hit as a false positive in one action.
