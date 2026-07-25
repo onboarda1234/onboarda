@@ -142,7 +142,7 @@ Two gates are decisions, not rows: **Applications-page readiness audit** — 202
 | — | Section M latency: gzip responses (4.7MB raw → ~15x compressed transfer) | — | #781 | ✅ merged + close-out PASS 2026-07-16 — evidence p50/p95 1.096s/1.202s (was 21.1s/33.6s) | — |
 | — | Phase 6 closeout: module card, ops runbook, CLAUDE.md change-control entry, rts-1.0 methodology | — | #792 | ✅ merged + deployed 2026-07-18 — queue verdict VALIDATED/CHANGE-CONTROLLED; end-to-end workflow verdict stays gated on SRP-3 | — |
 | — | Test hygiene: uuid-hex fixture-collision flake class retired, prefix-aware fixture-safe suffixes, async timeout raise | — | #800 #802 | ✅ merged 2026-07-19 | — |
-| — | Ops tickets (Phase 6): CloudWatch p95 alarm on /api/screening/queue · PG-backed test lane for seed/ops tooling | — | — | ⬜ recorded — not yet created | — |
+| — | Ops tickets (Phase 6): CloudWatch p95 alarm on /api/screening/queue · PG-backed test lane for seed/ops tooling | — | [#875](https://github.com/onboarda1234/onboarda/pull/875), [#876](https://github.com/onboarda1234/onboarda/pull/876) | ◐ PG tooling lane ✅ merged + CI-enforced 2026-07-25 (#876) · p95 alarm: latency metric emission live + provisioning script + runbook merged (#875), AWS `--apply` = operator step ([runbook](OPS_HARDENING_RUNBOOK.md) §2) | — |
 
 ### Screening Review page & Agent 3 — simplification work plan (SRP, added 2026-07-16)
 
@@ -255,7 +255,7 @@ are out of scope for every SRP item.
 | P10-4 | Per-decision-type prerequisite gates (RDI-003/008) | HIGH | — | 📋 scoped — policy decision needed | — |
 | P10-5 | Decision-record coverage + provenance (RDI-009 non-SAR, 010) — includes RDI-002 residual assertions | HIGH | — | 📋 scoped (P10-2 dependency now met) | — |
 | P10-6 | Sign-off IP attribution (RDI-012) — RDI-107 explicit allowlist delivered default-off | HIGH | [#708](https://github.com/onboarda1234/onboarda/pull/708), [#809](https://github.com/onboarda1234/onboarda/pull/809) | ✅ merged + staging-validated 2026-07-21 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#eight-remediation-prs-808-815) |
-| P10-7 | Append-only audit at DB level (RDI-013 non-SAR) | MEDIUM | [#837](https://github.com/onboarda1234/onboarda/pull/837) | ◐ code half ✅ merged + staging-validated 2026-07-22 (DB triggers, `audit_log`) · RDS-grants ops half open | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#second-remediation-batch-prs-833-837) |
+| P10-7 | Append-only audit at DB level (RDI-013 non-SAR) | MEDIUM | [#837](https://github.com/onboarda1234/onboarda/pull/837), [#875](https://github.com/onboarda1234/onboarda/pull/875) | ◐ code half ✅ (DB triggers, 2026-07-22) · grants pack + runbook merged 2026-07-25 (#875, review-hardened: TRIGGER retained for boot safety; purge moves to admin DSN + `SET ROLE`) · RDS psql execution = operator step ([runbook](OPS_HARDENING_RUNBOOK.md) §3); documented residual: app role remains table owner | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#second-remediation-batch-prs-833-837) |
 | RDI-002 | LOW/MEDIUM fast-path — by-design HIGH policy-exception; policy approved & signed (Aisha Sudally, 2026-07-07): [`LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md`](compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md) | HIGH | — | ✅ policy approved · residual code assertions → P10-5 | — |
 | RDI-005 | SAR permanence (= **DCI-002**) — Enterprise pre-enable blocker; safe only while `ENABLE_SAR_WORKFLOW`/`ENABLE_SAR_STR` stay false; same guard covers SAR slices of RDI-009/013 | HIGH | — | ⏸ deferred until Enterprise SAR/STR enablement | — |
 
@@ -296,13 +296,13 @@ are out of scope for every SRP item.
 | P12-1 | Regulated-record deletion protection (DCI-001/003) — 🔴 blocker, closed for pilot | CRITICAL+HIGH | [#738](https://github.com/onboarda1234/onboarda/pull/738) | ✅ merged + validated 2026-07-11 (pilot scope) · Phase A discovery report open as draft #737 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-1-pr-738) |
 | P12-2 | Change-implementation fail-closed recompute + audit-in-transaction (DCI-012/013) | HIGH+MED | [#715](https://github.com/onboarda1234/onboarda/pull/715) | ✅ merged + validated 2026-07-09; M3 already-approved-apps residual open | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-2-pr-715) |
 | P12-3 | Compliance-logic corrections — fail-closed risk-config load, `jur_rating` floor mutation, `MULTI_GAP_ESCALATION` branch order (DCI-008/010/011) | HIGH+HIGH+MED | [#710](https://github.com/onboarda1234/onboarda/pull/710) | ✅ merged 2026-07-08; deploy precondition (validate live staging risk_config row) awaits Codex sign-off | — |
-| P12-4 | Migration hard-stops + schema-drift detection (DCI-005/004) | HIGH | [#711](https://github.com/onboarda1234/onboarda/pull/711) | ◐ DCI-005 half ✅ #711 · DCI-004 drift check 📋 | — |
+| P12-4 | Migration hard-stops + schema-drift detection (DCI-005/004) | HIGH | [#711](https://github.com/onboarda1234/onboarda/pull/711), [#877](https://github.com/onboarda1234/onboarda/pull/877) | ✅ DCI-005 hard-stops #711 · DCI-004 warn-only drift detection merged + staging-deployed 2026-07-25 (#877: boot-time check vs `schema_expected.json`, CI freshness gate, PG name-parity test) | — |
 | P12-5 | Status-column CHECK constraints (DCI-006, Migration v2.47) | MED | [#716](https://github.com/onboarda1234/onboarda/pull/716) + [#739](https://github.com/onboarda1234/onboarda/pull/739) | ✅ merged; staging constraints installed via #739, executed 2026-07-11 · 54-FK follow-up tracked at DCI-104 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-5-dci-006-prs-716-and-739) |
 | P12-6 | PG pool connection validation — pre-ping on checkout (DCI-007) | MED | [#709](https://github.com/onboarda1234/onboarda/pull/709) | ✅ merged 2026-07-08 | — |
 | P12-7 | Verification-matrix fidelity — HYBRID only on deterministic INCONCLUSIVE; resolve 5 TODO mappings (DCI-014/015) | MED+LOW | [#835](https://github.com/onboarda1234/onboarda/pull/835) | ◐ mechanism (rules-first gate + INCONCLUSIVE-aware aggregation) merged + staging-validated 2026-07-22, flag-gated OFF · DCI-015 mappings + evaluator activation = founder sign-off ([memo](compliance/P12_7_VERIFICATION_MATRIX_DECISION_MEMO.md)) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#second-remediation-batch-prs-833-837) |
 | P12-8 | Retention purge enforceability + purge-log evidence (DCI-020/021, Migration v2.48) | MED | [#717](https://github.com/onboarda1234/onboarda/pull/717) + hotfix [#723](https://github.com/onboarda1234/onboarda/pull/723) | ✅ merged + deployed | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-8-prs-717-and-723) |
 | P12-9 | Observability hardening — JSON logs, request-correlation ids, readiness gates (DCI-028/029, Migration v2.49) | MED | [#718](https://github.com/onboarda1234/onboarda/pull/718) | ✅ merged + deployed | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-9-pr-718) |
-| P12-10 | Infra guards — upload body-size pre-buffering, deploy fails on `services-stable` timeout (DCI-016/025; stability half partly mitigated by #702) | MED+LOW | [#812](https://github.com/onboarda1234/onboarda/pull/812) | ◐ upload limits ✅ 2026-07-21 · deploy-timeout half open | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#eight-remediation-prs-808-815) |
+| P12-10 | Infra guards — upload body-size pre-buffering, deploy fails on `services-stable` timeout (DCI-016/025; stability half partly mitigated by #702) | MED+LOW | [#812](https://github.com/onboarda1234/onboarda/pull/812), [#875](https://github.com/onboarda1234/onboarda/pull/875) | ✅ upload limits 2026-07-21 · deploy-timeout half closed 2026-07-25 (#875: backend wait fails closed after 2×10-min attempts + diagnostics; proven live by the very deploy that shipped it) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#eight-remediation-prs-808-815) |
 
 ## Phase 12 — Frontend & Operational Readiness (FEO audit / Audit 4)
 
@@ -362,7 +362,7 @@ are out of scope for every SRP item.
 | P9-9 | Legal/compliance sign-off (residency, DPA, regulator) | legal | — | ⬜ | — |
 | P9-10 | Prod monitoring/alerting/on-call (+ **DCI-030**, **FEO-011**) | ops | — | ⬜ | — |
 | P9-11 | Close parked prod-posture decisions (PR-25 + PR-17) | decision | — | ⬜ | — |
-| P9-12 | ECR immutable image tags (REGMIND-P2-004) | ops | — | ⬜ | — |
+| P9-12 | ECR immutable image tags (REGMIND-P2-004) | ops | [#875](https://github.com/onboarda1234/onboarda/pull/875) | ◐ deploy tagging audited immutability-compatible (one per-SHA tag, no `:latest`) + flip/rerun runbook merged 2026-07-25 · AWS `put-image-tag-mutability` = operator step ([runbook](OPS_HARDENING_RUNBOOK.md) §1) | — |
 | P9-13 | Full authz/tenant-isolation route matrix (role-by-route) | security | [#733](https://github.com/onboarda1234/onboarda/pull/733) | ◐ harness ✅ #733 (53/53 checks) · ⬜ runtime coverage of approval/dual-control/memo-approve/screening-2nd-review/IDV + cross-client seed fix | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#app-aud-prs-733-734-735) |
 | P9-14 | Registry KYB (OpenCorporates) simulated → real/production | code/vendor | — | ⬜ | — |
 
@@ -554,14 +554,15 @@ are out of scope for every SRP item.
 
 ---
 
-## Roll-up — computed by counting rows, 2026-07-24
+## Roll-up — computed by counting rows, 2026-07-25
 
 Counting rule: every row in Phases 0–14 + the Re-audit/RSMP tables counts once.
 The 3 cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 7
 APP-CONF-003, Phase 13 CA row) and the Optional Modernization tables are
 excluded. ◐ = items with one named half done and one open (SRP-1, SRP-2a,
-staging-SHA gate, P12-4, P13-7, staging-reset closure, P9-13, DCI-104,
-RSMP-0C-A, RSMP-0C-REM, and the second-batch splits P12-7, P10-7, P11-5).
+staging-SHA gate, P13-7, staging-reset closure, P9-13, DCI-104, RSMP-0C-A,
+RSMP-0C-REM, the second-batch splits P12-7, P11-5, plus the ops-pack halves
+P10-7, P9-12 and the Phase-5 ops-ticket row).
 This count unions the #780 stream with both staged batches (#808–#815 and
 #833–#837). Second batch moved 5 rows out of 📋 scoped: P11-6/P11-7 → ✅,
 P12-7/P10-7/P11-5 → ◐ (total unchanged — items changed category, none added).
@@ -571,14 +572,19 @@ and 2 ⏸ deferred (RDI-002/003 — frozen risk-staleness approval gate, founder
 sign-off pending). Codex validation 2026-07-25 findings on RDI-008/006/014
 closed by #867 (round 1) and #870 (round 2 — approval-time evidence TOCTOU +
 violation undercount); no row-count change — same items, corrections folded in.
+Ops-hardening pack 2026-07-25 (PRs #875–#877, workflow-neutral): P12-4 and
+P12-10 ◐ → ✅ (drift detection #877; fail-closed deploy wait #875); P9-12 and
+the Phase-5 ops-ticket row ⬜ → ◐ (repo halves merged; AWS execution =
+operator steps per `docs/OPS_HARDENING_RUNBOOK.md`); P10-7 stays ◐ with the
+grants pack merged and RDS execution pending (total unchanged).
 
 | Status | Count |
 |--------|:--:|
-| ✅ done/merged | 128 |
+| ✅ done/merged | 130 |
 | ◐ split — one half open | 14 |
 | 🟢 PR open | 0 |
 | 🔨 in progress | 3 |
 | 📋 scoped | 15 |
 | ⏸ blocked | 7 |
-| ⬜ pending | 32 |
+| ⬜ pending | 30 |
 | **Total tracked items** | **199** |
