@@ -268,7 +268,14 @@ class FeatureFlags:
         return dict(self._cache)
 
     def get_client_safe_flags(self) -> dict:
-        """Return flags safe to expose to frontend."""
+        """Return flags safe to expose to frontend.
+
+        Item 33: enterprise flags are reported through the pilot-scope veto,
+        so the client never believes a module is available while every one of
+        its routes 403s. Without this the frozen Application Review supervisor
+        tab would call the API and paint a load error instead of its
+        Coming Soon card.
+        """
         safe_keys = [
             "ENABLE_DEMO_MODE", "ENABLE_DEMO_BANNER", "ENABLE_PHASE2_FEATURES",
             "ENABLE_REGULATORY_INTELLIGENCE_FULL", "ENABLE_MONITORING_DASHBOARD",
@@ -279,7 +286,12 @@ class FeatureFlags:
             "ENABLE_ROLE_SWITCHER", "ENABLE_DOCUMENT_AI_ANALYSIS",
         ]
         safe_keys.extend(CLIENT_SAFE_UPLOAD_LATENCY_FLAGS)
-        return {k: self._cache.get(k, False) for k in safe_keys}
+        resolved = {k: self._cache.get(k, False) for k in safe_keys}
+        if pilot_scope_active(self._env):
+            for flag in _PILOT_SCOPE_VETOED_FLAGS:
+                if flag in resolved:
+                    resolved[flag] = False
+        return resolved
 
     def get_upload_latency_client_flags(self) -> dict:
         """Return the exact upload-latency flag allowlist safe for clients."""
@@ -288,6 +300,76 @@ class FeatureFlags:
 
 # Singleton
 flags = FeatureFlags()
+
+
+# ══════════════════════════════════════════════════════════════
+# 2b. PILOT SCOPE GUARD (register item 33)
+# ══════════════════════════════════════════════════════════════
+# Enterprise-scope modules that are gated by a feature flag (SAR/STR,
+# Regulatory Intelligence, AI Compliance Supervisor, Supervisor Audit) must not
+# be reachable in a pilot deployment. Roadmap agents 8-10 are blocked
+# unconditionally elsewhere and KPI/Supervisor-Dashboard have no server route,
+# so neither needs — or gets — this veto. Today that rests on per-module
+# feature flags whose deployed values live outside version control
+# (render.yaml pins three of them `sync: false`, i.e. hand-set in a hosting
+# dashboard). PILOT_SCOPE is the veto ABOVE those flags: when active, the
+# enterprise modules stay disabled no matter what any individual flag says.
+#
+# Defaults are behaviour-preserving: ON for staging/production (where every
+# enterprise flag already defaults False, so this is a no-op that merely makes
+# the exclusion enforceable rather than conventional) and OFF for
+# development/demo/testing (which deliberately enable some of those modules).
+_PILOT_SCOPE_DEFAULTS = {
+    "development": False,
+    "demo": False,
+    "testing": False,
+    "staging": True,
+    "production": True,
+}
+
+# Deliberately NOT prefixed ENABLE_ — this is a scope veto, not a feature
+# toggle, and the pilot-lockdown tests assert no "ENABLE_" substring leaks
+# into the disabled-module response bodies.
+PILOT_SCOPE_VAR = "PILOT_SCOPE"
+
+# The client-visible flags the veto suppresses, so /api/config/environment
+# never advertises a module whose routes refuse to serve.
+_PILOT_SCOPE_VETOED_FLAGS = (
+    "ENABLE_SAR_WORKFLOW",
+    "ENABLE_SAR_STR",
+    "ENABLE_REGULATORY_INTELLIGENCE_FULL",
+    "ENABLE_AI_SUPERVISOR",
+    "ENABLE_SUPERVISOR_DASHBOARD",
+    "ENABLE_SUPERVISOR_AUDIT",
+)
+
+
+def pilot_scope_active(env: str = None) -> bool:
+    """True when enterprise-scope modules must be refused regardless of flags.
+
+    Fail-closed parsing (the inverse of FeatureFlags): the guard turns OFF only
+    on an explicit, well-formed disable value. A typo (`PILOT_SCOPE=flase`) or
+    any unrecognised string leaves the guard ON, because the failure mode of a
+    stuck-on guard is a refused enterprise module, while the failure mode of a
+    stuck-off guard is an exposed one.
+    """
+    raw = os.environ.get(PILOT_SCOPE_VAR)
+    if raw is not None:
+        normalised = raw.strip().lower()
+        if normalised in ("false", "0", "no", "off"):
+            return False
+        if normalised not in ("true", "1", "yes", "on"):
+            # Coercing silently is what makes a typo dangerous elsewhere; say
+            # so. The value still resolves ON (fail-closed), so this is a
+            # warning, not the fatal treatment canonicalize_environment gives
+            # an unrecognised ENVIRONMENT.
+            logger.warning(
+                "Unrecognised %s=%r — treating as ACTIVE (enterprise modules "
+                "refused). Use an explicit 'false' to disable the guard.",
+                PILOT_SCOPE_VAR, raw,
+            )
+        return True
+    return _PILOT_SCOPE_DEFAULTS.get(env or ENV, True)
 
 
 def get_backoffice_runtime_config() -> dict:
