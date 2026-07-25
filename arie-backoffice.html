@@ -4163,7 +4163,9 @@ function boOrdinaryKycUploadDisabledReason(app) {
 async function loadEnvironment() {
   try {
     const res = await fetch((BO_API_BASE || '/api') + '/config/environment');
-    const data = await res.json();
+    // FEO-004: runs first at startup and unauthenticated — a proxy error page
+    // here must not throw before APP_ENV falls back.
+    const data = await readApiResponseBody(res);
     APP_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
     BACKOFFICE_CONFIG = data.backoffice || {};
@@ -4309,6 +4311,59 @@ function showCmGuidanceToast(guidance) {
   });
 }
 
+async function readApiResponseBody(res) {
+  // Returns the decoded JSON body, or a synthetic object carrying the raw
+  // text when the response is not JSON. Never throws: a transport-level
+  // surprise must surface as an HTTP status through the caller's own error
+  // handling, not as a parse exception that erases the status.
+  var contentType = '';
+  try {
+    contentType = (res.headers && res.headers.get && res.headers.get('Content-Type')) || '';
+  } catch (_e) {
+    contentType = '';
+  }
+  if (res.status === 204 || res.status === 205) return {};
+  if (contentType.indexOf('json') >= 0) {
+    try {
+      return await res.json();
+    } catch (_e) {
+      return { error: 'Malformed JSON in server response', _parseError: true };
+    }
+  }
+  // A response object without a usable text() must NOT silently become {}.
+  // Several test harnesses (and any minimal stub) expose only json(); falling
+  // back to it keeps this helper a drop-in for a plain res.json() rather than
+  // a silent data-loss path.
+  if (typeof res.text !== 'function') {
+    if (typeof res.json === 'function') {
+      try {
+        return await res.json();
+      } catch (_e) {
+        return { error: 'Malformed JSON in server response', _parseError: true };
+      }
+    }
+    return {};
+  }
+  var text = '';
+  try {
+    text = await res.text();
+  } catch (_e) {
+    text = '';
+  }
+  if (!text) return {};
+  // A JSON body served without the header is still usable.
+  try {
+    return JSON.parse(text);
+  } catch (_e) {
+    return {
+      error: res.ok ? 'Unexpected non-JSON response from server'
+                    : ('Server error (HTTP ' + res.status + ')'),
+      _nonJson: true,
+      _rawExcerpt: String(text).slice(0, 240)
+    };
+  }
+}
+
 async function boApiCall(method, path, body) {
   var options = arguments.length > 3 ? (arguments[3] || {}) : {};
   var callSessionId = options.sessionId != null ? options.sessionId : BO_ACTIVE_SESSION_ID;
@@ -4328,7 +4383,13 @@ async function boApiCall(method, path, body) {
   }
   try {
     var res = await fetch(BO_API_BASE + path, opts);
-    var data = await res.json();
+    // FEO-004: parse AFTER the status checks and only when the body is
+    // actually JSON. Parsing first meant a 502 HTML error page, an nginx
+    // plaintext body or a 204 threw SyntaxError here — so the !res.ok branch
+    // below (which builds apiErr.status / .payload / .cmGuidance) never ran,
+    // and every downstream `err.status === 403` check silently mis-classified
+    // a bare SyntaxError that carries no status at all.
+    var data = await readApiResponseBody(res);
     if (res.status === 401 && BO_AUTH_TOKEN && !options.suppressAuthReset && callSessionId && callSessionId === BO_ACTIVE_SESSION_ID) {
       showToast('Your session has expired. Please sign in again.', 'warning');
       clearBoAuthState();
@@ -35562,7 +35623,11 @@ async function fetchValidationResults() {
     var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo/validation', {
       headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
     });
-    var data = await res.json();
+    // FEO-004: same outcome as before for every real response, but a non-JSON
+    // body now returns null through the normal path instead of throwing a
+    // SyntaxError into the silent catch below.
+    if (!res.ok) return null;
+    var data = await readApiResponseBody(res);
     if (data.success !== false && (data.data || data.quality_score !== undefined)) {
       var result = data.data || data;
       renderValidationPanel(result);
@@ -35790,7 +35855,7 @@ async function runSupervisorPipeline() {
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') },
       body: JSON.stringify({ trigger_type: 'onboarding' })
     });
-    var data = await res.json();
+    var data = await readApiResponseBody(res);
     if (data.success !== false && data.data) {
       window._lastSupervisorResult = data.data;
       renderSupervisorResults(data.data);
@@ -35832,7 +35897,9 @@ async function loadSupervisorForApp() {
       }
       return;
     }
-    var data = await res.json();
+    // FEO-004: the error branches above are thorough, but a non-JSON 200 used
+    // to throw straight past them.
+    var data = await readApiResponseBody(res);
     if (data.success !== false && data.data && data.data.pipeline_id) {
       window._lastSupervisorResult = data.data;
       renderSupervisorResults(data.data);
@@ -36022,7 +36089,7 @@ async function refreshSupervisorDashboard() {
     var res = await fetch(BO_API_BASE + '/supervisor/dashboard', {
       headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
     });
-    var data = await res.json();
+    var data = await readApiResponseBody(res);
     if (data.error) { document.getElementById('sv-pipelines-list').innerHTML = '<div style="font-size:12px;color:var(--text3);">Supervisor not available: ' + escapeHtml(data.error) + '</div>'; return; }
 
     var stats = data.system_stats || {};
@@ -36062,7 +36129,7 @@ async function refreshSupervisorDashboard() {
     var rulesRes = await fetch(BO_API_BASE + '/supervisor/rules', {
       headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
     });
-    var rulesData = await rulesRes.json();
+    var rulesData = await readApiResponseBody(rulesRes);
     var rules = (rulesData.rules || []);
     var rlHtml = '';
     if (rules.length === 0) { rlHtml = '<div style="font-size:12px;color:var(--text3);">No rules configured.</div>'; }
@@ -36088,7 +36155,7 @@ async function refreshSupervisorAudit() {
   if (filterType) url += '&event_type=' + encodeURIComponent(filterType);
   try {
     var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') } });
-    var data = await res.json();
+    var data = await readApiResponseBody(res);
     if (data.error) { document.getElementById('sv-audit-entries').innerHTML = '<div style="font-size:12px;color:var(--red);">' + escapeHtml(data.error) + '</div>'; return; }
 
     var entries = data.entries || [];
@@ -36117,7 +36184,7 @@ async function verifySupervisorAuditChain() {
     var res = await fetch(BO_API_BASE + '/supervisor/audit/verify', {
       headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
     });
-    var data = await res.json();
+    var data = await readApiResponseBody(res);
     var statusEl = document.getElementById('sv-audit-chain-status');
     if (data.error) {
       statusEl.innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;">Chain verification error: ' + escapeHtml(data.error) + '</div>';
