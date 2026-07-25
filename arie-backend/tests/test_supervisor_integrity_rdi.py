@@ -575,3 +575,82 @@ class TestRDI014FullChainVerification:
         assert len(result["broken_links"]) <= 200
         assert result.get("violations_truncated", 0) >= 100
         assert "coverage_note" in result or result.get("violations_truncated")
+        # Leave the shared chain clean for later suites (this test deliberately
+        # corrupted it).
+        _clear_chain()
+
+    # ── Codex round-2 (2026-07-25): structural totals must be TRUE counts ──
+    def test_mass_structural_violations_counted_fully(self, temp_db):
+        """total_violations must reflect the TRUE number of structural
+        violations (uncapped COUNT), not the capped detail-query size —
+        Codex reproduced 300 dangling rows reported as total_violations=202."""
+        _clear_chain()
+        from db import get_db
+        from supervisor.audit import AuditLogger, supervisor_entry_hash
+
+        # One valid genesis…
+        ids, hashes = _seed_linear_chain(1)
+
+        # …plus 300 rows whose stored predecessor hash exists nowhere.
+        db = get_db()
+        n_dangling = 300
+        for i in range(n_dangling):
+            aid = str(uuid4())
+            missing_prev = f"nonexistent-prev-{i:04d}"
+            row = {
+                "id": aid,
+                "timestamp": f"2026-01-02T00:00:{i % 60:02d}Z",
+                "event_type": "supervisor_verdict",
+                "severity": "info",
+                "pipeline_id": None,
+                "application_id": "app-dangling",
+                "run_id": None,
+                "agent_type": None,
+                "actor_type": "system",
+                "actor_id": None,
+                "actor_name": None,
+                "actor_role": None,
+                "action": f"x{i}",
+                "detail": f"y{i}",
+                "data_json": "{}",
+            }
+            h = supervisor_entry_hash(row, missing_prev)
+            db.execute(
+                """INSERT INTO supervisor_audit_log
+                   (id, timestamp, event_type, severity, pipeline_id, application_id,
+                    run_id, agent_type, actor_type, actor_id, actor_name, actor_role,
+                    action, detail, data_json, ip_address, session_id,
+                    previous_hash, entry_hash)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (row["id"], row["timestamp"], row["event_type"], row["severity"],
+                 row["pipeline_id"], row["application_id"], row["run_id"],
+                 row["agent_type"], row["actor_type"], row["actor_id"],
+                 row["actor_name"], row["actor_role"], row["action"],
+                 row["detail"], row["data_json"], None, None,
+                 missing_prev, h),
+            )
+        db.commit()
+        db.close()
+
+        al = AuditLogger(db_path=temp_db)
+        result = al.verify_full_chain(batch_size=100)
+
+        assert result["verified"] is False
+        # TRUE per-class totals — no undercount despite the 200-detail cap.
+        totals = result["violation_totals"]
+        assert totals.get("dangling_previous_hash") == n_dangling
+        assert totals.get("orphan_entries") == n_dangling
+        assert result["total_violations"] >= n_dangling
+        # Details stay bounded, truncation declared, notes additive.
+        assert len(result["broken_links"]) <= 200
+        assert result.get("violations_truncated", 0) >= (
+            result["total_violations"] - 200
+        )
+        assert result.get("coverage_notes"), "additive notes must be present"
+        # Both the truncation note AND the unreached-rows note must survive.
+        joined = result.get("coverage_note", "")
+        assert "details reported" in joined
+        assert "not reached" in joined
+        # Leave the shared chain clean for later suites (this test deliberately
+        # corrupted it with dangling rows).
+        _clear_chain()

@@ -36554,7 +36554,8 @@ class MonitoringAlertOverdueEscalationHandler(BaseHandler):
 
 
 def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
-                                 requested_outcome, dismissal_reason, note, log_audit):
+                                 requested_outcome, dismissal_reason, note, log_audit,
+                                 request_evidence_ref=None):
     """Run the terminal clear for an approved/senior-cleared request, reusing the
     existing dismissal/decision machinery. Used by the approver endpoint (and
     mirrors the inline execution in MonitoringAlertDetailHandler.patch)."""
@@ -36567,10 +36568,20 @@ def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
         return {"alert_id": alert_id, "status": alert_before.get("status"),
                 "outcome": requested_outcome, "already_terminal": True}
 
-    # RDI-008: this runs only after a second-review request was APPROVED, so a
-    # critical alert's four-eyes disposition is already complete — certify it to
-    # the service-layer severity gate via the approved-review marker.
-    approved_clearance = {"approver": dict(user or {}), "via": "approved_review"}
+    # RDI-008 approval-time revalidation (Codex round-2 TOCTOU): the request's
+    # evidence was validated against the alert AS IT WAS at creation. Re-check
+    # requires_evidence against the CURRENT alert + the STORED request evidence
+    # right where the approved-review marker is minted — a request created for
+    # a then-non-critical alert (or under the pre-#867 tier-1-only rule) must
+    # not execute an evidence-less clear of a now-CRITICAL alert. Raises
+    # DismissalControlError(409) BEFORE any mutation.
+    _mdc.assert_evidence_current(alert_before, request_evidence_ref)
+
+    # RDI-008: this runs only after a second-review request was APPROVED (four
+    # eyes complete) AND the evidence recheck above passed — certify it to the
+    # service-layer severity gate via the approved-review marker.
+    approved_clearance = {"approver": dict(user or {}), "via": "approved_review",
+                          "evidence_ref": str(request_evidence_ref or "").strip()}
     if requested_outcome == "dismiss" or (dismissal_reason and requested_outcome not in MONITORING_DECISION_OUTCOMES):
         return mr.dismiss_alert(
             db, alert_id,
@@ -36687,6 +36698,7 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
                     dismissal_reason=request.get("dismissal_reason"),
                     note=request.get("rationale"),
                     log_audit=self.log_audit,
+                    request_evidence_ref=request.get("evidence_ref"),
                 )
                 _mdc.mark_request_approved(
                     db, request=request, approver=user,
