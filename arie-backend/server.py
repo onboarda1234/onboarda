@@ -25279,6 +25279,7 @@ class ScreeningQueueHandler(BaseHandler):
             "pep": self.get_argument("pep", "").strip(),
             "application_ref": self.get_argument("application_ref", "").strip(),
         }
+        _queue_started = time.monotonic()
         db = get_db()
         payload = _build_screening_queue_payload(
             db,
@@ -25291,6 +25292,19 @@ class ScreeningQueueHandler(BaseHandler):
         )
         db.close()
         self.success(payload)
+        # Screening-queue ops ticket (p95 alarm): emit a low-cardinality
+        # latency metric line AFTER the response is written, hard-isolated so
+        # observability can never affect the change-controlled queue payload.
+        try:
+            from observability import emit_cloudwatch_metric_log
+            emit_cloudwatch_metric_log(
+                "ScreeningQueueLatencyMs",
+                round((time.monotonic() - _queue_started) * 1000, 1),
+                unit="Milliseconds",
+                service="backend",
+            )
+        except Exception:
+            pass
 
 
 _SCREENING_HIT_DISPOSITIONS = ("match", "cleared", "escalated", "follow_up_required")

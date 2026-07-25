@@ -216,13 +216,30 @@ jobs:
             --force-new-deployment \
             --region $AWS_REGION > /dev/null
 
-          echo "Waiting for service to stabilize (up to 10 min)..."
+          # P12-10 / DCI-025 (fail-closed): a services-stable timeout FAILS the
+          # deploy instead of proceeding on a warning. Two wait attempts give
+          # the backend up to ~20 min to stabilize (rolling drain can exceed a
+          # single 10-min waiter window); after that the deployment state is
+          # dumped and the workflow exits non-zero.
+          echo "Waiting for service to stabilize (attempt 1/2, up to 10 min)..."
           if ! aws ecs wait services-stable \
             --cluster $ECS_CLUSTER \
             --services $ECS_SERVICE \
             --region $AWS_REGION; then
-            echo "WARNING: ECS service did not stabilize within timeout"
-            echo "Proceeding to health check to determine actual state..."
+            echo "Service not stable yet; waiting (attempt 2/2, up to 10 min)..."
+            if ! aws ecs wait services-stable \
+              --cluster $ECS_CLUSTER \
+              --services $ECS_SERVICE \
+              --region $AWS_REGION; then
+              echo "FAIL: ECS service did not stabilize within timeout (P12-10 fail-closed)"
+              aws ecs describe-services \
+                --cluster $ECS_CLUSTER \
+                --services $ECS_SERVICE \
+                --region $AWS_REGION \
+                --query 'services[0].{deployments:deployments,events:events[0:10]}' \
+                --output json || true
+              exit 1
+            fi
           fi
 
       - name: Deploy verification worker to ECS (rolling update)
