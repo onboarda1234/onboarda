@@ -38,7 +38,10 @@ CONFIRM_TOKEN = "I-UNDERSTAND-STAGING-ROLE-AUDIT-WRITES"
 ALLOW_ENV = "ALLOW_APPLICATION_ROLE_SEED"
 ALLOWED_HOST_ENV = "ROLE_AUDIT_ALLOWED_DB_HOST"
 OFFICER_ROLES = ("admin", "sco", "co", "analyst")
-ALL_ROLES = (*OFFICER_ROLES, "client")
+# Two tenants: APP-CONF-003 requires a genuinely cross-client probe, which is
+# impossible with a single `clients` row (see build_seed_plan).
+CLIENT_ACTORS = ("client", "other_client")
+ALL_ROLES = (*OFFICER_ROLES, *CLIENT_ACTORS)
 RUN_ID_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{6}$")
 PRODUCTION_MARKERS = ("production", "prod-db", "prod_", "-prod", ".prod.")
 DEFAULT_STAGING_BASE_URL = f"https://staging.{BRAND['system_id']}.co"
@@ -121,23 +124,40 @@ def build_seed_plan(run_id: str) -> Dict[str, Any]:
         "role": "client",
         "type": "client",
     }
+    # APP-CONF-003 / P9-13: a SECOND tenant. The cross-application probe used
+    # to point at another application owned by the SAME client, so
+    # check_app_ownership (base_handler: client sub != app.client_id) could
+    # never fire and the "cross_application_detail_denied" check passed
+    # vacuously. Tenant isolation is only exercised across two client rows.
+    actors["other_client"] = {
+        "id": _stable_id(run_id, "other_client", "ra_client"),
+        "email": f"appaudit_role_other_client_{run_id.lower()}@example.test",
+        "name": f"APPAUDIT_ROLE_OTHER_CLIENT_{run_id}",
+        "role": "client",
+        "type": "client",
+    }
 
+    # (scenario, status, risk_level, assigned_role, owner) — `owner` names the
+    # client actor that owns the row (APP-CONF-003: previously every row was
+    # blanket-assigned to actors["client"], making the cross-client probe
+    # same-tenant and therefore vacuous).
     scenario_specs = (
-        ("assigned_sco", "compliance_review", "MEDIUM", "sco"),
-        ("assigned_co", "compliance_review", "LOW", "co"),
-        ("assigned_analyst", "kyc_documents", "MEDIUM", "analyst"),
-        ("unassigned", "compliance_review", "LOW", None),
-        ("blocked_admin", "kyc_documents", "MEDIUM", "admin"),
-        ("blocked_sco", "kyc_documents", "MEDIUM", "sco"),
-        ("blocked_co", "kyc_documents", "MEDIUM", "co"),
-        ("submitted_compliance", "submitted_to_compliance", "HIGH", "sco"),
-        ("wrong_stage", "draft", "LOW", "co"),
-        ("terminal_approved", "approved", "LOW", "sco"),
-        ("client_owned", "draft", "LOW", None),
+        ("assigned_sco", "compliance_review", "MEDIUM", "sco", "client"),
+        ("assigned_co", "compliance_review", "LOW", "co", "client"),
+        ("assigned_analyst", "kyc_documents", "MEDIUM", "analyst", "client"),
+        ("unassigned", "compliance_review", "LOW", None, "client"),
+        ("blocked_admin", "kyc_documents", "MEDIUM", "admin", "client"),
+        ("blocked_sco", "kyc_documents", "MEDIUM", "sco", "client"),
+        ("blocked_co", "kyc_documents", "MEDIUM", "co", "client"),
+        ("submitted_compliance", "submitted_to_compliance", "HIGH", "sco", "client"),
+        ("wrong_stage", "draft", "LOW", "co", "client"),
+        ("terminal_approved", "approved", "LOW", "sco", "client"),
+        ("client_owned", "draft", "LOW", None, "client"),
+        ("other_client_owned", "draft", "LOW", None, "other_client"),
     )
     apps: Dict[str, Dict[str, Any]] = {}
     compact_stamp = run_id.split("-")[0]
-    for index, (scenario, status_value, risk_level, assigned_role) in enumerate(scenario_specs, start=1):
+    for index, (scenario, status_value, risk_level, assigned_role, owner) in enumerate(scenario_specs, start=1):
         apps[scenario] = {
             "id": _stable_id(run_id, scenario, "ra_app"),
             "ref": f"ROLEAUDIT-{compact_stamp}-{index:02d}",
@@ -147,7 +167,8 @@ def build_seed_plan(run_id: str) -> Dict[str, Any]:
             "risk_score": {"LOW": 20, "MEDIUM": 50, "HIGH": 78}[risk_level],
             "assigned_to": actors[assigned_role]["id"] if assigned_role else None,
             "assigned_role": assigned_role,
-            "client_id": actors["client"]["id"],
+            "client_id": actors[owner]["id"],
+            "owner_actor": owner,
             "is_fixture": True,
         }
     return {"run_id": run_id, "actors": actors, "applications": apps}
@@ -190,12 +211,15 @@ def _insert_seed_rows(db, plan: Mapping[str, Any], passwords: Mapping[str, str])
             (actor["id"], actor["email"], password_hash, actor["name"], role),
         )
 
-    client = plan["actors"]["client"]
-    client_hash = bcrypt.hashpw(passwords["client"].encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    db.execute(
-        "INSERT INTO clients (id, email, password_hash, company_name, status) VALUES (?,?,?,?,'active')",
-        (client["id"], client["email"], client_hash, client["name"]),
-    )
+    for client_key in CLIENT_ACTORS:
+        client = plan["actors"][client_key]
+        client_hash = bcrypt.hashpw(
+            passwords[client_key].encode("utf-8"), bcrypt.gensalt()
+        ).decode("utf-8")
+        db.execute(
+            "INSERT INTO clients (id, email, password_hash, company_name, status) VALUES (?,?,?,?,'active')",
+            (client["id"], client["email"], client_hash, client["name"]),
+        )
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     for scenario, app in plan["applications"].items():
@@ -292,6 +316,15 @@ def _read_json(path: str) -> Dict[str, Any]:
 
 
 def disable_staging_users(manifest_path: str) -> Dict[str, Any]:
+    """Deactivate every synthetic account from one seed run.
+
+    NOTE (APP-CONF-003 migration): the actor set is checked for EXACT equality,
+    so a manifest from a PRE-second-tenant run (5 actors) is refused here. That
+    is the right fail-closed default, but it means a pre-fix run still live on
+    staging cannot be cleaned up by this code path — disable it from the
+    pre-fix commit, or deactivate those accounts manually. Leaving synthetic
+    logins active on staging is tracked separately on the register.
+    """
     manifest = _read_json(manifest_path)
     run_id = str(manifest.get("run_id") or "")
     if not RUN_ID_RE.fullmatch(run_id):
@@ -348,7 +381,7 @@ def _http_json(
 
 
 def _login(base_url: str, actor: Mapping[str, str], role: str) -> str:
-    kind = "client" if role == "client" else "officer"
+    kind = "client" if role in CLIENT_ACTORS else "officer"
     code, payload = _http_json(
         base_url,
         "POST",
@@ -415,7 +448,10 @@ def validate_staging(base_url: str, manifest_path: str, credentials_path: str, o
         )
 
     own_app = applications["client_owned"]
-    cross_app = applications["assigned_co"]
+    # APP-CONF-003: cross-TENANT, not merely cross-application. `assigned_co`
+    # (the previous target) shares this client's client_id, so the ownership
+    # branch in check_app_ownership was never reached.
+    cross_app = applications["other_client_owned"]
     check("client", "backoffice_list_denied", "GET", "/api/applications", {403})
     _, client_detail = check("client", "own_shared_detail_safe", "GET", f"/api/applications/{own_app['id']}", {200})
     forbidden_detail = {"gate_blockers", "screening_reviews", "latest_memo_data", "decision_basis"}
@@ -438,7 +474,19 @@ def validate_staging(base_url: str, manifest_path: str, credentials_path: str, o
         not unsafe_doc_keys,
         f"unexpected keys: {unsafe_doc_keys}",
     )
-    check("client", "cross_application_detail_denied", "GET", f"/api/applications/{cross_app['id']}", {403})
+    check("client", "cross_tenant_detail_denied", "GET", f"/api/applications/{cross_app['id']}", {403})
+    check("client", "cross_tenant_documents_denied", "GET", f"/api/applications/{cross_app['id']}/documents", {403})
+    # Same-tenant, different application: a client may not browse another of
+    # its own applications through the officer detail route either. Kept as a
+    # distinct check so a regression in EITHER boundary is attributable.
+    check(
+        "client", "same_tenant_other_application_denied", "GET",
+        f"/api/applications/{applications['assigned_co']['id']}", {403},
+    )
+    # Reciprocal direction — proves the second tenant is a real, logged-in
+    # actor and not an inert seed row, and that isolation is symmetric.
+    check("other_client", "reciprocal_cross_tenant_detail_denied", "GET", f"/api/applications/{own_app['id']}", {403})
+    check("other_client", "own_detail_visible", "GET", f"/api/applications/{cross_app['id']}", {200})
     check("client", "activity_log_denied", "GET", f"/api/applications/{own_app['id']}/audit-log", {403})
     check("client", "evidence_pack_denied", "GET", f"/api/applications/{own_app['id']}/evidence-pack", {403})
 

@@ -81,12 +81,13 @@ def test_staging_validation_url_refuses_non_staging_or_non_https_hosts():
 
 def test_seed_plan_is_complete_synthetic_and_secret_free():
     plan = build_seed_plan("20260710T120000Z-abcdef")
-    assert set(plan["actors"]) == {"admin", "sco", "co", "analyst", "client"}
+    assert set(plan["actors"]) == {
+        "admin", "sco", "co", "analyst", "client", "other_client"}
     assert set(plan["applications"]) == {
         "assigned_sco", "assigned_co", "assigned_analyst", "unassigned",
         "blocked_admin", "blocked_sco", "blocked_co", "submitted_compliance",
         "wrong_stage", "terminal_approved",
-        "client_owned",
+        "client_owned", "other_client_owned",
     }
     assert all(actor["name"].startswith("APPAUDIT_ROLE_") for actor in plan["actors"].values())
     assert all(app["company_name"].startswith("ROLEAUDIT-") for app in plan["applications"].values())
@@ -112,8 +113,13 @@ def test_local_seed_sql_artifacts_and_bulk_disable_round_trip(db, tmp_path):
         "SELECT id, ref, company_name, is_fixture FROM applications WHERE company_name LIKE 'ROLEAUDIT-%'"
     ).fetchall()
     assert officer_count == 4
-    assert client_count == 1
-    assert len(app_rows) == 11
+    assert client_count == 1  # LIKE 'APPAUDIT_ROLE_CLIENT_%' — the second
+    # tenant is named APPAUDIT_ROLE_OTHER_CLIENT_* and counted separately
+    other_client_count = db.execute(
+        "SELECT COUNT(*) AS c FROM clients WHERE company_name LIKE 'APPAUDIT_ROLE_OTHER_CLIENT_%'"
+    ).fetchone()["c"]
+    assert other_client_count == 1
+    assert len(app_rows) == 12
     assert all(row["is_fixture"] for row in app_rows)
 
     manifest = {
@@ -133,7 +139,13 @@ def test_local_seed_sql_artifacts_and_bulk_disable_round_trip(db, tmp_path):
 
     disabled = disable_staging_users(str(manifest_path))
     assert len(disabled["disabled_officers"]) == 4
-    assert len(disabled["disabled_clients"]) == 1
+    # BOTH synthetic tenants must be deactivated — a cross-tenant fixture that
+    # survives the cleanup window is exactly the "test logins left on staging"
+    # problem the register tracks separately.
+    assert len(disabled["disabled_clients"]) == 2
+    assert db.execute(
+        "SELECT COUNT(*) AS c FROM clients WHERE company_name LIKE 'APPAUDIT_ROLE_OTHER_CLIENT_%' AND status='inactive'"
+    ).fetchone()["c"] == 1
     assert db.execute(
         "SELECT COUNT(*) AS c FROM users WHERE full_name LIKE 'APPAUDIT_ROLE_%' AND status='inactive'"
     ).fetchone()["c"] == 4
