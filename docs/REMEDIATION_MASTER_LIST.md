@@ -48,7 +48,7 @@ things stand") was retired in the 2026-07-15 restructure; see git history.
 | Gate | Tracked at | State |
 |------|-----------|-------|
 | RSMP Tier 0C — post-reset 0C-A rerun (read-only) → 0C-B controlled activation + recomputation | Re-audit → RSMP | 🔴 0C-A 2026-07-16 verdict NOT READY was against the pre-reset population (purged 2026-07-17); fresh 0C-A on the canonical baseline next; 0C-B unauthorized |
-| item 33 — pilot-scope guards (server-side) | Phase 13 | ⬜ |
+| item 33 — pilot-scope guards (server-side) | Phase 13 | ✅ #880 |
 | P13-7 — SOP pack Section 16 execution (docs merged) | Phase 12 | 🟠 open |
 | CA production workspace validation — complete or formally exclude from pilot scope | Phase 14 (P9-3) | ⏸ |
 | Staging-SHA alignment gate — ops half | Phase 7 | 🟠 open |
@@ -182,7 +182,7 @@ are out of scope for every SRP item.
 |----|-------|:--:|:--:|----|:--:|
 | PR-APP-STATUS-CANONICALIZATION-1 | Canonical status labels + senior queue + parity | P1 | #685 | ✅ merged | — |
 | PR-APP-ACTION-OWNERSHIP-SCOPE-1 | Terminal decision & memo-approval ownership gate (= **FEO-013**) | P1/P2 | [#713](https://github.com/onboarda1234/onboarda/pull/713) | ✅ merged + validated 2026-07-09; sign-off memo awaiting founder signature | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#ownership-gate-pr-713) |
-| 🟠 ops-enforce-staging-sha-alignment-gate | Staging-SHA gate + delete test logins | P0 | [#702](https://github.com/onboarda1234/onboarda/pull/702) | ◐ code ✅ (SW-3) · delete-test-logins ⬜ ops · 🟠 gate open | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#wave-a-prs-700-703) |
+| 🟠 ops-enforce-staging-sha-alignment-gate | Staging-SHA gate + delete test logins | P0 | [#702](https://github.com/onboarda1234/onboarda/pull/702), [#882](https://github.com/onboarda1234/onboarda/pull/882) | ◐ code ✅ (SW-3) · test-login quarantine script + runbook merged 2026-07-25 (#882 — quarantine only; review proved a delete path would orphan memo/SAR/EDD attribution, so it was removed) · staging execution = operator step ([runbook](OPS_HARDENING_RUNBOOK.md) §5) · 🟠 gate open | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#wave-a-prs-700-703) |
 | perf-applications-default-list-projection | Slim paginated projection as default `/api/applications` payload | P2 | [#719](https://github.com/onboarda1234/onboarda/pull/719) | ✅ merged + staging-validated | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#applications-page-pair-prs-719-720-727) |
 | audit-log-tamper-evidence-1 | *(cross-ref: = Phase 4 item 27, #691 — not counted)* | P2 | #691 | ✅ see item 27 | — |
 | ux-applications-list-sort-status-tabs | Server-side sort + status tabs + fake-AI chat removal + toolbar declutter | P3 | [#720](https://github.com/onboarda1234/onboarda/pull/720) → [#727](https://github.com/onboarda1234/onboarda/pull/727) | ✅ merged + staging-validated (re-landed as #727 after wrong-base merge) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#applications-page-pair-prs-719-720-727) |
@@ -219,7 +219,7 @@ are out of scope for every SRP item.
 | — | Party correction modal locked to clicked person; residence/appointment fields correctable; directors-UBOs report de-flake | — | #794 | ✅ merged 2026-07-18 | — |
 | APP-CONF-001 | Analyst RMI/Escalate UI/authz mismatch — matrix + UI aligned to decision-endpoint authority; contract tests pin all three surfaces | P1 | [#782](https://github.com/onboarda1234/onboarda/pull/782) | ✅ merged + revalidated 2026-07-16 (33/33 Chromium/Firefox/WebKit; analyst API 403) | — |
 | APP-CONF-002 | Retained synthetic records visible in normal staging list | P2 | — | ✅ closed 2026-07-16 — all 3 records fixture-marked (approved); full normal-list sweep clean (247 rows, 0 synthetic visible) | — |
-| APP-CONF-003 | Role-harness cross-client probe not actually cross-client — *(cross-ref: = P9-13 open half "cross-client seed fix" — not counted)* | P2 | — | ⬜ see P9-13 | — |
+| APP-CONF-003 | Role-harness cross-client probe not actually cross-client — *(cross-ref: = P9-13 open half "cross-client seed fix" — not counted)* | P2 | [#881](https://github.com/onboarda1234/onboarda/pull/881) | ✅ closed 2026-07-25 — see P9-13 | — |
 | APP-CONF-004 | Largest-case detail-open p95 2.105s > 2s prod target — round-2 detail optimisations (dedupe gate recompute, batch name resolution, single monitoring load) + p95 monitor; frozen-scope approval required | P2 | — | 📋 scoped | — |
 | APP-CONF-005 | Firefox unreachable-code warning + report-only CSP console diagnostics not production-clean (CSP enforcement relates to item 22) | P2 | — | ⬜ pending | — |
 | APP-CONF-006 | Applications freeze policy absent from `CLAUDE.md` | P2 | [#776](https://github.com/onboarda1234/onboarda/pull/776) | ✅ closed 2026-07-16 (Module Status & Change Control section) | — |
@@ -318,9 +318,9 @@ are out of scope for every SRP item.
 |----|-------|:--:|:--:|----|:--:|
 | P13-1 | Back-office stored-XSS elimination (FEO-001/002) — 🔴 blocker, closed; screening/notes/doc-metadata renderers are follow-up | HIGH | [#729](https://github.com/onboarda1234/onboarda/pull/729) | ✅ merged + validated 2026-07-09 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p13-1-pr-729) |
 | P13-2 | Single API wrapper + consistent CSRF for all 23 raw `fetch()` sites (FEO-003) | MED | — | 📋 scoped | — |
-| P13-3 | Defensive API response parsing — status/Content-Type before `res.json()` (FEO-004) | MED | — | 📋 scoped | — |
+| P13-3 | Defensive API response parsing — status/Content-Type before `res.json()` (FEO-004) | MED | [#883](https://github.com/onboarda1234/onboarda/pull/883) | ✅ merged (`0acbcc4`) 2026-07-25 — `boApiCall` (transport for ~161 sites incl. every frozen decision/memo/detail path) parsed BEFORE its status checks, so a non-JSON error threw SyntaxError and the branch building `apiErr.status`/`.payload` never ran; downstream `err.status === 403` checks were testing a status-less SyntaxError. Review verified success-path identity across 84 body-shape × content-type combinations (incl. `null`/`false`/`0`/`""`/arrays) — the only divergences are cases where the old code threw. Review REJECT r2 caught two real defects, both fixed: the new helper broke `test_p13_backoffice_xss_static.py` (red CI — it is defined outside the regions that test slices, so converted renderers hit a swallowed ReferenceError), and it silently returned `{}` for any response exposing neither `headers` nor `text()` — the repo's house mock shape — now falling back to `res.json()`. One of its own tests was proven vacuous and fixed | — |
 | P13-4 | App-detail render race guard — request nonce in `openAppDetail` (FEO-005) | MED | — | 📋 scoped | — |
-| P13-5 | Role-UI fail-closed until RBAC matrix loads (FEO-006) | LOW | — | 📋 scoped | — |
+| P13-5 | Role-UI fail-closed until RBAC matrix loads (FEO-006) | LOW | [#884](https://github.com/onboarda1234/onboarda/pull/884) | ◐ **delivered as race-elimination, NOT as fail-closed** — merged (`f0f7a81`) 2026-07-25: the matrix now settles before the shell paints (bounded 3s so sign-in cannot be blocked), removing the optimistic-render window, and a failed load is surfaced via the degraded-load banner. The literal fail-CLOSED inversion was NOT done — `test_approval_ux_gates_static.py::test_ux_gates_fail_open_when_permission_matrix_unloaded` pins fail-open by name after a staging smoke blocker (a legitimate CO lost Approve); **inverting it needs founder sign-off**. Independent review upheld that call on stronger grounds: the decision actions already `await` the matrix before acting and the server enforces roles on every decision endpoint, so FEO-006's residual content is a cosmetic flicker, not an authz hole. It also cleared the cross-session question — `/config/roles-permissions` returns a module-level STATIC matrix, identical for every caller, so no per-user matrix can leak. Review REJECT r2 caught that the first revision was a silent NO-OP on the common auto-login path (`resetBackofficeSessionData()` nulled the preloaded matrix between kick-off and settle, and the settle still reported success, suppressing the banner); fixed by hoisting the reset, with runtime tests that drive the real sequence rather than its shape | — |
 | P13-6 | Portal intake PII out of sessionStorage — server-side save/resume (FEO-007) | MED | — | 📋 scoped | — |
 | 🟠 P13-7 | Compliance-officer SOP pack (FEO-014) | MED | [#745](https://github.com/onboarda1234/onboarda/pull/745) | ◐ docs ✅ merged 2026-07-13 (`02eeae5`) · 🟠 Section 16 execution open (officers named/trained, scope approved, signatures) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p13-7-pr-745) |
 
@@ -328,7 +328,7 @@ are out of scope for every SRP item.
 
 | ID | Title | Sev | GitHub | Status | E |
 |----|-------|:--:|:--:|----|:--:|
-| 🟠 33 | Pilot-scope guards (server-side) — pilot operational gate | — | — | ⬜ pending | — |
+| 🟠 33 | Pilot-scope guards (server-side) — pilot operational gate | — | [#880](https://github.com/onboarda1234/onboarda/pull/880) | ✅ merged 2026-07-25 — `PILOT_SCOPE` vetoes the enterprise modules ABOVE their feature flags (so the exclusion no longer depends on deployed flag values this repo cannot see), and closed a real gap: `/memo/supervisor/run` and `/memo/supervisor` had NO enterprise gate and admitted `analyst`, a broader role set than their gated siblings | — |
 | 34 | Dashboard API performance (15.1s → sub-2s) | — | — | ⬜ pending | — |
 | 35 | Screening full-evidence hydration performance | — | — | ⬜ pending | — |
 | 36 | Persisted negative-path fixtures — controlled-pilot staging evidence | — | #748, #749 | ✅ closed 2026-07-12 (pilot scope; staging left clean) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#item-36-prs-748-749) |
@@ -358,12 +358,12 @@ are out of scope for every SRP item.
 | P9-5 | Drill prod deploy + rollback with evidence (+ **FEO-008**) | ops | — | ⬜ | — |
 | P9-6 | Load/performance test at prod scale | test/ops | — | ⬜ | — |
 | P9-7 | Pen test + security review + rehearsed secret rotation (+ **FEO-010**) | security | — | ⬜ | — |
-| P9-8 | DR/backup drill, restore/PITR, RTO/RPO (= **DCI-027 CRITICAL blocker** = **FEO-009**) | ops | — | ⬜ | — |
+| P9-8 | DR/backup drill, restore/PITR, RTO/RPO (= **DCI-027 CRITICAL blocker** = **FEO-009**) | ops | [#882](https://github.com/onboarda1234/onboarda/pull/882) | ◐ posture check + drill runbook merged 2026-07-25 (retention/deletion-protection/encryption/**PITR freshness**, which proves point-in-time recovery works rather than is merely configured) · the timed restore drill that yields the measured RTO is the operator half ([runbook](OPS_HARDENING_RUNBOOK.md) §6) — the script reports `rto_seconds_observed: null` on purpose | — |
 | P9-9 | Legal/compliance sign-off (residency, DPA, regulator) | legal | — | ⬜ | — |
-| P9-10 | Prod monitoring/alerting/on-call (+ **DCI-030**, **FEO-011**) | ops | — | ⬜ | — |
+| P9-10 | Prod monitoring/alerting/on-call (+ **DCI-030**, **FEO-011**) | ops | [#882](https://github.com/onboarda1234/onboarda/pull/882) | ◐ metric filters + alarms for the 7 emitted-but-unalarmed metrics, a worker HEARTBEAT alarm (catches running-but-wedged, which ECS LiveTaskCount cannot) and a log-based error rate, merged 2026-07-25 · AWS `--apply` + SNS subscription + on-call rota = operator steps ([runbook](OPS_HARDENING_RUNBOOK.md) §7) | — |
 | P9-11 | Close parked prod-posture decisions (PR-25 + PR-17) | decision | — | ⬜ | — |
 | P9-12 | ECR immutable image tags (REGMIND-P2-004) | ops | [#875](https://github.com/onboarda1234/onboarda/pull/875) | ◐ deploy tagging audited immutability-compatible (one per-SHA tag, no `:latest`) + flip/rerun runbook merged 2026-07-25 · AWS `put-image-tag-mutability` = operator step ([runbook](OPS_HARDENING_RUNBOOK.md) §1) | — |
-| P9-13 | Full authz/tenant-isolation route matrix (role-by-route) | security | [#733](https://github.com/onboarda1234/onboarda/pull/733) | ◐ harness ✅ #733 (53/53 checks) · ⬜ runtime coverage of approval/dual-control/memo-approve/screening-2nd-review/IDV + cross-client seed fix | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#app-aud-prs-733-734-735) |
+| P9-13 | Full authz/tenant-isolation route matrix (role-by-route) | security | [#733](https://github.com/onboarda1234/onboarda/pull/733), [#881](https://github.com/onboarda1234/onboarda/pull/881) | ◐ cross-client seed fix ✅ 2026-07-25 (#881 — the probe was same-tenant, so 1 of the 53 checks had been a false positive since #733; second tenant + reciprocal + positive control added) · runtime coverage ◐ **partial and deliberately under-claimed**: decision authority, IDV senior-outcome escalation, reassignment and cross-tenant isolation are mutation-verified; dual control NOT covered (unreachable behind risk-staleness on a bare fixture); memo-approve/screening-admission/IDV-read reach only the decorator | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#app-aud-prs-733-734-735) |
 | P9-14 | Registry KYB (OpenCorporates) simulated → real/production | code/vendor | — | ⬜ | — |
 
 ---
@@ -485,6 +485,44 @@ are out of scope for every SRP item.
 | 🔒 RDI-002 | Final approval allowed when the application has no `risk_config_version` (unknown risk provenance) — `_application_risk_staleness_error` | CRITICAL | ⏸ deferred — frozen Application Review approval gate; needs Aisha Sudally sign-off |
 | 🔒 RDI-003 | Risk-staleness control disabled when the current risk-config version row is absent (same gate) | CRITICAL | ⏸ deferred — frozen Application Review approval gate; needs Aisha Sudally sign-off |
 
+### Remaining findings from the same re-audit — now individually tracked (2026-07-25)
+
+> The re-audit reported **26 findings** (7 CRITICAL, 13 HIGH, 6 MEDIUM). The ten
+> above were remediated or deferred; the other sixteen were previously carried
+> only as the prose phrase "separate scope". They are enumerated here so the
+> register reflects the whole audit rather than the part that was actioned.
+>
+> **ID-space warning:** these `RDI-*` ids belong to the 2026-07-21 re-audit
+> (`3389d4eb`, 26 findings). Phase 10 above uses the SAME prefix for the
+> ORIGINAL Audit 1 (`c8b6dac`, 13 findings) with different meanings — e.g.
+> re-audit RDI-005 is supervisor persistence, Phase-10 RDI-005 is SAR
+> permanence. Ids are canonical per table and must not be merged or renumbered.
+
+| ID | Title | Sev | Status |
+|----|-------|:--:|----|
+| RDI-009 | Production defaults to the legacy screening source while the same file states Sumsub is not authoritative for sanctions/PEP/watchlist/adverse-media | HIGH | 📋 scoped — screening-config source-of-truth stream (with RDI-010/024) |
+| RDI-010 | Screening source selected globally from env vars; no per-application source-version pin or migration state | HIGH | 📋 scoped — same stream as RDI-009 |
+| RDI-011 | Atomic `decision_records` persistence proven for the main decision endpoint; coverage for every decision-equivalent pathway is an acknowledged gap | HIGH | 📋 scoped — tracked by P10-5 (decision-record coverage + provenance) |
+| RDI-012 | Per-decision-type prerequisite gates remain an open HIGH control in this register | HIGH | 📋 scoped — tracked by P10-4 (policy decision needed) |
+| RDI-013 | Supervisor hash chain cannot detect deletion of the newest suffix — no external head-hash + entry-count anchor is wired | HIGH | ⬜ pending — pairs the RDI-004/014 chain work; needs an out-of-band anchor store |
+| RDI-015 | With `TRUSTED_PROXY_CIDRS` unset, every private/loopback peer is trusted to supply officer sign-off IP headers | HIGH | ⬜ pending — P10-6 delivered the explicit allowlist default-OFF (#809); this is the deployed-value half |
+| RDI-017 | SAR permanence not production-ready; safe only while the SAR feature flags stay disabled | HIGH | ◐ materially strengthened 2026-07-25 by item 33 ([#880](https://github.com/onboarda1234/onboarda/pull/880)): `PILOT_SCOPE` refuses every SAR route regardless of flag state, so the safety argument no longer rests on flag hygiene alone. Permanence itself still unbuilt — full closure remains an Enterprise pre-enable blocker |
+| RDI-018 | Repository source cannot prove the app DB role lacks UPDATE/DELETE/TRUNCATE on legal-record tables (ENVIRONMENT-REQUIRED) | HIGH | ◐ grants pack + runbook merged ([#875](https://github.com/onboarda1234/onboarda/pull/875), [#879](https://github.com/onboarda1234/onboarda/pull/879)) — see P10-7; the RDS execution that would make this provable is an operator step ([runbook](OPS_HARDENING_RUNBOOK.md) §3) |
+| RDI-019 | The free-form Claude path converts every provider/budget/programming failure to an empty string, making failure indistinguishable from a legitimate empty output | HIGH | ⬜ pending — not on the live memo path (deterministic); affects the gated `ENABLE_CLAUDE_MEMO` draft |
+| RDI-020 | Decorator-level and back-office denials are logged, but complete routing of every custom authorization denial is an acknowledged open control | HIGH | ⬜ pending — partially evidenced by the P9-13 runtime role probes (#881) |
+| RDI-021 | Officer-visible `rules_checked` metadata under-enumerates the actual pre-generation rules | MEDIUM | ⬜ pending |
+| RDI-022 | Monitoring status treated as free text; DB CHECK hardening incomplete | MEDIUM | ⬜ pending — same family as P12-5/DCI-006 status lockstep |
+| RDI-023 | Feature flags carry no owner, introduction version, expiry or sunset state, so permanent conditional paths are indistinguishable from temporary rollouts | MEDIUM | ⬜ pending |
+| RDI-024 | The repository proves flag/provider DEFAULTS but not the live deployed values | MEDIUM | ◐ partially addressed by item 33: `PILOT_SCOPE` makes the enterprise exclusion independent of unprovable deployed flag values ([#880](https://github.com/onboarda1234/onboarda/pull/880)). The general problem (no evidence of live values) stands |
+| RDI-025 | Pipeline persistence stores a summary of agent results, not the full agent evidence needed to reconstruct each output | MEDIUM | ⬜ pending |
+| RDI-026 | The fallback memo claims "Full audit trail maintained" even though it is generated specifically when the AI pipeline failed | MEDIUM | ⬜ pending — wording/claim accuracy fix |
+
+> Two of these were materially strengthened by the 2026-07-25 overnight batch
+> (RDI-017 and RDI-024, both via the item-33 pilot-scope veto) and one moved
+> from unprovable to operator-executable (RDI-018, via the P10-7 grants pack).
+> None is claimed CLOSED: RDI-017 needs SAR permanence built, RDI-024 needs
+> live-value evidence, RDI-018 needs the RDS run.
+
 ---
 
 ## Optional / Post-Production Modernization (NOT required for pilot or first production cut; excluded from roll-up)
@@ -554,37 +592,45 @@ are out of scope for every SRP item.
 
 ---
 
-## Roll-up — computed by counting rows, 2026-07-25
+## Roll-up — computed by counting rows, 2026-07-25 (overnight batch)
 
 Counting rule: every row in Phases 0–14 + the Re-audit/RSMP tables counts once.
 The 3 cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 7
 APP-CONF-003, Phase 13 CA row) and the Optional Modernization tables are
-excluded. ◐ = items with one named half done and one open (SRP-1, SRP-2a,
-staging-SHA gate, P13-7, staging-reset closure, P9-13, DCI-104, RSMP-0C-A,
-RSMP-0C-REM, the second-batch splits P12-7, P11-5, plus the ops-pack halves
-P10-7, P9-12 and the Phase-5 ops-ticket row).
-This count unions the #780 stream with both staged batches (#808–#815 and
-#833–#837). Second batch moved 5 rows out of 📋 scoped: P11-6/P11-7 → ✅,
-P12-7/P10-7/P11-5 → ◐ (total unchanged — items changed category, none added).
-Third batch (Audit 1 re-run 2026-07-21, PRs #862–#865) adds **10 net-new rows**:
-8 ✅ merged + staging-deployed 2026-07-24 (RDI-001/004/005/006/007/008/014/016)
-and 2 ⏸ deferred (RDI-002/003 — frozen risk-staleness approval gate, founder
-sign-off pending). Codex validation 2026-07-25 findings on RDI-008/006/014
-closed by #867 (round 1) and #870 (round 2 — approval-time evidence TOCTOU +
-violation undercount); no row-count change — same items, corrections folded in.
-Ops-hardening pack 2026-07-25 (PRs #875–#877, workflow-neutral): P12-4 and
-P12-10 ◐ → ✅ (drift detection #877; fail-closed deploy wait #875); P9-12 and
-the Phase-5 ops-ticket row ⬜ → ◐ (repo halves merged; AWS execution =
-operator steps per `docs/OPS_HARDENING_RUNBOOK.md`); P10-7 stays ◐ with the
-grants pack merged and RDS execution pending (total unchanged).
+excluded. ◐ = items with one named half done and one open.
+This count unions the #780 stream with the staged batches (#808–#815,
+#833–#837, #862–#870, #875–#884).
+
+**Net-new rows this pass: 16.** The 2026-07-21 re-audit reported 26 findings;
+only 10 were carried as rows (8 remediated + 2 deferred) and the other 16 were
+carried as the prose phrase "separate scope". They are now enumerated as rows
+in "Remaining findings from the same re-audit", so the register reflects the
+whole audit. Total 199 → 215.
+
+Overnight batch 2026-07-25 (PRs #875–#884, all through fix → adversarial
+review → PR → green CI → merge → staging deploy):
+* ✅ item 33 (#880), P12-4 and P12-10 (#875/#877), P13-3 (#883), APP-CONF-003 (#881)
+* ◐ P9-13 (#881 — cross-client half closed; runtime coverage deliberately
+  under-claimed after review mutation-tested it), P9-8 / P9-10 / staging-SHA
+  test-login half (#882 — repo halves merged, AWS/DB execution outstanding),
+  P13-5 (#884 — delivered as race-elimination; the literal fail-closed
+  inversion needs founder sign-off), P10-7 (#879 — grants pack completed after
+  Codex found the maintenance role could not execute the sanctioned purge)
+* Three re-audit findings materially strengthened without being closed:
+  RDI-017 and RDI-024 (item 33's veto) and RDI-018 (P10-7 grants).
+
+Two review REJECTs in this batch were substantive, not cosmetic: a
+`--delete-unused` path that would have orphaned memo/SAR/EDD attribution (flag
+removed), and two P9-13 tests that passed with the gate they named deleted
+(one fixed, one deleted as tautological).
 
 | Status | Count |
 |--------|:--:|
-| ✅ done/merged | 130 |
-| ◐ split — one half open | 14 |
+| ✅ done/merged | 135 |
+| ◐ split — one half open | 19 |
 | 🟢 PR open | 0 |
 | 🔨 in progress | 3 |
-| 📋 scoped | 15 |
+| 📋 scoped | 17 |
 | ⏸ blocked | 7 |
-| ⬜ pending | 30 |
-| **Total tracked items** | **199** |
+| ⬜ pending | 34 |
+| **Total tracked items** | **215** |
