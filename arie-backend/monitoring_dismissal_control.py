@@ -160,6 +160,28 @@ def requires_evidence(tier: int, alert: Any) -> bool:
     return tier == 1 or _token(_get(alert, "severity")) == "critical"
 
 
+def assert_evidence_current(alert: Any, evidence_ref: Any) -> None:
+    """Approval-time evidence revalidation (Codex round-2, RDI-008 TOCTOU).
+
+    A pending request's evidence was validated against the alert AS IT WAS at
+    request creation. If the alert has since escalated (e.g. document-health
+    re-scoring raised severity to critical) — or the request predates the
+    critical-evidence rule — executing the approval would clear a CRITICAL
+    alert with no documented evidence. Re-check ``requires_evidence`` against
+    the CURRENT alert and the STORED request evidence immediately before the
+    terminal clear; refuse (409, state changed) rather than execute.
+    """
+    tier = classify_alert_tier(alert)
+    if requires_evidence(tier, alert) and not str(evidence_ref or "").strip():
+        raise DismissalControlError(
+            "This alert now requires documented evidence for clearance (its "
+            "severity/tier escalated after the review request was created, or "
+            "the request predates the evidence rule). Reject this request and "
+            "submit a new clearance request with an evidence note.",
+            409,
+        )
+
+
 def approver_roles_for_tier(tier: int) -> set:
     return TIER1_APPROVER_ROLES if tier == 1 else TIER2_APPROVER_ROLES
 

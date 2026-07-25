@@ -201,12 +201,14 @@ def _valid_critical_clearance(critical_clearance, user):
     """Return True when the caller has certified a valid senior/four-eyes
     disposition for dismissing a CRITICAL alert (RDI-008).
 
-    A valid clearance is a mapping carrying a senior (admin/SCO) ``approver`` and:
-      - ``via='approved_review'`` — a COMPLETED second review, whose evidence was
-        already validated at request creation (M2.2 ``create_pending_request``
-        mandates evidence for every critical alert), so it may pass marker-only; OR
-      - a non-empty ``evidence_ref`` — any DIRECT senior clear must itself carry
-        documented evidence.
+    A valid clearance is a mapping carrying a senior (admin/SCO) ``approver``
+    and a non-empty ``evidence_ref``. For ``via='approved_review'`` the server
+    threads the STORED request evidence after re-validating it against the
+    CURRENT alert at approval time (``_mdc.assert_evidence_current`` — the
+    Codex round-2 TOCTOU fix); requiring the evidence here as well means even
+    a severity escalation that lands in the tiny window between that recheck
+    and this gate's fresh alert fetch cannot produce an evidence-less critical
+    dismissal.
 
     RDI-008 follow-up: the bare ``via='senior_clear'`` marker is NO LONGER
     sufficient on its own — a direct senior clear without evidence would let a
@@ -218,9 +220,6 @@ def _valid_critical_clearance(critical_clearance, user):
     approver_role = str((approver or {}).get("role") or "").strip().lower()
     if approver_role not in _SENIOR_DISPOSITION_ROLES:
         return False
-    via = str(critical_clearance.get("via") or "").strip().lower()
-    if via == "approved_review":
-        return True
     evidence_ref = str(critical_clearance.get("evidence_ref") or "").strip()
     return bool(evidence_ref)
 

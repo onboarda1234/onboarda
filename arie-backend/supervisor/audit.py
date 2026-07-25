@@ -864,29 +864,59 @@ class AuditLogger:
 
             broken_links: List[Dict[str, Any]] = []
             total_violations = 0
+            coverage_notes: List[str] = []
+            # Per-class TRUE totals (a row may legitimately contribute to more
+            # than one class, e.g. a dangling row is usually also unreachable).
+            violation_totals: Dict[str, int] = {}
 
             def _report(violation: Dict[str, Any]) -> None:
                 # Bounded reporting: count every violation, keep details for
                 # the first MAX_REPORTED_VIOLATIONS only.
                 nonlocal total_violations
                 total_violations += 1
+                key = str(violation.get("issue") or "hash_mismatch")
+                violation_totals[key] = violation_totals.get(key, 0) + 1
                 if len(broken_links) < MAX_REPORTED_VIOLATIONS:
                     broken_links.append(violation)
 
-            # ── Structural violation classes, computed DB-side (bounded) ──
-            for r in db.execute(
-                "SELECT entry_hash, COUNT(*) AS c FROM supervisor_audit_log "
-                "GROUP BY entry_hash HAVING COUNT(*) > 1 LIMIT ?",
-                (MAX_REPORTED_VIOLATIONS,),
-            ).fetchall():
-                _report({"issue": "duplicate_entry_hash",
-                         "entry_hash": r["entry_hash"], "count": r["c"]})
+            def _class_report(issue: str, true_count: int, detail_rows, make_detail) -> None:
+                # Codex round-2 (RDI-014): the TRUE total for each structural
+                # class comes from an uncapped COUNT(*) — only the DETAILS are
+                # capped. total_violations is therefore never an undercount.
+                nonlocal total_violations
+                if true_count <= 0:
+                    return
+                total_violations += true_count
+                violation_totals[issue] = violation_totals.get(issue, 0) + true_count
+                for r in detail_rows:
+                    if len(broken_links) < MAX_REPORTED_VIOLATIONS:
+                        broken_links.append(make_detail(r))
 
-            genesis_count_row = db.execute(
+            def _scalar_count(sql: str, params=()) -> int:
+                row = db.execute(sql, params).fetchone()
+                return (row["c"] if row else 0) or 0
+
+            # ── Structural violation classes: TRUE totals via COUNT(*),
+            #    details capped (bounded memory, honest counts) ──
+            dup_total = _scalar_count(
+                "SELECT COUNT(*) AS c FROM (SELECT entry_hash FROM "
+                "supervisor_audit_log GROUP BY entry_hash HAVING COUNT(*) > 1) AS d"
+            )
+            _class_report(
+                "duplicate_entry_hash", dup_total,
+                db.execute(
+                    "SELECT entry_hash, COUNT(*) AS c FROM supervisor_audit_log "
+                    "GROUP BY entry_hash HAVING COUNT(*) > 1 LIMIT ?",
+                    (MAX_REPORTED_VIOLATIONS,),
+                ).fetchall(),
+                lambda r: {"issue": "duplicate_entry_hash",
+                           "entry_hash": r["entry_hash"], "count": r["c"]},
+            )
+
+            genesis_count = _scalar_count(
                 "SELECT COUNT(*) AS c FROM supervisor_audit_log "
                 "WHERE previous_hash IS NULL OR previous_hash = ''"
-            ).fetchone()
-            genesis_count = (genesis_count_row["c"] if genesis_count_row else 0) or 0
+            )
             single_genesis = genesis_count == 1
             if not single_genesis:
                 _report({
@@ -894,30 +924,50 @@ class AuditLogger:
                     "detail": f"expected exactly one genesis entry, found {genesis_count}",
                 })
                 logger.error(
-                    "verify_full_chain: genesis_count=%d — id-order scan anchors "
+                    "verify_full_chain: genesis_count=%d — fallback scan anchors "
                     "on the first row's stored previous_hash; structural coverage "
                     "is bounded", genesis_count,
                 )
 
-            for r in db.execute(
-                "SELECT previous_hash, COUNT(*) AS c FROM supervisor_audit_log "
-                "WHERE previous_hash IS NOT NULL AND previous_hash != '' "
-                "GROUP BY previous_hash HAVING COUNT(*) > 1 LIMIT ?",
-                (MAX_REPORTED_VIOLATIONS,),
-            ).fetchall():
-                _report({"issue": "chain_fork",
-                         "after_hash": r["previous_hash"], "successor_count": r["c"]})
+            fork_total = _scalar_count(
+                "SELECT COUNT(*) AS c FROM (SELECT previous_hash FROM "
+                "supervisor_audit_log WHERE previous_hash IS NOT NULL AND "
+                "previous_hash != '' GROUP BY previous_hash "
+                "HAVING COUNT(*) > 1) AS f"
+            )
+            _class_report(
+                "chain_fork", fork_total,
+                db.execute(
+                    "SELECT previous_hash, COUNT(*) AS c FROM supervisor_audit_log "
+                    "WHERE previous_hash IS NOT NULL AND previous_hash != '' "
+                    "GROUP BY previous_hash HAVING COUNT(*) > 1 LIMIT ?",
+                    (MAX_REPORTED_VIOLATIONS,),
+                ).fetchall(),
+                lambda r: {"issue": "chain_fork",
+                           "after_hash": r["previous_hash"],
+                           "successor_count": r["c"]},
+            )
 
             # Rows whose stored predecessor hash does not exist anywhere —
-            # orphan islands / severed links (anti-join, capped result).
-            for r in db.execute(
-                "SELECT a.id AS id FROM supervisor_audit_log a "
+            # orphan islands / severed links (anti-join; true COUNT + capped
+            # details).
+            dangling_total = _scalar_count(
+                "SELECT COUNT(*) AS c FROM supervisor_audit_log a "
                 "LEFT JOIN supervisor_audit_log b ON a.previous_hash = b.entry_hash "
                 "WHERE a.previous_hash IS NOT NULL AND a.previous_hash != '' "
-                "AND b.id IS NULL LIMIT ?",
-                (MAX_REPORTED_VIOLATIONS,),
-            ).fetchall():
-                _report({"entry_id": r["id"], "issue": "dangling_previous_hash"})
+                "AND b.id IS NULL"
+            )
+            _class_report(
+                "dangling_previous_hash", dangling_total,
+                db.execute(
+                    "SELECT a.id AS id FROM supervisor_audit_log a "
+                    "LEFT JOIN supervisor_audit_log b ON a.previous_hash = b.entry_hash "
+                    "WHERE a.previous_hash IS NOT NULL AND a.previous_hash != '' "
+                    "AND b.id IS NULL LIMIT ?",
+                    (MAX_REPORTED_VIOLATIONS,),
+                ).fetchall(),
+                lambda r: {"entry_id": r["id"], "issue": "dangling_previous_hash"},
+            )
 
             # ── Bounded link-following walk (O(1) row memory) ──
             entries_verified = 0
@@ -978,11 +1028,18 @@ class AuditLogger:
                     current = dict(nxts[0]) if nxts else None
                 if entries_verified < total_entries:
                     # Rows the walk never reached (islands / severed segments)
-                    # — counted without holding their ids in memory; the
-                    # dangling-predecessor aggregate above names a capped
-                    # sample.
-                    _report({"issue": "orphan_entries",
-                             "count": total_entries - entries_verified})
+                    # — every unreachable row counts toward the TRUE total
+                    # (Codex round-2), reported as one aggregated detail entry
+                    # without holding ids in memory; the dangling-predecessor
+                    # aggregate above names a capped sample.
+                    orphan_count = total_entries - entries_verified
+                    total_violations += orphan_count
+                    violation_totals["orphan_entries"] = (
+                        violation_totals.get("orphan_entries", 0) + orphan_count
+                    )
+                    if len(broken_links) < MAX_REPORTED_VIOLATIONS:
+                        broken_links.append({"issue": "orphan_entries",
+                                             "count": orphan_count})
             else:
                 # No single genesis: content-verify EVERY row in a stable
                 # keyset-paginated (timestamp, id) order, anchoring on the
@@ -1034,14 +1091,22 @@ class AuditLogger:
                 "chain_root_hash": chain_root_hash,
                 "chain_head_hash": chain_head_hash,
                 "broken_links": broken_links,
+                # TRUE total (structural classes counted by uncapped COUNT(*),
+                # walk violations counted per row, every orphan counted).
                 "total_violations": total_violations,
+                "violation_totals": dict(violation_totals),
+                "totals_note": (
+                    "totals are per-class sums; a row may contribute to more "
+                    "than one class (e.g. a dangling row is usually also "
+                    "unreachable)"
+                ),
                 "chain_intact": total_violations == 0,
                 "verified_at": verified_at,
             }
             if total_violations > len(broken_links):
                 # Detailed reporting was capped — never silently: say how many.
                 result["violations_truncated"] = total_violations - len(broken_links)
-                result["coverage_note"] = (
+                coverage_notes.append(
                     f"{total_violations} violations found; details reported for "
                     f"the first {len(broken_links)} only"
                 )
@@ -1052,14 +1117,20 @@ class AuditLogger:
             if entries_verified != total_entries:
                 # Never silently truncate — say exactly what was NOT covered.
                 result["coverage_complete"] = False
-                result["coverage_note"] = (
+                coverage_notes.append(
                     f"verified {entries_verified} of {total_entries} rows; "
-                    f"{total_entries - entries_verified} not covered by the id-order scan"
+                    f"{total_entries - entries_verified} not reached by the "
+                    f"link-following walk"
                 )
                 logger.error(
                     "verify_full_chain coverage bounded: verified %d of %d rows",
                     entries_verified, total_entries,
                 )
+            if coverage_notes:
+                # Codex round-2: notes are ADDITIVE — a truncation note must
+                # never be overwritten by a later coverage note.
+                result["coverage_note"] = " | ".join(coverage_notes)
+                result["coverage_notes"] = list(coverage_notes)
             return result
 
         except Exception as e:

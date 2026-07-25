@@ -428,3 +428,86 @@ def test_no_new_monitoring_alert_status_values(four_eyes_server):
         conn.close()
     for r in rows:
         assert r["status"] in CANONICAL_STATUSES, r["status"]
+
+
+def test_severity_escalation_between_request_and_approval_blocks_evidence_less_clear(four_eyes_server):
+    """Codex round-2 TOCTOU: a request created while the alert was NON-critical
+    (evidence optional) must NOT execute an evidence-less clear after the alert
+    escalates to CRITICAL. Approval must re-check requires_evidence against the
+    CURRENT alert and refuse (409), leaving the alert open and the request
+    pending."""
+    base, dbm = four_eyes_server
+    # Tier-2 shape, non-critical at request time.
+    aid = _seed_alert(dbm, "document_expired", "high", "passport has expired")
+    co = _tok("co_fe", "co", "CO FE")
+    sco = _tok("sco_fe", "sco", "SCO FE")
+
+    # CO requests a controlled clear with rationale but NO evidence — accepted
+    # because the alert is non-critical tier 2 at creation.
+    r = _patch(base, co, aid, {"action": "dismiss", "dismissal_reason": "false_positive",
+                               "reason": "expired doc superseded"})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "review_requested"
+    req_id = r.json()["result"]["review_request_id"]
+
+    # The alert escalates to CRITICAL before approval.
+    conn = dbm.get_db()
+    conn.execute("UPDATE monitoring_alerts SET severity = 'critical' WHERE id = ?", (aid,))
+    conn.commit()
+    conn.close()
+
+    # A different SCO approves → must now be refused, not executed.
+    ap = requests.post(f"{base}/api/monitoring/review-requests/{req_id}/approve",
+                       headers=_hdr(sco), json={"approval_note": "concur"}, timeout=10)
+    assert ap.status_code == 409, ap.text
+    assert "evidence" in ap.text.lower()
+    assert _status(dbm, aid) == "open", "the now-CRITICAL alert must not be dismissed"
+
+    # The request survives as pending so it can be rejected + resubmitted with evidence.
+    conn = dbm.get_db()
+    state = conn.execute(
+        "SELECT state FROM monitoring_alert_review_requests WHERE id = ?", (req_id,)
+    ).fetchone()["state"]
+    conn.close()
+    assert state == "pending"
+
+
+def test_approval_with_evidence_still_executes_after_escalation(four_eyes_server):
+    """Counterpart: a request that DID carry evidence executes normally even if
+    the alert escalated to CRITICAL before approval."""
+    base, dbm = four_eyes_server
+    aid = _seed_alert(dbm, "document_expired", "high", "passport has expired")
+    co = _tok("co_fe", "co", "CO FE")
+    sco = _tok("sco_fe", "sco", "SCO FE")
+
+    r = _patch(base, co, aid, {"action": "dismiss", "dismissal_reason": "false_positive",
+                               "reason": "expired doc superseded",
+                               "evidence_ref": "replacement passport on file"})
+    assert r.status_code == 200, r.text
+    req_id = r.json()["result"]["review_request_id"]
+
+    conn = dbm.get_db()
+    conn.execute("UPDATE monitoring_alerts SET severity = 'critical' WHERE id = ?", (aid,))
+    conn.commit()
+    conn.close()
+
+    ap = requests.post(f"{base}/api/monitoring/review-requests/{req_id}/approve",
+                       headers=_hdr(sco), json={"approval_note": "concur"}, timeout=10)
+    assert ap.status_code == 200, ap.text
+    assert _status(dbm, aid) == "dismissed"
+
+
+def test_assert_evidence_current_unit():
+    """Unit: assert_evidence_current refuses a critical current-alert with empty
+    stored evidence (409) and passes with evidence or a non-critical alert."""
+    crit = {"alert_type": "document_expired", "severity": "critical",
+            "summary": "licence has expired"}
+    noncrit = {"alert_type": "document_expired", "severity": "high",
+               "summary": "passport has expired"}
+    with pytest.raises(mdc.DismissalControlError) as excinfo:
+        mdc.assert_evidence_current(crit, "")
+    assert excinfo.value.status_code == 409
+    with pytest.raises(mdc.DismissalControlError):
+        mdc.assert_evidence_current(crit, "   ")
+    mdc.assert_evidence_current(crit, "SAR ref 42")  # must not raise
+    mdc.assert_evidence_current(noncrit, "")  # non-critical tier-2 → no evidence needed
