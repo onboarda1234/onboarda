@@ -37,10 +37,12 @@ def _template_db(tmp_path_factory):
     path = tmp_path_factory.mktemp("driftref") / "template.db"
     env = dict(os.environ, ENVIRONMENT="testing", DATABASE_URL="",
                DB_PATH=str(path))
-    code = ("import os, db; db._DB_PATH = os.environ['DB_PATH']; "
-            "db.init_db(); print('template ok')")
-    subprocess.run([sys.executable, "-c", code], cwd=str(BACKEND), env=env,
-                   check=True, capture_output=True, timeout=180)
+    # DB_PATH env is what config/db actually honor for the SQLite path.
+    code = "import db; db.init_db(); print('template ok')"
+    proc = subprocess.run([sys.executable, "-c", code], cwd=str(BACKEND),
+                          env=env, capture_output=True, text=True, timeout=180)
+    assert proc.returncode == 0, (
+        f"template init_db failed:\nstdout: {proc.stdout}\nstderr: {proc.stderr}")
     return path
 
 
@@ -167,7 +169,7 @@ class TestStartupWiring:
 
 
 class TestCliModes:
-    def test_cli_check_exits_1_on_missing(self, fresh_sqlite, tmp_path, monkeypatch):
+    def test_check_mode_flags_phantom_table(self, fresh_sqlite, tmp_path, monkeypatch):
         # Point the module at a doctored manifest expecting a phantom table.
         expected = schema_drift.load_expected()
         doctored = dict(expected)

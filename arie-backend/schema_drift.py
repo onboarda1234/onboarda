@@ -56,8 +56,13 @@ def introspect_schema(db) -> dict:
     tables: dict = {}
     if getattr(db, "is_postgres", False):
         rows = db.execute(
-            "SELECT table_name, column_name FROM information_schema.columns "
-            "WHERE table_schema = current_schema() ORDER BY table_name, column_name"
+            "SELECT c.table_name, c.column_name "
+            "FROM information_schema.columns c "
+            "JOIN information_schema.tables t "
+            "  ON t.table_schema = c.table_schema AND t.table_name = c.table_name "
+            "WHERE c.table_schema = current_schema() "
+            "  AND t.table_type = 'BASE TABLE' "
+            "ORDER BY c.table_name, c.column_name"
         ).fetchall()
         for r in rows:
             t = r["table_name"]
