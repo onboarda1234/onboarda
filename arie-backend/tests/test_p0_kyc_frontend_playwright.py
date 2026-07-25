@@ -27,6 +27,7 @@ APP_REF = "ARF-2026-P0-BROWSER"
 CLIENT_ID = "client-p0-browser"
 DIRECTOR_ID = "dir-server-001"
 UBO_ID = "ubo-server-001"
+TEST_ORIGIN = "http://portal.test"
 SYNTHETIC_MARKER = (
     "SYNTHETIC E2E TEST DOCUMENT — NOT A REAL IDENTITY OR CORPORATE RECORD"
 )
@@ -438,7 +439,7 @@ def _new_page(browser, harness):
     context = browser.new_context()
     context.route("**/*", harness.route)
     page = context.new_page()
-    page.goto("http://regmind.test/portal", wait_until="domcontentloaded")
+    page.goto(f"{TEST_ORIGIN}/portal", wait_until="domcontentloaded")
     return context, page
 
 
@@ -1133,7 +1134,7 @@ def test_f_cross_surface_portal_and_backoffice_values_match_exactly(
     backoffice_page = backoffice_context.new_page()
     try:
         backoffice_page.goto(
-            "http://regmind.test/backoffice",
+            f"{TEST_ORIGIN}/backoffice",
             wait_until="domcontentloaded",
         )
         backoffice_page.locator("#login-email").fill("officer@example.test")
@@ -1637,7 +1638,7 @@ def test_canonical_empty_party_collections_never_revive_stale_prescreening_rows(
     backoffice_page = backoffice_context.new_page()
     try:
         backoffice_page.goto(
-            "http://regmind.test/backoffice",
+            f"{TEST_ORIGIN}/backoffice",
             wait_until="domcontentloaded",
         )
         backoffice_page.locator("#login-email").fill("officer@example.test")
@@ -1732,7 +1733,7 @@ def test_backoffice_filters_and_blocks_arbitrary_enhanced_document_links(
     context.route("**/*", harness.route)
     page = context.new_page()
     try:
-        page.goto("http://regmind.test/backoffice", wait_until="domcontentloaded")
+        page.goto(f"{TEST_ORIGIN}/backoffice", wait_until="domcontentloaded")
         page.locator("#login-email").fill("officer@example.test")
         page.locator("#login-password").fill(
             "Synthetic-Only-Officer-Password-123!"
@@ -1777,6 +1778,9 @@ def test_backoffice_filters_and_blocks_arbitrary_enhanced_document_links(
                 integrityReason: integrity.reason,
                 optionsContainBaseDocument:
                   options.includes('doc-base-source-wealth'),
+                selectedInvalidOptionDisabled:
+                  options.includes('doc-base-source-wealth" selected disabled') &&
+                  options.includes('invalid link; use controlled replacement'),
                 enhancedIntegrityCount:
                   summary.enhancedDocumentLinkIntegrityCount,
                 isIncomplete: summary.isIncomplete,
@@ -1791,7 +1795,8 @@ def test_backoffice_filters_and_blocks_arbitrary_enhanced_document_links(
         assert result == {
             "integrityValid": False,
             "integrityReason": "document_slot_mismatch",
-            "optionsContainBaseDocument": False,
+            "optionsContainBaseDocument": True,
+            "selectedInvalidOptionDisabled": True,
             "enhancedIntegrityCount": 1,
             "isIncomplete": True,
             "hasBanner": True,
@@ -1808,7 +1813,7 @@ def test_backoffice_accepted_document_without_link_is_named_red_blocker(
     context.route("**/*", harness.route)
     page = context.new_page()
     try:
-        page.goto("http://regmind.test/backoffice", wait_until="domcontentloaded")
+        page.goto(f"{TEST_ORIGIN}/backoffice", wait_until="domcontentloaded")
         page.locator("#login-email").fill("officer@example.test")
         page.locator("#login-password").fill(
             "Synthetic-Only-Officer-Password-123!"

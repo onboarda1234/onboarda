@@ -47,7 +47,11 @@ def _find_free_port():
 
 
 @pytest.fixture(scope="module")
-def p0_api_server(tmp_path_factory):
+def p0_runtime(tmp_path_factory):
+    original_environment = {
+        key: os.environ.get(key)
+        for key in ("DATABASE_URL", "DB_PATH")
+    }
     db_path = str(
         tmp_path_factory.mktemp("p0_backend_document_links")
         / "p0_backend_document_links.db"
@@ -57,6 +61,23 @@ def p0_api_server(tmp_path_factory):
     import server as server_module
 
     importlib.reload(server_module)
+    yield db_module, server_module
+
+    for key, value in original_environment.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    import config as config_module
+
+    importlib.reload(config_module)
+    importlib.reload(db_module)
+    importlib.reload(server_module)
+
+
+@pytest.fixture(scope="module")
+def p0_api_server(p0_runtime):
+    db_module, server_module = p0_runtime
     app = server_module.make_app()
     port = _find_free_port()
     server_ref = {}
@@ -235,9 +256,9 @@ def _insert_requirement(
 
 
 def test_strict_enhanced_link_contract_and_historical_link_block_approval_and_pilot(
-    p0_api_server,
+    p0_runtime,
 ):
-    _base_url, db_module, server_module = p0_api_server
+    db_module, server_module = p0_runtime
     from enhanced_requirements import (
         enhanced_requirement_document_policy,
         serialize_application_requirement,
@@ -344,9 +365,9 @@ def test_strict_enhanced_link_contract_and_historical_link_block_approval_and_pi
 
 
 def test_document_requirement_acceptance_requires_link_and_historical_no_link_blocks(
-    p0_api_server,
+    p0_runtime,
 ):
-    _base_url, db_module, _server_module = p0_api_server
+    db_module, _server_module = p0_runtime
     from enhanced_requirements import (
         update_application_enhanced_requirement,
         validate_enhanced_requirements_for_approval,
@@ -402,6 +423,93 @@ def test_document_requirement_acceptance_requires_link_and_historical_no_link_bl
             approval["invalid_document_links"][0]["document_integrity"]["reason"]
             == "linked_document_missing"
         )
+    finally:
+        db.close()
+
+
+def test_terminal_and_non_document_requirements_ignore_stale_document_links(
+    p0_runtime,
+):
+    db_module, _server_module = p0_runtime
+    from enhanced_requirements import (
+        _approval_validation_from_items,
+        serialize_application_requirement,
+        validate_enhanced_requirements_for_approval,
+    )
+
+    db = db_module.get_db()
+    try:
+        app_id = _insert_application(
+            db,
+            status="compliance_review",
+            risk_level="HIGH",
+        )
+        cancelled_id = _insert_requirement(
+            db,
+            app_id,
+            requirement_key="cancelled_document",
+            status="cancelled",
+            linked_document_id="stale-cancelled-link",
+        )
+        waived_id = _insert_requirement(
+            db,
+            app_id,
+            requirement_key="waived_document",
+            status="waived",
+            linked_document_id="stale-waived-link",
+        )
+        declaration_id = _insert_requirement(
+            db,
+            app_id,
+            requirement_key="accepted_declaration",
+            status="accepted",
+            linked_document_id="stale-declaration-link",
+        )
+        db.execute(
+            """
+            UPDATE application_enhanced_requirements
+               SET waiver_reason='Senior approved exception',
+                   waived_by='sco001',
+                   waived_at=?
+             WHERE id=?
+            """,
+            (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"), waived_id),
+        )
+        db.execute(
+            """
+            UPDATE application_enhanced_requirements
+               SET requirement_type='declaration'
+             WHERE id=?
+            """,
+            (declaration_id,),
+        )
+        db.commit()
+
+        validation = validate_enhanced_requirements_for_approval(db, app_id)
+        assert validation["passed"] is True
+        assert validation["document_integrity_error_count"] == 0
+        assert validation["invalid_document_links"] == []
+
+        app = db.execute(
+            "SELECT * FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+        rows = db.execute(
+            """
+            SELECT *
+              FROM application_enhanced_requirements
+             WHERE id IN (?, ?, ?)
+             ORDER BY id
+            """,
+            (cancelled_id, waived_id, declaration_id),
+        ).fetchall()
+        item_validation = _approval_validation_from_items(
+            db,
+            app,
+            [serialize_application_requirement(row) for row in rows],
+        )
+        assert item_validation["passed"] is True
+        assert item_validation["document_integrity_error_count"] == 0
     finally:
         db.close()
 
@@ -676,9 +784,9 @@ def test_preapproval_list_uses_fixture_marker_not_e2e_name_heuristic(
 
 
 def test_document_reliance_ignores_enhanced_special_slot_for_base_resolution(
-    p0_api_server,
+    p0_runtime,
 ):
-    _base_url, db_module, _server_module = p0_api_server
+    db_module, _server_module = p0_runtime
     from document_reliance_gate import evaluate_document_reliance_gate
 
     db = db_module.get_db()
@@ -833,9 +941,9 @@ def test_portal_repairs_historical_base_link_without_superseding_base_document(
 
 
 def test_monitoring_validator_enforces_successor_lineage_and_canonical_owner(
-    p0_api_server,
+    p0_runtime,
 ):
-    _base_url, db_module, _server_module = p0_api_server
+    db_module, _server_module = p0_runtime
     from enhanced_requirements import (
         serialize_application_requirement,
         validate_enhanced_requirement_document_link,
@@ -1054,9 +1162,9 @@ def test_monitoring_validator_enforces_successor_lineage_and_canonical_owner(
 
 
 def test_monitoring_refresh_target_helper_refuses_noncanonical_metadata(
-    p0_api_server,
+    p0_runtime,
 ):
-    _base_url, db_module, server_module = p0_api_server
+    db_module, server_module = p0_runtime
     db = db_module.get_db()
     try:
         app_id = _insert_application(db, status="kyc_documents", risk_level="LOW")
@@ -1559,9 +1667,9 @@ def test_monitoring_alert_replacement_upload_builds_multi_hop_successor_chain(
 
 
 def test_periodic_review_consumers_treat_invalid_verified_base_link_as_missing(
-    p0_api_server,
+    p0_runtime,
 ):
-    _base_url, db_module, _server_module = p0_api_server
+    db_module, _server_module = p0_runtime
     from periodic_review_memo import build_memo_data
     from periodic_review_notifications import (
         notification_projection_from_review,

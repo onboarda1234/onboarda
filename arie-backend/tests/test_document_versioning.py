@@ -100,10 +100,8 @@ def _seed_application(app_id, client_id, status="kyc_documents"):
     from db import get_db
 
     conn = get_db()
-    conn.execute("DELETE FROM audit_log WHERE target = ?", (f"ARF-{app_id}",))
-    conn.execute("DELETE FROM documents WHERE application_id = ?", (app_id,))
-    conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
-    conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+    # The fixture provisions a fresh per-test database, so destructive
+    # pre-cleanup is both unnecessary and correctly refused for audit evidence.
     conn.execute(
         "INSERT INTO clients (id, email, password_hash, company_name) VALUES (?, ?, ?, ?)",
         (client_id, f"{client_id}@example.test", "hash", "Versioning Ltd"),

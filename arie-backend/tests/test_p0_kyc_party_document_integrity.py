@@ -23,14 +23,59 @@ import tornado.httpserver
 import tornado.ioloop
 
 
+_MISSING = object()
+
+
+def _capture_db_path_state():
+    state = {
+        "environment": os.environ.get("DB_PATH", _MISSING),
+        "modules": {},
+    }
+    for module_name, attributes in (
+        ("config", ("DB_PATH",)),
+        ("db", ("DB_PATH",)),
+        ("server", ("DB_PATH", "_CFG_DB_PATH")),
+    ):
+        module = sys.modules.get(module_name)
+        if module is not None:
+            state["modules"][module_name] = {
+                attribute: getattr(module, attribute, _MISSING)
+                for attribute in attributes
+            }
+    return state
+
+
+def _restore_db_path_state(state):
+    environment_value = state["environment"]
+    if environment_value is _MISSING:
+        os.environ.pop("DB_PATH", None)
+    else:
+        os.environ["DB_PATH"] = environment_value
+    for module_name, attributes in state["modules"].items():
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        for attribute, value in attributes.items():
+            if value is _MISSING:
+                if hasattr(module, attribute):
+                    delattr(module, attribute)
+            else:
+                setattr(module, attribute, value)
+
+
 def _sync_db_path(path):
     os.environ["DB_PATH"] = path
-    for module_name in ("config", "db", "server"):
-        module = sys.modules.get(module_name)
-        if module is not None and hasattr(module, "DB_PATH"):
-            setattr(module, "DB_PATH", path)
-        if module_name == "server" and module is not None and hasattr(module, "_CFG_DB_PATH"):
-            setattr(module, "_CFG_DB_PATH", path)
+    config_module = sys.modules.get("config")
+    if config_module is not None and hasattr(config_module, "DB_PATH"):
+        config_module.DB_PATH = path
+    db_module = sys.modules.get("db")
+    if db_module is not None and hasattr(db_module, "DB_PATH"):
+        db_module.DB_PATH = path
+    server_module = sys.modules.get("server")
+    if server_module is not None and hasattr(server_module, "DB_PATH"):
+        server_module.DB_PATH = path
+    if server_module is not None and hasattr(server_module, "_CFG_DB_PATH"):
+        server_module._CFG_DB_PATH = path
 
 
 def _free_port():
@@ -42,20 +87,32 @@ def _free_port():
 
 
 @pytest.fixture(scope="module")
-def p0_api_server(tmp_path_factory):
+def p0_db_runtime(tmp_path_factory):
+    import config  # noqa: F401
+    import db as db_module
+    import server  # noqa: F401
+
+    previous_db_path_state = _capture_db_path_state()
     db_path = str(tmp_path_factory.mktemp("p0-backend") / "regmind-p0.db")
     _sync_db_path(db_path)
 
-    from db import get_db, init_db, seed_initial_data
-
-    init_db()
-    db = get_db()
-    seed_initial_data(db)
+    db_module.init_db()
+    db = db_module.get_db()
+    db_module.seed_initial_data(db)
     db.commit()
     db.close()
 
+    try:
+        yield db_path
+    finally:
+        _restore_db_path_state(previous_db_path_state)
+
+
+@pytest.fixture(scope="module")
+def p0_api_server(p0_db_runtime):
     import server as server_module
 
+    previous_has_s3 = server_module.HAS_S3
     server_module.HAS_S3 = False
     app = server_module.make_app()
     port = _free_port()
@@ -78,11 +135,15 @@ def p0_api_server(tmp_path_factory):
     assert started.wait(timeout=3), "P0 backend test server did not start"
     time.sleep(0.15)
 
-    yield f"http://127.0.0.1:{port}"
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        from tests.conftest import shutdown_test_http_server
 
-    from tests.conftest import shutdown_test_http_server
-
-    shutdown_test_http_server(thread, server_ref)
+        try:
+            shutdown_test_http_server(thread, server_ref)
+        finally:
+            server_module.HAS_S3 = previous_has_s3
 
 
 def _token_headers(user_id, *, actor_type="client", role=None):
@@ -498,7 +559,9 @@ def test_concurrent_pricing_acceptance_has_one_winner_and_one_set_of_side_effect
     db.close()
 
 
-def test_repeated_party_save_preserves_ids_order_ownership_and_documents():
+def test_repeated_party_save_preserves_ids_order_ownership_and_documents(
+    p0_db_runtime,
+):
     case = _seed_case()
     from db import get_db
     from server import get_application_parties, store_application_parties
@@ -571,6 +634,72 @@ def test_repeated_party_save_preserves_ids_order_ownership_and_documents():
         "SELECT COUNT(*) AS count FROM directors WHERE application_id=?",
         (case["app_id"],),
     ).fetchone()["count"] == 2
+    db.close()
+
+
+def test_party_sync_distinguishes_omitted_profile_from_explicit_clear(
+    p0_db_runtime,
+):
+    case = _seed_case()
+    from db import get_db
+    from server import store_application_parties
+
+    db = get_db()
+    directors = [
+        {
+            "id": case["director_a"],
+            "person_key": "alpha-director",
+            "first_name": "Alice",
+            "last_name": "Alpha",
+            "professional_profile_url": "https://profiles.example.test/alice",
+        },
+        {
+            "id": case["director_b"],
+            "person_key": "zeta-director",
+            "first_name": "Zara",
+            "last_name": "Zulu",
+        },
+    ]
+    ubos = [
+        {
+            "id": case["ubo_id"],
+            "person_key": "primary-ubo",
+            "first_name": "Uma",
+            "last_name": "Owner",
+            "professional_profile_url": "https://profiles.example.test/uma",
+        }
+    ]
+    store_application_parties(
+        db,
+        case["app_id"],
+        directors=directors,
+        ubos=ubos,
+    )
+    db.commit()
+    encrypted_director_profile = db.execute(
+        "SELECT professional_profile_url FROM directors WHERE id=?",
+        (case["director_a"],),
+    ).fetchone()["professional_profile_url"]
+    assert encrypted_director_profile
+    assert encrypted_director_profile != directors[0]["professional_profile_url"]
+
+    directors[0].pop("professional_profile_url")
+    ubos[0]["professional_profile_url"] = ""
+    store_application_parties(
+        db,
+        case["app_id"],
+        directors=directors,
+        ubos=ubos,
+    )
+    db.commit()
+    assert db.execute(
+        "SELECT professional_profile_url FROM directors WHERE id=?",
+        (case["director_a"],),
+    ).fetchone()["professional_profile_url"] == encrypted_director_profile
+    assert db.execute(
+        "SELECT professional_profile_url FROM ubos WHERE id=?",
+        (case["ubo_id"],),
+    ).fetchone()["professional_profile_url"] == ""
     db.close()
 
 
@@ -781,7 +910,9 @@ def test_document_upload_missing_ambiguous_and_cross_tenant_refs_fail_closed(
     db.close()
 
 
-def test_replacement_rejects_linked_category_movement_without_mutation():
+def test_replacement_rejects_linked_category_movement_without_mutation(
+    p0_db_runtime,
+):
     case = _seed_case()
     from db import get_db
     from server import _prepare_document_slot_replacement
@@ -873,7 +1004,9 @@ def test_replacement_rejects_linked_category_movement_without_mutation():
     db.close()
 
 
-def test_reliance_rejects_owner_type_category_and_cross_alias_collisions():
+def test_reliance_rejects_owner_type_category_and_cross_alias_collisions(
+    p0_db_runtime,
+):
     from document_reliance_gate import (
         _evaluate_document,
         evaluate_document_reliance_gate,
@@ -1022,6 +1155,73 @@ def test_sumsub_uses_exact_typed_party_and_ignores_tampered_identity_fields(
     assert captured["last_name"] == "Alpha"
     assert captured["dob"] == "1979-03-04"
     assert captured["country"] == "United Kingdom"
+
+    from db import get_db
+
+    db = get_db()
+    applicant_id = db.execute(
+        """
+        SELECT applicant_id
+          FROM sumsub_applicant_mappings
+         WHERE application_id=? AND external_user_id=?
+        """,
+        (case["app_id"], case["director_a"]),
+    ).fetchone()["applicant_id"]
+    db.execute(
+        """
+        UPDATE sumsub_applicant_mappings
+           SET external_user_id=?, person_type=''
+         WHERE application_id=? AND applicant_id=?
+        """,
+        ("alpha-director", case["app_id"], applicant_id),
+    )
+    app_state = db.execute(
+        "SELECT prescreening_data FROM applications WHERE id=?",
+        (case["app_id"],),
+    ).fetchone()
+    prescreening = json.loads(app_state["prescreening_data"] or "{}")
+    prescreening["sumsub_applicant_ids"] = {"alpha-director": applicant_id}
+    db.execute(
+        "UPDATE applications SET prescreening_data=? WHERE id=?",
+        (json.dumps(prescreening), case["app_id"]),
+    )
+    db.commit()
+    db.close()
+
+    with patch("server.sumsub_create_applicant") as provider:
+        reused = requests.post(
+            f"{p0_api_server}/api/kyc/applicant",
+            headers={
+                **_token_headers(case["client_id"]),
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=8,
+        )
+    assert reused.status_code == 200, reused.text
+    assert reused.json()["applicant_id"] == applicant_id
+    assert reused.json()["reused"] is True
+    provider.assert_not_called()
+
+    db = get_db()
+    assert db.execute(
+        """
+        SELECT external_user_id
+          FROM sumsub_applicant_mappings
+         WHERE application_id=? AND applicant_id=?
+        """,
+        (case["app_id"], applicant_id),
+    ).fetchone()["external_user_id"] == case["director_a"]
+    repaired_prescreening = json.loads(
+        db.execute(
+            "SELECT prescreening_data FROM applications WHERE id=?",
+            (case["app_id"],),
+        ).fetchone()["prescreening_data"]
+    )
+    assert repaired_prescreening["sumsub_applicant_ids"] == {
+        case["director_a"]: applicant_id
+    }
+    db.close()
 
     with patch("server.sumsub_create_applicant") as provider:
         denied = requests.post(

@@ -2446,15 +2446,17 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 if canon:
                     director = dict(director)
                     director["nationality"] = canon
-            if director.get("professional_profile_url") not in (None, ""):
+            profile_supplied = "professional_profile_url" in director
+            if profile_supplied:
                 director = dict(director)
                 director["professional_profile_url"] = _validate_professional_profile_url(
-                    director["professional_profile_url"]
+                    director.get("professional_profile_url"),
+                    allow_blank=True,
                 )
             encrypted = encrypt_pii_fields(director, PII_FIELDS_DIRECTORS)
             professional_profile_url = (
                 encrypted.get("professional_profile_url")
-                if director.get("professional_profile_url") not in (None, "")
+                if profile_supplied
                 else existing.get("professional_profile_url", "")
             )
             normalized_pep = normalize_is_pep(director.get("is_pep", "No"))
@@ -2540,15 +2542,17 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 if canon:
                     ubo = dict(ubo)
                     ubo["nationality"] = canon
-            if ubo.get("professional_profile_url") not in (None, ""):
+            profile_supplied = "professional_profile_url" in ubo
+            if profile_supplied:
                 ubo = dict(ubo)
                 ubo["professional_profile_url"] = _validate_professional_profile_url(
-                    ubo["professional_profile_url"]
+                    ubo.get("professional_profile_url"),
+                    allow_blank=True,
                 )
             encrypted = encrypt_pii_fields(ubo, PII_FIELDS_UBOS)
             professional_profile_url = (
                 encrypted.get("professional_profile_url")
-                if ubo.get("professional_profile_url") not in (None, "")
+                if profile_supplied
                 else existing.get("professional_profile_url", "")
             )
             normalized_pep = normalize_is_pep(ubo.get("is_pep", "No"))
@@ -6071,6 +6075,10 @@ class ApplicationsHandler(BaseHandler):
                     doc["manual_acceptance"] = reliance_snapshot.get("manual_acceptance")
                 doc.pop("application_id", None)
             app["documents"] = app_docs
+            if user.get("type") == "client":
+                app["documents"] = [
+                    _client_safe_document_record(doc) for doc in app_docs
+                ]
             app["rmi_requests"] = rmi_by_app.get(app["id"], [])
             app["periodic_review"] = _latest_periodic_review_projection(db, app["id"])
             app["periodic_reviews"] = periodic_reviews_by_app.get(app["id"], [])
@@ -30492,6 +30500,7 @@ class SumsubApplicantHandler(BaseHandler):
         external_user_id = str(data.get("external_user_id", "") or "").strip()
         if not external_user_id:
             return self.error("external_user_id is required")
+        requested_external_user_id = external_user_id
         application_id = str(data.get("application_id", "") or "").strip()
         if not application_id:
             return self.error("application_id is required")
@@ -30538,6 +30547,78 @@ class SumsubApplicantHandler(BaseHandler):
             application_id = app["id"]
             external_user_id = party["id"]
             person_type = party["person_type"]
+            legacy_external_ids = {
+                requested_external_user_id,
+                str(party.get("person_key") or "").strip(),
+            }
+            compatible_external_ids = sorted(
+                value for value in ({external_user_id} | legacy_external_ids) if value
+            )
+            placeholders = ",".join("?" for _ in compatible_external_ids)
+            existing_mappings = auth_db.execute(
+                "SELECT id, applicant_id, external_user_id "
+                "FROM sumsub_applicant_mappings "
+                "WHERE application_id=? "
+                "AND (person_type=? OR COALESCE(person_type, '')='') "
+                f"AND external_user_id IN ({placeholders})",
+                (application_id, person_type, *compatible_external_ids),
+            ).fetchall()
+            existing_applicant_ids = {
+                str(row["applicant_id"] or "").strip()
+                for row in existing_mappings
+                if str(row["applicant_id"] or "").strip()
+            }
+            if len(existing_applicant_ids) > 1:
+                return self.error(
+                    "Conflicting legacy applicant mappings require officer repair",
+                    409,
+                )
+            if existing_applicant_ids:
+                applicant_id = next(iter(existing_applicant_ids))
+                mapping_id = existing_mappings[0]["id"]
+                auth_db.execute(
+                    "UPDATE sumsub_applicant_mappings "
+                    "SET external_user_id=?, person_type=? WHERE id=?",
+                    (external_user_id, person_type, mapping_id),
+                )
+                app_state = auth_db.execute(
+                    "SELECT prescreening_data FROM applications WHERE id=?",
+                    (application_id,),
+                ).fetchone()
+                prescreening = safe_json_loads(
+                    (app_state["prescreening_data"] if app_state else "") or "{}"
+                )
+                if not isinstance(prescreening, dict):
+                    prescreening = {}
+                applicant_map = prescreening.setdefault("sumsub_applicant_ids", {})
+                if not isinstance(applicant_map, dict):
+                    applicant_map = {}
+                    prescreening["sumsub_applicant_ids"] = applicant_map
+                for legacy_id in legacy_external_ids:
+                    if legacy_id and legacy_id != external_user_id:
+                        applicant_map.pop(legacy_id, None)
+                applicant_map[external_user_id] = applicant_id
+                auth_db.execute(
+                    "UPDATE applications SET prescreening_data=? WHERE id=?",
+                    (json.dumps(prescreening), application_id),
+                )
+                auth_db.commit()
+                self.log_audit(
+                    user,
+                    "KYC Applicant Reused",
+                    external_user_id,
+                    f"Existing Sumsub applicant reused — ID: {applicant_id}",
+                )
+                return self.success(
+                    {
+                        "applicant_id": applicant_id,
+                        "external_user_id": external_user_id,
+                        "status": "existing",
+                        "source": "sumsub-mapping",
+                        "api_status": "reused",
+                        "reused": True,
+                    }
+                )
             authoritative_full_name = str(party.get("full_name") or "").strip()
             authoritative_first_name = str(party.get("first_name") or "").strip()
             authoritative_last_name = str(party.get("last_name") or "").strip()

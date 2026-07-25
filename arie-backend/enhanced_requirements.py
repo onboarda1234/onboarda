@@ -2909,17 +2909,9 @@ def validate_enhanced_requirements_for_approval(db, application_id, app_row=None
         return result
 
     for item in items:
-        invalid_document_link = _approval_document_link_integrity_item(db, application_id, item)
-        if invalid_document_link:
-            result["invalid_document_links"].append(invalid_document_link)
-            result["document_integrity_error_count"] += 1
-            result["unresolved_requirements"].append(invalid_document_link)
-            continue
         status = str(item.get("status") or "generated").strip().lower()
         is_blocking = bool(item.get("mandatory")) or bool(item.get("blocking_approval"))
         if status == "cancelled":
-            continue
-        if status == "accepted":
             continue
         if status == "waived":
             waiver_ok, waiver_error = _valid_approval_waiver(db, item)
@@ -2930,6 +2922,17 @@ def validate_enhanced_requirements_for_approval(db, application_id, app_row=None
             result["invalid_waiver_count"] += 1
             if is_blocking:
                 result["unresolved_requirements"].append(invalid)
+            continue
+        if _clean_text(item.get("requirement_type")).lower() == "document":
+            invalid_document_link = _approval_document_link_integrity_item(
+                db, application_id, item
+            )
+            if invalid_document_link:
+                result["invalid_document_links"].append(invalid_document_link)
+                result["document_integrity_error_count"] += 1
+                result["unresolved_requirements"].append(invalid_document_link)
+                continue
+        if status == "accepted":
             continue
         if is_blocking:
             result["unresolved_requirements"].append(
@@ -3049,17 +3052,9 @@ def _approval_validation_from_items(db, app, items, *, table_missing=False):
         return result
 
     for item in items:
-        invalid_document_link = _approval_document_link_integrity_item(db, app.get("id"), item)
-        if invalid_document_link:
-            result["invalid_document_links"].append(invalid_document_link)
-            result["document_integrity_error_count"] += 1
-            result["unresolved_requirements"].append(invalid_document_link)
-            continue
         status = str(item.get("status") or "generated").strip().lower()
         is_blocking = bool(item.get("mandatory")) or bool(item.get("blocking_approval"))
         if status == "cancelled":
-            continue
-        if status == "accepted":
             continue
         if status == "waived":
             waiver_ok, waiver_error = _valid_approval_waiver(db, item)
@@ -3070,6 +3065,17 @@ def _approval_validation_from_items(db, app, items, *, table_missing=False):
             result["invalid_waiver_count"] += 1
             if is_blocking:
                 result["unresolved_requirements"].append(invalid)
+            continue
+        if _clean_text(item.get("requirement_type")).lower() == "document":
+            invalid_document_link = _approval_document_link_integrity_item(
+                db, app.get("id"), item
+            )
+            if invalid_document_link:
+                result["invalid_document_links"].append(invalid_document_link)
+                result["document_integrity_error_count"] += 1
+                result["unresolved_requirements"].append(invalid_document_link)
+                continue
+        if status == "accepted":
             continue
         if is_blocking:
             result["unresolved_requirements"].append(

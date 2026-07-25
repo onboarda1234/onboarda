@@ -7162,7 +7162,6 @@ function bindCanonicalPartyRecordsToRows(app) {
       }
     });
   });
-  if (!errors.length) syncDirectorsUBOsToKYC();
   return errors;
 }
 
@@ -7683,6 +7682,9 @@ function syncDirectorsUBOsToKYC() {
     var holdingVisible = (p.type === 'ubo' || p.type === 'intermediary') ? ' visible' : '';
     var holdingVal = p.pct || '';
     var hasStablePartyId = isValidPortalPathId(p.partyId) && String(p.id) === String(p.partyId);
+    var partyTypeToggleLock = hasStablePartyId
+      ? ' disabled aria-disabled="true" title="Party type is controlled by the saved ownership record"'
+      : '';
 
     var card = document.createElement('div');
     card.className = 'kyc-person-card';
@@ -7699,9 +7701,9 @@ function syncDirectorsUBOsToKYC() {
         '</div>' +
         '<div style="display:flex;align-items:center;gap:8px;">' +
           '<div class="kyc-type-toggle">' +
-            '<button type="button" class="kyc-type-btn ' + dirActive + '" onclick="setKYCType(\'' + p.id + '\',\'director\',this)">Director</button>' +
-            '<button type="button" class="kyc-type-btn ' + uboActive + '" onclick="setKYCType(\'' + p.id + '\',\'ubo\',this)">UBO</button>' +
-            '<button type="button" class="kyc-type-btn ' + intermediaryActive + '" onclick="setKYCType(\'' + p.id + '\',\'intermediary\',this)">Intermediary</button>' +
+            '<button type="button" class="kyc-type-btn ' + dirActive + '" onclick="setKYCType(\'' + p.id + '\',\'director\',this)"' + partyTypeToggleLock + '>Director</button>' +
+            '<button type="button" class="kyc-type-btn ' + uboActive + '" onclick="setKYCType(\'' + p.id + '\',\'ubo\',this)"' + partyTypeToggleLock + '>UBO</button>' +
+            '<button type="button" class="kyc-type-btn ' + intermediaryActive + '" onclick="setKYCType(\'' + p.id + '\',\'intermediary\',this)"' + partyTypeToggleLock + '>Intermediary</button>' +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -8714,6 +8716,7 @@ async function acceptPricing() {
     // The status transition rebuilds the person cards. Rehydrate the canonical
     // pre-transition document records immediately so existing KYC evidence is
     // not visually erased until the next full application reload.
+    await loadPortalEnhancedRequirements();
     syncPersistedApplicationDocuments(canonicalApplication);
     buildReviewScreen();
   }
@@ -9216,12 +9219,20 @@ function validatePersistedDocumentSlotIdentity(documentRecord) {
     if (!isValidPortalPersonId(personId) || !personType) {
       return { valid: false, reason: 'invalid_person_document_identity', expected_slot_key: '' };
     }
-    expectedSlotKey = 'person:' + personType + ':' + personId + ':' + docType;
+    expectedSlotKey = getDocumentSlotKey({
+      doc_type: docType,
+      person_id: personId,
+      person_type: personType
+    });
   } else {
     if (rawPersonType) {
       return { valid: false, reason: 'entity_document_has_person_type', expected_slot_key: 'entity:' + docType };
     }
-    expectedSlotKey = 'entity:' + docType;
+    expectedSlotKey = getDocumentSlotKey({
+      doc_type: docType,
+      person_id: '',
+      person_type: ''
+    });
   }
   if (!storedSlotKey || storedSlotKey !== expectedSlotKey) {
     return {
@@ -12048,21 +12059,24 @@ async function loadPortalEnhancedRequirements(options) {
   var excludePeriodicReview = opts.excludePeriodicReview !== false;
   if (!AUTH_TOKEN || !currentApplicationId) {
     renderPortalEnhancedRequirements([]);
-    return;
+    return false;
   }
   try {
     var path = '/portal/applications/' + encodeURIComponent(currentApplicationId) + '/enhanced-requirements';
     if (excludePeriodicReview) path += '?exclude_periodic_review=1';
     var resp = await apiCall('GET', path);
     renderPortalEnhancedRequirements(resp.requirements || []);
+    return true;
   } catch (err) {
     console.warn('Could not load additional information requests:', err);
+    currentEnhancedRequirements = [];
     var card = document.getElementById('additional-info-required-card');
     var container = document.getElementById('additional-info-required-container');
     if (card && container) {
       card.style.display = '';
       container.innerHTML = '<div style="padding:12px;border:1px dashed var(--border2);border-radius:8px;color:var(--text3);font-size:12px;text-align:center;">Unable to load additional information right now.</div>';
     }
+    return false;
   }
 }
 
@@ -14515,6 +14529,12 @@ function updateKYCPersonNames() {
 // ─── KYC: toggle Director / UBO type and show/hide % holding ───────────
 function setKYCType(personId, type, btn) {
   var card = btn && btn.closest ? btn.closest('.kyc-person-card') : null;
+  var stablePartyId = String((card && card.dataset && card.dataset.partyId) || '').trim();
+  if (isValidPortalPathId(stablePartyId) &&
+      stablePartyId === String(personId || '').trim()) {
+    showToast('info', 'Party Type Locked', 'Update the saved ownership record to change this party type.');
+    return;
+  }
   if (card) card.dataset.personType = normalizePersonType(type);
   // Update toggle button states
   const btns = btn.closest('.kyc-type-toggle').querySelectorAll('.kyc-type-btn');
@@ -14608,7 +14628,11 @@ function renderPortalDocumentHydrationErrors(errors) {
 
 function renderPortalPartyHydrationErrors(errors) {
   portalPartyHydrationErrors = Array.isArray(errors) ? errors.slice() : [];
-  if (portalPartyHydrationBlocked()) clearSyncedCanonicalKYCCards();
+  if (portalPartyHydrationBlocked()) {
+    clearSyncedCanonicalKYCCards();
+  } else {
+    syncDirectorsUBOsToKYC();
+  }
   var banner = document.getElementById('portal-party-hydration-errors');
   var detail = document.getElementById('portal-party-hydration-errors-detail');
   if (banner) banner.style.display = portalPartyHydrationBlocked() ? 'block' : 'none';

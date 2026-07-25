@@ -125,7 +125,7 @@ connections, production-like database identities, a DSN/database-name
 mismatch, multi-host authorities, target-affecting libpq URI overrides (for
 example `host`, `hostaddr`, `port`, `dbname`, or `service` query parameters),
 ambient target-changing libpq variables (`PGHOST`, `PGHOSTADDR`, `PGPORT`,
-`PGDATABASE`, `PGSERVICE`, and `PGSERVICEFILE`), any difference between the
+`PGDATABASE`, `PGOPTIONS`, `PGSERVICE`, and `PGSERVICEFILE`), any difference between the
 effective live connection host/port/database and the fingerprinted URI, and a
 missing or mismatched positive staging fingerprint. Benign TLS/transport
 parameters such as `sslmode` do not change the fingerprint. Clear any listed

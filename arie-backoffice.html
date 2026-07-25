@@ -9268,8 +9268,65 @@ function getAuthoritativeRiskEvidence(app) {
   return evidence;
 }
 
+function normalizeBackofficeDocumentTypeForSlot(value) {
+  var raw = String(value || 'general').trim().toLowerCase();
+  var candidate = raw.replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
+  var aliases = {
+    'doc-coi': 'cert_inc',
+    'certificate-incorporation': 'cert_inc',
+    'certificate incorporation': 'cert_inc',
+    'certificate_of_incorporation': 'cert_inc',
+    'certificate of incorporation': 'cert_inc',
+    'incorporation_certificate': 'cert_inc',
+    'incorporation certificate': 'cert_inc',
+    'proof_of_address': 'poa',
+    'proof of address': 'poa',
+    'address_proof': 'poa',
+    'financial_statements': 'fin_stmt',
+    'financial statements': 'fin_stmt',
+    'source_of_wealth': 'source_wealth',
+    'source of wealth': 'source_wealth',
+    'source_of_funds': 'source_funds',
+    'source of funds': 'source_funds',
+    'doc-memarts': 'memarts',
+    'memorandum_of_association': 'memarts',
+    'memorandum of association': 'memarts',
+    'memorandum_and_articles': 'memarts',
+    'memorandum and articles': 'memarts',
+    'memorandum_articles': 'memarts',
+    'articles_of_association': 'memarts',
+    'articles of association': 'memarts',
+    'doc-shareholders': 'reg_sh',
+    'register_of_shareholders': 'reg_sh',
+    'register of shareholders': 'reg_sh',
+    'shareholder_register': 'reg_sh',
+    'shareholder register': 'reg_sh',
+    'doc-directors-reg': 'reg_dir',
+    'register_of_directors': 'reg_dir',
+    'register of directors': 'reg_dir',
+    'director_register': 'reg_dir',
+    'director register': 'reg_dir',
+    'doc-financials': 'fin_stmt',
+    'doc-proof-address': 'poa',
+    'doc-board-res': 'board_res',
+    'board_resolution': 'board_res',
+    'board resolution': 'board_res',
+    'doc-structure-chart': 'structure_chart',
+    'structure chart': 'structure_chart',
+    'ownership_structure_chart': 'structure_chart',
+    'doc-bank-ref': 'bankref',
+    'bank_reference': 'bankref',
+    'bank reference': 'bankref',
+    'license': 'licence',
+    'licence_certificate': 'licence',
+    'license_certificate': 'licence',
+    'general': 'supporting_document'
+  };
+  return aliases[raw] || aliases[candidate] || candidate || 'general';
+}
+
 function validateBackofficeDocumentSlotIdentity(doc) {
-  var docType = String((doc && doc.doc_type) || '').trim();
+  var docType = normalizeBackofficeDocumentTypeForSlot(doc && doc.doc_type);
   var personId = String((doc && doc.person_id) || '').trim();
   var personType = String((doc && doc.person_type) || '').trim().toLowerCase();
   var storedSlotKey = String((doc && doc.slot_key) || '').trim();
@@ -9377,6 +9434,11 @@ function validateBackofficeDocumentIntegrity(app, doc) {
       });
     });
   } else if (identity.special_slot_type === 'enhanced_requirement') {
+    if (typeof currentApp !== 'undefined' && app !== currentApp) {
+      return Object.assign({}, identity, {
+        special_link_validation_deferred: true
+      });
+    }
     var requirements = typeof APPLICATION_ENHANCED_REQUIREMENTS !== 'undefined' &&
       Array.isArray(APPLICATION_ENHANCED_REQUIREMENTS)
       ? APPLICATION_ENHANCED_REQUIREMENTS
@@ -9571,7 +9633,13 @@ function renderDocumentReadinessBanner(summary) {
 	  if (summary.issueCount > 0) parts.push(summary.issueCount + ' uploaded document(s) not reliance-ready');
 	  if (summary.partyIntegrityCount > 0) parts.push(summary.partyIntegrityCount + ' authoritative party collection error(s)');
 	  if (summary.enhancedDocumentLinkIntegrityCount > 0) parts.push(summary.enhancedDocumentLinkIntegrityCount + ' invalid enhanced evidence link(s)');
-	  if (summary.blockerCount > summary.issueCount) parts.push(summary.blockerCount + ' document evidence blocker(s)');
+	  var documentOnlyBlockers = Math.max(
+	    0,
+	    summary.blockerCount -
+	      summary.partyIntegrityCount -
+	      summary.enhancedDocumentLinkIntegrityCount
+	  );
+	  if (documentOnlyBlockers > summary.issueCount) parts.push(documentOnlyBlockers + ' document evidence blocker(s)');
 	  if (summary.pepIncompleteCount > 0) parts.push(summary.pepIncompleteCount + ' incomplete PEP declaration(s)');
 	  return '<div class="ah-alert-banner warning" style="margin-bottom:12px;"><span style="font-size:18px;">⚠️</span><div><strong>Incomplete / warning-state submission:</strong> ' + escapeHtml(parts.join(' · ')) + '. This case is reviewable but should not be treated as clean.</div></div>';
 	}
@@ -12926,7 +12994,12 @@ function enhancedRequirementDocumentLinkIntegrity(req, doc) {
     return { valid: false, reason: 'linked_document_unavailable', message: 'Linked enhanced evidence is missing from this application.' };
   }
   if (enhancedRequirementIsMonitoringRefresh(req)) {
-    return { valid: false, reason: 'monitoring_link_requires_server_validation', message: 'Monitoring replacement evidence must be uploaded through its controlled replacement flow.' };
+    return {
+      valid: true,
+      reason: 'monitoring_link_validation_deferred_to_server',
+      message: '',
+      server_validation_pending: true
+    };
   }
   var currentValue = doc.is_current;
   var isCurrent = currentValue == null ||
@@ -13142,9 +13215,15 @@ function enhancedRequirementDocumentOptions(req) {
   var options = '<option value="">No document link change</option>';
   docs.forEach(function(doc) {
     var value = String(doc.id || '');
-    if (!value || !enhancedRequirementDocumentEligibleForLink(req, doc)) return;
-    options += '<option value="' + escapeHtml(value) + '"' + (value === selected ? ' selected' : '') + '>' +
+    if (!value) return;
+    var eligible = enhancedRequirementDocumentEligibleForLink(req, doc);
+    var isSelected = value === selected;
+    if (!eligible && !isSelected) return;
+    options += '<option value="' + escapeHtml(value) + '"' +
+      (isSelected ? ' selected' : '') +
+      (!eligible ? ' disabled' : '') + '>' +
       escapeHtml(enhancedRequirementDocumentLabel(doc)) +
+      (!eligible ? ' — invalid link; use controlled replacement' : '') +
     '</option>';
   });
   return options;

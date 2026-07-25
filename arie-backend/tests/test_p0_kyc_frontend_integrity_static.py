@@ -74,7 +74,11 @@ def test_pricing_review_hydrates_canonical_parties_before_acceptance():
     assert "duplicate_canonical_party_binding" in binder
     assert "authoritativeIdentityTokens" in binder
     assert "authoritative_party_identity_namespace_collision" in binder
-    assert "if (!errors.length) syncDirectorsUBOsToKYC()" in binder
+    assert "syncDirectorsUBOsToKYC()" not in binder
+    party_errors = _function(source, "renderPortalPartyHydrationErrors")
+    assert "if (portalPartyHydrationBlocked())" in party_errors
+    assert "clearSyncedCanonicalKYCCards()" in party_errors
+    assert "syncDirectorsUBOsToKYC()" in party_errors
 
 
 def test_resume_hydrates_documents_after_the_final_card_rebuild():
@@ -164,7 +168,7 @@ def test_unmatched_or_ambiguous_persisted_documents_fail_visibly_closed():
     assert "validatePersistedDocumentSlotIdentity(doc)" in hydrate
     assert "conflicting_document_slot_identity" in slot_validator
     assert "storedSlotKey !== expectedSlotKey" in slot_validator
-    assert "'person:' + personType + ':' + personId + ':' + docType" in slot_validator
+    assert "expectedSlotKey = getDocumentSlotKey({" in slot_validator
     assert "special_slot: true" in slot_validator
     assert "if (slotIdentity.special_slot) return" in hydrate
     assert "item.document_id" in special_validator
@@ -221,6 +225,7 @@ def test_backoffice_retains_typed_document_ownership_and_displays_profiles():
     assert "validateBackofficeDocumentIntegrity(app, doc)" in slot_matcher
     assert "storedSlotKey !== expectedSlotKey" in integrity
     assert "'person:' + personType + ':' + personId + ':' + docType" in integrity
+    assert "normalizeBackofficeDocumentTypeForSlot(doc && doc.doc_type)" in integrity
     assert "special_slot: true" in integrity
     assert "person_id: person.id || person.person_key" in readiness
     assert "documentMatchesExpectedSlot(doc, expectation, app)" in readiness
@@ -248,6 +253,20 @@ def test_kyc_applicant_registration_uses_exact_typed_canonical_party():
     assert "person_id.startsWith" not in register
     assert "external_user_id: personId" in register
     assert "person_type: personType" in register
+
+
+def test_canonical_party_type_cannot_be_changed_on_the_kyc_card():
+    source = _read(PORTAL)
+    sync = _function(source, "syncDirectorsUBOsToKYC")
+    toggle = _function(source, "setKYCType")
+
+    assert "partyTypeToggleLock" in sync
+    assert 'disabled aria-disabled="true"' in sync
+    assert "stablePartyId === String(personId || '').trim()" in toggle
+    assert "Party Type Locked" in toggle
+    assert toggle.index("Party Type Locked") < toggle.index(
+        "card.dataset.personType = normalizePersonType(type)"
+    )
 
 
 def test_canonical_empty_party_collections_never_restore_stale_prescreening_rows():
@@ -329,6 +348,8 @@ def test_enhanced_evidence_link_contract_is_server_enforced_and_ui_filtered():
     readiness = _function(backoffice, "computeDocumentReadinessSummary")
 
     assert "enhancedRequirementDocumentEligibleForLink(req, doc)" in options
+    assert "(!eligible && !isSelected)" in options
+    assert "invalid link; use controlled replacement" in options
     assert "enhancedRequirementDocumentLinkIntegrity(req, doc).valid === true" in eligibility
     assert "'enhanced_requirement:' + String(req.id || '').trim()" in local_integrity
     assert "document_slot_mismatch" in local_integrity
