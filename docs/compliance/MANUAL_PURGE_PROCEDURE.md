@@ -73,6 +73,12 @@ enriched evidence logging (DCI-021).
 - `audit_log` may only be purged by a **deliberate manual**
   `purge_expired_data("audit_logs", dry_run=False)` — the unattended
   scheduler refuses it.
+- **Once the P10-7 append-only grants are applied on staging RDS**
+  (`arie-backend/scripts/apply_audit_log_append_only_grants.sql`, see
+  `docs/OPS_HARDENING_RUNBOOK.md` §3), the app role no longer holds DELETE on
+  `audit_log`: the manual purge must run over an **admin DSN** with
+  `SET ROLE regmind_audit_maint;` first. The trigger maintenance window is a
+  table marker (role-agnostic), so the procedure is otherwise unchanged.
 - A purge without its `data_purge_log` evidence row did not happen — the
   automatic engine enforces this atomically (delete + evidence in one
   transaction); this procedure enforces it for manual purges via step 5-6.

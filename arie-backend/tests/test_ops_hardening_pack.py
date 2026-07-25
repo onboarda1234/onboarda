@@ -127,6 +127,29 @@ class TestGrantsPackAndRunbook:
         assert "has_table_privilege" in sql  # built-in verification
         assert "ON_ERROR_STOP" in sql
 
+    def test_grants_sql_boot_and_purge_safety(self):
+        # Review round-1 defects, pinned:
+        # (1) TRIGGER must NOT be revoked — the boot path re-creates the
+        #     append-only triggers as the app role every start; revoking it
+        #     crash-loops the next deploy.
+        # (2) The NOLOGIN maintenance role must be made assumable (PG15 needs
+        #     explicit membership even for the master user).
+        sql = (BACKEND / "scripts" / "apply_audit_log_append_only_grants.sql"
+               ).read_text(encoding="utf-8")
+        revoke_lines = [l for l in sql.splitlines() if l.strip().startswith("REVOKE")]
+        assert revoke_lines and all("TRIGGER" not in l for l in revoke_lines), (
+            "TRIGGER must not be revoked from the table-owning app role"
+        )
+        assert re.search(r'GRANT :"maint_role" TO :"admin_role"', sql), (
+            "maintenance role must be granted to the admin role (SET ROLE)"
+        )
+        # The sanctioned-purge role change must be documented where operators look.
+        rb = (REPO / "docs" / "OPS_HARDENING_RUNBOOK.md").read_text(encoding="utf-8")
+        assert "SET ROLE regmind_audit_maint" in rb
+        purge_doc = (REPO / "docs" / "compliance" / "MANUAL_PURGE_PROCEDURE.md"
+                     ).read_text(encoding="utf-8")
+        assert "SET ROLE regmind_audit_maint" in purge_doc
+
     def test_runbook_covers_all_three_ops_halves(self):
         rb = (REPO / "docs" / "OPS_HARDENING_RUNBOOK.md").read_text(encoding="utf-8")
         assert "put-image-tag-mutability" in rb          # P9-12

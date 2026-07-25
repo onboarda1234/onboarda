@@ -73,19 +73,35 @@ shows datapoints (namespace `RegMind/Pilot`, metric `ScreeningQueueLatencyMs`).
 Redundant permission-layer enforcement beneath the merged trigger layer
 (#837). The app role loses UPDATE/DELETE/TRUNCATE on `audit_log`; a NOLOGIN
 maintenance role receives them for sanctioned retention purges only.
+**TRIGGER is deliberately NOT revoked** — the app role owns the table and the
+boot path re-creates the append-only triggers every start; revoking TRIGGER
+would crash-loop the next deploy.
 
 ```bash
 # identify the app role if unsure: run SELECT current_user; over the app DSN
 psql "$ADMIN_DATABASE_URL" \
   -v app_role=<app_role_name> \
   -v maint_role=regmind_audit_maint \
+  -v admin_role=<rds_master_user> \
   -f arie-backend/scripts/apply_audit_log_append_only_grants.sql
 ```
 
 The script ends with a `has_table_privilege` verification row — expect the app
 role `f/f/f` for UPDATE/DELETE/TRUNCATE and `t/t` for INSERT/SELECT. Follow
-with one end-to-end check: perform any audited back-office action on staging
-and confirm the new `audit_log` row appears (INSERT path unaffected).
+with TWO end-to-end checks:
+
+1. Perform any audited back-office action on staging and confirm the new
+   `audit_log` row appears (INSERT path unaffected).
+2. **Redeploy staging** (or force a task restart) and confirm it boots — the
+   boot path re-creates the append-only triggers as the app role, proving the
+   TRIGGER privilege was preserved.
+
+**Sanctioned purge procedure changes with these grants** (update your copy of
+`docs/compliance/MANUAL_PURGE_PROCEDURE.md` habits): the manual
+`purge_expired_data("audit_logs", dry_run=False)` run must now execute over an
+**admin DSN** with `SET ROLE regmind_audit_maint;` first — the app DSN no
+longer holds DELETE. The #837 trigger maintenance window is a table marker
+(role-agnostic), so the purge works unchanged under the maintenance role.
 
 Rollback (emergency only): `GRANT UPDATE, DELETE, TRUNCATE ON TABLE audit_log
 TO <app_role>;`
