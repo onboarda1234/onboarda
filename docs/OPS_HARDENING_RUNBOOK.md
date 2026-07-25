@@ -1,9 +1,10 @@
 # Ops Hardening Runbook — 2026-07 pack
 
-Operator-executed halves of the register items listed below. Each is idempotent, staging-
+Operator-executed halves of three register items. Each is idempotent, staging-
 scoped, and changes **no application workflow** (verification queries included).
 Register rows: P9-12 · Phase-5/6 screening-queue ops ticket (p95 alarm) ·
-P10-7 (RDS-grants half).
+P10-7 (RDS-grants half) · item 33 (pilot-scope guard — no-op by default,
+documented here for the IaC pin and the verification command).
 
 Prerequisites: AWS CLI v2 with credentials for `af-south-1` (ECR/CloudWatch/
 Logs admin), and the RDS master-user DSN for `regmind-staging-db`.
@@ -98,14 +99,83 @@ with TWO end-to-end checks:
    TRIGGER privilege was preserved.
 
 **Sanctioned purge procedure changes with these grants** (update your copy of
-`docs/compliance/MANUAL_PURGE_PROCEDURE.md` habits): the manual
-`purge_expired_data("audit_logs", dry_run=False)` run must now execute over an
-**admin DSN** with `SET ROLE regmind_audit_maint;` first — the app DSN no
-longer holds DELETE. The #837 trigger maintenance window is a table marker
-(role-agnostic), so the purge works unchanged under the maintenance role.
+`docs/compliance/MANUAL_PURGE_PROCEDURE.md` habits): the manual audit-log
+retention purge must now execute over an **admin DSN** with
+`SET ROLE regmind_audit_maint` on the SAME connection — the app DSN no longer
+holds DELETE. The script grants the maintenance role the complete purge-path
+set (policy read, window marker INSERT/DELETE + sequence, audit_log
+SELECT+DELETE, data_purge_log evidence INSERT + sequence — Codex validation
+2026-07-25 item 5(b)), and `tests/test_audit_log_grants_pg.py` proves the
+literal script + this exact invocation end-to-end on PostgreSQL in CI.
+Run it from a one-off task container (app code present):
+
+```python
+import os, psycopg2, db, gdpr
+conn = psycopg2.connect(os.environ["ADMIN_DATABASE_URL"])   # RDS master DSN
+dbw = db.DBConnection(conn, is_postgres=True, database_identity="admin-maint")
+dbw.execute('SET ROLE regmind_audit_maint')                  # session role; one connection throughout
+print(gdpr.purge_expired_data(dbw, "audit_logs", purged_by="<operator>", dry_run=True))
+# review the dry-run counts, then repeat with dry_run=False
+```
 
 Rollback (emergency only): `GRANT UPDATE, DELETE, TRUNCATE ON TABLE audit_log
 TO <app_role>;`
+
+---
+
+## 4. Item 33 — pilot-scope guard (`PILOT_SCOPE`)
+
+Server-side veto above the enterprise feature flags: when active, the
+enterprise modules (SAR/STR, Regulatory Intelligence, AI Compliance
+Supervisor, Supervisor Audit) are refused **regardless of individual flag
+values**, including values set outside version control.
+
+**No operator action is required to activate it** — the guard defaults ON in
+staging and production. It converts the enterprise exclusion from a convention
+into an enforced, testable control.
+
+**Two behaviour notes — read before deploying:**
+
+1. The veto is a no-op *only for the default flag values*. Every enterprise
+   flag defaults False in staging/production, but deployed values can come from
+   the ECS task definition or the Render dashboard (`render.yaml` pins three
+   `sync: false`), and those are not visible in this repo. **Before deploying,
+   confirm `ENABLE_AI_SUPERVISOR`, `ENABLE_REGULATORY_INTELLIGENCE_FULL` and
+   `ENABLE_SAR_WORKFLOW` are not set true** in the live `regmind-staging` task
+   definition or the Render dashboard — if any is, the veto will newly refuse
+   that module (which is the intent, but it should be a deliberate flip).
+2. Independently of `PILOT_SCOPE`, this change adds the missing enterprise gate
+   to `POST /api/applications/:id/memo/supervisor/run` and
+   `GET /api/applications/:id/memo/supervisor`. Those two routes had no gate at
+   all; on staging/production (`ENABLE_AI_SUPERVISOR` False by default) they
+   now return 403 where they previously served. No UI calls them — verified
+   against `arie-backoffice.html` and `arie-portal.html` — and memo approval
+   does not depend on them (the supervisor result is embedded during memo
+   generation and read from there by the approve gate).
+
+Pin it explicitly in IaC so the control is reviewable (recommended, optional):
+
+```yaml
+# render.yaml, per service envVars — an explicit value, NOT `sync: false`
+- key: PILOT_SCOPE
+  value: "true"
+```
+
+**To verify on staging** (expect HTTP 403 with
+`{"code":"enterprise_module_inactive"}`):
+
+```bash
+curl -si -H "Authorization: Bearer $STAGING_OFFICER_TOKEN" \
+  https://staging.regmind.co/api/sar | head -1
+```
+
+**Parsing is fail-closed and inverted on purpose:** the guard turns off only
+on an explicit `false`/`0`/`no`/`off`. Any other value — including a typo like
+`PILOT_SCOPE=ture` — leaves it ON, because a stuck-on guard refuses an
+enterprise module while a stuck-off guard exposes one.
+
+To deliberately run an enterprise-scope environment, set `PILOT_SCOPE=false`;
+the per-module flags then decide as before.
 
 ---
 
@@ -114,11 +184,6 @@ TO <app_role>;`
 Origin: ADMIN-AUDIT-006 — "several test-like users in staging", recommended fix
 "remove or quarantine stale test accounts". The audit-trail half already
 shipped; this is the account half.
-
-**Quarantine, not delete.** ~20 tables carry `REFERENCES users(id)`, so hard-
-deleting an officer who ever acted orphans referential history AML
-recordkeeping depends on. `status='inactive'` blocks login and preserves every
-audit and decision linkage.
 
 ```bash
 cd arie-backend
@@ -261,7 +326,9 @@ Two alarms are worth understanding before you tune them:
   existing ECS `LiveTaskCount` alarm cannot see that.
 * `*-application-error-rate-high` counts `$.level = "ERROR"` records. 4xx is
   logged at WARNING deliberately, so this counts genuine server-side failures
-  and cannot be driven by unauthenticated callers.
+  and cannot be driven by unauthenticated callers. The metric is
+  **dimensionless** (ERROR records carry no `environment` field) and scoped by
+  metric name: `ApplicationErrorCount-<environment>`.
 
 **Verify by checking the METRIC has datapoints, not the alarm state.** With
 `TreatMissingData: notBreaching`, an alarm whose filter never matches also

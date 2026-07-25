@@ -54,12 +54,31 @@ GRANT USAGE, SELECT ON SEQUENCE audit_log_id_seq TO :"app_role";
 --    trigger-layer maintenance window during sanctioned purges).
 GRANT UPDATE, DELETE, TRUNCATE ON TABLE audit_log TO :"maint_role";
 
+-- 4a. Complete purge-path privilege set (Codex validation 2026-07-25, item
+--     5(b)): gdpr.purge_expired_data("audit_logs") runs ENTIRELY over the
+--     SET ROLE'd connection, so the maintenance role itself must be able to:
+--       * read the retention policy               (data_retention_policies)
+--       * count/MIN/MAX + DELETE-with-WHERE       (SELECT on audit_log —
+--         PostgreSQL requires SELECT for columns referenced in DELETE's WHERE,
+--         and the append-only trigger guard SELECTs the window table as the
+--         invoking role)
+--       * open + close the maintenance-window marker row
+--         (audit_maintenance_window INSERT/SELECT/DELETE + its id sequence)
+--       * write the mandatory evidence row        (data_purge_log INSERT +
+--         its id sequence; DCI-021: purge without evidence must not commit)
+GRANT SELECT ON TABLE audit_log TO :"maint_role";
+GRANT SELECT ON TABLE data_retention_policies TO :"maint_role";
+GRANT SELECT, INSERT, DELETE ON TABLE audit_maintenance_window TO :"maint_role";
+GRANT USAGE, SELECT ON SEQUENCE audit_maintenance_window_id_seq TO :"maint_role";
+GRANT SELECT, INSERT ON TABLE data_purge_log TO :"maint_role";
+GRANT USAGE, SELECT ON SEQUENCE data_purge_log_id_seq TO :"maint_role";
+
 -- 4b. Make the NOLOGIN maintenance role actually assumable: on PostgreSQL 15
 --     (staging RDS) even the master user needs explicit membership to
 --     SET ROLE into it.
 GRANT :"maint_role" TO :"admin_role";
 
--- 5. Verification (expect: app f/f/f/t/t, maint t/t/t).
+-- 5. Verification (expect: app f/f/f/t/t, maint ALL t).
 SELECT
   has_table_privilege(:'app_role',  'audit_log', 'UPDATE')   AS app_update,
   has_table_privilege(:'app_role',  'audit_log', 'DELETE')   AS app_delete,
@@ -68,7 +87,14 @@ SELECT
   has_table_privilege(:'app_role',  'audit_log', 'SELECT')   AS app_select,
   has_table_privilege(:'maint_role','audit_log', 'UPDATE')   AS maint_update,
   has_table_privilege(:'maint_role','audit_log', 'DELETE')   AS maint_delete,
-  has_table_privilege(:'maint_role','audit_log', 'TRUNCATE') AS maint_truncate;
+  has_table_privilege(:'maint_role','audit_log', 'TRUNCATE') AS maint_truncate,
+  has_table_privilege(:'maint_role','audit_log', 'SELECT')   AS maint_select,
+  has_table_privilege(:'maint_role','data_retention_policies', 'SELECT') AS maint_policy_select,
+  has_table_privilege(:'maint_role','audit_maintenance_window', 'INSERT') AS maint_window_insert,
+  has_table_privilege(:'maint_role','audit_maintenance_window', 'DELETE') AS maint_window_delete,
+  has_table_privilege(:'maint_role','data_purge_log', 'INSERT') AS maint_evidence_insert,
+  has_sequence_privilege(:'maint_role','audit_maintenance_window_id_seq', 'USAGE') AS maint_window_seq,
+  has_sequence_privilege(:'maint_role','data_purge_log_id_seq', 'USAGE') AS maint_evidence_seq;
 
 -- Rollback (emergency only; restores pre-pack state):
 --   GRANT UPDATE, DELETE, TRUNCATE ON TABLE audit_log TO <app_role>;
