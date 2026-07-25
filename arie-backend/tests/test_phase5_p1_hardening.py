@@ -249,7 +249,7 @@ def test_document_type_validation_rejects_unknown_upload(phase5_api_server):
     assert "Invalid doc_type" in resp.text
 
 
-def test_legacy_general_doc_type_maps_to_supporting_document(phase5_api_server):
+def test_legacy_general_doc_type_without_supported_scope_is_rejected(phase5_api_server):
     client_id, app_id, _ = _seed_app(app_id="phase5_doc_general", ref="ARF-2026-P5-012", status="rmi_sent")
 
     resp = requests.post(
@@ -259,8 +259,8 @@ def test_legacy_general_doc_type_maps_to_supporting_document(phase5_api_server):
         timeout=5,
     )
 
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["doc_type"] == "supporting_document"
+    assert resp.status_code == 400, resp.text
+    assert "explicit supported party association" in resp.text
 
 
 def test_rmi_replacement_upload_maps_to_canonical_required_slot(phase5_api_server):

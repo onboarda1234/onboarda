@@ -307,14 +307,15 @@ def insert_verified_required_documents(db, app_or_id):
         db.execute(
             """
             INSERT INTO documents
-            (id, application_id, person_id, doc_type, doc_name, file_path, slot_key,
+            (id, application_id, person_id, person_type, doc_type, doc_name, file_path, slot_key,
              verification_status, verification_results, verified_at, review_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'verified', ?, ?, 'pending')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'verified', ?, ?, 'pending')
             """,
             (
                 doc_id,
                 app_id,
                 expectation.get("person_id"),
+                expectation.get("person_type"),
                 doc_type,
                 f"{doc_type}.pdf",
                 f"/tmp/{app_id}/{safe_slot or doc_type}.pdf",

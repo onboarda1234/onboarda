@@ -243,7 +243,7 @@ class E2EAuthorityMatrixTest(AsyncHTTPTestCase):
                 "(application_id, trigger_key, trigger_label, requirement_key, requirement_label, "
                 " requirement_type, waivable, blocking_approval, mandatory, status) "
                 "VALUES (?, 'high_risk', 'High Risk', 'source_wealth', 'Source of Wealth', "
-                " 'document', 1, 1, 1, 'accepted')",
+                " 'declaration', 1, 1, 1, 'accepted')",
                 (app_id,),
             )
         self.db.commit()

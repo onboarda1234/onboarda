@@ -605,7 +605,11 @@ class TestVerificationContextResolution:
         db.commit()
 
         app = dict(db.execute("SELECT * FROM applications WHERE id = ?", ("int_app",)).fetchone())
-        context = build_document_verification_context(db, app, {"doc_type": "cert_inc", "person_id": "int1"})
+        context = build_document_verification_context(
+            db,
+            app,
+            {"doc_type": "cert_inc", "person_id": "int1", "person_type": "intermediary"},
+        )
 
         assert context["doc_category"] == "company"
         assert context["subject_type"] == "intermediary_company"

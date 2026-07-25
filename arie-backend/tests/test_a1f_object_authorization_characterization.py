@@ -299,6 +299,14 @@ def test_sumsub_applicant_officer_success_path_records_mapping(a1f_api_server, d
         "ARF-A1F-SUMSUB-SUCCESS",
         "a1f_sumsub_owner",
     )
+    db.execute(
+        """
+        INSERT INTO directors
+            (id, application_id, person_key, first_name, last_name, full_name)
+        VALUES ('a1f_external_success', 'a1f_app_sumsub_success',
+                'a1f_external_success', 'A1F', 'Officer', 'A1F Officer')
+        """
+    )
     db.commit()
 
     token = _token("a1f_sco_sumsub_success", "sco", "A1F SCO", "officer")

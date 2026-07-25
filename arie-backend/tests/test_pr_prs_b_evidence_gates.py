@@ -76,6 +76,7 @@ def _row(**kw):
         "document_reviewer_role": "",
         "document_review_comment": "",
         "document_is_current": 1,
+        "linked_document_integrity_valid": True,
     }
     base.update(kw)
     return base
@@ -130,6 +131,7 @@ def test_periodic_projection_counts_senior_accepted_manual_evidence_ready():
         "document_review_status": "accepted",
         "document_reviewer_role": "sco",
         "document_review_comment": "Manual source check completed",
+        "linked_document_integrity_valid": True,
     }
     assert _projection_doc_request_ready(row) is True
 

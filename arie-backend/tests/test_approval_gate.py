@@ -293,7 +293,7 @@ def _insert_enhanced_requirement(
             "Enhanced approval gate evidence",
             "Evidence required for enhanced review approval gate tests.",
             "client",
-            "document",
+            "declaration",
             "application",
             1 if blocking else 0,
             1 if waivable else 0,

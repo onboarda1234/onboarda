@@ -77,8 +77,15 @@ PII_FIELDS_DIRECTORS = [
     "id_number",
     "country_of_residence",
     "residential_address",
+    "professional_profile_url",
 ]
-PII_FIELDS_UBOS = ["passport_number", "nationality", "country_of_residence", "residential_address"]
+PII_FIELDS_UBOS = [
+    "passport_number",
+    "nationality",
+    "country_of_residence",
+    "residential_address",
+    "professional_profile_url",
+]
 PII_FIELDS_INTERMEDIARIES = ["owned_or_controlled_by"]
 PII_FIELDS_APPLICATIONS = ["pep_flags"]
 
@@ -232,14 +239,23 @@ def get_application_parties(db, application_id):
     """
     directors = [
         hydrate_party_record(d, PII_FIELDS_DIRECTORS, source="directors")
-        for d in db.execute("SELECT * FROM directors WHERE application_id = ?", (application_id,)).fetchall()
+        for d in db.execute(
+            "SELECT * FROM directors WHERE application_id = ? ORDER BY person_key, id",
+            (application_id,),
+        ).fetchall()
     ]
     ubos = [
         hydrate_party_record(u, PII_FIELDS_UBOS, source="ubos")
-        for u in db.execute("SELECT * FROM ubos WHERE application_id = ?", (application_id,)).fetchall()
+        for u in db.execute(
+            "SELECT * FROM ubos WHERE application_id = ? ORDER BY person_key, id",
+            (application_id,),
+        ).fetchall()
     ]
     intermediaries = []
-    for row in db.execute("SELECT * FROM intermediaries WHERE application_id = ?", (application_id,)).fetchall():
+    for row in db.execute(
+        "SELECT * FROM intermediaries WHERE application_id = ? ORDER BY person_key, id",
+        (application_id,),
+    ).fetchall():
         item = decrypt_pii_fields(dict(row), PII_FIELDS_INTERMEDIARIES, source="intermediaries")
         source_metadata = parse_json_field(item.get("source_metadata_json"), {})
         if isinstance(source_metadata.get("registry_originals"), dict):
@@ -267,7 +283,8 @@ def get_application_parties_batch(db, application_ids):
     # Batch query directors
     directors_by_app = {}
     for d in db.execute(
-        f"SELECT * FROM directors WHERE application_id IN ({placeholders})",
+        f"SELECT * FROM directors WHERE application_id IN ({placeholders}) "
+        "ORDER BY application_id, person_key, id",
         id_list,
     ).fetchall():
         app_id = d["application_id"]
@@ -278,7 +295,8 @@ def get_application_parties_batch(db, application_ids):
     # Batch query UBOs
     ubos_by_app = {}
     for u in db.execute(
-        f"SELECT * FROM ubos WHERE application_id IN ({placeholders})",
+        f"SELECT * FROM ubos WHERE application_id IN ({placeholders}) "
+        "ORDER BY application_id, person_key, id",
         id_list,
     ).fetchall():
         app_id = u["application_id"]
@@ -289,7 +307,8 @@ def get_application_parties_batch(db, application_ids):
     # Batch query intermediaries
     intermediaries_by_app = {}
     for row in db.execute(
-        f"SELECT * FROM intermediaries WHERE application_id IN ({placeholders})",
+        f"SELECT * FROM intermediaries WHERE application_id IN ({placeholders}) "
+        "ORDER BY application_id, person_key, id",
         id_list,
     ).fetchall():
         app_id = row["application_id"]

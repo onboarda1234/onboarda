@@ -28,7 +28,15 @@ class TestPersonLevelDocumentUpload:
         """, (app_id, person_key, first_name, last_name, f"{first_name} {last_name}", nationality, ownership_pct))
         db.commit()
 
-    def _upload_document(self, db, app_id, doc_type="passport", person_id="dir1", filename="passport.pdf"):
+    def _upload_document(
+        self,
+        db,
+        app_id,
+        doc_type="passport",
+        person_id="dir1",
+        person_type="director",
+        filename="passport.pdf",
+    ):
         """Simulate a document upload by inserting directly into the DB."""
         import tempfile
         doc_id = uuid.uuid4().hex[:16]
@@ -36,10 +44,24 @@ class TestPersonLevelDocumentUpload:
         # Create a minimal test file
         with open(file_path, "wb") as f:
             f.write(b"%PDF-1.4 test content")
+        if not person_id:
+            person_type = None
         db.execute("""
-            INSERT INTO documents (id, application_id, person_id, doc_type, doc_name, file_path, file_size, mime_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (doc_id, app_id, person_id, doc_type, filename, file_path, 100, "application/pdf"))
+            INSERT INTO documents
+                (id, application_id, person_id, person_type, doc_type, doc_name,
+                 file_path, file_size, mime_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            doc_id,
+            app_id,
+            person_id,
+            person_type,
+            doc_type,
+            filename,
+            file_path,
+            100,
+            "application/pdf",
+        ))
         db.commit()
         return doc_id
 
@@ -87,6 +109,7 @@ class TestPersonLevelDocumentUpload:
         doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
         assert doc is not None
         assert doc["person_id"] == "dir1"
+        assert doc["person_type"] == "director"
         assert doc["doc_type"] == "passport"
         assert doc["application_id"] == sample_application
 
@@ -117,7 +140,13 @@ class TestPersonLevelDocumentUpload:
     def test_verification_context_ubo_passport(self, temp_db, db, sample_application):
         """UBO passport doc should resolve to 'kyc' category with UBO person_type."""
         self._create_ubo(db, sample_application, person_key="ubo1")
-        doc_id = self._upload_document(db, sample_application, doc_type="passport", person_id="ubo1")
+        doc_id = self._upload_document(
+            db,
+            sample_application,
+            doc_type="passport",
+            person_id="ubo1",
+            person_type="ubo",
+        )
         doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
         app = db.execute("SELECT * FROM applications WHERE id=?", (sample_application,)).fetchone()
         from server import resolve_document_subject_context
@@ -204,6 +233,34 @@ class TestPersonLevelDocumentUpload:
         # passport is not in company_doc_types, so falls to 'kyc'
         assert ctx["doc_category"] == "kyc"
         assert ctx["person_record"] is None
+
+    def test_verification_context_untyped_legacy_person_document_fails_closed(
+        self,
+        temp_db,
+        db,
+        sample_application,
+    ):
+        """Legacy person refs without persisted type never get guessed."""
+        self._create_director(db, sample_application, person_key="dir1")
+        doc_id = self._upload_document(
+            db,
+            sample_application,
+            doc_type="passport",
+            person_id="dir1",
+            person_type=None,
+        )
+        doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+        app = db.execute(
+            "SELECT * FROM applications WHERE id=?",
+            (sample_application,),
+        ).fetchone()
+
+        from server import resolve_document_subject_context
+
+        ctx = resolve_document_subject_context(db, app, dict(doc))
+        assert ctx["person_record"] is None
+        assert ctx["subject_type"] == "person"
+        assert ctx["doc_category"] == "kyc"
 
     # ── Test 16: Sanctions screening safe when person has empty full_name ──
     def test_sanctions_safe_empty_name(self, temp_db, db, sample_application, mock_screening):
