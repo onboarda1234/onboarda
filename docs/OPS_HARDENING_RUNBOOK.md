@@ -79,11 +79,12 @@ would crash-loop the next deploy.
 
 ```bash
 # identify the app role if unsure: run SELECT current_user; over the app DSN
-psql "$ADMIN_DATABASE_URL" \
+psql "$ADMIN_DATABASE_URL" -1 \
   -v app_role=<app_role_name> \
   -v maint_role=regmind_audit_maint \
   -v admin_role=<rds_master_user> \
   -f arie-backend/scripts/apply_audit_log_append_only_grants.sql
+# (-1 = single transaction: an aborted run leaves no partial grant state)
 ```
 
 The script ends with a `has_table_privilege` verification row — expect the app
@@ -110,4 +111,5 @@ TO <app_role>;`
 
 **Evidence:** after executing, record command outputs against the register rows
 in `docs/REMEDIATION_MASTER_LIST.md` (P9-12 → ✅; ops-ticket row → ✅; P10-7 →
-fully ✅ closing the ◐).
+✅ closing the ◐, with the documented residual that the app role remains
+table OWNER — full owner separation is future work).

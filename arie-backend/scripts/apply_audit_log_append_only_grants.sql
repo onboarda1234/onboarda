@@ -5,8 +5,9 @@
 -- UPDATE/DELETE triggers with a maintenance-window bypass for sanctioned
 -- retention purges. This pack adds the REDUNDANT permission-layer enforcement
 -- the register records as the residual: the application role must not hold
--- UPDATE / DELETE / TRUNCATE (or DDL) on `audit_log`; trigger/maintenance
--- ownership moves to a separate role the app cannot assume.
+-- UPDATE / DELETE / TRUNCATE on `audit_log`; a separate NOLOGIN maintenance
+-- role holds those privileges (via membership grant — NOT an ownership
+-- transfer; the app role remains table owner, see boot-safety note).
 --
 -- No RUNTIME REQUEST PATH performs these operations (enforced + validated by
 -- the trigger layer), so applying these grants changes no request-serving
