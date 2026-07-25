@@ -26,6 +26,14 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
+class MissingAuditContext(ValueError):
+    """Raised when a fail-closed writer is called without an actor/audit sink
+    (RDI-006). Subclasses ValueError for backward compatibility, but callers
+    should catch THIS type for the caller-contract 400 — a generic ValueError
+    from inside the atomic write (e.g. a failing audit sink) is an atomic-write
+    failure and must surface as a 500, not a 400."""
+
+
 # ============================================================================
 # Constants & Enums
 # ============================================================================
@@ -772,7 +780,7 @@ def create_change_alert(
     # either is absent rather than committing a materiality decision with no
     # audit evidence.
     if log_audit_fn is None or user is None:
-        raise ValueError(
+        raise MissingAuditContext(
             "create_change_alert requires a non-null audit writer and actor "
             "(RDI-006): change-alert materiality must not be recorded without "
             "audit evidence"

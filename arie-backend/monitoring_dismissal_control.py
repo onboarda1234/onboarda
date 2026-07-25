@@ -149,6 +149,17 @@ def requires_control(alert: Any, *, action: str, outcome: Optional[str] = None,
     return True
 
 
+def requires_evidence(tier: int, alert: Any) -> bool:
+    """Documented evidence is mandatory for a Tier-1 clearance AND for ANY
+    CRITICAL-severity alert (RDI-008 follow-up).
+
+    Without the severity clause a CRITICAL alert that classifies Tier-2 (obvious
+    document duplicate) or Tier-3 could be direct-cleared / requested by a senior
+    with no evidence, defeating RDI-008's "senior four-eyes PLUS documented
+    evidence" requirement."""
+    return tier == 1 or _token(_get(alert, "severity")) == "critical"
+
+
 def approver_roles_for_tier(tier: int) -> set:
     return TIER1_APPROVER_ROLES if tier == 1 else TIER2_APPROVER_ROLES
 
@@ -204,8 +215,8 @@ def create_pending_request(db, *, alert, tier, requested_outcome, dismissal_reas
     alert_id = _get(alert, "id")
     if not (rationale or "").strip():
         raise DismissalControlError("A rationale is required to request clearance of this alert.", 400)
-    if tier == 1 and not (evidence_ref or "").strip():
-        raise DismissalControlError("An evidence note is required for sanctions/PEP/watchlist/adverse-media clearance requests.", 400)
+    if requires_evidence(tier, alert) and not (evidence_ref or "").strip():
+        raise DismissalControlError("An evidence note is required to request clearance of a sanctions/PEP/watchlist/adverse-media or CRITICAL-severity alert.", 400)
     if has_pending_request(db, alert_id):
         raise DismissalControlError("A review request is already pending for this alert.", 409)
 
@@ -243,8 +254,8 @@ def record_senior_clear(db, *, alert, tier, requested_outcome, dismissal_reason,
     alert_id = _get(alert, "id")
     if not (rationale or "").strip():
         raise DismissalControlError("Senior direct clearance requires an enhanced rationale.", 400)
-    if tier == 1 and not (evidence_ref or "").strip():
-        raise DismissalControlError("Senior direct clearance of a sanctions/PEP/watchlist/adverse-media alert requires an evidence note.", 400)
+    if requires_evidence(tier, alert) and not (evidence_ref or "").strip():
+        raise DismissalControlError("Senior direct clearance of a sanctions/PEP/watchlist/adverse-media or CRITICAL-severity alert requires an evidence note.", 400)
     if has_pending_request(db, alert_id):
         raise DismissalControlError(
             "A review request is already pending for this alert; approve or reject it instead of clearing directly.",

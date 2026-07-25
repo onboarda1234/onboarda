@@ -725,3 +725,34 @@ class TestRdi008CriticalDismissalGate:
             user=USER, audit_writer=audit_sink,
         )
         assert result["status"] == "dismissed"
+
+    # ── Codex-validation follow-up (2026-07-25): a bare senior_clear marker
+    #    WITHOUT evidence must no longer pass the service gate ──
+    def test_bare_senior_clear_marker_without_evidence_rejected(self, routing_db, audit_sink):
+        from monitoring_routing import dismiss_alert, CriticalAlertDismissalBlocked
+        alert_id = _insert_alert(routing_db, severity="critical")
+        no_evidence = {"approver": _SENIOR, "via": "senior_clear"}  # no evidence_ref
+        with pytest.raises(CriticalAlertDismissalBlocked):
+            dismiss_alert(
+                routing_db, alert_id,
+                dismissal_reason="false_positive",
+                dismissal_notes="senior says fine",
+                user=_SENIOR, audit_writer=audit_sink,
+                critical_clearance=no_evidence,
+            )
+        row = _alert(routing_db, alert_id)
+        assert row["status"] == "open"
+
+    def test_approved_review_marker_still_passes_marker_only(self, routing_db, audit_sink):
+        # A COMPLETED second review validated evidence at request creation, so
+        # the approved_review marker alone remains sufficient.
+        from monitoring_routing import dismiss_alert
+        alert_id = _insert_alert(routing_db, severity="critical")
+        result = dismiss_alert(
+            routing_db, alert_id,
+            dismissal_reason="false_positive",
+            dismissal_notes="approved via second review",
+            user=_SENIOR, audit_writer=audit_sink,
+            critical_clearance={"approver": _SENIOR, "via": "approved_review"},
+        )
+        assert result["status"] == "dismissed"

@@ -58,9 +58,6 @@ VALID_DISMISSAL_REASONS = (
 CRITICAL_SEVERITIES = ("critical",)
 # Roles accepted as a senior disposition authority for a critical dismissal.
 _SENIOR_DISPOSITION_ROLES = ("admin", "sco")
-# Markers a caller may set on the clearance to certify that the M2.2 control
-# already recorded a senior clear / approved second review for this alert.
-_APPROVED_CLEARANCE_MARKERS = ("approved_review", "senior_clear")
 
 # Alert statuses set by this module. The base `monitoring_alerts.status`
 # column is free-text in the schema (see arie-backend/db.py) so this
@@ -204,11 +201,16 @@ def _valid_critical_clearance(critical_clearance, user):
     """Return True when the caller has certified a valid senior/four-eyes
     disposition for dismissing a CRITICAL alert (RDI-008).
 
-    A valid clearance is a mapping carrying a senior (admin/SCO) ``approver``
-    and either a non-empty ``evidence_ref`` or an explicit approved-review /
-    senior-clear marker (``via``). This is the service-layer enforcement of
-    the M2.2 monitoring-dismissal control; the server supplies it only after
-    that control has recorded the senior clear or approved second review.
+    A valid clearance is a mapping carrying a senior (admin/SCO) ``approver`` and:
+      - ``via='approved_review'`` — a COMPLETED second review, whose evidence was
+        already validated at request creation (M2.2 ``create_pending_request``
+        mandates evidence for every critical alert), so it may pass marker-only; OR
+      - a non-empty ``evidence_ref`` — any DIRECT senior clear must itself carry
+        documented evidence.
+
+    RDI-008 follow-up: the bare ``via='senior_clear'`` marker is NO LONGER
+    sufficient on its own — a direct senior clear without evidence would let a
+    CRITICAL tier-2/3 alert be dismissed with no documented evidence.
     """
     if not isinstance(critical_clearance, dict):
         return False
@@ -216,9 +218,11 @@ def _valid_critical_clearance(critical_clearance, user):
     approver_role = str((approver or {}).get("role") or "").strip().lower()
     if approver_role not in _SENIOR_DISPOSITION_ROLES:
         return False
-    evidence_ref = str(critical_clearance.get("evidence_ref") or "").strip()
     via = str(critical_clearance.get("via") or "").strip().lower()
-    return bool(evidence_ref) or via in _APPROVED_CLEARANCE_MARKERS
+    if via == "approved_review":
+        return True
+    evidence_ref = str(critical_clearance.get("evidence_ref") or "").strip()
+    return bool(evidence_ref)
 
 
 def _enforce_critical_dismissal_gate(alert_id, dismissal_notes, critical_clearance, user):

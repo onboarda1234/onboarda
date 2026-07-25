@@ -542,3 +542,36 @@ class TestRDI014FullChainVerification:
         assert "verify_full_chain" in src
         assert "full" in src
         assert "verify_chain_integrity" in src  # windowed default retained
+
+    # ── Codex-validation follow-up (2026-07-25): bounded reporting ──
+    def test_mass_tamper_report_is_capped_but_counted(self, temp_db):
+        """Under mass tampering the DETAILED violation list must stay bounded
+        (memory/response safety) while the TOTAL count and truncation are
+        reported honestly — never silently."""
+        _clear_chain()
+        from db import get_db
+        from supervisor.audit import AuditLogger
+
+        n = 450
+        ids, hashes = _seed_linear_chain(n)
+
+        # Tamper the detail of 300 rows (> the 200-violation reporting cap).
+        db = get_db()
+        for rid in ids[:300]:
+            db.execute(
+                "UPDATE supervisor_audit_log SET detail = 'TAMPERED' WHERE id = ?",
+                (rid,),
+            )
+        db.commit()
+        db.close()
+
+        al = AuditLogger(db_path=temp_db)
+        result = al.verify_full_chain(batch_size=100)
+
+        assert result["verified"] is False
+        # Every tampered row was found...
+        assert result["total_violations"] >= 300
+        # ...but the detailed report is capped, with the truncation declared.
+        assert len(result["broken_links"]) <= 200
+        assert result.get("violations_truncated", 0) >= 100
+        assert "coverage_note" in result or result.get("violations_truncated")
