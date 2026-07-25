@@ -111,6 +111,7 @@ from environment import (
     ENV, is_demo, is_production, is_staging, flags,
     enforce_startup_safety, get_environment_info,
     get_database_url, get_jwt_secret, get_cors_origin, get_s3_bucket,
+    pilot_scope_active,
 )
 from verification_state import (
     STATE_FAILED,
@@ -4337,16 +4338,35 @@ def _feature_enabled(flag_name):
     return bool(flags.is_enabled(flag_name))
 
 
+def _enterprise_scope_permitted():
+    """Register item 33 — server-side pilot-scope veto.
+
+    Sits ABOVE the per-module feature flags: in a pilot deployment the
+    enterprise modules stay refused regardless of individual flag values,
+    including values set outside version control (render.yaml pins several
+    `sync: false`). No-op where every enterprise flag already defaults off
+    (staging/production); development/demo/testing default the veto off so
+    their deliberately-enabled modules are unchanged.
+    """
+    return not pilot_scope_active()
+
+
 def _sar_str_enabled():
-    return _feature_enabled("ENABLE_SAR_WORKFLOW") and _feature_enabled("ENABLE_SAR_STR")
+    return (
+        _enterprise_scope_permitted()
+        and _feature_enabled("ENABLE_SAR_WORKFLOW")
+        and _feature_enabled("ENABLE_SAR_STR")
+    )
 
 
 def _regulatory_intelligence_enabled():
-    return _feature_enabled("ENABLE_REGULATORY_INTELLIGENCE_FULL")
+    return _enterprise_scope_permitted() and _feature_enabled(
+        "ENABLE_REGULATORY_INTELLIGENCE_FULL"
+    )
 
 
 def _ai_supervisor_enabled():
-    return _feature_enabled("ENABLE_AI_SUPERVISOR")
+    return _enterprise_scope_permitted() and _feature_enabled("ENABLE_AI_SUPERVISOR")
 
 
 def _supervisor_audit_enabled():
@@ -34714,6 +34734,12 @@ class MemoSupervisorHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
             return
+        # Item 33: AI Compliance Supervisor is an enterprise module. This
+        # surface was missed by PR-PILOT-SCOPE-1B (which gated
+        # /supervisor/run and /supervisor/result) and was reachable by a
+        # BROADER role set than its gated siblings.
+        if not _ai_supervisor_enabled():
+            return _enterprise_module_disabled(self, "AI Compliance Supervisor")
 
         db = get_db()
         memo_row = latest_compliance_memo_row_for_identifier(db, app_id)
@@ -34895,6 +34921,9 @@ class MemoSupervisorResultHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
             return
+        # Item 33: see MemoSupervisorHandler — same missed enterprise surface.
+        if not _ai_supervisor_enabled():
+            return _enterprise_module_disabled(self, "AI Compliance Supervisor")
 
         db = get_db()
         memo_row = latest_compliance_memo_row_for_identifier(

@@ -290,6 +290,50 @@ class FeatureFlags:
 flags = FeatureFlags()
 
 
+# ══════════════════════════════════════════════════════════════
+# 2b. PILOT SCOPE GUARD (register item 33)
+# ══════════════════════════════════════════════════════════════
+# Enterprise-scope modules (SAR/STR, Regulatory Intelligence, AI Compliance
+# Supervisor, Supervisor Audit, roadmap agents 8-10, KPI/Enterprise analytics)
+# must not be reachable in a pilot deployment. Today that rests on per-module
+# feature flags whose deployed values live outside version control
+# (render.yaml pins three of them `sync: false`, i.e. hand-set in a hosting
+# dashboard). PILOT_SCOPE is the veto ABOVE those flags: when active, the
+# enterprise modules stay disabled no matter what any individual flag says.
+#
+# Defaults are behaviour-preserving: ON for staging/production (where every
+# enterprise flag already defaults False, so this is a no-op that merely makes
+# the exclusion enforceable rather than conventional) and OFF for
+# development/demo/testing (which deliberately enable some of those modules).
+_PILOT_SCOPE_DEFAULTS = {
+    "development": False,
+    "demo": False,
+    "testing": False,
+    "staging": True,
+    "production": True,
+}
+
+# Deliberately NOT prefixed ENABLE_ — this is a scope veto, not a feature
+# toggle, and the pilot-lockdown tests assert no "ENABLE_" substring leaks
+# into the disabled-module response bodies.
+PILOT_SCOPE_VAR = "PILOT_SCOPE"
+
+
+def pilot_scope_active(env: str = None) -> bool:
+    """True when enterprise-scope modules must be refused regardless of flags.
+
+    Fail-closed parsing (the inverse of FeatureFlags): the guard turns OFF only
+    on an explicit, well-formed disable value. A typo (`PILOT_SCOPE=flase`) or
+    any unrecognised string leaves the guard ON, because the failure mode of a
+    stuck-on guard is a refused enterprise module, while the failure mode of a
+    stuck-off guard is an exposed one.
+    """
+    raw = os.environ.get(PILOT_SCOPE_VAR)
+    if raw is not None:
+        return raw.strip().lower() not in ("false", "0", "no", "off")
+    return _PILOT_SCOPE_DEFAULTS.get(env or ENV, True)
+
+
 def get_backoffice_runtime_config() -> dict:
     """Return safe runtime settings derived from backend-only flags."""
     polling_slow = flags.is_enabled("FF_POLLING_SLOW")

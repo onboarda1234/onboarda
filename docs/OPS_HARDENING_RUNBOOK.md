@@ -3,7 +3,8 @@
 Operator-executed halves of three register items. Each is idempotent, staging-
 scoped, and changes **no application workflow** (verification queries included).
 Register rows: P9-12 · Phase-5/6 screening-queue ops ticket (p95 alarm) ·
-P10-7 (RDS-grants half).
+P10-7 (RDS-grants half) · item 33 (pilot-scope guard — no-op by default,
+documented here for the IaC pin and the verification command).
 
 Prerequisites: AWS CLI v2 with credentials for `af-south-1` (ECR/CloudWatch/
 Logs admin), and the RDS master-user DSN for `regmind-staging-db`.
@@ -106,6 +107,44 @@ longer holds DELETE. The #837 trigger maintenance window is a table marker
 
 Rollback (emergency only): `GRANT UPDATE, DELETE, TRUNCATE ON TABLE audit_log
 TO <app_role>;`
+
+---
+
+## 4. Item 33 — pilot-scope guard (`PILOT_SCOPE`)
+
+Server-side veto above the enterprise feature flags: when active, the
+enterprise modules (SAR/STR, Regulatory Intelligence, AI Compliance
+Supervisor, Supervisor Audit) are refused **regardless of individual flag
+values**, including values set outside version control.
+
+**No operator action is required for staging or production** — the guard
+defaults ON there, and because every enterprise flag already defaults off in
+those environments this is a behaviour no-op. It converts the exclusion from a
+convention into an enforced, testable control.
+
+Pin it explicitly in IaC so the control is reviewable (recommended, optional):
+
+```yaml
+# render.yaml, per service envVars — an explicit value, NOT `sync: false`
+- key: PILOT_SCOPE
+  value: "true"
+```
+
+**To verify on staging** (expect HTTP 403 with
+`{"code":"enterprise_module_inactive"}`):
+
+```bash
+curl -si -H "Authorization: Bearer $STAGING_OFFICER_TOKEN" \
+  https://staging.regmind.co/api/sar | head -1
+```
+
+**Parsing is fail-closed and inverted on purpose:** the guard turns off only
+on an explicit `false`/`0`/`no`/`off`. Any other value — including a typo like
+`PILOT_SCOPE=ture` — leaves it ON, because a stuck-on guard refuses an
+enterprise module while a stuck-off guard exposes one.
+
+To deliberately run an enterprise-scope environment, set `PILOT_SCOPE=false`;
+the per-module flags then decide as before.
 
 ---
 
