@@ -132,7 +132,12 @@ def _meaningful_form_data(seed="Acme"):
             "f-email": f"{seed.lower()}@example.com",
         },
         "directors": [
-            {"first_name": "Jane", "last_name": "Doe", "nationality": "Mauritius"}
+            {
+                "person_key": "dir_1",
+                "first_name": "Jane",
+                "last_name": "Doe",
+                "nationality": "Mauritius",
+            }
         ],
     }
 
@@ -446,7 +451,12 @@ def test_pre_submit_save_accepts_root_payload_shape_without_form_data(api_server
             "entity_type": "SME",
             "ownership_structure": "Simple ownership",
         },
-        "directors": [{"first_name": "Rita", "last_name": "Draft", "nationality": "MU"}],
+        "directors": [{
+            "person_key": "dir_root_shape",
+            "first_name": "Rita",
+            "last_name": "Draft",
+            "nationality": "MU",
+        }],
     }
 
     save_resp = http_requests.post(
@@ -521,8 +531,19 @@ def test_pre_submit_step2_key_fields_round_trip_and_update_without_500(api_serve
             "f-ownership-structure": "1–2 ownership layers",
             "f-sector": "Software / SaaS",
         },
-        "directors": [{"first_name": "Mia", "last_name": "Director", "nationality": "MU"}],
-        "ubos": [{"first_name": "Uma", "last_name": "Beneficial", "nationality": "GB", "ownership_pct": "55"}],
+        "directors": [{
+            "person_key": "dir_step2",
+            "first_name": "Mia",
+            "last_name": "Director",
+            "nationality": "MU",
+        }],
+        "ubos": [{
+            "person_key": "ubo_step2",
+            "first_name": "Uma",
+            "last_name": "Beneficial",
+            "nationality": "GB",
+            "ownership_pct": "55",
+        }],
     }
 
     manual_save = http_requests.post(

@@ -255,8 +255,29 @@ class RuntimeFileSecurityRegressionTest(AsyncHTTPTestCase):
 
     def test_invalid_file_type_upload_is_rejected(self):
         app_id, _ = self._seed_application(status="rmi_sent")
+        self.conn.execute(
+            """
+            INSERT INTO directors
+                (id, application_id, person_key, first_name, last_name, full_name, nationality)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "dir_file_security",
+                app_id,
+                "dir_file_security",
+                "Runtime",
+                "Director",
+                "Runtime Director",
+                "Mauritius",
+            ),
+        )
+        self.conn.commit()
         body, content_type = _multipart(
-            {"doc_type": "passport"},
+            {
+                "doc_type": "passport",
+                "person_id": "dir_file_security",
+                "person_type": "director",
+            },
             [("file", "payload.exe", "application/octet-stream", b"MZnot-a-document")],
         )
 

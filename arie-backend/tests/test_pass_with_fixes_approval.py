@@ -47,7 +47,7 @@ def _insert_resolved_enhanced_requirement(db, app_id):
             "Resolved enhanced review requirement",
             "Resolved enhanced review fixture for memo approval tests.",
             "client",
-            "document",
+            "declaration",
             "application",
             1,
             1,

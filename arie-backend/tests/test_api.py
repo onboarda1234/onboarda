@@ -3109,7 +3109,7 @@ class TestAuthenticatedAccess:
             "high_risk",
             "High risk",
             "risk",
-            "bank_reference",
+            "company_bank_reference",
             "Bank reference letter",
             "document",
             1,
@@ -3118,6 +3118,17 @@ class TestAuthenticatedAccess:
             1,
             "doc_evidence_enhanced_synthetic",
         ))
+        req_id = conn.execute(
+            "SELECT id FROM application_enhanced_requirements WHERE application_id=?",
+            (app_id,),
+        ).fetchone()["id"]
+        conn.execute(
+            "UPDATE documents SET slot_key=? WHERE id=?",
+            (
+                f"enhanced_requirement:{req_id}",
+                "doc_evidence_enhanced_synthetic",
+            ),
+        )
         conn.commit()
         conn.close()
 
@@ -3187,7 +3198,7 @@ class TestAuthenticatedAccess:
             "high_risk",
             "High risk",
             "risk",
-            "bank_reference",
+            "company_bank_reference",
             "Bank reference letter",
             "document",
             1,
@@ -3199,6 +3210,13 @@ class TestAuthenticatedAccess:
             "SELECT id FROM application_enhanced_requirements WHERE application_id=?",
             (app_id,),
         ).fetchone()["id"]
+        conn.execute(
+            "UPDATE documents SET slot_key=? WHERE id=?",
+            (
+                f"enhanced_requirement:{req_id}",
+                "doc_workflow_enhanced_synthetic",
+            ),
+        )
         conn.commit()
         conn.close()
 
@@ -4392,7 +4410,7 @@ class TestGovernanceAttemptAudit:
                 "Enhanced approval gate evidence",
                 "Evidence required for enhanced review approval.",
                 "client",
-                "document",
+                "declaration",
                 "application",
                 blocking_approval,
                 1,

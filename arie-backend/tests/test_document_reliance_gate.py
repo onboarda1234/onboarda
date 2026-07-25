@@ -186,6 +186,39 @@ def test_optional_pending_document_does_not_block_required_reliance(db):
     assert gate["passed"] is True
 
 
+def test_person_document_selection_does_not_treat_entity_scope_as_empty_legacy_alias():
+    from document_reliance_gate import _index_documents, _select_expected_document
+
+    docs = [
+        {
+            "id": "entity-poa",
+            "doc_type": "poa",
+            "slot_key": "entity:poa",
+            "person_id": None,
+            "person_type": None,
+        },
+        {
+            "id": "director-poa",
+            "doc_type": "poa",
+            "slot_key": "person:director:director-1:poa",
+            "person_id": "director-1",
+            "person_type": "director",
+        },
+    ]
+    docs_by_slot, _ = _index_documents(docs)
+    expectation = {
+        "doc_type": "poa",
+        "slot_key": "person:director:director-1:poa",
+        "person_id": "director-1",
+        "person_type": "director",
+        "legacy_person_key": None,
+    }
+
+    selected = _select_expected_document(expectation, docs, docs_by_slot)
+
+    assert selected["id"] == "director-poa"
+
+
 def test_manual_accepted_required_document_passes_with_governance(db):
     app = _insert_app(db)
     doc_id = _insert_required_documents(

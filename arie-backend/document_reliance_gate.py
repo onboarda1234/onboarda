@@ -514,6 +514,9 @@ def _select_expected_document(
     expected_person_id = str(expectation.get("person_id") or "").strip()
     legacy_person_key = str(expectation.get("legacy_person_key") or "").strip()
     expected_doc_type = _normalize_document_type(expectation.get("doc_type"))
+    allowed_person_ids = {expected_person_id}
+    if legacy_person_key:
+        allowed_person_ids.add(legacy_person_key)
     for raw_doc in docs:
         doc = dict(raw_doc)
         if _normalize_document_type(doc.get("doc_type")) != expected_doc_type:
@@ -529,7 +532,7 @@ def _select_expected_document(
             continue
         actual_person_id = str(doc.get("person_id") or "").strip()
         if expected_person_id:
-            if actual_person_id not in {expected_person_id, legacy_person_key}:
+            if actual_person_id not in allowed_person_ids:
                 continue
         elif actual_person_id:
             continue
