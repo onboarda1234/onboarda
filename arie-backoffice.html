@@ -5906,6 +5906,21 @@ function ensureRegulatoryIntelligenceLoaded(options) {
   return REG_INTEL_DATA_PROMISE;
 }
 
+function settleRolePermissionsBeforeShell(promise) {
+  // P13-5: wait for the RBAC matrix, but NEVER let it hold the shell hostage.
+  // ensureRolePermissionsLoaded already converts failures to `false`; the risk
+  // this bounds is a SLOW or hanging matrix endpoint delaying sign-in, which
+  // is the property test_backoffice_login_resilience_runtime.py protects.
+  // On timeout the UI proceeds under the documented fail-open policy exactly
+  // as it did before this change, and the late resolution still populates
+  // ROLE_PERMISSIONS for subsequent renders.
+  var timeoutMs = 3000;
+  return Promise.race([
+    Promise.resolve(promise).catch(function() { return false; }),
+    new Promise(function(resolve) { setTimeout(function() { resolve(false); }, timeoutMs); })
+  ]);
+}
+
 function ensureRolePermissionsLoaded(options) {
   options = options || {};
   if (ROLE_PERMISSIONS && !options.force) return Promise.resolve(true);
@@ -33450,11 +33465,20 @@ async function handleLogin(e) {
     resetBackofficeSessionData();
     syncCurrentUserUI();
 
+    // P13-5 / FEO-006: settle the RBAC matrix BEFORE the shell paints, so the
+    // fresh-login path has no optimistic-render window either (see the
+    // matching comment in the DOMContentLoaded auto-login path).
+    var rolePermissionsLoadedOk = await settleRolePermissionsBeforeShell(
+      ensureRolePermissionsLoaded());
+
     activateAuthenticatedShell();
     showView('dashboard');
     var loadedCleanly = await bootstrapBackofficeSession();
     if (!applyBackofficeHashRoute()) showView('dashboard');
-    if (!loadedCleanly) showDashboardLoadWarning(['Dashboard metrics']);
+    var failedModules = [];
+    if (!loadedCleanly) failedModules.push('Dashboard metrics');
+    if (!rolePermissionsLoadedOk) failedModules.push('Roles and permissions');
+    if (failedModules.length) showDashboardLoadWarning(failedModules);
     showToast('Welcome back, ' + (resp.user.name || currentUser.name));
   } catch(err) {
     console.error('Post-login data load failed', err);
@@ -36277,14 +36301,35 @@ document.addEventListener('DOMContentLoaded', async function() {
   // Try auto-login with stored token
   if (BO_AUTH_TOKEN) {
     try {
+      // P13-5 / FEO-006: start the RBAC matrix load IN PARALLEL with /auth/me
+      // and settle it BEFORE the shell paints. Previously the matrix was only
+      // fetched later, in the deferred support load, so every first render —
+      // including each app-detail open — painted role-dependent controls with
+      // ROLE_PERMISSIONS still null and corrected itself afterwards.
+      //
+      // This removes the optimistic-render WINDOW without inverting the
+      // documented fail-open policy: rolePermissionsLoaded() still gates the
+      // hide-on-missing-permission checks, because failing closed there caused
+      // a prior staging smoke blocker (a legitimate CO lost the Approve
+      // button on a matrix-load race) and is pinned by
+      // test_approval_ux_gates_static.py. Safe to start before setBoAuth:
+      // the loader passes suppressAuthReset, so a 401 cannot bounce the
+      // session out from under the login it is racing.
+      var rolePermissionsReady = ensureRolePermissionsLoaded();
       var me = await boApiCall('GET', '/auth/me');
       setBoAuth(BO_AUTH_TOKEN, (me && (me.user || me)) || BO_AUTH_USER);
       resetBackofficeSessionData();
       syncCurrentUserUI();
+      var rolePermissionsLoadedOk = await settleRolePermissionsBeforeShell(rolePermissionsReady);
       activateAuthenticatedShell();
       showView('dashboard');
       var loadedCleanly = await bootstrapBackofficeSession();
-      if (!loadedCleanly) showDashboardLoadWarning(['Dashboard metrics']);
+      var failedModules = [];
+      if (!loadedCleanly) failedModules.push('Dashboard metrics');
+      // A failed matrix leaves the UI permissive by policy, so the operator
+      // must be told rather than shown a silently-degraded toolbar.
+      if (!rolePermissionsLoadedOk) failedModules.push('Roles and permissions');
+      if (failedModules.length) showDashboardLoadWarning(failedModules);
       applyBackofficeHashRoute();
       return;
     } catch(e) {

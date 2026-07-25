@@ -378,7 +378,12 @@ class TestBackofficeLoginResilienceRuntime:
         assert result["usersCount"] == 0
         assert result["showViewCalls"] == ["dashboard", "dashboard"]
         assert result["failures"] == []
-        assert [call["path"] for call in result["apiCalls"]] == ["/dashboard"]
+        # P13-5: the RBAC matrix is now settled before the shell paints
+        # (bounded by settleRolePermissionsBeforeShell so it can never block
+        # sign-in), so it precedes /dashboard. The property this test guards —
+        # auth completes despite deferred loader failures — is unchanged.
+        assert [call["path"] for call in result["apiCalls"]] == [
+            "/config/roles-permissions", "/dashboard"]
 
     def test_successful_auth_does_not_block_on_deferred_users_loader_failure(self):
         html = _read_backoffice()
@@ -409,7 +414,12 @@ class TestBackofficeLoginResilienceRuntime:
         assert result["usersCount"] == 0
         assert result["token"] == "token-users-fail"
         assert result["failures"] == []
-        assert [call["path"] for call in result["apiCalls"]] == ["/dashboard"]
+        # P13-5: the RBAC matrix is now settled before the shell paints
+        # (bounded by settleRolePermissionsBeforeShell so it can never block
+        # sign-in), so it precedes /dashboard. The property this test guards —
+        # auth completes despite deferred loader failures — is unchanged.
+        assert [call["path"] for call in result["apiCalls"]] == [
+            "/config/roles-permissions", "/dashboard"]
 
     def test_successful_auth_does_not_block_on_deferred_edd_loader_failure(self):
         html = _read_backoffice()
@@ -439,7 +449,12 @@ class TestBackofficeLoginResilienceRuntime:
         assert result["applicationsCount"] == 0
         assert result["eddCount"] == 0
         assert result["failures"] == []
-        assert [call["path"] for call in result["apiCalls"]] == ["/dashboard"]
+        # P13-5: the RBAC matrix is now settled before the shell paints
+        # (bounded by settleRolePermissionsBeforeShell so it can never block
+        # sign-in), so it precedes /dashboard. The property this test guards —
+        # auth completes despite deferred loader failures — is unchanged.
+        assert [call["path"] for call in result["apiCalls"]] == [
+            "/config/roles-permissions", "/dashboard"]
 
     def test_invalid_credentials_keep_overlay_visible_and_show_auth_error(self):
         html = _read_backoffice()
