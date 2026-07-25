@@ -797,26 +797,38 @@ class AuditLogger:
         The windowed ``verify_chain_integrity(limit=...)`` mode (and the API's
         historical 5,000-row ceiling) could never *fully* verify a chain longer
         than the window, leaving corruption outside it undetectable. This mode
-        covers EVERY row, in two bounded passes so memory stays bounded even for
-        very long chains:
+        covers EVERY row with STRICTLY BOUNDED memory (O(batch_size) rows plus a
+        capped violation list — never O(chain length)):
 
-          1. A lightweight structural pass fetches only the linkage columns
-             (id, timestamp, previous_hash, entry_hash) and reconstructs order by
-             FOLLOWING THE HASH LINKS (not timestamp), detecting duplicate
-             hashes, genesis count, forks, cycles and orphans — the same rules as
-             the frozen windowed verifier.
-          2. A content pass re-fetches FULL rows in ``batch_size`` batches and
-             recomputes each entry_hash with the FROZEN ``supervisor_entry_hash``,
-             checking the stored previous_hash linkage.
+          1. Structural violation classes are computed DB-SIDE with capped
+             result sets: duplicate entry hashes (GROUP BY … HAVING), genesis
+             count (previous_hash IS NULL), link forks (previous_hash GROUP BY
+             … HAVING > 1) and dangling predecessors (anti-join on
+             previous_hash → entry_hash).
+          2. A link-following walk starts at the genesis row and follows
+             entry_hash → previous_hash successor links ONE ROW AT A TIME —
+             each step is a single indexed lookup (the H12/B3 anti-fork
+             partial unique index ``uq_sup_audit_prev_hash`` covers it) that
+             fetches the next full row, recomputes its entry_hash with the
+             FROZEN ``supervisor_entry_hash`` and checks the stored
+             previous_hash linkage. A step counter bounds the walk at
+             ``total_entries`` so a cycle can never run unbounded; rows the
+             walk never reaches are reported as orphans by count. When there
+             is no single genesis, a keyset-paginated (timestamp, id) scan
+             content-verifies every row instead and coverage is reported as
+             bounded.
 
         Returns ``chain_root_hash`` (genesis hash), ``chain_head_hash`` (tail
         hash), ``total_entries``, ``entries_verified`` and a ``verified_at``
-        timestamp. If coverage is bounded for any reason (broken genesis, a row
-        vanishing mid-verification, etc.) it LOGS and reports exactly what was
-        and was not covered — it never silently truncates.
+        timestamp. If coverage is bounded for any reason (no/multiple genesis,
+        truncated violation reporting, etc.) it LOGS and reports exactly what
+        was and was not covered — it never silently truncates.
 
         The hashing is unchanged; this only adds an uncapped, batched traversal.
         """
+        # Cap the DETAILED violation report so a mass-tampered chain cannot
+        # balloon the response/memory; the total count is always reported.
+        MAX_REPORTED_VIOLATIONS = 200
         verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         if not isinstance(batch_size, int) or batch_size < 1:
             batch_size = 500
@@ -850,122 +862,170 @@ class AuditLogger:
                     "reason": "Audit chain is empty — no entries to verify.",
                 }
 
-            # ── Pass 1: lightweight linkage / structural reconstruction ──
-            link_rows = [dict(r) for r in db.execute(
-                "SELECT id, timestamp, previous_hash, entry_hash "
-                "FROM supervisor_audit_log"
-            ).fetchall()]
-
             broken_links: List[Dict[str, Any]] = []
-            by_hash: Dict[Any, Dict[str, Any]] = {}
-            for r in link_rows:
-                h = r.get("entry_hash")
-                if h in by_hash:
-                    broken_links.append({"entry_id": r.get("id"), "issue": "duplicate_entry_hash"})
-                by_hash[h] = r
+            total_violations = 0
 
-            successors: Dict[Any, List[Dict[str, Any]]] = {}
-            genesis: List[Dict[str, Any]] = []
-            for r in link_rows:
-                ph = r.get("previous_hash") or None
-                if ph is None:
-                    genesis.append(r)
-                else:
-                    successors.setdefault(ph, []).append(r)
+            def _report(violation: Dict[str, Any]) -> None:
+                # Bounded reporting: count every violation, keep details for
+                # the first MAX_REPORTED_VIOLATIONS only.
+                nonlocal total_violations
+                total_violations += 1
+                if len(broken_links) < MAX_REPORTED_VIOLATIONS:
+                    broken_links.append(violation)
 
-            ordered_ids: List[Any] = []
-            single_genesis = len(genesis) == 1
+            # ── Structural violation classes, computed DB-side (bounded) ──
+            for r in db.execute(
+                "SELECT entry_hash, COUNT(*) AS c FROM supervisor_audit_log "
+                "GROUP BY entry_hash HAVING COUNT(*) > 1 LIMIT ?",
+                (MAX_REPORTED_VIOLATIONS,),
+            ).fetchall():
+                _report({"issue": "duplicate_entry_hash",
+                         "entry_hash": r["entry_hash"], "count": r["c"]})
+
+            genesis_count_row = db.execute(
+                "SELECT COUNT(*) AS c FROM supervisor_audit_log "
+                "WHERE previous_hash IS NULL OR previous_hash = ''"
+            ).fetchone()
+            genesis_count = (genesis_count_row["c"] if genesis_count_row else 0) or 0
+            single_genesis = genesis_count == 1
             if not single_genesis:
-                broken_links.append({
+                _report({
                     "issue": "genesis_count",
-                    "detail": f"expected exactly one genesis entry, found {len(genesis)}",
+                    "detail": f"expected exactly one genesis entry, found {genesis_count}",
                 })
-
-            if single_genesis:
-                seen = set()
-                current = genesis[0]
-                while current is not None:
-                    ch = current.get("entry_hash")
-                    if ch in seen:
-                        broken_links.append({"entry_id": current.get("id"), "issue": "cycle_detected"})
-                        break
-                    seen.add(ch)
-                    ordered_ids.append(current.get("id"))
-                    nxts = successors.get(ch, [])
-                    if len(nxts) > 1:
-                        broken_links.append({
-                            "issue": "chain_fork",
-                            "after_entry_id": current.get("id"),
-                            "successor_count": len(nxts),
-                        })
-                    current = nxts[0] if nxts else None
-                for r in link_rows:
-                    if r.get("entry_hash") not in seen:
-                        broken_links.append({"entry_id": r.get("id"), "issue": "orphan_entry"})
-                chain_root_hash = genesis[0].get("entry_hash")
-            else:
-                # Order cannot be reconstructed from a single genesis. Fall back
-                # to a stable ordering so per-row content tampering is still
-                # recomputed, and REPORT that structural coverage is bounded.
-                ordered_ids = [
-                    r.get("id") for r in sorted(
-                        link_rows, key=lambda r: (str(r.get("timestamp")), str(r.get("id")))
-                    )
-                ]
-                chain_root_hash = None
                 logger.error(
-                    "verify_full_chain: genesis_count=%d — order reconstructed by "
-                    "fallback sort; structural coverage is bounded",
-                    len(genesis),
+                    "verify_full_chain: genesis_count=%d — id-order scan anchors "
+                    "on the first row's stored previous_hash; structural coverage "
+                    "is bounded", genesis_count,
                 )
 
-            # ── Pass 2: recompute hashes over FULL rows in bounded batches ──
+            for r in db.execute(
+                "SELECT previous_hash, COUNT(*) AS c FROM supervisor_audit_log "
+                "WHERE previous_hash IS NOT NULL AND previous_hash != '' "
+                "GROUP BY previous_hash HAVING COUNT(*) > 1 LIMIT ?",
+                (MAX_REPORTED_VIOLATIONS,),
+            ).fetchall():
+                _report({"issue": "chain_fork",
+                         "after_hash": r["previous_hash"], "successor_count": r["c"]})
+
+            # Rows whose stored predecessor hash does not exist anywhere —
+            # orphan islands / severed links (anti-join, capped result).
+            for r in db.execute(
+                "SELECT a.id AS id FROM supervisor_audit_log a "
+                "LEFT JOIN supervisor_audit_log b ON a.previous_hash = b.entry_hash "
+                "WHERE a.previous_hash IS NOT NULL AND a.previous_hash != '' "
+                "AND b.id IS NULL LIMIT ?",
+                (MAX_REPORTED_VIOLATIONS,),
+            ).fetchall():
+                _report({"entry_id": r["id"], "issue": "dangling_previous_hash"})
+
+            # ── Bounded link-following walk (O(1) row memory) ──
             entries_verified = 0
             prev_hash: Optional[str] = None
-            for start in range(0, len(ordered_ids), batch_size):
-                batch_ids = ordered_ids[start:start + batch_size]
-                placeholders = ",".join(["?"] * len(batch_ids))
-                full_rows: Dict[Any, Dict[str, Any]] = {}
-                for fr in db.execute(
-                    f"SELECT * FROM supervisor_audit_log WHERE id IN ({placeholders})",
-                    tuple(batch_ids),
-                ).fetchall():
-                    frd = dict(fr)
-                    full_rows[frd.get("id")] = frd
+            chain_root_hash: Optional[str] = None
+            steps = 0
 
-                for rid in batch_ids:
-                    row = full_rows.get(rid)
-                    if row is None:
-                        broken_links.append({
-                            "entry_id": rid,
-                            "issue": "row_vanished_during_verification",
-                        })
-                        continue
-                    if entries_verified == 0 and not single_genesis:
-                        # Fallback ordering: anchor on the first row's stored
-                        # previous_hash so a legitimately anchored head verifies.
-                        prev_hash = row.get("previous_hash") or None
-                    expected_hash = supervisor_entry_hash(row, prev_hash)
-                    if row.get("entry_hash") != expected_hash:
-                        broken_links.append({
-                            "entry_id": rid,
-                            "expected_hash": expected_hash,
-                            "actual_hash": row.get("entry_hash"),
-                        })
-                    if (row.get("previous_hash") or None) != (prev_hash or None):
-                        broken_links.append({
-                            "entry_id": rid,
-                            "issue": "previous_hash mismatch",
-                            "expected_previous": prev_hash,
-                            "actual_previous": row.get("previous_hash"),
-                        })
-                    prev_hash = row.get("entry_hash")
-                    entries_verified += 1
+            def _verify_row(row: Dict[str, Any]) -> None:
+                # Recompute with the FROZEN hash helper + check stored linkage.
+                nonlocal prev_hash, entries_verified
+                rid = row.get("id")
+                expected_hash = supervisor_entry_hash(row, prev_hash)
+                if row.get("entry_hash") != expected_hash:
+                    _report({
+                        "entry_id": rid,
+                        "expected_hash": expected_hash,
+                        "actual_hash": row.get("entry_hash"),
+                    })
+                if (row.get("previous_hash") or None) != (prev_hash or None):
+                    _report({
+                        "entry_id": rid,
+                        "issue": "previous_hash mismatch",
+                        "expected_previous": prev_hash,
+                        "actual_previous": row.get("previous_hash"),
+                    })
+                prev_hash = row.get("entry_hash")
+                entries_verified += 1
+
+            if single_genesis:
+                current_row = db.execute(
+                    "SELECT * FROM supervisor_audit_log "
+                    "WHERE previous_hash IS NULL OR previous_hash = '' LIMIT 1"
+                ).fetchone()
+                current = dict(current_row) if current_row else None
+                if current is not None:
+                    chain_root_hash = current.get("entry_hash")
+                while current is not None:
+                    steps += 1
+                    if steps > total_entries:
+                        # A cycle would otherwise walk forever; the step
+                        # counter bounds it without a seen-set.
+                        _report({"entry_id": current.get("id"),
+                                 "issue": "cycle_detected"})
+                        break
+                    rid = current.get("id")
+                    _verify_row(current)
+                    # One indexed successor lookup per step (LIMIT 2 detects a
+                    # fork even if the anti-fork unique index is absent on a
+                    # legacy DB).
+                    nxts = db.execute(
+                        "SELECT * FROM supervisor_audit_log "
+                        "WHERE previous_hash = ? ORDER BY id LIMIT 2",
+                        (prev_hash,),
+                    ).fetchall()
+                    if len(nxts) > 1:
+                        _report({"issue": "chain_fork", "after_entry_id": rid,
+                                 "successor_count": len(nxts)})
+                    current = dict(nxts[0]) if nxts else None
+                if entries_verified < total_entries:
+                    # Rows the walk never reached (islands / severed segments)
+                    # — counted without holding their ids in memory; the
+                    # dangling-predecessor aggregate above names a capped
+                    # sample.
+                    _report({"issue": "orphan_entries",
+                             "count": total_entries - entries_verified})
+            else:
+                # No single genesis: content-verify EVERY row in a stable
+                # keyset-paginated (timestamp, id) order, anchoring on the
+                # first row's stored previous_hash. Structural coverage is
+                # bounded and reported (never silent).
+                last_ts: Optional[Any] = None
+                last_id: Optional[Any] = None
+                first = True
+                while True:
+                    if last_ts is None:
+                        batch = db.execute(
+                            "SELECT * FROM supervisor_audit_log "
+                            "ORDER BY timestamp, id LIMIT ?",
+                            (batch_size,),
+                        ).fetchall()
+                    else:
+                        batch = db.execute(
+                            "SELECT * FROM supervisor_audit_log "
+                            "WHERE timestamp > ? OR (timestamp = ? AND id > ?) "
+                            "ORDER BY timestamp, id LIMIT ?",
+                            (last_ts, last_ts, last_id, batch_size),
+                        ).fetchall()
+                    if not batch:
+                        break
+                    for fr in batch:
+                        row = dict(fr)
+                        last_ts = row.get("timestamp")
+                        last_id = row.get("id")
+                        if first:
+                            prev_hash = row.get("previous_hash") or None
+                            first = False
+                        _verify_row(row)
+                    if len(batch) < batch_size:
+                        break
 
             chain_head_hash = prev_hash
-            coverage_complete = single_genesis and entries_verified == total_entries
+            coverage_complete = (
+                single_genesis
+                and entries_verified == total_entries
+                and total_violations == len(broken_links)  # nothing truncated
+            )
             result = {
-                "verified": len(broken_links) == 0,
+                "verified": total_violations == 0,
                 "mode": "full_chain",
                 "total_entries": total_entries,
                 "entries_verified": entries_verified,
@@ -974,15 +1034,27 @@ class AuditLogger:
                 "chain_root_hash": chain_root_hash,
                 "chain_head_hash": chain_head_hash,
                 "broken_links": broken_links,
-                "chain_intact": len(broken_links) == 0,
+                "total_violations": total_violations,
+                "chain_intact": total_violations == 0,
                 "verified_at": verified_at,
             }
+            if total_violations > len(broken_links):
+                # Detailed reporting was capped — never silently: say how many.
+                result["violations_truncated"] = total_violations - len(broken_links)
+                result["coverage_note"] = (
+                    f"{total_violations} violations found; details reported for "
+                    f"the first {len(broken_links)} only"
+                )
+                logger.error(
+                    "verify_full_chain: %d violations (details capped at %d)",
+                    total_violations, len(broken_links),
+                )
             if entries_verified != total_entries:
                 # Never silently truncate — say exactly what was NOT covered.
                 result["coverage_complete"] = False
                 result["coverage_note"] = (
                     f"verified {entries_verified} of {total_entries} rows; "
-                    f"{total_entries - entries_verified} not covered by hash-link ordering"
+                    f"{total_entries - entries_verified} not covered by the id-order scan"
                 )
                 logger.error(
                     "verify_full_chain coverage bounded: verified %d of %d rows",

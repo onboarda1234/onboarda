@@ -78,6 +78,47 @@ def test_requires_control_matrix():
     assert mdc.requires_control(crit_odd, action="dismiss", dismissal_reason="false_positive") is True
 
 
+def test_requires_evidence_matrix():
+    """Codex-validation follow-up (2026-07-25): evidence is mandatory for Tier 1
+    AND for ANY critical-severity alert — a senior direct-clear of a critical
+    tier-2/3 alert without evidence was a fail-open."""
+    tier1 = {"alert_type": "sanctions_change", "severity": "critical"}
+    crit_t2 = {"alert_type": "document_expired", "severity": "critical",
+               "summary": "licence has expired"}
+    crit_t3 = {"alert_type": "misc_flag", "severity": "critical", "summary": "n/a"}
+    plain_t2 = {"alert_type": "document_expired", "severity": "high",
+                "summary": "passport has expired"}
+    assert mdc.requires_evidence(1, tier1) is True
+    assert mdc.requires_evidence(2, crit_t2) is True   # critical forces evidence
+    assert mdc.requires_evidence(3, crit_t3) is True   # critical forces evidence
+    assert mdc.requires_evidence(2, plain_t2) is False  # non-critical tier 2 unchanged
+
+
+def test_senior_clear_of_critical_tier2_requires_evidence(db):
+    """record_senior_clear / create_pending_request must refuse a
+    critical-severity clear with no evidence, regardless of tier (the Codex
+    fail-open scenario: severity=critical, tier-2 duplicate, senior actor,
+    notes but no evidence)."""
+    crit_t2 = {"id": "ma-crit-t2", "alert_type": "document_expired",
+               "severity": "critical", "summary": "licence has expired"}
+    with pytest.raises(mdc.DismissalControlError):
+        mdc.record_senior_clear(
+            db, alert=crit_t2, tier=2, requested_outcome="dismiss",
+            dismissal_reason="duplicate", rationale="looks duplicate",
+            evidence_ref="",  # no evidence → must refuse
+            user={"sub": "sco-1", "role": "sco"},
+            audit_writer=lambda *a, **k: None,
+        )
+    with pytest.raises(mdc.DismissalControlError):
+        mdc.create_pending_request(
+            db, alert=crit_t2, tier=2, requested_outcome="dismiss",
+            dismissal_reason="duplicate", rationale="looks duplicate",
+            evidence_ref="",  # no evidence → must refuse
+            user={"sub": "co-1", "role": "co"},
+            audit_writer=lambda *a, **k: None,
+        )
+
+
 # ── API harness (isolated sqlite + live tornado) ─────────────────────────────
 
 def _free_port():

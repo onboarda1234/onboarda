@@ -1157,3 +1157,40 @@ class TestRdi006CreateAlertAtomicity:
         assert rows == 0, (
             "RDI-006: an alert whose audit evidence could not be written must NOT persist"
         )
+
+    # ── Codex-validation follow-up (2026-07-25): exception typing ──
+    def test_guard_raises_dedicated_exception_type(self, db):
+        """The fail-closed guard raises MissingAuditContext (a ValueError
+        subclass) so the API can map ONLY the caller-contract error to 400."""
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, _ = _setup_test_data(db)
+        with pytest.raises(cm.MissingAuditContext):
+            cm.create_change_alert(wdb, app_id, "director_change", "companies_house",
+                                   "No audit sink", {}, user={"sub": "u1", "role": "sco"})
+
+    def test_audit_writer_valueerror_is_not_miscast_as_caller_error(self, db):
+        """A generic ValueError raised INSIDE the atomic write (by the audit
+        writer) must propagate as-is — NOT as MissingAuditContext — so the
+        handler reports 500 (atomic-write failure), never 400. The alert must
+        also roll back."""
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, _ = _setup_test_data(db)
+        user = {"sub": "u1", "name": "User", "role": "sco"}
+
+        def audit_raises_valueerror(user, action, target, detail, **kwargs):
+            raise ValueError("audit sink rejected the payload")
+
+        with pytest.raises(ValueError) as excinfo:
+            cm.create_change_alert(
+                wdb, app_id, "director_change", "companies_house",
+                "Audit sink fails", {"d": {"old": "A", "new": "B"}},
+                user=user, log_audit_fn=audit_raises_valueerror,
+            )
+        assert not isinstance(excinfo.value, cm.MissingAuditContext)
+        rows = db.execute(
+            "SELECT COUNT(*) AS c FROM change_alerts WHERE application_id = ?",
+            (app_id,),
+        ).fetchone()["c"]
+        assert rows == 0, "alert must roll back when the audit write fails"
