@@ -18405,9 +18405,43 @@ function screeningTriageWeakTailSection(row, weakEntries, triage) {
   var tailLine = String(weakCount) + ' weak name-only matches — below triage threshold ' + threshold + ' · no identity corroboration · each remains reviewable';
   var weakKey = screeningTriageSectionKey(row, 'weak');
   var weakOpen = !!SCREENING_TRIAGE_SECTION_OPEN[weakKey];
+  // Bulk disposition of the weak tail (founder request): these are all
+  // below-threshold, name-only, no-identity-corroboration matches whose
+  // matched names vary — so they never fold into a near-identical group, and
+  // clearing them one-by-one meant dozens of clicks. Register the rendered
+  // weak hit ids (same shape as the near-identical group) so "Clear all as
+  // false positive" / "Undo all" act on exactly this subject's weak tail.
+  // Per-hit semantics are unchanged: each hit keeps its own decision, the bulk
+  // action only touches PENDING hits, confirming any one still flips the
+  // subject to TRUE MATCH, and every clear is reversible via Undo all.
+  var appRef = row.application_ref || (currentApp && currentApp.ref) || '';
+  var subjType = row.subject_type || '', subjName = row.subject_name || '';
+  var weakRegId = screeningStableId(screeningReviewSubjectKey(appRef, subjType, subjName) + '|weak');
+  // Filter falsy ids — an unstamped item is non-dispositionable per-hit, so it
+  // must not be swept into a bulk action either.
+  var hitIds = weakEntries.map(function(entry) { return screeningHitId(entry.item, entry.index); }).filter(Boolean);
+  SCREENING_WEAK_TAIL_REG[weakRegId] = { appRef: appRef, subjType: subjType, subjName: subjName, hitIds: hitIds };
+  var pending = 0, cleared = 0;
+  hitIds.forEach(function(hid) {
+    var st = screeningHitDispositionState(appRef, subjType, subjName, hid).status;
+    if (st === 'pending') pending++; else if (st === 'cleared') cleared++;
+  });
+  // Same read-only lock the per-hit cards use: a recorded / locked subject is
+  // governed through the audit trail, so the bulk bar must not stay live there.
+  var locked = (!row.review_required || (row.review_disposition && row.review_actionable === false));
+  var bulkBar = '';
+  if (canDispositionScreeningDisposition() && !locked && (pending > 0 || cleared > 0)) {
+    bulkBar += '<span data-screening-weak-tail-actions="true" style="display:inline-flex;gap:8px;flex-wrap:wrap;">';
+    if (pending > 0) bulkBar += '<button type="button" class="btn btn-outline btn-sm" onclick="event.stopPropagation();event.preventDefault();screeningWeakTailBulkClear(\'' + weakRegId + '\')">Clear all ' + pending + ' as false positive</button>';
+    // Undo reverts only the false-positive CLEARS — a weak hit an officer
+    // confirmed as a true match is never silently reverted.
+    if (cleared > 0) bulkBar += '<button type="button" class="btn btn-outline btn-sm" onclick="event.stopPropagation();event.preventDefault();screeningWeakTailUndoAll(\'' + weakRegId + '\')">↺ Undo all ' + cleared + '</button>';
+    bulkBar += '</span>';
+  }
   return '<details data-screening-triage-weak-tail="true" data-section-open-key="' + escapeHtml(weakKey) + '"' + (weakOpen ? ' open' : '') + ' ontoggle="screeningTriageSectionToggled(this)" style="margin-top:16px;border:1px solid var(--border1);border-radius:10px;background:#fff;">' +
     '<summary style="list-style:none;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:11px 14px;cursor:pointer;">' +
       '<span style="font-size:12px;color:var(--text2);"><strong style="color:var(--text1);">' + escapeHtml(tailLine) + '</strong></span>' +
+      bulkBar +
       '<span style="margin-left:auto;font-size:11px;color:var(--text3);">Expand ▾</span>' +
     '</summary>' +
     '<div>' + weakEntries.map(function(entry) {
@@ -18426,6 +18460,35 @@ function screeningTriageWeakTailSection(row, weakEntries, triage) {
 var SCREENING_HIT_GROUP_UI = {};   // groupId -> { expanded, sel:{hitId:true} }
 var SCREENING_HIT_GROUP_REG = {};  // groupId -> { appRef, subjType, subjName, hitIds:[] }
 var SCREENING_HIT_GROUP_MIN = 4;
+var SCREENING_WEAK_TAIL_REG = {};  // weakRegId -> { appRef, subjType, subjName, hitIds:[] }
+
+function screeningWeakTailBulkClear(weakRegId) {
+  // Clear every PENDING weak-tail hit as a false positive in one action.
+  // Never overrides an existing decision (match/cleared stay put); persisted
+  // and reversible via screeningWeakTailUndoAll.
+  var reg = SCREENING_WEAK_TAIL_REG[weakRegId]; if (!reg) return;
+  var changed = [];
+  reg.hitIds.forEach(function(hid) {
+    var st = screeningHitDispositionState(reg.appRef, reg.subjType, reg.subjName, hid);
+    if (st.status === 'pending') { st.status = 'cleared'; changed.push(hid); }
+  });
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  if (changed.length) screeningPersistHitDisposition(reg.appRef, reg.subjType, reg.subjName, changed, 'cleared', null);
+}
+
+function screeningWeakTailUndoAll(weakRegId) {
+  // Reverse the bulk false-positive clears only: reset 'cleared' weak hits back
+  // to pending. A weak hit an officer confirmed as a true match is deliberately
+  // left intact — undo never wipes a true-match decision or its materiality.
+  var reg = SCREENING_WEAK_TAIL_REG[weakRegId]; if (!reg) return;
+  var changed = [];
+  reg.hitIds.forEach(function(hid) {
+    var st = screeningHitDispositionState(reg.appRef, reg.subjType, reg.subjName, hid);
+    if (st.status === 'cleared') { st.status = 'pending'; st.materiality = null; changed.push(hid); }
+  });
+  renderScreeningReviewPanel(currentApp, currentScreeningReviewFocus);
+  if (changed.length) screeningPersistHitDisposition(reg.appRef, reg.subjType, reg.subjName, changed, 'pending', null);
+}
 
 function screeningStableId(str) {
   var h = 0; str = String(str);
