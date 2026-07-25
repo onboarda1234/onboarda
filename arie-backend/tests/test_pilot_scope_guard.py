@@ -74,6 +74,47 @@ class TestPilotScopeResolution:
     def test_env_var_overrides_the_environment_default(self, monkeypatch):
         assert self._resolve("development", "true", monkeypatch) is True
 
+    def test_client_safe_flags_agree_with_the_server(self, monkeypatch):
+        """Adversarial-review finding: /api/config/environment must not
+        advertise an enterprise module the server refuses. Otherwise the frozen
+        Application Review supervisor tab calls the API and paints a load error
+        instead of its Coming Soon card."""
+        import importlib
+
+        monkeypatch.setenv(environment_module.PILOT_SCOPE_VAR, "true")
+        monkeypatch.setenv("ENABLE_AI_SUPERVISOR", "true")
+        monkeypatch.setenv("ENABLE_SAR_WORKFLOW", "true")
+        importlib.reload(environment_module)
+        try:
+            client_flags = environment_module.FeatureFlags("staging").get_client_safe_flags()
+            for flag in environment_module._PILOT_SCOPE_VETOED_FLAGS:
+                if flag in client_flags:
+                    assert client_flags[flag] is False, flag
+        finally:
+            monkeypatch.undo()
+            importlib.reload(environment_module)
+
+    def test_client_safe_flags_untouched_when_guard_is_off(self, monkeypatch):
+        import importlib
+
+        monkeypatch.setenv(environment_module.PILOT_SCOPE_VAR, "false")
+        monkeypatch.setenv("ENABLE_AI_SUPERVISOR", "true")
+        importlib.reload(environment_module)
+        try:
+            client_flags = environment_module.FeatureFlags("staging").get_client_safe_flags()
+            assert client_flags["ENABLE_AI_SUPERVISOR"] is True
+        finally:
+            monkeypatch.undo()
+            importlib.reload(environment_module)
+
+    def test_unrecognised_value_is_warned_about(self, monkeypatch, caplog):
+        """Silent coercion is what makes a typo dangerous; it must be logged."""
+        monkeypatch.setenv(environment_module.PILOT_SCOPE_VAR, "ture")
+        with caplog.at_level("WARNING"):
+            assert environment_module.pilot_scope_active("staging") is True
+        assert any("PILOT_SCOPE" in r.message or "PILOT_SCOPE" in str(r.args)
+                   for r in caplog.records), caplog.text
+
     def test_scope_var_name_carries_no_enable_prefix(self):
         """The lockdown suite asserts no "ENABLE_" substring reaches a disabled
         response body; keeping the name unprefixed keeps that assertion true

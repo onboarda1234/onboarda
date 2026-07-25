@@ -117,10 +117,28 @@ enterprise modules (SAR/STR, Regulatory Intelligence, AI Compliance
 Supervisor, Supervisor Audit) are refused **regardless of individual flag
 values**, including values set outside version control.
 
-**No operator action is required for staging or production** — the guard
-defaults ON there, and because every enterprise flag already defaults off in
-those environments this is a behaviour no-op. It converts the exclusion from a
-convention into an enforced, testable control.
+**No operator action is required to activate it** — the guard defaults ON in
+staging and production. It converts the enterprise exclusion from a convention
+into an enforced, testable control.
+
+**Two behaviour notes — read before deploying:**
+
+1. The veto is a no-op *only for the default flag values*. Every enterprise
+   flag defaults False in staging/production, but deployed values can come from
+   the ECS task definition or the Render dashboard (`render.yaml` pins three
+   `sync: false`), and those are not visible in this repo. **Before deploying,
+   confirm `ENABLE_AI_SUPERVISOR`, `ENABLE_REGULATORY_INTELLIGENCE_FULL` and
+   `ENABLE_SAR_WORKFLOW` are not set true** in the live `regmind-staging` task
+   definition or the Render dashboard — if any is, the veto will newly refuse
+   that module (which is the intent, but it should be a deliberate flip).
+2. Independently of `PILOT_SCOPE`, this change adds the missing enterprise gate
+   to `POST /api/applications/:id/memo/supervisor/run` and
+   `GET /api/applications/:id/memo/supervisor`. Those two routes had no gate at
+   all; on staging/production (`ENABLE_AI_SUPERVISOR` False by default) they
+   now return 403 where they previously served. No UI calls them — verified
+   against `arie-backoffice.html` and `arie-portal.html` — and memo approval
+   does not depend on them (the supervisor result is embedded during memo
+   generation and read from there by the approve gate).
 
 Pin it explicitly in IaC so the control is reviewable (recommended, optional):
 
