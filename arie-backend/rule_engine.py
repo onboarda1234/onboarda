@@ -969,13 +969,114 @@ def validate_risk_config(config):
     return validated, all_errors
 
 
+def validate_required_risk_config_semantics(config):
+    """Validate the complete model required by editor and approval gates.
+
+    ``validate_risk_config`` remains intentionally permissive for legacy
+    scorer fallback.  This shared validator is the stricter contract used by
+    the config editor and by ``load_risk_config(require_valid=True)``.
+    """
+    errors = []
+    dimensions = config.get("dimensions") or []
+    thresholds = config.get("thresholds") or []
+    required_dimension_ids = {"D1", "D2", "D3", "D4", "D5"}
+
+    if not dimensions:
+        errors.append({"code": "risk_dimensions_required", "field": "dimensions", "message": "complete five-dimension model is required"})
+    elif isinstance(dimensions, list):
+        dim_ids = {str(d.get("id") or "") for d in dimensions if isinstance(d, dict)}
+        missing = required_dimension_ids - dim_ids
+        extra = dim_ids - required_dimension_ids
+        if len(dim_ids) != len(dimensions):
+            errors.append({"code": "risk_dimension_duplicate_or_invalid", "field": "dimensions", "message": "dimension ids must be unique and non-empty"})
+        if missing:
+            errors.append({"code": "risk_dimension_missing", "field": "dimensions", "message": f"missing required dimensions {sorted(missing)}"})
+        if extra:
+            errors.append({"code": "risk_dimension_unknown", "field": "dimensions", "message": f"unsupported dimensions {sorted(extra)}"})
+        total_weight = 0
+        for dim in dimensions:
+            if not isinstance(dim, dict):
+                errors.append({"code": "risk_dimension_invalid", "field": "dimensions", "message": "each dimension must be an object"})
+                continue
+            weight = dim.get("weight")
+            if not isinstance(weight, int) or isinstance(weight, bool) or weight <= 0:
+                errors.append({"code": "risk_dimension_weight_invalid", "field": f"dimensions.{dim.get('id', '?')}.weight", "message": "dimension weights must be positive integers"})
+            else:
+                total_weight += weight
+            subcriteria = dim.get("subcriteria") or []
+            if not subcriteria:
+                errors.append({"code": "risk_subcriteria_required", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "at least one subcriteria row is required"})
+                continue
+            sub_total = 0
+            names = set()
+            for sub in subcriteria:
+                if not isinstance(sub, dict):
+                    errors.append({"code": "risk_subcriteria_invalid", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "subcriteria rows must be objects"})
+                    continue
+                name = str(sub.get("name") or "").strip()
+                if not name:
+                    errors.append({"code": "risk_subcriteria_name_required", "field": f"dimensions.{dim.get('id', '?')}.subcriteria.name", "message": "subcriteria name is required"})
+                names.add(name)
+                sub_weight = sub.get("weight")
+                if not isinstance(sub_weight, int) or isinstance(sub_weight, bool) or sub_weight <= 0:
+                    errors.append({"code": "risk_subcriteria_weight_invalid", "field": f"dimensions.{dim.get('id', '?')}.subcriteria.weight", "message": "subcriteria weights must be positive integers"})
+                else:
+                    sub_total += sub_weight
+            if len(names) != len(subcriteria):
+                errors.append({"code": "risk_subcriteria_duplicate", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "subcriteria names must be unique within each dimension"})
+            if sub_total != 100:
+                errors.append({"code": "risk_subcriteria_weight_total_invalid", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "subcriteria total weight must equal 100"})
+        if total_weight != 100:
+            errors.append({"code": "risk_dimension_weight_total_invalid", "field": "dimensions", "message": "dimension total weight must equal 100"})
+
+    if not thresholds:
+        errors.append({"code": "risk_thresholds_required", "field": "thresholds", "message": "complete LOW/MEDIUM/HIGH/VERY_HIGH thresholds are required"})
+    elif isinstance(thresholds, list):
+        expected = ["LOW", "MEDIUM", "HIGH", "VERY_HIGH"]
+        by_level = {str(t.get("level") or ""): t for t in thresholds if isinstance(t, dict)}
+        if set(by_level) != set(expected):
+            errors.append({"code": "risk_threshold_levels_invalid", "field": "thresholds", "message": "thresholds must contain LOW, MEDIUM, HIGH, and VERY_HIGH"})
+        ordered = []
+        for level in expected:
+            row = by_level.get(level)
+            if not row:
+                continue
+            min_v = row.get("min")
+            max_v = row.get("max")
+            if not isinstance(min_v, (int, float)) or not isinstance(max_v, (int, float)):
+                errors.append({"code": "risk_threshold_value_invalid", "field": f"thresholds.{level}", "message": "threshold min/max must be numeric"})
+                continue
+            if min_v < 0 or max_v > 100 or min_v > max_v:
+                errors.append({"code": "risk_threshold_range_invalid", "field": f"thresholds.{level}", "message": "threshold ranges must be ordered within 0-100"})
+            ordered.append((level, min_v, max_v))
+        for idx in range(1, len(ordered)):
+            if ordered[idx][1] <= ordered[idx - 1][1] or ordered[idx][2] <= ordered[idx - 1][2]:
+                errors.append({"code": "risk_threshold_order_invalid", "field": "thresholds", "message": "thresholds must be ordered LOW to VERY_HIGH"})
+                break
+
+    for map_name in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
+        value = config.get(map_name)
+        if not isinstance(value, dict) or not value:
+            errors.append({"code": "risk_score_map_required", "field": map_name, "message": f"{map_name} must be a non-empty score map"})
+            continue
+        for key, score in value.items():
+            if not isinstance(key, str) or not key.strip():
+                errors.append({"code": "risk_score_map_key_invalid", "field": map_name, "message": f"{map_name} keys must be non-empty strings"})
+                continue
+            if not isinstance(score, (int, float)) or isinstance(score, bool) or score < 1 or score > 4:
+                errors.append({"code": "risk_score_out_of_range", "field": map_name, "message": f"{map_name}.{key} must be numeric between 1 and 4"})
+
+    return errors
+
+
 # ══════════════════════════════════════════════════════════
 # RISK CONFIG LOADING (DB is canonical, hardcoded = fallback)
 # ══════════════════════════════════════════════════════════
 
 class RiskConfigUnavailable(Exception):
     """Raised when the live risk-scoring configuration cannot be loaded or
-    fails validation in a fail-closed environment (staging/production).
+    fails validation in a fail-closed environment (staging/production), or
+    when a regulated caller explicitly requires validated configuration.
 
     DCI-008: regulated decision paths must not silently score against the
     hardcoded default model when the approved live model in the DB is
@@ -1021,12 +1122,15 @@ def _parse_config_column(val):
     return val  # JSONB already parsed: dict/list pass validation, scalars get flagged
 
 
-def load_risk_config(db=None):
+def load_risk_config(db=None, *, require_valid=False):
     """Load live risk scoring configuration from DB.
 
     Callers may supply an existing connection when configuration must be read
     from their caller-owned transaction. The default continues to open and
     close its own read connection exactly as normal runtime callers expect.
+    ``require_valid=True`` is reserved for regulated decision gates: it makes
+    missing, unreadable, or invalid configuration fail closed in every
+    environment instead of allowing the development/test fallback posture.
 
     Validates that score-mapping columns (country_risk_scores, sector_risk_scores,
     entity_type_scores) are dicts after JSON parsing, attempting normalization of
@@ -1040,7 +1144,7 @@ def load_risk_config(db=None):
       so the hardcoded fallback in the scoring functions takes over (historical
       behaviour, keeps local dev and the test suite runnable without a seeded row).
     """
-    fail_closed = _risk_config_fail_closed()
+    fail_closed = bool(require_valid) or _risk_config_fail_closed()
     try:
         owns_connection = db is None
         if owns_connection:
@@ -1075,6 +1179,8 @@ def load_risk_config(db=None):
 
             # ── Full schema validation with normalization ──
             validated, errors = validate_risk_config(result)
+            if require_valid:
+                errors.extend(validate_required_risk_config_semantics(validated))
             for err in errors:
                 logger.error("risk_config validation: %s", err)
             if errors and fail_closed:
@@ -2115,6 +2221,54 @@ RISK_CONFIG_VERSION_RECOMPUTE_FAILED = "stale:recompute_failed"
 # instead of approvable on its stale pre-change score. A successful recompute
 # overwrites it with the real current config version.
 RISK_CONFIG_VERSION_CM_RECOMPUTE_PENDING = "stale:cm_recompute_pending"
+
+
+def _is_valid_risk_config_version(value):
+    """Return whether *value* is an authoritative timestamped config version.
+
+    Runtime versions are persisted as ``risk_config:<updated_at>``. SQLite
+    emits a space-separated timestamp while PostgreSQL/test fixtures may use
+    ISO ``T``/``Z`` notation, so both are accepted. Symbolic, blank,
+    whitespace-padded, or otherwise non-timestamp versions are not sufficient
+    provenance for a regulated approval.
+    """
+    if not isinstance(value, str) or value != value.strip():
+        return False
+    prefix = "risk_config:"
+    if not value.startswith(prefix):
+        return False
+    timestamp_text = value[len(prefix):]
+    if (
+        not timestamp_text
+        or timestamp_text != timestamp_text.strip()
+        or ("T" not in timestamp_text and " " not in timestamp_text)
+    ):
+        return False
+    try:
+        datetime.fromisoformat(timestamp_text.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _get_validated_risk_config_version_strict(db):
+    """Return the validated singleton config version for an approval gate.
+
+    Unlike the legacy version-only lookup below, this proves that the
+    singleton configuration exists, loads, passes the existing schema
+    validator, and carries a timestamped version. It deliberately opts out of
+    development/test fallback semantics because approval is fail closed in
+    every environment.
+    """
+    config = load_risk_config(db=db, require_valid=True)
+    current_version = (
+        config.get("_config_version") if isinstance(config, dict) else None
+    )
+    if not _is_valid_risk_config_version(current_version):
+        raise RiskConfigUnavailable(
+            "risk_config has no valid timestamped configuration version"
+        )
+    return current_version
 
 
 def _get_risk_config_version_strict(db):

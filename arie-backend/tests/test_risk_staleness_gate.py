@@ -3,9 +3,9 @@
 Covers:
   1. `_application_risk_staleness_error` — blocks approval when the stored risk
      score was not computed against the current risk config; blocks apps carrying
-     the `stale:recompute_failed` quarantine sentinel; fails CLOSED when the
-     current version cannot be read; passes when current; no-ops when versioning
-     is not in use; allows unknown provenance (documented residual).
+     the `stale:recompute_failed` quarantine sentinel; fails CLOSED when stored
+     provenance is absent/malformed or the current validated configuration
+     cannot be obtained; passes only when both timestamped versions match.
   2. `_summarize_risk_recompute_results` — reports recompute failures explicitly
      instead of silently counting them as successes.
   3. Quarantine stamping — `recompute_risk_for_active_apps` marks failed apps
@@ -14,7 +14,7 @@ Covers:
      the authority gate, and the config save stamps a microsecond-precision
      version timestamp (no same-second version collisions).
 
-The gate helper imports `_get_risk_config_version_strict` at call time, so these
+The gate helper imports `_get_validated_risk_config_version_strict` at call time, so these
 tests monkeypatch it for deterministic, DB-neutral behaviour (identical on
 SQLite/PG).
 """
@@ -23,20 +23,33 @@ import os
 from fixture_safe_refs import fixture_safe_suffix
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _patch_current_version(monkeypatch, value):
     import rule_engine
-    monkeypatch.setattr(rule_engine, "_get_risk_config_version_strict", lambda db: value)
+    monkeypatch.setattr(
+        rule_engine,
+        "_get_validated_risk_config_version_strict",
+        lambda db: value,
+    )
 
 
 class TestRiskStalenessGate:
-    def test_matching_config_version_passes(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "version",
+        [
+            "risk_config:2026-07-07 00:00:00.123456",
+            "risk_config:2026-07-07T00:00:00Z",
+        ],
+    )
+    def test_matching_config_version_passes(self, monkeypatch, version):
         from server import _application_risk_staleness_error
-        _patch_current_version(monkeypatch, "risk_config:2026-07-07T00:00:00Z")
+        _patch_current_version(monkeypatch, version)
         app = {"id": "A1", "status": "kyc_submitted",
-               "risk_config_version": "risk_config:2026-07-07T00:00:00Z"}
+               "risk_config_version": version}
         assert _application_risk_staleness_error(object(), app, "approve application") is None
 
     def test_older_config_version_blocks(self, monkeypatch):
@@ -62,24 +75,53 @@ class TestRiskStalenessGate:
         assert "FAILED" in err
         assert "quarantined" in err
 
-    def test_missing_config_version_does_not_block(self, monkeypatch):
-        """Unknown provenance (no stored version) is a documented residual: not
-        blocked, because legacy apps predate version stamping and every live
-        scoring path stamps versions going forward. The next risk-config update
-        sweeps such apps (current version on success, quarantine sentinel on
-        failure), after which they are fully covered."""
-        from server import _application_risk_staleness_error
+    @pytest.mark.parametrize(
+        "invalid_version",
+        [
+            None,
+            "",
+            "   ",
+            "risk_config:",
+            "risk_config:v1",
+            "not-a-risk-version",
+            " risk_config:2026-07-07T12:00:00Z",
+            "risk_config:2026-07-07T12:00:00Z ",
+            "risk_config:2026-13-07T12:00:00Z",
+        ],
+    )
+    def test_missing_or_malformed_application_version_fails_closed(
+        self, monkeypatch, invalid_version
+    ):
+        from server import (
+            _APPROVAL_RISK_PROVENANCE_REQUIRED,
+            _application_risk_staleness_error,
+        )
         _patch_current_version(monkeypatch, "risk_config:2026-07-07T12:00:00Z")
-        for missing in (None, ""):
-            app = {"id": "A3", "status": "kyc_submitted", "risk_config_version": missing}
-            assert _application_risk_staleness_error(object(), app, "approve application") is None
+        app = {
+            "id": "A3",
+            "status": "kyc_submitted",
+            "risk_config_version": invalid_version,
+        }
+        assert (
+            _application_risk_staleness_error(
+                object(), app, "approve application"
+            )
+            == _APPROVAL_RISK_PROVENANCE_REQUIRED
+        )
 
-    def test_no_current_config_does_not_block(self, monkeypatch):
-        """Versioning not in use (no risk_config row) -> gate must not invent a block."""
+    def test_missing_current_config_version_fails_closed(self, monkeypatch):
         from server import _application_risk_staleness_error
         _patch_current_version(monkeypatch, None)
-        app = {"id": "A4", "status": "kyc_submitted", "risk_config_version": None}
-        assert _application_risk_staleness_error(object(), app, "approve application") is None
+        app = {
+            "id": "A4",
+            "status": "kyc_submitted",
+            "risk_config_version": "risk_config:2026-07-07T12:00:00Z",
+        }
+        err = _application_risk_staleness_error(
+            object(), app, "approve application"
+        )
+        assert err is not None
+        assert "Recompute risk" in err
 
     def test_version_lookup_failure_fails_closed(self, monkeypatch):
         """A provenance check that cannot run must NOT approve (fail closed)."""
@@ -89,15 +131,21 @@ class TestRiskStalenessGate:
         def _boom(db):
             raise RuntimeError("db down")
 
-        monkeypatch.setattr(rule_engine, "_get_risk_config_version_strict", _boom)
-        app = {"id": "A5", "status": "kyc_submitted", "risk_config_version": "risk_config:v1"}
+        monkeypatch.setattr(
+            rule_engine, "_get_validated_risk_config_version_strict", _boom
+        )
+        app = {
+            "id": "A5",
+            "status": "kyc_submitted",
+            "risk_config_version": "risk_config:2026-07-07T12:00:00Z",
+        }
         err = _application_risk_staleness_error(object(), app, "approve application")
         assert err is not None
         assert "could not be verified" in err
 
     def test_empty_app_returns_none(self, monkeypatch):
         from server import _application_risk_staleness_error
-        _patch_current_version(monkeypatch, "risk_config:v1")
+        _patch_current_version(monkeypatch, "risk_config:2026-07-07T12:00:00Z")
         assert _application_risk_staleness_error(object(), None, "approve application") is None
 
 
@@ -244,6 +292,7 @@ class TestStalenessGateWiring:
         assert approve_branch.index("can_decide_application(") < approve_branch.index(
             "_application_risk_staleness_error("), (
             "authority gate must run before the staleness gate")
+        assert "return self.error(staleness_error, 409)" in approve_branch
         # Config-update path routes through the honest summary helper.
         assert "_summarize_risk_recompute_results(recomp_results)" in src
         # Config save stamps a microsecond-precision version timestamp

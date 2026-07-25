@@ -181,24 +181,27 @@ class FailClosedPersistenceTest(AsyncHTTPTestCase):
         inputs_updated_at is set in the past so a memo inserted now is fresh.
         """
         from tests.conftest import insert_verified_required_documents
+        from rule_engine import _get_validated_risk_config_version_strict
         suffix = uuid.uuid4().hex[:8]
         app_id = f"p102_{suffix}"
         app_ref = f"P102-{suffix}"
         now = datetime.now(timezone.utc)
         created = now.strftime("%Y-%m-%dT%H:%M:%S")
         inputs_past = (now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S")
+        risk_config_version = _get_validated_risk_config_version_strict(self.db)
         self.db.execute(
             """
             INSERT INTO applications
                 (id, ref, client_id, company_name, country, sector, entity_type,
                  status, risk_level, final_risk_level, risk_score,
-                 prescreening_data, screening_mode, submitted_at, created_at,
+                 risk_config_version, prescreening_data, screening_mode, submitted_at, created_at,
                  updated_at, inputs_updated_at)
             VALUES (?, ?, ?, ?, 'Mauritius', 'Technology', 'SME',
-                    'compliance_review', 'LOW', 'LOW', 20, ?, 'live', ?, ?, ?, ?)
+                    'compliance_review', 'LOW', 'LOW', 20, ?, ?, 'live', ?, ?, ?, ?)
             """,
             (app_id, app_ref, f"{app_id}_c", f"{app_ref} Ltd",
-             _live_clear_prescreening(), created, created, created, inputs_past),
+             risk_config_version, _live_clear_prescreening(),
+             created, created, created, inputs_past),
         )
         if with_memo:
             self.db.execute(

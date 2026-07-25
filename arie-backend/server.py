@@ -162,7 +162,7 @@ from rule_engine import (
     classify_country, score_sector, compute_risk_score, classify_risk_level,
     apply_risk_floor,
     normalize_country_key,
-    validate_risk_config, load_risk_config,
+    validate_risk_config, validate_required_risk_config_semantics, load_risk_config,
     recompute_risk, recompute_risk_for_active_apps,
     RiskConfigUnavailable,
 )
@@ -498,6 +498,11 @@ _RISK_REQUIRED_APPLICATION_STATUSES = (
 )
 _RISK_UNAVAILABLE_WARNING = "Risk unavailable — recalculation required"
 _EDD_ZERO_SCORE_WARNING = "EDD required while canonical risk score is unavailable or zero"
+_APPROVAL_RISK_PROVENANCE_REQUIRED = (
+    "The application has no authoritative proof that its risk score was calculated "
+    "using the current approved risk methodology. Recompute the risk assessment "
+    "before approval."
+)
 
 
 def _unique_list(values):
@@ -655,32 +660,26 @@ def _application_risk_staleness_error(db, app, action_label="approve"):
         change implementation) recompute. Checked before the current-version
         read so an environment without config versioning cannot neutralise a
         quarantine.
-      * Blocks on a *present-and-different* stored version — the precise RDI-004
+      * Blocks on a missing, blank, whitespace-only, or malformed stored
+        version: approval requires authoritative proof that the stored score
+        was computed under a timestamped approved methodology.
+      * Blocks on a present-and-different stored version — the precise RDI-004
         scenario (the app was scored, the config then changed, and the app was
         not re-scored to the new version). After a config change,
         ``recompute_risk_for_active_apps`` stamps the current version on every
         app it successfully re-scores and stamps the quarantine sentinel
         ``RISK_CONFIG_VERSION_RECOMPUTE_FAILED`` on every app whose re-score
         failed.
-      * Blocks (fail-closed) when the current config version cannot be READ —
-        a provenance check that errors must not silently allow approval.
-      * A missing/blank ``risk_config_version`` (unknown provenance) is NOT
-        blocked: legacy applications predate version stamping and every live
-        scoring path stamps versions going forward. Residual: such an app is
-        unguarded only until the next risk-config update — the update sweep
-        re-stamps it (current version on success, quarantine sentinel on
-        failure), after which it is fully covered.
-      * Returns ``None`` for version-comparison purposes when versioning is
-        genuinely not in use (no ``risk_config`` row), so environments without
-        a configured risk model are unaffected — except for quarantine
-        sentinels, which block regardless (see first rule).
+      * Blocks (fail-closed) unless the current singleton risk configuration
+        exists, loads, validates, and carries a timestamped version. A
+        provenance check that cannot run must never silently allow approval.
       * Scoped to approval only: rejection/escalation tighten the outcome and
         must remain available even when a re-score is pending.
     """
     if not app:
         return None
     stored_version = dict(app).get("risk_config_version")
-    stored_text = str(stored_version) if stored_version else ""
+    stored_text = str(stored_version) if stored_version is not None else ""
     if stored_text.startswith("stale:"):
         # Quarantine sentinel — blocks unconditionally, before any config
         # version lookup (a quarantine is meaningful even where versioning
@@ -697,9 +696,12 @@ def _application_risk_staleness_error(db, app, action_label="approve"):
             "application FAILED after a risk-configuration change, so its stored "
             "risk score is quarantined. Recompute risk successfully before approving."
         )
+    from rule_engine import _is_valid_risk_config_version
+    if not _is_valid_risk_config_version(stored_text):
+        return _APPROVAL_RISK_PROVENANCE_REQUIRED
     try:
-        from rule_engine import _get_risk_config_version_strict
-        current_version = _get_risk_config_version_strict(db)
+        from rule_engine import _get_validated_risk_config_version_strict
+        current_version = _get_validated_risk_config_version_strict(db)
     except Exception as version_err:
         # Fail CLOSED: a provenance check that cannot run must not approve.
         logger.error(
@@ -711,13 +713,7 @@ def _application_risk_staleness_error(db, app, action_label="approve"):
             "be verified against the current risk configuration. Retry, and if "
             "this persists contact an administrator."
         )
-    if not current_version:
-        # Versioning not established (no risk_config row) — nothing to compare.
-        return None
-    if not stored_version:
-        # Unknown provenance — not blocked (see blocking rules above).
-        return None
-    if stored_version == current_version:
+    if stored_text == current_version:
         return None
     return (
         "Cannot " + action_label + ": the stored risk score was computed against "
@@ -15285,18 +15281,6 @@ def _bool_from_payload(value, field_name, errors):
     return None
 
 
-def _validate_admin_score_map(name, value, errors):
-    if not isinstance(value, dict) or not value:
-        errors.append({"code": "risk_score_map_required", "field": name, "message": f"{name} must be a non-empty score map"})
-        return
-    for key, score in value.items():
-        if not isinstance(key, str) or not key.strip():
-            errors.append({"code": "risk_score_map_key_invalid", "field": name, "message": f"{name} keys must be non-empty strings"})
-            continue
-        if not isinstance(score, (int, float)) or isinstance(score, bool) or score < 1 or score > 4:
-            errors.append({"code": "risk_score_out_of_range", "field": name, "message": f"{name}.{key} must be numeric between 1 and 4"})
-
-
 COUNTRY_RISK_GROUP_SCORE = {
     "FATF_BLACK": 4,
     "SANCTIONED": 4,
@@ -15738,87 +15722,7 @@ class RiskConfigHandler(BaseHandler):
 
     @classmethod
     def _validate_risk_model_semantics(cls, config):
-        errors = []
-        dimensions = config.get("dimensions") or []
-        thresholds = config.get("thresholds") or []
-
-        if not dimensions:
-            errors.append({"code": "risk_dimensions_required", "field": "dimensions", "message": "complete five-dimension model is required"})
-        elif isinstance(dimensions, list):
-            dim_ids = {str(d.get("id") or "") for d in dimensions if isinstance(d, dict)}
-            missing = cls.REQUIRED_DIMENSION_IDS - dim_ids
-            extra = dim_ids - cls.REQUIRED_DIMENSION_IDS
-            if len(dim_ids) != len(dimensions):
-                errors.append({"code": "risk_dimension_duplicate_or_invalid", "field": "dimensions", "message": "dimension ids must be unique and non-empty"})
-            if missing:
-                errors.append({"code": "risk_dimension_missing", "field": "dimensions", "message": f"missing required dimensions {sorted(missing)}"})
-            if extra:
-                errors.append({"code": "risk_dimension_unknown", "field": "dimensions", "message": f"unsupported dimensions {sorted(extra)}"})
-            total_weight = 0
-            for dim in dimensions:
-                if not isinstance(dim, dict):
-                    errors.append({"code": "risk_dimension_invalid", "field": "dimensions", "message": "each dimension must be an object"})
-                    continue
-                weight = dim.get("weight")
-                if not isinstance(weight, int) or isinstance(weight, bool) or weight <= 0:
-                    errors.append({"code": "risk_dimension_weight_invalid", "field": f"dimensions.{dim.get('id', '?')}.weight", "message": "dimension weights must be positive integers"})
-                else:
-                    total_weight += weight
-                subcriteria = dim.get("subcriteria") or []
-                if not subcriteria:
-                    errors.append({"code": "risk_subcriteria_required", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "at least one subcriteria row is required"})
-                    continue
-                sub_total = 0
-                names = set()
-                for sub in subcriteria:
-                    if not isinstance(sub, dict):
-                        errors.append({"code": "risk_subcriteria_invalid", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "subcriteria rows must be objects"})
-                        continue
-                    name = str(sub.get("name") or "").strip()
-                    if not name:
-                        errors.append({"code": "risk_subcriteria_name_required", "field": f"dimensions.{dim.get('id', '?')}.subcriteria.name", "message": "subcriteria name is required"})
-                    names.add(name)
-                    sub_weight = sub.get("weight")
-                    if not isinstance(sub_weight, int) or isinstance(sub_weight, bool) or sub_weight <= 0:
-                        errors.append({"code": "risk_subcriteria_weight_invalid", "field": f"dimensions.{dim.get('id', '?')}.subcriteria.weight", "message": "subcriteria weights must be positive integers"})
-                    else:
-                        sub_total += sub_weight
-                if len(names) != len(subcriteria):
-                    errors.append({"code": "risk_subcriteria_duplicate", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "subcriteria names must be unique within each dimension"})
-                if sub_total != 100:
-                    errors.append({"code": "risk_subcriteria_weight_total_invalid", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "subcriteria total weight must equal 100"})
-            if total_weight != 100:
-                errors.append({"code": "risk_dimension_weight_total_invalid", "field": "dimensions", "message": "dimension total weight must equal 100"})
-
-        if not thresholds:
-            errors.append({"code": "risk_thresholds_required", "field": "thresholds", "message": "complete LOW/MEDIUM/HIGH/VERY_HIGH thresholds are required"})
-        elif isinstance(thresholds, list):
-            expected = ["LOW", "MEDIUM", "HIGH", "VERY_HIGH"]
-            by_level = {str(t.get("level") or ""): t for t in thresholds if isinstance(t, dict)}
-            if set(by_level) != set(expected):
-                errors.append({"code": "risk_threshold_levels_invalid", "field": "thresholds", "message": "thresholds must contain LOW, MEDIUM, HIGH, and VERY_HIGH"})
-            ordered = []
-            for level in expected:
-                row = by_level.get(level)
-                if not row:
-                    continue
-                min_v = row.get("min")
-                max_v = row.get("max")
-                if not isinstance(min_v, (int, float)) or not isinstance(max_v, (int, float)):
-                    errors.append({"code": "risk_threshold_value_invalid", "field": f"thresholds.{level}", "message": "threshold min/max must be numeric"})
-                    continue
-                if min_v < 0 or max_v > 100 or min_v > max_v:
-                    errors.append({"code": "risk_threshold_range_invalid", "field": f"thresholds.{level}", "message": "threshold ranges must be ordered within 0-100"})
-                ordered.append((level, min_v, max_v))
-            for idx in range(1, len(ordered)):
-                if ordered[idx][1] <= ordered[idx - 1][1] or ordered[idx][2] <= ordered[idx - 1][2]:
-                    errors.append({"code": "risk_threshold_order_invalid", "field": "thresholds", "message": "thresholds must be ordered LOW to VERY_HIGH"})
-                    break
-
-        for map_name in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
-            _validate_admin_score_map(map_name, config.get(map_name), errors)
-
-        return errors
+        return validate_required_risk_config_semantics(config)
 
     @staticmethod
     def _normalize_validation_errors(errors):
