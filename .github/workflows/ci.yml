@@ -209,6 +209,55 @@ jobs:
           fi
           echo "PASS: Coverage ${COV}% (>= 30% minimum)"
 
+      - name: Seed/ops tooling lane (real PostgreSQL)
+        env:
+          ENVIRONMENT: testing
+          SECRET_KEY: ci-test-secret-key
+          ADMIN_INITIAL_PASSWORD: CITestPassword123
+          PGPASSWORD: postgres
+        run: |
+          # Phase-5/6 screening-queue ops ticket: exercise the operator
+          # seed/ops TOOLING end-to-end against real PostgreSQL. The pytest
+          # suite above covers app code on PG; the tooling itself previously
+          # only ever met PG in operator hands. Fresh database per run;
+          # init_db exactly as staging boots.
+          DB_NAME="onboarda_tooling_${{ github.run_id }}"
+          psql -h localhost -U postgres -c "CREATE DATABASE \"${DB_NAME}\";"
+          export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/${DB_NAME}"
+          python -c "import db; db.init_db(); print('init_db OK on PostgreSQL')"
+
+          # Seed -> verify -> re-seed (idempotent) -> wipe -> verify.
+          python seed_screening_qa_fixtures.py
+          python - <<'PY'
+          import db, seed_screening_qa_fixtures as s
+          conn = db.get_db()
+          ids = [f["id"] for f in s.FIXTURES]
+          ph = ",".join("?" for _ in ids)
+          n = conn.execute(f"SELECT COUNT(*) AS c FROM applications WHERE id IN ({ph})", ids).fetchone()["c"]
+          assert n == len(ids), f"expected {len(ids)} fixture applications on PG, found {n}"
+          fx = conn.execute(f"SELECT COUNT(*) AS c FROM applications WHERE id IN ({ph}) AND is_fixture = TRUE", ids).fetchone()["c"]
+          assert fx == len(ids), f"is_fixture not set on PG rows ({fx}/{len(ids)})"
+          conn.close()
+          print(f"seed verified: {n} fixture applications, is_fixture set")
+          PY
+          python seed_screening_qa_fixtures.py
+          python seed_screening_qa_fixtures.py --wipe
+          python - <<'PY'
+          import db, seed_screening_qa_fixtures as s
+          conn = db.get_db()
+          ids = [f["id"] for f in s.FIXTURES]
+          ph = ",".join("?" for _ in ids)
+          n = conn.execute(f"SELECT COUNT(*) AS c FROM applications WHERE id IN ({ph})", ids).fetchone()["c"]
+          assert n == 0, f"wipe left {n} fixture applications behind on PG"
+          conn.close()
+          print("wipe verified: 0 fixture applications remain")
+          PY
+
+          # Stale-report refresh tooling: dry-run candidate listing (DB-only;
+          # --execute is never used in CI).
+          python scripts/ops/refresh_stale_screening_reports.py
+          echo "PG tooling lane PASS"
+
   docker-validate:
     runs-on: ubuntu-latest
     needs: lint-and-test
