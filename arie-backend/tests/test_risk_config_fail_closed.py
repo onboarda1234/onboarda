@@ -64,6 +64,28 @@ _HEALTHY_ROW = {
     "updated_at": "2026-07-24 10:11:12.123456",
 }
 
+_STRICT_HEALTHY_ROW = {
+    "dimensions": [
+        {
+            "id": dimension_id,
+            "name": f"Dimension {dimension_id}",
+            "weight": 20,
+            "subcriteria": [{"name": f"{dimension_id} factor", "weight": 100}],
+        }
+        for dimension_id in ("D1", "D2", "D3", "D4", "D5")
+    ],
+    "thresholds": [
+        {"level": "LOW", "min": 0, "max": 24.9},
+        {"level": "MEDIUM", "min": 25, "max": 49.9},
+        {"level": "HIGH", "min": 50, "max": 74.9},
+        {"level": "VERY_HIGH", "min": 75, "max": 100},
+    ],
+    "country_risk_scores": {"mauritius": 1, "iran": 4},
+    "sector_risk_scores": {"technology": 1},
+    "entity_type_scores": {"sme": 2},
+    "updated_at": "2026-07-24 10:11:12.123456",
+}
+
 
 # ══════════════════════════════════════════════════════════
 # Fail-closed environments: staging / production
@@ -197,7 +219,7 @@ class TestApprovalRiskConfigVersionStrict:
 
     def test_valid_configuration_and_timestamp_load(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "testing")
-        assert self._current_version(_FakeDB(row=dict(_HEALTHY_ROW))) == (
+        assert self._current_version(_FakeDB(row=dict(_STRICT_HEALTHY_ROW))) == (
             "risk_config:2026-07-24 10:11:12.123456"
         )
 
@@ -211,7 +233,7 @@ class TestApprovalRiskConfigVersionStrict:
         self, monkeypatch, updated_at
     ):
         monkeypatch.setenv("ENVIRONMENT", "testing")
-        row = dict(_HEALTHY_ROW)
+        row = dict(_STRICT_HEALTHY_ROW)
         row["updated_at"] = updated_at
         with pytest.raises(RiskConfigUnavailable, match="timestamped"):
             self._current_version(_FakeDB(row=row))
@@ -226,7 +248,7 @@ class TestApprovalRiskConfigVersionStrict:
         [
             dict(_MALFORMED_ROW, updated_at="2026-07-24 10:11:12.123456"),
             dict(
-                _HEALTHY_ROW,
+                _STRICT_HEALTHY_ROW,
                 thresholds='[{"level": "LOW", "min": 0, "max": 39.9}]',
             ),
         ],
@@ -237,6 +259,58 @@ class TestApprovalRiskConfigVersionStrict:
         monkeypatch.setenv("ENVIRONMENT", "testing")
         with pytest.raises(RiskConfigUnavailable, match="validation"):
             self._current_version(_FakeDB(row=invalid_row))
+
+    @pytest.mark.parametrize(
+        "missing_model_row",
+        [
+            {
+                "dimensions": None,
+                "thresholds": None,
+                "country_risk_scores": None,
+                "sector_risk_scores": None,
+                "entity_type_scores": None,
+                "updated_at": "2026-07-24 10:11:12.123456",
+            },
+            {
+                "dimensions": "[]",
+                "thresholds": "[]",
+                "country_risk_scores": "{}",
+                "sector_risk_scores": "{}",
+                "entity_type_scores": "{}",
+                "updated_at": "2026-07-24 10:11:12.123456",
+            },
+        ],
+        ids=["null-model", "empty-model"],
+    )
+    def test_timestamped_but_missing_model_fails_closed(
+        self, monkeypatch, missing_model_row
+    ):
+        monkeypatch.setenv("ENVIRONMENT", "testing")
+        with pytest.raises(RiskConfigUnavailable, match="validation"):
+            self._current_version(_FakeDB(row=missing_model_row))
+
+    def test_timestamped_but_semantically_invalid_model_fails_closed(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("ENVIRONMENT", "testing")
+        invalid = dict(_STRICT_HEALTHY_ROW)
+        invalid["dimensions"] = [
+            {
+                "id": "D1",
+                "name": "Customer Risk",
+                "weight": 999,
+                "subcriteria": [],
+            }
+        ]
+        invalid["thresholds"] = [
+            {"level": "LOW", "min": 50, "max": 40},
+            {"level": "MEDIUM", "min": 30, "max": 20},
+            {"level": "HIGH", "min": 10, "max": 5},
+            {"level": "VERY_HIGH", "min": 0, "max": 1},
+        ]
+        invalid["country_risk_scores"] = {"mauritius": 99}
+        with pytest.raises(RiskConfigUnavailable, match="validation"):
+            self._current_version(_FakeDB(row=invalid))
 
 
 # ══════════════════════════════════════════════════════════

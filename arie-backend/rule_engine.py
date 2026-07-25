@@ -969,6 +969,106 @@ def validate_risk_config(config):
     return validated, all_errors
 
 
+def validate_required_risk_config_semantics(config):
+    """Validate the complete model required by editor and approval gates.
+
+    ``validate_risk_config`` remains intentionally permissive for legacy
+    scorer fallback.  This shared validator is the stricter contract used by
+    the config editor and by ``load_risk_config(require_valid=True)``.
+    """
+    errors = []
+    dimensions = config.get("dimensions") or []
+    thresholds = config.get("thresholds") or []
+    required_dimension_ids = {"D1", "D2", "D3", "D4", "D5"}
+
+    if not dimensions:
+        errors.append({"code": "risk_dimensions_required", "field": "dimensions", "message": "complete five-dimension model is required"})
+    elif isinstance(dimensions, list):
+        dim_ids = {str(d.get("id") or "") for d in dimensions if isinstance(d, dict)}
+        missing = required_dimension_ids - dim_ids
+        extra = dim_ids - required_dimension_ids
+        if len(dim_ids) != len(dimensions):
+            errors.append({"code": "risk_dimension_duplicate_or_invalid", "field": "dimensions", "message": "dimension ids must be unique and non-empty"})
+        if missing:
+            errors.append({"code": "risk_dimension_missing", "field": "dimensions", "message": f"missing required dimensions {sorted(missing)}"})
+        if extra:
+            errors.append({"code": "risk_dimension_unknown", "field": "dimensions", "message": f"unsupported dimensions {sorted(extra)}"})
+        total_weight = 0
+        for dim in dimensions:
+            if not isinstance(dim, dict):
+                errors.append({"code": "risk_dimension_invalid", "field": "dimensions", "message": "each dimension must be an object"})
+                continue
+            weight = dim.get("weight")
+            if not isinstance(weight, int) or isinstance(weight, bool) or weight <= 0:
+                errors.append({"code": "risk_dimension_weight_invalid", "field": f"dimensions.{dim.get('id', '?')}.weight", "message": "dimension weights must be positive integers"})
+            else:
+                total_weight += weight
+            subcriteria = dim.get("subcriteria") or []
+            if not subcriteria:
+                errors.append({"code": "risk_subcriteria_required", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "at least one subcriteria row is required"})
+                continue
+            sub_total = 0
+            names = set()
+            for sub in subcriteria:
+                if not isinstance(sub, dict):
+                    errors.append({"code": "risk_subcriteria_invalid", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "subcriteria rows must be objects"})
+                    continue
+                name = str(sub.get("name") or "").strip()
+                if not name:
+                    errors.append({"code": "risk_subcriteria_name_required", "field": f"dimensions.{dim.get('id', '?')}.subcriteria.name", "message": "subcriteria name is required"})
+                names.add(name)
+                sub_weight = sub.get("weight")
+                if not isinstance(sub_weight, int) or isinstance(sub_weight, bool) or sub_weight <= 0:
+                    errors.append({"code": "risk_subcriteria_weight_invalid", "field": f"dimensions.{dim.get('id', '?')}.subcriteria.weight", "message": "subcriteria weights must be positive integers"})
+                else:
+                    sub_total += sub_weight
+            if len(names) != len(subcriteria):
+                errors.append({"code": "risk_subcriteria_duplicate", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "subcriteria names must be unique within each dimension"})
+            if sub_total != 100:
+                errors.append({"code": "risk_subcriteria_weight_total_invalid", "field": f"dimensions.{dim.get('id', '?')}.subcriteria", "message": "subcriteria total weight must equal 100"})
+        if total_weight != 100:
+            errors.append({"code": "risk_dimension_weight_total_invalid", "field": "dimensions", "message": "dimension total weight must equal 100"})
+
+    if not thresholds:
+        errors.append({"code": "risk_thresholds_required", "field": "thresholds", "message": "complete LOW/MEDIUM/HIGH/VERY_HIGH thresholds are required"})
+    elif isinstance(thresholds, list):
+        expected = ["LOW", "MEDIUM", "HIGH", "VERY_HIGH"]
+        by_level = {str(t.get("level") or ""): t for t in thresholds if isinstance(t, dict)}
+        if set(by_level) != set(expected):
+            errors.append({"code": "risk_threshold_levels_invalid", "field": "thresholds", "message": "thresholds must contain LOW, MEDIUM, HIGH, and VERY_HIGH"})
+        ordered = []
+        for level in expected:
+            row = by_level.get(level)
+            if not row:
+                continue
+            min_v = row.get("min")
+            max_v = row.get("max")
+            if not isinstance(min_v, (int, float)) or not isinstance(max_v, (int, float)):
+                errors.append({"code": "risk_threshold_value_invalid", "field": f"thresholds.{level}", "message": "threshold min/max must be numeric"})
+                continue
+            if min_v < 0 or max_v > 100 or min_v > max_v:
+                errors.append({"code": "risk_threshold_range_invalid", "field": f"thresholds.{level}", "message": "threshold ranges must be ordered within 0-100"})
+            ordered.append((level, min_v, max_v))
+        for idx in range(1, len(ordered)):
+            if ordered[idx][1] <= ordered[idx - 1][1] or ordered[idx][2] <= ordered[idx - 1][2]:
+                errors.append({"code": "risk_threshold_order_invalid", "field": "thresholds", "message": "thresholds must be ordered LOW to VERY_HIGH"})
+                break
+
+    for map_name in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
+        value = config.get(map_name)
+        if not isinstance(value, dict) or not value:
+            errors.append({"code": "risk_score_map_required", "field": map_name, "message": f"{map_name} must be a non-empty score map"})
+            continue
+        for key, score in value.items():
+            if not isinstance(key, str) or not key.strip():
+                errors.append({"code": "risk_score_map_key_invalid", "field": map_name, "message": f"{map_name} keys must be non-empty strings"})
+                continue
+            if not isinstance(score, (int, float)) or isinstance(score, bool) or score < 1 or score > 4:
+                errors.append({"code": "risk_score_out_of_range", "field": map_name, "message": f"{map_name}.{key} must be numeric between 1 and 4"})
+
+    return errors
+
+
 # ══════════════════════════════════════════════════════════
 # RISK CONFIG LOADING (DB is canonical, hardcoded = fallback)
 # ══════════════════════════════════════════════════════════
@@ -1079,6 +1179,8 @@ def load_risk_config(db=None, *, require_valid=False):
 
             # ── Full schema validation with normalization ──
             validated, errors = validate_risk_config(result)
+            if require_valid:
+                errors.extend(validate_required_risk_config_semantics(validated))
             for err in errors:
                 logger.error("risk_config validation: %s", err)
             if errors and fail_closed:
