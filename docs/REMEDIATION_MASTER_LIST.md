@@ -439,15 +439,27 @@ are out of scope for every SRP item.
 > (RDI-009/010/015 screening-config source-of-truth, RDI-017 SAR gating, etc.)
 > are separate scope, not part of this batch.
 >
-> **Codex validation 2026-07-25:** an independent Codex validation of the merged
-> batch returned 5 PASS, 2 PARTIAL (RDI-006 exception mapping, RDI-014 memory
-> bound) and 1 FAIL (RDI-008: a senior could direct-clear a CRITICAL tier-2/3
-> alert with notes but no documented evidence). All three closed by
-> [#867](https://github.com/onboarda1234/onboarda/pull/867) (merged `d532956`,
-> independently re-reviewed APPROVE). Open hardening follow-up (non-fail-open,
-> narrow): re-check `requires_evidence` against the *current* alert at approval
-> time in `_execute_monitoring_clearing`, covering pre-fix pending requests and
-> severity-escalated alerts.
+> **Codex validation 2026-07-25 (round 1):** an independent Codex validation of
+> the merged batch returned 5 PASS, 2 PARTIAL (RDI-006 exception mapping,
+> RDI-014 memory bound) and 1 FAIL (RDI-008: a senior could direct-clear a
+> CRITICAL tier-2/3 alert with notes but no documented evidence). All three
+> closed by [#867](https://github.com/onboarda1234/onboarda/pull/867) (merged
+> `d532956`, independently re-reviewed APPROVE).
+>
+> **Codex re-validation 2026-07-25 (round 2):** confirmed RDI-006 CLOSED; kept
+> RDI-008 and RDI-014 PARTIAL with two reproduced defects — an approval-time
+> evidence TOCTOU (a request created while an alert was non-critical could be
+> approved after escalation to CRITICAL, clearing it with `has_evidence:false`)
+> and a structural-violation undercount (300 dangling rows reported as
+> `total_violations=202`). Both closed by
+> [#870](https://github.com/onboarda1234/onboarda/pull/870) (merged `36c14d7`,
+> independently re-reviewed APPROVE): approval-time
+> `assert_evidence_current` recheck (409 before any mutation; request stays
+> pending) + evidence now required even for the `approved_review` marker
+> (closes the residual escalation race on the dismiss path); true per-class
+> violation totals via uncapped COUNT(*) with `violation_totals` breakdown and
+> additive coverage notes. Codex round-1's five PASS findings re-confirmed
+> unregressed in round 2.
 
 ### Remediated (2026-07-24)
 
@@ -458,8 +470,8 @@ are out of scope for every SRP item.
 | 🔴 RDI-007 | `monitoring_routing` committed alert status/action + linkage before a swallowed routing audit → single atomic transaction that propagates audit failure and rolls back | CRITICAL | [#864](https://github.com/onboarda1234/onboarda/pull/864) | ✅ merged (`81d762c`) + staging-deployed 2026-07-24 |
 | 🔴 RDI-004 | Supervisor `AuditLogger` advanced the in-memory hash-chain head before persistence, swallowing failures → persist-before-advance from the committed DB tail; raises `AuditPersistenceError` (fail closed) | CRITICAL | [#865](https://github.com/onboarda1234/onboarda/pull/865) | ✅ merged (`b3a3cbe`) + staging-deployed 2026-07-24 |
 | 🔴 RDI-005 | Supervisor pipeline returned a successful decision-equivalent result without persistence → typed persist-or-raise; no cache/return before commit; 500 on failure; durable-store reads | CRITICAL | [#865](https://github.com/onboarda1234/onboarda/pull/865) | ✅ merged (`b3a3cbe`) + staging-deployed 2026-07-24 |
-| RDI-008 | CRITICAL monitoring alert dismissable via the ordinary single-officer path (no severity gate) → fail-closed behind the M2.2 senior/four-eyes disposition (pairs RDI-007) | HIGH | [#864](https://github.com/onboarda1234/onboarda/pull/864), [#867](https://github.com/onboarda1234/onboarda/pull/867) | ✅ merged (`81d762c`) + staging-deployed 2026-07-24 · Codex FAIL (evidence-less senior clear of critical tier-2/3) closed by #867: evidence mandatory for ANY critical clear at both M2.2 and service layers |
-| RDI-014 | Supervisor audit-verify API capped at 5000 rows → uncapped batched full-chain verify (`?full=true`, admin/SCO) returning root/head/count/timestamp (pairs RDI-004) | HIGH | [#865](https://github.com/onboarda1234/onboarda/pull/865), [#867](https://github.com/onboarda1234/onboarda/pull/867) | ✅ merged (`b3a3cbe`) + staging-deployed 2026-07-24 · Codex PARTIAL (O(n)-memory structural pass) closed by #867: bounded link-following walk + capped DB-side aggregates |
+| RDI-008 | CRITICAL monitoring alert dismissable via the ordinary single-officer path (no severity gate) → fail-closed behind the M2.2 senior/four-eyes disposition (pairs RDI-007) | HIGH | [#864](https://github.com/onboarda1234/onboarda/pull/864), [#867](https://github.com/onboarda1234/onboarda/pull/867), [#870](https://github.com/onboarda1234/onboarda/pull/870) | ✅ merged (`81d762c`) + staging-deployed 2026-07-24 · Codex r1 FAIL (evidence-less senior clear) closed by #867 · Codex r2 PARTIAL (approval-time evidence TOCTOU) closed by #870: `assert_evidence_current` recheck + evidence required even for approved-review clearances |
+| RDI-014 | Supervisor audit-verify API capped at 5000 rows → uncapped batched full-chain verify (`?full=true`, admin/SCO) returning root/head/count/timestamp (pairs RDI-004) | HIGH | [#865](https://github.com/onboarda1234/onboarda/pull/865), [#867](https://github.com/onboarda1234/onboarda/pull/867), [#870](https://github.com/onboarda1234/onboarda/pull/870) | ✅ merged (`b3a3cbe`) + staging-deployed 2026-07-24 · Codex r1 PARTIAL (O(n) memory) closed by #867 · Codex r2 PARTIAL (violation undercount) closed by #870: true per-class COUNT(*) totals + additive coverage notes |
 | RDI-016 | `revalidate_actor_post_await` existed but was unwired → invoked after the pipeline await, before persist, aborting on mid-request revocation/demotion (pairs RDI-005) | HIGH | [#865](https://github.com/onboarda1234/onboarda/pull/865) | ✅ merged (`b3a3cbe`) + staging-deployed 2026-07-24 |
 
 > Supervisor items (RDI-004/005/014/016) harden the Enterprise supervisor, which is
@@ -557,7 +569,8 @@ Third batch (Audit 1 re-run 2026-07-21, PRs #862–#865) adds **10 net-new rows*
 8 ✅ merged + staging-deployed 2026-07-24 (RDI-001/004/005/006/007/008/014/016)
 and 2 ⏸ deferred (RDI-002/003 — frozen risk-staleness approval gate, founder
 sign-off pending). Codex validation 2026-07-25 findings on RDI-008/006/014
-closed by #867 (no row-count change — same items, corrections folded in).
+closed by #867 (round 1) and #870 (round 2 — approval-time evidence TOCTOU +
+violation undercount); no row-count change — same items, corrections folded in.
 
 | Status | Count |
 |--------|:--:|
