@@ -388,19 +388,22 @@ class TestOwnershipGateHTTP(tornado.testing.AsyncHTTPTestCase):
     def _seed(self, risk="LOW", assigned_to=None, first_approver=None,
               with_memo=True, documents_ready=True, status="compliance_review"):
         from tests.conftest import insert_verified_required_documents
+        from rule_engine import _get_validated_risk_config_version_strict
         suffix = uuid.uuid4().hex[:8]
         app_id, ref = f"own_{suffix}", f"OWN-{suffix}"
         now = "2026-07-01 09:00:00"
         score = {"LOW": 20, "MEDIUM": 50}.get(risk, 78)
+        risk_config_version = _get_validated_risk_config_version_strict(self.db)
         self.db.execute(
             """INSERT INTO applications
                  (id, ref, client_id, company_name, country, sector, entity_type,
                   status, risk_level, final_risk_level, risk_score, assigned_to,
-                  first_approver_id, prescreening_data, screening_mode,
+                  first_approver_id, risk_config_version, prescreening_data, screening_mode,
                   submitted_at, created_at, updated_at, inputs_updated_at)
-               VALUES (?, ?, ?, ?, 'Mauritius', 'Technology', 'SME', ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, 'Mauritius', 'Technology', 'SME', ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?)""",
             (app_id, ref, f"{app_id}_c", f"{ref} Ltd", status, risk, risk, score,
-             assigned_to, first_approver, _live_clear_prescreening(), now, now, now, now),
+             assigned_to, first_approver, risk_config_version,
+             _live_clear_prescreening(), now, now, now, now),
         )
         if with_memo:
             self.db.execute(

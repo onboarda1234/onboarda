@@ -61,6 +61,7 @@ _HEALTHY_ROW = {
     "country_risk_scores": '{"mauritius": 1, "iran": 4}',
     "sector_risk_scores": '{"technology": 1}',
     "entity_type_scores": '{"sme": 2}',
+    "updated_at": "2026-07-24 10:11:12.123456",
 }
 
 
@@ -184,6 +185,58 @@ class TestFallbackEnvironments:
         monkeypatch.setenv("ENVIRONMENT", "testing")
         _use_fake_db(monkeypatch, _FakeDB(row=None))
         assert load_risk_config() is None
+
+
+# ══════════════════════════════════════════════════════════
+# Approval provenance always uses strict validated loading
+# ══════════════════════════════════════════════════════════
+
+class TestApprovalRiskConfigVersionStrict:
+    def _current_version(self, db):
+        return rule_engine._get_validated_risk_config_version_strict(db)
+
+    def test_valid_configuration_and_timestamp_load(self, monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "testing")
+        assert self._current_version(_FakeDB(row=dict(_HEALTHY_ROW))) == (
+            "risk_config:2026-07-24 10:11:12.123456"
+        )
+
+    def test_missing_singleton_row_fails_closed_in_testing(self, monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "testing")
+        with pytest.raises(RiskConfigUnavailable, match="missing"):
+            self._current_version(_FakeDB(row=None))
+
+    @pytest.mark.parametrize("updated_at", [None, "", "   ", "not-a-timestamp"])
+    def test_blank_or_malformed_configuration_version_fails_closed(
+        self, monkeypatch, updated_at
+    ):
+        monkeypatch.setenv("ENVIRONMENT", "testing")
+        row = dict(_HEALTHY_ROW)
+        row["updated_at"] = updated_at
+        with pytest.raises(RiskConfigUnavailable, match="timestamped"):
+            self._current_version(_FakeDB(row=row))
+
+    def test_configuration_load_failure_fails_closed_in_testing(self, monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "testing")
+        with pytest.raises(RiskConfigUnavailable, match="Failed to load"):
+            self._current_version(_FakeDB(raise_exc=RuntimeError("db down")))
+
+    @pytest.mark.parametrize(
+        "invalid_row",
+        [
+            dict(_MALFORMED_ROW, updated_at="2026-07-24 10:11:12.123456"),
+            dict(
+                _HEALTHY_ROW,
+                thresholds='[{"level": "LOW", "min": 0, "max": 39.9}]',
+            ),
+        ],
+    )
+    def test_invalid_configuration_or_validation_failure_fails_closed(
+        self, monkeypatch, invalid_row
+    ):
+        monkeypatch.setenv("ENVIRONMENT", "testing")
+        with pytest.raises(RiskConfigUnavailable, match="validation"):
+            self._current_version(_FakeDB(row=invalid_row))
 
 
 # ══════════════════════════════════════════════════════════

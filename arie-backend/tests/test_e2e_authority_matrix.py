@@ -199,6 +199,8 @@ class E2EAuthorityMatrixTest(AsyncHTTPTestCase):
         app_ref = f"E2E-{suffix}"
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         score = {"LOW": 20, "MEDIUM": 50}.get(risk_level, 78)
+        from rule_engine import _get_validated_risk_config_version_strict
+        risk_config_version = _get_validated_risk_config_version_strict(self.db)
         # NB: deliberately no client row — mirrors the proven approvable fixture in
         # test_api.py. A real client would require client-IDV resolution; this suite
         # tests decision-time AUTHORITY + audit, not IDV onboarding.
@@ -207,11 +209,13 @@ class E2EAuthorityMatrixTest(AsyncHTTPTestCase):
             INSERT INTO applications
                 (id, ref, client_id, company_name, country, sector, entity_type,
                  status, risk_level, final_risk_level, risk_score,
-                 prescreening_data, screening_mode, submitted_at, created_at, updated_at, inputs_updated_at)
-            VALUES (?, ?, ?, ?, 'Mauritius', 'Technology', 'SME', ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?)
+                 risk_config_version, prescreening_data, screening_mode,
+                 submitted_at, created_at, updated_at, inputs_updated_at)
+            VALUES (?, ?, ?, ?, 'Mauritius', 'Technology', 'SME', ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?, ?)
             """,
             (app_id, app_ref, f"{app_id}_c", f"{app_ref} Ltd", status, risk_level, risk_level,
-             score, prescreening_data or _live_clear_prescreening(), now, now, now, now),
+             score, risk_config_version, prescreening_data or _live_clear_prescreening(),
+             now, now, now, now),
         )
         if director_pep:
             self.db.execute(
@@ -256,6 +260,24 @@ class E2EAuthorityMatrixTest(AsyncHTTPTestCase):
         )
 
     # ── SUCCESS PATHS (the coverage gap) ──
+
+    def test_approval_without_authoritative_risk_provenance_fails_closed(self):
+        app_id, _ref = self._seed_approvable("LOW")
+        self.db.execute(
+            "UPDATE applications SET risk_config_version=NULL WHERE id=?",
+            (app_id,),
+        )
+        self.db.commit()
+
+        resp = self._approve(app_id, self.co_token)
+
+        assert resp.code == 409
+        assert self._json(resp)["error"] == (
+            "The application has no authoritative proof that its risk score was "
+            "calculated using the current approved risk methodology. Recompute "
+            "the risk assessment before approval."
+        )
+        assert self._status_of(app_id)["status"] == "compliance_review"
 
     def test_co_approves_clean_low(self):
         app_id, ref = self._seed_approvable("LOW")

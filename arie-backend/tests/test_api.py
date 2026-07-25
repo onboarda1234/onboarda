@@ -4276,6 +4276,14 @@ class TestPasswordRotationGuard:
 # ═══════════════════════════════════════════════════════════
 
 class TestGovernanceAttemptAudit:
+    def _stamp_current_risk_config_version(self, conn, app_id):
+        from rule_engine import _get_validated_risk_config_version_strict
+
+        conn.execute(
+            "UPDATE applications SET risk_config_version = ? WHERE id = ?",
+            (_get_validated_risk_config_version_strict(conn), app_id),
+        )
+
     def _live_prescreening(self):
         from tests.conftest import clean_ca_prescreening
         return json.dumps(clean_ca_prescreening(
@@ -4354,6 +4362,7 @@ class TestGovernanceAttemptAudit:
             42,
             json.dumps(prescreening),
         ))
+        self._stamp_current_risk_config_version(conn, app_id)
         self._insert_approved_memo(conn, app_id)
         insert_verified_required_documents(conn, app_id)
         conn.execute(
@@ -4589,6 +4598,7 @@ class TestGovernanceAttemptAudit:
             20,
             self._live_prescreening(),
         ))
+        self._stamp_current_risk_config_version(conn, app_id)
         conn.commit()
         conn.close()
 
@@ -4766,6 +4776,7 @@ class TestGovernanceAttemptAudit:
             42,
             self._live_prescreening(),
         ))
+        self._stamp_current_risk_config_version(conn, app_id)
         self._insert_approved_memo(conn, app_id)
         inserted_docs = insert_verified_required_documents(conn, app_id)
         pending_doc_id = inserted_docs[0]
@@ -5077,6 +5088,7 @@ class TestGovernanceAttemptAudit:
             45,
             self._live_prescreening(),
         ))
+        self._stamp_current_risk_config_version(conn, app_id)
         self._insert_approved_memo(conn, app_id)
         insert_verified_required_documents(conn, app_id)
         self._insert_enhanced_requirement(conn, app_id, status="generated", mandatory=1, blocking_approval=1)
@@ -7038,6 +7050,7 @@ class TestGovernanceAttemptAudit:
             "Mauritius", "Banking", "NBFI", "compliance_review", "HIGH", 80,
             self._live_prescreening(),
         ))
+        self._stamp_current_risk_config_version(conn, app_id)
         self._insert_approved_memo(conn, app_id)
         self._insert_enhanced_requirement(conn, app_id, status="accepted")
         insert_verified_required_documents(conn, app_id)
@@ -7242,6 +7255,14 @@ class TestGovernanceAttemptAudit:
 
 
 class TestMonitoringEnrollmentActuation:
+    def _stamp_current_risk_config_version(self, conn, app_id):
+        from rule_engine import _get_validated_risk_config_version_strict
+
+        conn.execute(
+            "UPDATE applications SET risk_config_version = ? WHERE id = ?",
+            (_get_validated_risk_config_version_strict(conn), app_id),
+        )
+
     def _live_clear_prescreening(self):
         from tests.conftest import clean_ca_prescreening_json
 
@@ -7285,6 +7306,7 @@ class TestMonitoringEnrollmentActuation:
                 now,
             ),
         )
+        self._stamp_current_risk_config_version(conn, app_id)
         conn.execute(
             """
             INSERT INTO compliance_memos

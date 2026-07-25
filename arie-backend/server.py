@@ -498,6 +498,11 @@ _RISK_REQUIRED_APPLICATION_STATUSES = (
 )
 _RISK_UNAVAILABLE_WARNING = "Risk unavailable — recalculation required"
 _EDD_ZERO_SCORE_WARNING = "EDD required while canonical risk score is unavailable or zero"
+_APPROVAL_RISK_PROVENANCE_REQUIRED = (
+    "The application has no authoritative proof that its risk score was calculated "
+    "using the current approved risk methodology. Recompute the risk assessment "
+    "before approval."
+)
 
 
 def _unique_list(values):
@@ -655,32 +660,26 @@ def _application_risk_staleness_error(db, app, action_label="approve"):
         change implementation) recompute. Checked before the current-version
         read so an environment without config versioning cannot neutralise a
         quarantine.
-      * Blocks on a *present-and-different* stored version — the precise RDI-004
+      * Blocks on a missing, blank, whitespace-only, or malformed stored
+        version: approval requires authoritative proof that the stored score
+        was computed under a timestamped approved methodology.
+      * Blocks on a present-and-different stored version — the precise RDI-004
         scenario (the app was scored, the config then changed, and the app was
         not re-scored to the new version). After a config change,
         ``recompute_risk_for_active_apps`` stamps the current version on every
         app it successfully re-scores and stamps the quarantine sentinel
         ``RISK_CONFIG_VERSION_RECOMPUTE_FAILED`` on every app whose re-score
         failed.
-      * Blocks (fail-closed) when the current config version cannot be READ —
-        a provenance check that errors must not silently allow approval.
-      * A missing/blank ``risk_config_version`` (unknown provenance) is NOT
-        blocked: legacy applications predate version stamping and every live
-        scoring path stamps versions going forward. Residual: such an app is
-        unguarded only until the next risk-config update — the update sweep
-        re-stamps it (current version on success, quarantine sentinel on
-        failure), after which it is fully covered.
-      * Returns ``None`` for version-comparison purposes when versioning is
-        genuinely not in use (no ``risk_config`` row), so environments without
-        a configured risk model are unaffected — except for quarantine
-        sentinels, which block regardless (see first rule).
+      * Blocks (fail-closed) unless the current singleton risk configuration
+        exists, loads, validates, and carries a timestamped version. A
+        provenance check that cannot run must never silently allow approval.
       * Scoped to approval only: rejection/escalation tighten the outcome and
         must remain available even when a re-score is pending.
     """
     if not app:
         return None
     stored_version = dict(app).get("risk_config_version")
-    stored_text = str(stored_version) if stored_version else ""
+    stored_text = str(stored_version) if stored_version is not None else ""
     if stored_text.startswith("stale:"):
         # Quarantine sentinel — blocks unconditionally, before any config
         # version lookup (a quarantine is meaningful even where versioning
@@ -697,9 +696,12 @@ def _application_risk_staleness_error(db, app, action_label="approve"):
             "application FAILED after a risk-configuration change, so its stored "
             "risk score is quarantined. Recompute risk successfully before approving."
         )
+    from rule_engine import _is_valid_risk_config_version
+    if not _is_valid_risk_config_version(stored_text):
+        return _APPROVAL_RISK_PROVENANCE_REQUIRED
     try:
-        from rule_engine import _get_risk_config_version_strict
-        current_version = _get_risk_config_version_strict(db)
+        from rule_engine import _get_validated_risk_config_version_strict
+        current_version = _get_validated_risk_config_version_strict(db)
     except Exception as version_err:
         # Fail CLOSED: a provenance check that cannot run must not approve.
         logger.error(
@@ -711,13 +713,7 @@ def _application_risk_staleness_error(db, app, action_label="approve"):
             "be verified against the current risk configuration. Retry, and if "
             "this persists contact an administrator."
         )
-    if not current_version:
-        # Versioning not established (no risk_config row) — nothing to compare.
-        return None
-    if not stored_version:
-        # Unknown provenance — not blocked (see blocking rules above).
-        return None
-    if stored_version == current_version:
+    if stored_text == current_version:
         return None
     return (
         "Cannot " + action_label + ": the stored risk score was computed against "

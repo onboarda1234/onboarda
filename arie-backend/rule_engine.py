@@ -975,7 +975,8 @@ def validate_risk_config(config):
 
 class RiskConfigUnavailable(Exception):
     """Raised when the live risk-scoring configuration cannot be loaded or
-    fails validation in a fail-closed environment (staging/production).
+    fails validation in a fail-closed environment (staging/production), or
+    when a regulated caller explicitly requires validated configuration.
 
     DCI-008: regulated decision paths must not silently score against the
     hardcoded default model when the approved live model in the DB is
@@ -1021,12 +1022,15 @@ def _parse_config_column(val):
     return val  # JSONB already parsed: dict/list pass validation, scalars get flagged
 
 
-def load_risk_config(db=None):
+def load_risk_config(db=None, *, require_valid=False):
     """Load live risk scoring configuration from DB.
 
     Callers may supply an existing connection when configuration must be read
     from their caller-owned transaction. The default continues to open and
     close its own read connection exactly as normal runtime callers expect.
+    ``require_valid=True`` is reserved for regulated decision gates: it makes
+    missing, unreadable, or invalid configuration fail closed in every
+    environment instead of allowing the development/test fallback posture.
 
     Validates that score-mapping columns (country_risk_scores, sector_risk_scores,
     entity_type_scores) are dicts after JSON parsing, attempting normalization of
@@ -1040,7 +1044,7 @@ def load_risk_config(db=None):
       so the hardcoded fallback in the scoring functions takes over (historical
       behaviour, keeps local dev and the test suite runnable without a seeded row).
     """
-    fail_closed = _risk_config_fail_closed()
+    fail_closed = bool(require_valid) or _risk_config_fail_closed()
     try:
         owns_connection = db is None
         if owns_connection:
@@ -2115,6 +2119,54 @@ RISK_CONFIG_VERSION_RECOMPUTE_FAILED = "stale:recompute_failed"
 # instead of approvable on its stale pre-change score. A successful recompute
 # overwrites it with the real current config version.
 RISK_CONFIG_VERSION_CM_RECOMPUTE_PENDING = "stale:cm_recompute_pending"
+
+
+def _is_valid_risk_config_version(value):
+    """Return whether *value* is an authoritative timestamped config version.
+
+    Runtime versions are persisted as ``risk_config:<updated_at>``. SQLite
+    emits a space-separated timestamp while PostgreSQL/test fixtures may use
+    ISO ``T``/``Z`` notation, so both are accepted. Symbolic, blank,
+    whitespace-padded, or otherwise non-timestamp versions are not sufficient
+    provenance for a regulated approval.
+    """
+    if not isinstance(value, str) or value != value.strip():
+        return False
+    prefix = "risk_config:"
+    if not value.startswith(prefix):
+        return False
+    timestamp_text = value[len(prefix):]
+    if (
+        not timestamp_text
+        or timestamp_text != timestamp_text.strip()
+        or ("T" not in timestamp_text and " " not in timestamp_text)
+    ):
+        return False
+    try:
+        datetime.fromisoformat(timestamp_text.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _get_validated_risk_config_version_strict(db):
+    """Return the validated singleton config version for an approval gate.
+
+    Unlike the legacy version-only lookup below, this proves that the
+    singleton configuration exists, loads, passes the existing schema
+    validator, and carries a timestamped version. It deliberately opts out of
+    development/test fallback semantics because approval is fail closed in
+    every environment.
+    """
+    config = load_risk_config(db=db, require_valid=True)
+    current_version = (
+        config.get("_config_version") if isinstance(config, dict) else None
+    )
+    if not _is_valid_risk_config_version(current_version):
+        raise RiskConfigUnavailable(
+            "risk_config has no valid timestamped configuration version"
+        )
+    return current_version
 
 
 def _get_risk_config_version_strict(db):

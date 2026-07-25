@@ -126,6 +126,9 @@ class PatchDecisionBypassTest(AsyncHTTPTestCase):
         return json.loads(response.body.decode() or "{}")
 
     def _seed_app(self, app_id, ref, status, risk_level, risk_score):
+        from rule_engine import _get_validated_risk_config_version_strict
+
+        risk_config_version = _get_validated_risk_config_version_strict(self.db)
         self.db.execute(
             "INSERT OR REPLACE INTO clients (id, email, password_hash, company_name, status) "
             "VALUES (?, ?, 'test-only', ?, 'active')",
@@ -135,11 +138,11 @@ class PatchDecisionBypassTest(AsyncHTTPTestCase):
             """
             INSERT OR REPLACE INTO applications
                 (id, ref, client_id, company_name, country, sector, entity_type,
-                 status, risk_score, risk_level, prescreening_data)
-            VALUES (?, ?, ?, ?, 'Mauritius', 'Technology', 'Company', ?, ?, ?, ?)
+                 status, risk_score, risk_level, prescreening_data, risk_config_version)
+            VALUES (?, ?, ?, ?, 'Mauritius', 'Technology', 'Company', ?, ?, ?, ?, ?)
             """,
             (app_id, ref, f"{app_id}_client", f"{ref} Ltd", status, risk_score, risk_level,
-             json.dumps({"jurisdiction": risk_level})),
+             json.dumps({"jurisdiction": risk_level}), risk_config_version),
         )
         self.db.commit()
 
