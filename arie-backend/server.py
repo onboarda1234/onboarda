@@ -24607,7 +24607,26 @@ def _screening_queue_row_triage(row):
 
     items = ((row.get("screening_evidence") or {}).get("items")) or []
     buckets = {"sanctions": 0, "pep": 0, "adverse_media": 0, "watchlist": 0, "other": 0}
-    scored, weak, unscored = [], 0, 0
+    # SRP-3 Phase F (F4) — reconciliation split.
+    #
+    # ``buckets`` counts EVERY hit in its category and ``weak_count`` re-counts
+    # the below-threshold ones across all categories, so the two overlap: a
+    # weak watchlist hit is in both. The review page renders them as adjacent
+    # tiles, which reads as a partition and overstated the material exposure
+    # (e.g. "15 Sanctions & watchlist" for a subject with zero of either, all
+    # 15 being weak name-only matches also counted in the weak tile).
+    #
+    # These additive fields express the partition the hit list already
+    # performs — every below-threshold hit is pulled out of its section and
+    # rendered in the weak tail — so counts and list agree:
+    #     sum(section_buckets) + weak_tail_count == total
+    #
+    # Sanctions are deliberately exempt from the tail: a sanctions hit is
+    # material regardless of how the name-match scored, and must never be
+    # buried behind a "weak name-only" disclosure.
+    section_buckets = {"sanctions": 0, "pep": 0, "adverse_media": 0, "watchlist": 0, "other": 0}
+    weak_buckets = {"sanctions": 0, "pep": 0, "adverse_media": 0, "watchlist": 0, "other": 0}
+    scored, weak, weak_tail, unscored = [], 0, 0, 0
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -24616,6 +24635,15 @@ def _screening_queue_row_triage(row):
         )
         buckets[category_key] += 1
         score = item.get("triage_score")
+        is_weak = isinstance(score, (int, float)) and score < _TRIAGE_WEAK_THRESHOLD
+        if is_weak:
+            weak_buckets[category_key] += 1
+        # Unscored hits are never assumed weak — they stay in-section and are
+        # disclosed separately as "unscored".
+        if is_weak and category_key != "sanctions":
+            weak_tail += 1
+        else:
+            section_buckets[category_key] += 1
         if isinstance(score, (int, float)):
             if score < _TRIAGE_WEAK_THRESHOLD:
                 weak += 1
@@ -24636,6 +24664,12 @@ def _screening_queue_row_triage(row):
         "total": sum(buckets.values()),
         "buckets": buckets,
         "weak_count": weak,
+        # Additive reconciliation fields (see note above). Legacy ``buckets``
+        # and ``weak_count`` keep their original overlapping semantics for
+        # back-compatibility with stored/cached payloads.
+        "section_buckets": section_buckets,
+        "weak_buckets": weak_buckets,
+        "weak_tail_count": weak_tail,
         "unscored_count": unscored,
         "weak_threshold": _TRIAGE_WEAK_THRESHOLD,
         "top_hits": scored[:5],

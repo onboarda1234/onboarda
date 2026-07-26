@@ -17622,17 +17622,42 @@ function screeningTriageStrip(row) {
   // hits so its label never excludes what it names — a watchlist "warning"
   // hit must never sit behind a tile showing 0. The sub-caption breaks the
   // combined count down honestly whenever either bucket is non-zero.
-  var sanctionsCount = Number(buckets.sanctions || 0);
-  var watchlistCount = Number(buckets.watchlist || 0);
-  var sanctionsWatchlistSub = (sanctionsCount || watchlistCount)
-    ? String(sanctionsCount) + ' sanctions · ' + String(watchlistCount) + ' watchlist/warning'
-    : 'Screened against sanction lists';
+  //
+  // Phase F (F4) — reconciliation. The category tiles now count only the hits
+  // rendered in their section (server ``section_buckets``); every
+  // below-threshold hit is counted once, in the weak tile. Previously the
+  // category tiles counted ALL hits and the weak tile re-counted the weak
+  // ones, so the four tiles summed to more than the subject had matches and a
+  // subject with zero material sanctions/watchlist exposure showed a red "15".
+  // Sanctions stay in-section at any score (never tailed) — server-side rule.
+  // Older cached payloads without the split fall back to legacy counts.
+  var sectionBuckets = triage.section_buckets || buckets;
+  var weakBuckets = triage.weak_buckets || {};
+  var weakTailCount = triage.weak_tail_count != null ? triage.weak_tail_count : triage.weak_count;
+  var sanctionsCount = Number(sectionBuckets.sanctions || 0);
+  var watchlistCount = Number(sectionBuckets.watchlist || 0);
+  // Below-threshold watchlist hits are disclosed in the sub-caption so a
+  // "0 · 0" tile never reads as "the provider returned nothing here".
+  var watchlistWeak = Number(weakBuckets.watchlist || 0);
+  var sanctionsWatchlistSub;
+  if (sanctionsCount || watchlistCount) {
+    sanctionsWatchlistSub = String(sanctionsCount) + ' sanctions · ' + String(watchlistCount) + ' watchlist/warning';
+    if (watchlistWeak) sanctionsWatchlistSub += ' · ' + String(watchlistWeak) + ' below threshold';
+  } else if (watchlistWeak) {
+    sanctionsWatchlistSub = watchlistWeak + ' watchlist match(es), all below threshold ' + threshold;
+  } else {
+    sanctionsWatchlistSub = 'Screened against sanction lists';
+  }
+  var adverseWeak = Number(weakBuckets.adverse_media || 0);
+  var adverseSub = adverseWeak
+    ? 'Above threshold · ' + String(adverseWeak) + ' more below threshold'
+    : 'Provider media matches';
   var html = '<div data-screening-triage-strip="true" style="margin:0 0 14px;">';
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;">';
   html += tile(sanctionsCount + watchlistCount, 'Sanctions & watchlist', sanctionsWatchlistSub, '#dc2626');
-  html += tile(buckets.pep, 'PEP matches', Number(buckets.pep || 0) > 0 ? 'Review first' : 'Politically exposed persons', '#d97706');
-  html += tile(buckets.adverse_media, 'Adverse media', 'Provider media matches', 'var(--brand)');
-  html += tile(triage.weak_count, 'Weak name-only matches', 'Below triage threshold ' + threshold, 'var(--border2)', true);
+  html += tile(sectionBuckets.pep, 'PEP matches', Number(sectionBuckets.pep || 0) > 0 ? 'Review first' : 'Politically exposed persons', '#d97706');
+  html += tile(sectionBuckets.adverse_media, 'Adverse media', adverseSub, 'var(--brand)');
+  html += tile(weakTailCount, 'Weak name-only matches', 'Below triage threshold ' + threshold, 'var(--border2)', true);
   html += '</div>';
   if (Number(triage.unscored_count || 0) > 0) {
     html += '<div style="font-size:11px;color:var(--text3);margin-top:6px;">' + escapeHtml(String(triage.unscored_count)) + ' match(es) predate the triage score and are labelled “unscored” — they are listed for review, never hidden.</div>';
@@ -18816,6 +18841,10 @@ function screeningTriageRankedHitSections(row) {
   var items = ((row.screening_evidence || {}).items) || [];
   if (!triage || !triage.buckets || !items.length) return '';
   var buckets = triage.buckets || {};
+  // Phase F (F4) reconciliation split — older cached payloads without the
+  // additive fields fall back to the legacy overlapping counts.
+  var sectionBuckets = triage.section_buckets || buckets;
+  var weakBuckets = triage.weak_buckets || {};
   var weakThreshold = triage.weak_threshold;
   var hasThreshold = typeof weakThreshold === 'number' && !isNaN(weakThreshold);
   var grouped = { sanctions: [], pep: [], adverse_media: [], watchlist: [], other: [] };
@@ -18823,11 +18852,16 @@ function screeningTriageRankedHitSections(row) {
   items.forEach(function(item, index) {
     if (!item || typeof item !== 'object') return;
     var entry = { item: item, index: index };
-    if (hasThreshold && typeof item.triage_score === 'number' && item.triage_score < weakThreshold) {
+    var bucketKey = screeningTriageBucketKeyForCategory(item.category);
+    // Phase F (F4): sanctions never fold into the weak tail — a sanctions hit
+    // is material regardless of how the name-match scored, and must never be
+    // buried behind a "weak name-only" disclosure. Mirrors the server split
+    // (section_buckets / weak_tail_count).
+    if (hasThreshold && bucketKey !== 'sanctions' && typeof item.triage_score === 'number' && item.triage_score < weakThreshold) {
       weakEntries.push(entry);
       return;
     }
-    grouped[screeningTriageBucketKeyForCategory(item.category)].push(entry);
+    grouped[bucketKey].push(entry);
   });
   var sortRanked = function(a, b) {
     var sa = typeof a.item.triage_score === 'number' ? a.item.triage_score : null;
@@ -18842,9 +18876,14 @@ function screeningTriageRankedHitSections(row) {
   SCREENING_TRIAGE_BUCKET_META.forEach(function(meta) {
     var entries = grouped[meta.key];
     entries.sort(sortRanked);
-    var serverCount = buckets[meta.key] != null ? Number(buckets[meta.key]) : 0;
-    if (meta.key !== 'sanctions' && !serverCount && !entries.length) return;
+    // Phase F (F4): the header counts what the section actually renders, and
+    // discloses the below-threshold remainder separately, so the number beside
+    // the heading always reconciles with the cards beneath it.
+    var serverCount = sectionBuckets[meta.key] != null ? Number(sectionBuckets[meta.key]) : 0;
+    var bucketWeak = Number(weakBuckets[meta.key] || 0);
+    if (meta.key !== 'sanctions' && !serverCount && !bucketWeak && !entries.length) return;
     var headerNote = serverCount === 1 ? '1 match' : String(serverCount) + ' matches';
+    if (bucketWeak) headerNote += ' · ' + String(bucketWeak) + ' below threshold';
     if (entries.length > 1) headerNote += ' · ranked';
     html += '<section data-screening-triage-bucket="' + escapeHtml(meta.key) + '">' +
       '<div style="display:flex;align-items:baseline;gap:10px;padding:0 2px 6px;border-bottom:2px solid var(--border2);">' +
@@ -18853,7 +18892,7 @@ function screeningTriageRankedHitSections(row) {
       '</div>';
     if (!entries.length) {
       var emptyCopy;
-      if (serverCount > 0) {
+      if (bucketWeak > 0) {
         emptyCopy = 'All matches for this section are below the triage threshold — each remains reviewable in the weak tail below.';
       } else if (meta.key === 'sanctions' && !Number(buckets.watchlist || 0)) {
         emptyCopy = 'No sanctions or watchlist matches — every subject was screened against sanction lists.';

@@ -204,11 +204,27 @@ FIXTURES = [
 FIXTURE_REFS = tuple(f["ref"] for f in FIXTURES)
 
 
+# Fail-closed allow-list of environments this seeder may write to.
+#
+# The previous guard denied only the literal string ``"production"``, which
+# made it fail OPEN: an unset, empty, misspelt or simply unrecognised
+# ``ENVIRONMENT`` (e.g. a production database whose env var was never wired,
+# or "prod" / "PRODUCTION " with stray whitespace) passed the check and the
+# fixture INSERT proceeded. Only explicitly-known non-production environments
+# may seed; anything else — including unset — is refused.
+SEEDER_ALLOWED_ENVIRONMENTS = frozenset(
+    {"testing", "test", "development", "dev", "local", "staging"}
+)
+
+
 def _guard_environment():
     environment = str(os.environ.get("ENVIRONMENT") or "").strip().lower()
-    if environment == "production":
+    if environment not in SEEDER_ALLOWED_ENVIRONMENTS:
         raise RuntimeError(
-            "seed_screening_qa_fixtures refuses to run with ENVIRONMENT=production"
+            "seed_screening_qa_fixtures refuses to run with ENVIRONMENT="
+            + (environment or "(unset)")
+            + " — seeding is allowed only in: "
+            + ", ".join(sorted(SEEDER_ALLOWED_ENVIRONMENTS))
         )
 
 
