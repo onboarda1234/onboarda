@@ -22,6 +22,9 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 BACKEND = REPO / "arie-backend"
 RUNBOOK = (REPO / "docs" / "OPS_HARDENING_RUNBOOK.md").read_text(encoding="utf-8")
+RUNSHEET = (
+    REPO / "docs" / "OPERATOR_RUNSHEET_REMAINING_OPS.md"
+).read_text(encoding="utf-8")
 
 
 def _load(script_name):
@@ -105,6 +108,27 @@ class TestProductionMonitoringAlarms:
         )
         assert "--alarm-action-arn" in reason
         assert "page nobody" in reason
+
+    def test_apply_without_arn_exits_nonzero_end_to_end(self):
+        """The predicate above proves the RULE; this proves it is WIRED.
+
+        Review finding: leaving `apply_refusal()` intact but unwiring it from
+        `main()` restored the exact pre-fix vulnerability (7/7 alarms created
+        with `AlarmActions: []`) while the predicate-only test above stayed
+        green. Drive the real entrypoint so the guard cannot be silently
+        disconnected.
+        """
+        for argv in (
+            ["--environment", "staging", "--apply"],
+            ["--environment", "production", "--apply", "--confirm-production"],
+            ["--environment", "staging", "--apply", "--alarm-action-arn", "   "],
+        ):
+            proc = subprocess.run(
+                [sys.executable,
+                 str(BACKEND / "scripts" / "provision_production_monitoring.py")] + argv,
+                capture_output=True, text=True, timeout=120)
+            assert proc.returncode == 2, (argv, proc.stdout, proc.stderr)
+            assert "--alarm-action-arn" in proc.stderr, (argv, proc.stderr)
 
     def test_error_filter_counts_only_error_level(self):
         """4xx is logged at WARNING on purpose, so an ERROR-level filter counts
@@ -467,13 +491,58 @@ class TestRunbookDocumentsEachOpsStep:
     def test_runbook_teardown_waits_for_deletion_protection_and_deletion(self):
         """Codex 2026-07-26: --apply-immediately does not block; deleting
         before the modification lands fails with protection still active, and
-        an undeleted drill instance bills forever."""
-        assert "DeletionProtection" in RUNBOOK
-        assert "db-instance-deleted" in RUNBOOK
-        # the poll must come BEFORE the delete command in §6
-        poll_at = RUNBOOK.index("'DBInstances[0].DeletionProtection'")
-        delete_at = RUNBOOK.index("aws rds delete-db-instance")
+        an undeleted drill instance bills forever.
+
+        Review 2026-07-26: the executable teardown now lives ONLY in the
+        operator runsheet. The runbook duplicated it with a FIXED instance id
+        (`regmind-dr-drill`) while the runsheet creates a timestamped one, so an
+        operator who created via the runsheet and tore down via the runbook
+        targeted a nonexistent identifier — leaving a live RDS copy of staging
+        data billing indefinitely. Assert the ordering in the runsheet, and that
+        the runbook carries no competing copy.
+        """
+        assert "DeletionProtection" in RUNSHEET
+        assert "db-instance-deleted" in RUNSHEET
+        # the poll must come BEFORE the delete command
+        poll_at = RUNSHEET.index("'DBInstances[0].DeletionProtection'")
+        delete_at = RUNSHEET.index("aws rds delete-db-instance")
         assert poll_at < delete_at
+
+    def test_runbook_does_not_duplicate_the_drill_commands(self):
+        """Single source of truth: the runbook must POINT at the runsheet, never
+        carry its own executable drill (that is how the id drift arose)."""
+        assert "aws rds delete-db-instance" not in RUNBOOK, (
+            "runbook must not carry its own teardown — it drifted from the runsheet"
+        )
+        assert "aws rds restore-db-instance-to-point-in-time" not in RUNBOOK
+        assert "OPERATOR_RUNSHEET_REMAINING_OPS.md" in RUNBOOK
+
+    def test_runsheet_uses_a_uniquely_named_drill_instance(self):
+        """A fixed drill id invites collision with a leftover instance and makes
+        the teardown guard unfalsifiable."""
+        assert "regmind-dr-drill-" in RUNSHEET
+
+    def test_runsheet_blocks_run_under_errexit(self):
+        """Every guard in the runsheet is a bare `test ...`; without errexit a
+        failed guard prints nothing and execution continues into the next
+        command, producing evidence that looks clean."""
+        assert "set -euo pipefail" in RUNSHEET
+        assert "set -o pipefail\n" not in RUNSHEET.replace("set -euo pipefail", "")
+
+    def test_runsheet_error_metric_uses_sum_not_samplecount(self):
+        """`defaultValue: 0` publishes a 0 for every NON-matching log event, so
+        SampleCount > 0 even against a completely dead ERROR filter."""
+        assert "--statistics Sum" in RUNSHEET
+        assert "application-error-sum.txt" in RUNSHEET
+
+    def test_runsheet_asserts_restored_row_counts_and_endpoint(self):
+        """The DR section closes a CRITICAL blocker; a restore yielding zero
+        rows must not be writable up as a PASS, and the evidence must identify
+        WHICH endpoint answered (source and PITR copy look identical)."""
+        assert "restored-row-count-assertions.txt" in RUNSHEET
+        assert 'test "$restored_apps"  -gt 0' in RUNSHEET
+        assert 'test -n "$PGHOST"' in RUNSHEET
+        assert "restored-endpoint.txt" in RUNSHEET
 
     def test_runbook_quarantine_command_carries_the_host_allowlist(self):
         assert "QUARANTINE_ALLOWED_DB_HOST" in RUNBOOK

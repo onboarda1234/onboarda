@@ -16,8 +16,37 @@ Required for all items:
 - an approved change ticket and named operator;
 - a clean checkout of GitHub `main` (GitHub is the source of truth);
 - Python 3.11+, AWS CLI v2, `psql`, and `jq`;
+- **Node.js with `playwright-core` available** (set `PLAYWRIGHT_NODE_MODULES` if
+  it is installed outside this repo) — item 1's *mandatory* gating smoke
+  (`scripts/qa/staging_browser_smoke.js`) exits 2 without it, and it is the
+  first step of that change window;
 - UTC timestamps on the execution host;
 - a durable evidence destination outside `/tmp`.
+
+> ### ⚠️ HOW TO RUN THESE BLOCKS — read before executing anything
+>
+> **Save each fenced block to a file and run it with `bash -euo pipefail`.
+> Do NOT paste blocks into an interactive shell.**
+>
+> ```bash
+> # correct:
+> cat > /tmp/step.sh <<'EOF'
+> ...paste the block here...
+> EOF
+> bash -euo pipefail /tmp/step.sh
+> ```
+>
+> Every safety check below is a bare `test ...` line. Without `errexit` a failed
+> guard prints **nothing** and execution simply continues into the next command —
+> so a pasted block can sail straight past `test "$ENVIRONMENT" = "staging"` or a
+> failed datapoint assertion and produce evidence that looks clean. `exit` also
+> behaves differently when pasted (it kills the shell and loses the exported
+> context these steps depend on). Running each block as a script under
+> `-euo pipefail` is what makes the guards actually stop the procedure.
+>
+> The two genuinely destructive operations fail closed on their own regardless
+> (the quarantine script refuses in-process; the teardown re-validates the drill
+> identifier), but every *verification* step depends on `errexit` to be trustworthy.
 
 ```bash
 git fetch origin
@@ -25,7 +54,7 @@ git checkout main
 git pull --ff-only origin main
 export REPO_SHA="$(git rev-parse HEAD)"
 git status --short
-set -o pipefail
+set -euo pipefail
 
 export CHANGE_TICKET="REPLACE_WITH_CHANGE_TICKET"
 export EVIDENCE_DIR="REPLACE_WITH_DURABLE_EVIDENCE_DIRECTORY"
@@ -78,9 +107,22 @@ test -n "$STAGING_QA_PASSWORD"
 
 export STAGING_BASE_URL="https://staging.regmind.co"
 export STAGING_SMOKE_OUT_DIR="$EVIDENCE_DIR/staging-smoke-replacement"
+
+# The smoke MUST actually pass. `staging_browser_smoke.js` writes report.json
+# from a `finally` block AND from its top-level catch, so the file exists (and
+# is non-empty) even on a total failure — `test -s report.json` would happily
+# green-light a broken replacement identity and let you proceed to the
+# irreversible quarantine. Assert the exit code AND the per-check results.
 node scripts/qa/staging_browser_smoke.js
-test -s "$STAGING_SMOKE_OUT_DIR/report.json"
+smoke_rc=$?
+test "$smoke_rc" -eq 0
+jq -e '[.checks[]?] | length > 0 and all(.ok == true)' \
+  "$STAGING_SMOKE_OUT_DIR/report.json" > /dev/null
 ```
+
+If `jq` reports a different shape for `.checks`, open `report.json` and confirm
+every check passed by inspection before continuing — do **not** fall back to a
+mere existence test.
 
 In the staging DB execution context, set and validate the positive guard:
 
@@ -299,6 +341,27 @@ test "$PGUSER" != "REPLACE_WITH_STAGING_DB_USER"
 test "$PGDATABASE" != "REPLACE_WITH_STAGING_DB_NAME"
 test -n "$PGPASSWORD"
 
+# PGHOST/PGPORT come from an AWS query that can fail or return "None". If PGHOST
+# were empty, psql would silently fall back to the LOCAL UNIX SOCKET and every
+# check below would "pass" against the wrong database entirely.
+test -n "$PGHOST"; test "$PGHOST" != "None"
+test -n "$PGPORT"; test "$PGPORT" != "None"
+
+# Prove WHICH endpoint answered. current_database()/pg_is_in_recovery() are
+# IDENTICAL on the source and on an available PITR copy, so on their own they
+# identify nothing — record the endpoint alongside them.
+printf '%s:%s\n' "$PGHOST" "$PGPORT" | tee "$DR_EVIDENCE/restored-endpoint.txt"
+
+psql -X -v ON_ERROR_STOP=1 -c \
+  "SELECT current_database() AS restored_database,
+          inet_server_addr() AS server_addr,
+          pg_is_in_recovery() AS read_only_recovery,
+          now() AT TIME ZONE 'UTC' AS verified_at_utc;" \
+  | tee "$DR_EVIDENCE/restored-database-identity.txt"
+
+# ASSERT, don't just record. `-v ON_ERROR_STOP=1` only proves the tables EXIST;
+# a restore yielding applications=0 / audit_log=0 would otherwise be written up
+# as a PASS. This is the step that closes a CRITICAL blocker — it must fail loudly.
 psql -X -v ON_ERROR_STOP=1 -c \
   "SELECT
      (SELECT COUNT(*) FROM applications) AS applications,
@@ -306,11 +369,12 @@ psql -X -v ON_ERROR_STOP=1 -c \
      (SELECT COUNT(*) FROM supervisor_audit_log) AS supervisor_rows;" \
   | tee "$DR_EVIDENCE/restored-row-counts.txt"
 
-psql -X -v ON_ERROR_STOP=1 -c \
-  "SELECT current_database() AS restored_database,
-          pg_is_in_recovery() AS read_only_recovery,
-          now() AT TIME ZONE 'UTC' AS verified_at_utc;" \
-  | tee "$DR_EVIDENCE/restored-database-identity.txt"
+restored_apps="$(psql -X -At -v ON_ERROR_STOP=1 -c 'SELECT COUNT(*) FROM applications;')"
+restored_audit="$(psql -X -At -v ON_ERROR_STOP=1 -c 'SELECT COUNT(*) FROM audit_log;')"
+test "$restored_apps"  -gt 0
+test "$restored_audit" -gt 0
+echo "restored_applications=$restored_apps restored_audit_rows=$restored_audit" \
+  | tee "$DR_EVIDENCE/restored-row-count-assertions.txt"
 
 export RTO_VERIFIED_EPOCH="$(date -u +%s)"
 export RTO_VERIFIED_UTC="$(date -u +%FT%TZ)"
@@ -573,6 +637,14 @@ aws cloudwatch get-metric-statistics \
   --output json \
   | tee "$MONITORING_EVIDENCE/screening-queue-depth-datapoints.json"
 
+# ApplicationErrorCount MUST be checked with Sum, not SampleCount.
+# The metric filter is created with "defaultValue": 0
+# (provision_production_monitoring.py), so CloudWatch publishes a 0 for EVERY
+# non-matching log event. SampleCount is therefore > 0 from ordinary INFO
+# traffic even when the `$.level = "ERROR"` pattern matches nothing at all —
+# i.e. the datapoint check would "pass" against a completely dead filter, which
+# is the exact failure mode this verification exists to catch.
+# Sum > 0 requires a real ERROR record to have matched.
 aws cloudwatch get-metric-statistics \
   --region "$AWS_REGION" \
   --namespace RegMind/Pilot \
@@ -580,21 +652,29 @@ aws cloudwatch get-metric-statistics \
   --start-time "$METRIC_START_TIME" \
   --end-time "$METRIC_END_TIME" \
   --period 300 \
-  --statistics SampleCount \
+  --statistics Sum SampleCount \
   --output json \
   | tee "$MONITORING_EVIDENCE/application-error-count-datapoints.json"
 
 jq '.Datapoints | length' \
   "$MONITORING_EVIDENCE/screening-queue-depth-datapoints.json" \
   | tee "$MONITORING_EVIDENCE/screening-queue-datapoint-count.txt"
-jq '.Datapoints | length' \
+jq '[.Datapoints[]?.Sum] | add // 0' \
   "$MONITORING_EVIDENCE/application-error-count-datapoints.json" \
-  | tee "$MONITORING_EVIDENCE/application-error-datapoint-count.txt"
+  | tee "$MONITORING_EVIDENCE/application-error-sum.txt"
 test "$(tr -d '\n' \
   < "$MONITORING_EVIDENCE/screening-queue-datapoint-count.txt")" -gt 0
-test "$(tr -d '\n' \
-  < "$MONITORING_EVIDENCE/application-error-datapoint-count.txt")" -gt 0
+test "$(tr -d '\n' < "$MONITORING_EVIDENCE/application-error-sum.txt")" -gt 0
 ```
+
+> **If `application-error-sum.txt` is 0**, do NOT record the error-rate alarm as
+> verified. A zero Sum means no ERROR record matched in the window — which is
+> either good news (no errors) or a dead filter, and the two are
+> indistinguishable from this evidence alone. Induce one real ERROR log line in
+> production (or widen the window to a period known to contain one), re-run, and
+> require Sum ≥ 1. Recording `verification_basis: metric_datapoints` off a
+> SampleCount that `defaultValue: 0` manufactures is exactly the false evidence
+> this section is meant to prevent.
 
 If either assertion fails, investigate the log group, emitted
 `$.environment`, service dimension, and filter pattern. Do not close the row

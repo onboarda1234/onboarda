@@ -261,72 +261,32 @@ single-AZ by design; production is tracked separately).
 
 **Step 2 — the timed restore drill (operator, in a change window):**
 
-1. Note the start time (`date -u +%FT%TZ`) and restore to a NEW instance:
+> ⚠️ **The executable commands live in ONE place: the
+> [operator runsheet §2](OPERATOR_RUNSHEET_REMAINING_OPS.md#2-dr-posture-and-timed-point-in-time-restore-drill).
+> Run them from there, not from this section.**
+>
+> This section previously carried its own copy of the drill using a *fixed*
+> instance id (`regmind-dr-drill`), while the runsheet creates a *timestamped*
+> one (`regmind-dr-drill-<UTC>`). An operator who created the instance with the
+> runsheet and then tore down with this section would have targeted an
+> identifier that does not exist — leaving a **live RDS instance holding a full
+> copy of staging data running and billing indefinitely**. The command bodies
+> are therefore deliberately NOT duplicated here; a single source of truth is
+> the only way this cannot drift again.
 
-   ```bash
-   aws rds restore-db-instance-to-point-in-time \
-     --source-db-instance-identifier regmind-staging-db \
-     --target-db-instance-identifier regmind-dr-drill \
-     --use-latest-restorable-time --region af-south-1
-   aws rds wait db-instance-available \
-     --db-instance-identifier regmind-dr-drill --region af-south-1
-   ```
+The shape of the drill (for review purposes — do not execute from this list):
 
-2. Verify integrity against the RESTORED instance (never against staging):
-
-   ```bash
-   psql "$DRILL_DSN" -c "SELECT
-     (SELECT COUNT(*) FROM applications)        AS applications,
-     (SELECT COUNT(*) FROM audit_log)           AS audit_rows,
-     (SELECT COUNT(*) FROM supervisor_audit_log) AS supervisor_rows;"
-   ```
-
-   The supervisor hash chain has no CLI — verification is
-   `GET /api/supervisor/audit/verify`, which needs an app pointed at this DSN.
-   Either run a throwaway task with `DATABASE_URL=$DRILL_DSN` and call that
-   endpoint, or record row counts only and note the chain check as not
-   performed. **Do not repoint the staging service at the drill instance.**
-
-3. Record the wall-clock time from step 1 to a verified step 2 — **that is the
-   measured RTO**. The RPO is bounded by the PITR lag reported in step 1.
-
-4. Tear down (the restored instance bills until deleted, and RDS may copy the
-   source's deletion protection). **`--apply-immediately` does not block** —
-   deleting before the modification lands fails with deletion protection still
-   active, so poll until it is actually off, and wait for the delete to finish:
-
-   ```bash
-   aws rds modify-db-instance --db-instance-identifier regmind-dr-drill \
-     --no-deletion-protection --apply-immediately --region af-south-1
-
-   # Wait until DeletionProtection is REALLY false before deleting. Fail on an
-   # AWS error or after 60 attempts (10 minutes); never spin forever.
-   protection=""
-   poll_attempt=1
-   while [ "$poll_attempt" -le 60 ]; do
-     if ! protection="$(aws rds describe-db-instances \
-         --db-instance-identifier regmind-dr-drill --region af-south-1 \
-         --query 'DBInstances[0].DeletionProtection' --output text)"; then
-       echo "failed to read deletion-protection state" >&2
-       exit 1
-     fi
-     [ "$protection" = "False" ] && break
-     echo "waiting for deletion protection to clear ($poll_attempt/60)"
-     sleep 10
-     poll_attempt=$((poll_attempt + 1))
-   done
-   if [ "$protection" != "False" ]; then
-     echo "timed out waiting for deletion protection to clear" >&2
-     exit 1
-   fi
-
-   aws rds delete-db-instance --db-instance-identifier regmind-dr-drill \
-     --skip-final-snapshot --delete-automated-backups --region af-south-1
-   # confirm the drill instance is actually gone (it bills until it is)
-   aws rds wait db-instance-deleted \
-     --db-instance-identifier regmind-dr-drill --region af-south-1
-   ```
-
+1. Note the start time and restore to a **new, uniquely named** instance
+   (`regmind-dr-drill-<UTC timestamp>`), never over the source.
+2. Verify integrity against the **restored** instance only, asserting non-zero
+   row counts — never against staging, and never by repointing the staging
+   service at the drill instance.
+3. The **measured RTO** is wall-clock from step 1 to a *verified* step 2 (not
+   merely "instance available"); the RPO is the PITR lag from Step 1's posture
+   check.
+4. Tear down: `--apply-immediately` does **not** block, so poll until
+   `DeletionProtection=False`, then delete, then `wait db-instance-deleted`.
+   The restored copy bills — and holds real data — until this completes.
 5. File the evidence JSON plus the measured RTO/RPO against the P9-8 row.
 
 The script deliberately reports `rto_seconds_observed: null` — RTO can only

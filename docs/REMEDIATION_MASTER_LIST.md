@@ -360,7 +360,7 @@ are out of scope for every SRP item.
 | P9-7 | Pen test + security review + rehearsed secret rotation (+ **FEO-010**) | security | — | ⬜ | — |
 | P9-8 | DR/backup drill, restore/PITR, RTO/RPO (= **DCI-027 CRITICAL blocker** = **FEO-009**) | ops | [#882](https://github.com/onboarda1234/onboarda/pull/882) | ◐ posture check + drill runbook merged 2026-07-25 (retention/deletion-protection/encryption/**PITR freshness**, which proves point-in-time recovery works rather than is merely configured) · the timed restore drill that yields the measured RTO is the operator half ([runbook](OPS_HARDENING_RUNBOOK.md) §6) — the script reports `rto_seconds_observed: null` on purpose. Codex 2026-07-26 caught a teardown race (`--apply-immediately` does not block, so the delete could fire with deletion protection still active); fixed by [#886](https://github.com/onboarda1234/onboarda/pull/886): poll `DeletionProtection=False` before delete + `db-instance-deleted` waiter. **Repo + operator runsheet ready**: unique-target restore, restored-DB integrity checks, measured wall-clock RTO, PITR-lag RPO, mandatory teardown poll/waiter, and evidence template are ordered in the [operator runsheet](OPERATOR_RUNSHEET_REMAINING_OPS.md#2-dr-posture-and-timed-point-in-time-restore-drill). No AWS/RDS execution is claimed; DCI-027 remains CRITICAL and ◐ until operator evidence lands | — |
 | P9-9 | Legal/compliance sign-off (residency, DPA, regulator) | legal | — | ⬜ | — |
-| P9-10 | Prod monitoring/alerting/on-call (+ **DCI-030**, **FEO-011**) | ops | [#882](https://github.com/onboarda1234/onboarda/pull/882) | ◐ metric filters + alarms for the 7 emitted-but-unalarmed metrics, a worker HEARTBEAT alarm (catches running-but-wedged, which ECS LiveTaskCount cannot) and a log-based error rate, merged 2026-07-25. **Repo + operator runsheet ready**: `--apply` now refuses actionless alarms, and the [operator runsheet](OPERATOR_RUNSHEET_REMAINING_OPS.md#3-production-monitoring-paging-and-datapoint-verification) requires a confirmed SNS subscription/on-call rota, explicit production target, and non-empty **metric datapoints** (alarm state is not accepted as verification). No AWS execution is claimed; row stays ◐ until production apply and evidence land | — |
+| P9-10 | Prod monitoring/alerting/on-call (+ **DCI-030**, **FEO-011**) | ops | [#882](https://github.com/onboarda1234/onboarda/pull/882) | ◐ metric filters + alarms for the 7 emitted-but-unalarmed metrics, a worker HEARTBEAT alarm (catches running-but-wedged, which ECS LiveTaskCount cannot) and a log-based error rate, merged 2026-07-25. **Repo + operator runsheet ready**: `provision_production_monitoring.py --apply` now refuses actionless alarms (exit 2, no AWS call — verified end-to-end, guard mutation-tested), and the [operator runsheet](OPERATOR_RUNSHEET_REMAINING_OPS.md#3-production-monitoring-paging-and-datapoint-verification) requires a confirmed SNS subscription/on-call rota, explicit production target, and real **metric datapoints** (alarm state is not accepted as verification; the error-rate check asserts `Sum` because `defaultValue: 0` makes `SampleCount` non-zero even against a dead filter). **Scope of the refusal — two residuals:** it applies to THIS script only (`provision_screening_queue_p95_alarm.py` and `provision_pr6_observability.py` still create actionless alarms on `--apply`; the latter auto-creates a zero-subscriber SNS topic, which looks wired and pages nobody — see R3-OPS-001), and it checks ARN *presence*, not deliverability (a well-formed ARN for an unsubscribed topic passes). No AWS execution is claimed; row stays ◐ until production apply and evidence land | — |
 | P9-11 | Close parked prod-posture decisions (PR-25 + PR-17) | decision | — | ⬜ | — |
 | P9-12 | ECR immutable image tags (REGMIND-P2-004) | ops | [#875](https://github.com/onboarda1234/onboarda/pull/875) | ◐ deploy tagging audited immutability-compatible (one per-SHA tag, no `:latest`) + flip/rerun runbook merged 2026-07-25 · AWS `put-image-tag-mutability` = operator step ([runbook](OPS_HARDENING_RUNBOOK.md) §1) | — |
 | P9-13 | Full authz/tenant-isolation route matrix (role-by-route) | security | [#733](https://github.com/onboarda1234/onboarda/pull/733), [#881](https://github.com/onboarda1234/onboarda/pull/881) | ◐ cross-client seed fix ✅ 2026-07-25 (#881 — the probe was same-tenant, so 1 of the 53 checks had been a false positive since #733; second tenant + reciprocal + positive control added) · runtime coverage ◐ **partial and deliberately under-claimed**: decision authority, IDV senior-outcome escalation, reassignment and cross-tenant isolation are mutation-verified; dual control NOT covered (unreachable behind risk-staleness on a bare fixture); memo-approve/screening-admission/IDV-read reach only the decorator | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#app-aud-prs-733-734-735) |
@@ -596,6 +596,18 @@ are out of scope for every SRP item.
 
 ---
 
+## Review-found items (independent adversarial review, 2026-07-26)
+
+Raised by the two-reviewer gate rather than by a numbered audit. Both are real
+defects found while verifying other work; neither is fixed here.
+
+| ID | Sev | Finding | Status |
+|----|:---:|---------|--------|
+| R3-OPS-001 | MED | Sibling alarm-provisioning scripts still create alarms that page nobody: `provision_screening_queue_p95_alarm.py --apply` accepts an empty action, and `provision_pr6_observability.py --apply` **auto-creates a brand-new SNS topic with zero subscribers** — alarms then carry a non-empty `AlarmActions` and look wired while paging no one, which is precisely the failure mode P9-10's guard exists to kill. Also: the P9-10 guard checks ARN *presence*, not deliverability | ⬜ pending — extend the `apply_refusal()` pattern to both siblings; consider an SNS subscription pre-check under `--apply` |
+| R3-APP-001 | LOW | Nulling `prescreening_data` on the approval path yields `400 "Approval blocked: Internal validation error: 'NoneType' object has no attribute 'get'"` — an unhandled `AttributeError` leaking an internal trace into an operator-facing message | ⬜ pending — **frozen Application Review decision path; needs founder approval before any change.** Cosmetic/robustness only; the approval is correctly blocked |
+
+---
+
 ## Optional / Post-Production Modernization (NOT required for pilot or first production cut; excluded from roll-up)
 
 > Elective architecture/scale/enterprise upgrades for after production launch.
@@ -767,5 +779,5 @@ reviewers** → green CI → merge → staging deploy):
 | 🔨 in progress | 3 |
 | 📋 scoped | 17 |
 | ⏸ blocked | 7 |
-| ⬜ pending | 41 |
-| **Total tracked items** | **237** |
+| ⬜ pending | 43 |
+| **Total tracked items** | **239** |
