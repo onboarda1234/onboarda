@@ -2244,7 +2244,12 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
                 timeout=timeout,
             )
 
-            text_content = response.content[0].text
+            # RDI-019: a degenerate EMPTY content list is an empty completion,
+            # not a provider failure — index it defensively so the documented
+            # contract ("a legitimate empty completion returns '' and never
+            # raises, in either mode") holds literally.
+            _blocks = getattr(response, "content", None) or []
+            text_content = _blocks[0].text if _blocks else ""
             self.usage_tracker.log_usage(
                 model=chosen_model,
                 input_tokens=response.usage.input_tokens,

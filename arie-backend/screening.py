@@ -239,7 +239,11 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
             }
 
     except Exception as e:
-        logger.error("Legacy screening adapter error: %s", e)
+        # R3-BSA-015: the raw exception carries the provider URL, whose path
+        # embeds applicant identifiers (PII) — scrub for BOTH the log sink and
+        # the officer-visible `error` field.
+        _safe_err = sanitize_provider_error(e, max_len=200)
+        logger.error("Legacy screening adapter error: %s", _safe_err)
         client = None
         try:
             client = get_sumsub_client()
@@ -251,7 +255,7 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
                 "results": [],
                 "source": "sumsub",
                 "api_status": "error",
-                "error": f"Legacy screening adapter failed: {str(e)[:200]}",
+                "error": f"Legacy screening adapter failed: {_safe_err}",
                 "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             }
         return _simulate_aml_screen(name)

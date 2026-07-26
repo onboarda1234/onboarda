@@ -262,10 +262,45 @@ class BaseHandler(tornado.web.RequestHandler):
                 return
         self.check_xsrf_cookie()
 
+    def _audit_unrouted_denial(self):
+        """RDI-020: audit any 403 that no explicit denial-logger claimed.
+
+        Called from on_finish(), which Tornado invokes after EVERY response —
+        so this sees 403s however they were produced: self.error(403), a raised
+        HTTPError(403) rendered by write_error (CSRF), a bare
+        set_status(403)+write (the enterprise-module gate), and the supervisor's
+        write_error_json(403). Patching each writer individually would have left
+        the next new one uncovered; a terminal hook is complete by construction.
+
+        Running here also makes it structurally incapable of altering the
+        response — the response is already sent.
+        """
+        if self.get_status() != 403 or getattr(self, "_authz_denial_routed", False):
+            return
+        user = getattr(self, "_auth_user", None) or {}
+        resource_id = str(getattr(self.request, "path", "") or "")[:160]
+        self.log_authz_denial(
+            user,
+            "authz_denied_unrouted",
+            resource_id,
+            {
+                "message": getattr(self, "_denial_message", "") or (self._reason or ""),
+                "method": self.request.method if hasattr(self, "request") else "",
+                "source": "on_finish_403",
+                "response_code": 403,
+            },
+        )
+
     def on_finish(self):
         """Emit the structured request log (P12-9 / DCI-028) and parse-ready
         timing logs for upload-latency endpoints."""
         try:
+            # RDI-020 — best-effort; must never break the request log below.
+            try:
+                self._audit_unrouted_denial()
+            except Exception:
+                logger.exception("authz_denied_unrouted audit write failed")
+
             path = self.request.path
             started_at = getattr(self, "_upload_latency_started_at", None)
             if (
@@ -873,29 +908,10 @@ class BaseHandler(tornado.web.RequestHandler):
         self.write(json.dumps(data, default=str))
 
     def error(self, message, status=400):
-        # RDI-020: every 403 leaving the API must appear in the audit trail.
-        # Explicit log_authz_denial call sites mark the request as routed; any
-        # OTHER 403 (custom checks that never called it) gets a uniform
-        # `authz_denied_unrouted` row here — complete by construction. Purely
-        # additive: never alters the response, and a failed audit write only
-        # logs (log_authz_denial has its own stderr fallback).
-        if status == 403 and not getattr(self, "_authz_denial_routed", False):
-            try:
-                user = getattr(self, "_auth_user", None) or {}
-                resource_id = str(getattr(self.request, "path", "") or "")[:160]
-                self.log_authz_denial(
-                    user,
-                    "authz_denied_unrouted",
-                    resource_id,
-                    {
-                        "message": str(message)[:200],
-                        "method": self.request.method if hasattr(self, "request") else "",
-                        "source": "base_error_403",
-                        "response_code": 403,
-                    },
-                )
-            except Exception:
-                logger.exception("authz_denied_unrouted audit write failed")
+        # RDI-020: 403s are audit-routed centrally in on_finish() — see
+        # _audit_unrouted_denial. Stash the message so that row can carry it.
+        if status == 403:
+            self._denial_message = str(message)[:200]
         self.set_status(status)
         self.write({"error": message})
 

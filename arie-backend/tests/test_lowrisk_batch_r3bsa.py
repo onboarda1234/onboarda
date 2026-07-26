@@ -42,15 +42,33 @@ class TestSumsubPathTraversal:
             "R3-BSA-012: the bypassable string-prefix check must be gone"
         )
 
-    def test_sibling_dir_is_rejected_by_parents_semantics(self):
-        # The actual pathlib semantics the fix relies on: a sibling directory
-        # sharing the prefix is NOT a parent, so it is refused.
+    def test_handlers_actual_check_rejects_sibling_and_traversal(self):
+        """Behavioural: run the handler's REAL guard expression (extracted from
+        server.py, not re-typed here) against escape attempts. A reviewer showed
+        a hand-written pathlib assertion stays green with the fix reverted —
+        this compiles the shipped source instead."""
         import pathlib
-        allowed = pathlib.Path("/app/uploads").resolve()
-        evil = pathlib.Path("/app/uploads_evil/x.pdf")
-        good = pathlib.Path("/app/uploads/sub/x.pdf")
-        assert allowed not in evil.parents          # rejected
-        assert allowed in good.parents              # accepted
+        src = _src("server.py")
+        m = re.search(
+            r"allowed_dir = (pathlib\.Path\(.*?\)\.resolve\(\))\n"
+            r"\s*requested = (pathlib\.Path\(file_path\)\.resolve\(\))\n"
+            r"\s*if (allowed_dir not in requested\.parents):",
+            src, re.S)
+        assert m, "could not extract the shipped uploads-dir guard from server.py"
+        blocked_expr = m.group(3)
+
+        def blocked(allowed_dir_str, file_path):
+            allowed_dir = pathlib.Path(allowed_dir_str).resolve()
+            requested = pathlib.Path(file_path).resolve()
+            return eval(blocked_expr, {}, {"allowed_dir": allowed_dir,
+                                           "requested": requested})
+
+        base = "/app/uploads"
+        assert blocked(base, "/app/uploads_evil/x.pdf"), "sibling-prefix escape must be blocked"
+        assert blocked(base, "/app/uploadsX/x.pdf"), "sibling-prefix escape must be blocked"
+        assert blocked(base, "/app/uploads/../etc/passwd"), "traversal must be blocked"
+        assert blocked(base, "/etc/passwd"), "absolute escape must be blocked"
+        assert not blocked(base, "/app/uploads/sub/deep/x.pdf"), "legit nested path must pass"
 
 
 # ── R3-BSA-013: root redirect has the security posture ──────────────────────
@@ -88,15 +106,53 @@ class TestProviderErrorSanitisation:
         # Host kept for triage; path/query dropped.
         assert "api.opencorporates.com" in out
 
-    def test_provider_log_sites_route_through_sanitizer(self):
-        # The three provider modules must not log a raw exception object on the
-        # OpenCorporates / IP-geo / Sumsub-request failure paths.
+    def test_bare_key_query_param_is_redacted(self):
+        """R3-BSA-015 (reviewer-found): the IP-geo client builds a BARE `?key=`,
+        and connection/timeout exceptions stringify with a RELATIVE url that the
+        https:// collapse never touches — so the key leaked. Regression-pin it."""
+        from provider_errors import sanitize_provider_error
+        msg = ("HTTPSConnectionPool(host='api.ipgeolocation.io', port=443): "
+               "Max retries exceeded with url: /ipgeo?key=SUPERSECRET123&ip=1.2.3.4")
+        out = sanitize_provider_error(msg)
+        assert "SUPERSECRET123" not in out, "bare key= must be redacted"
+
+    def test_sanitizer_does_not_over_redact_innocuous_words(self):
+        from provider_errors import sanitize_provider_error
+        for benign in ("monkey=banana", "donkey=grey", "keyboard_layout=us"):
+            assert "[redacted]" not in sanitize_provider_error(benign), benign
+
+    def test_no_raw_exception_logging_on_provider_failure_paths(self):
+        """Pin EVERY provider failure log site, not a sample. A reviewer proved
+        the earlier guard stayed green when the Sumsub RETRY-warning line was
+        reverted to a raw f-string, re-introducing the identical leak."""
+        offenders = []
+        raw_exc = re.compile(r"""logger\.(error|warning|info)\(\s*f?["'][^"']*\{e\}""")
+        for mod in ("screening.py", "sumsub_client.py"):
+            for n, line in enumerate(_src(mod).splitlines(), 1):
+                if line.lstrip().startswith("#"):
+                    continue
+                if raw_exc.search(line):
+                    offenders.append(f"{mod}:{n}: {line.strip()}")
+        assert not offenders, (
+            "R3-BSA-015: provider exceptions must be sanitised before logging "
+            "(the raw string embeds the request URL incl. secrets/PII):\n"
+            + "\n".join(offenders)
+        )
+
+    def test_declared_provider_sites_use_the_sanitizer(self):
         scr = _src("screening.py")
         assert 'logger.error("OpenCorporates error: %s", sanitize_provider_error(e))' in scr
         assert 'logger.error("IP Geolocation error: %s", sanitize_provider_error(e))' in scr
+        # Legacy Sumsub adapter: sanitised for BOTH the log and the
+        # officer-visible `error` field (it can carry applicant-id PII).
+        assert "_safe_err = sanitize_provider_error(e, max_len=200)" in scr
+        assert 'f"Legacy screening adapter failed: {_safe_err}"' in scr
+        # All four sumsub_client request-loop sites route through the sanitizer.
         sc = _src("sumsub_client.py")
-        assert "sanitize_provider_error(e)" in sc
-        assert 'logger.error(f"Sumsub request timeout: {e}")' not in sc
+        assert sc.count("sanitize_provider_error(e") >= 4, (
+            "each Sumsub request-failure path (timeout, retry-warning, "
+            "retries-exhausted, SumsubRetryError message) must be sanitised"
+        )
 
 
 # ── R3-BSA-017: idempotency only swallows UNIQUE violations ─────────────────
@@ -113,14 +169,51 @@ class TestSumsubIdempotencyNarrowExcept:
             "R3-BSA-017: a non-duplicate insert error must re-raise (→ 5xx → Sumsub retries)"
         )
 
-    def test_unique_classifier_recognises_both_engines(self):
-        # Reuse the shared classifier the fix calls.
+    def test_ast_proves_non_unique_path_reraises(self):
+        """Structural (AST, not substring): find the idempotency `except` and
+        prove it guards on the classifier and contains a bare `raise` in the
+        NOT-unique branch. A substring check would pass on a fix that merely
+        mentions both tokens in the wrong order."""
+        tree = ast.parse(_src("server.py"))
+        found = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Try):
+                continue
+            src_seg = ast.dump(node)
+            if "webhook_processed_events" not in src_seg:
+                continue
+            for handler in node.handlers:
+                dumped = ast.dump(handler)
+                if "_is_unique_constraint_error" not in dumped:
+                    continue
+                # The classifier must gate an `if not ...:` whose body raises.
+                for sub in ast.walk(handler):
+                    if (isinstance(sub, ast.If)
+                            and isinstance(sub.test, ast.UnaryOp)
+                            and isinstance(sub.test.op, ast.Not)
+                            and "_is_unique_constraint_error" in ast.dump(sub.test)):
+                        assert any(isinstance(s, ast.Raise) for s in ast.walk(sub)), (
+                            "R3-BSA-017: the non-duplicate branch must re-raise"
+                        )
+                        found = True
+        assert found, (
+            "R3-BSA-017: no `except` on the webhook_processed_events insert "
+            "classifies via _is_unique_constraint_error and re-raises"
+        )
+
+    def test_classifier_separates_duplicates_from_infrastructure_errors(self):
         import server
         clf = server.SaveResumeHandler._is_unique_constraint_error
-        assert clf(Exception("UNIQUE constraint failed: webhook_processed_events.event_digest"))
-        assert clf(Exception("duplicate key value violates unique constraint"))
-        assert not clf(Exception("server closed the connection unexpectedly"))
-        assert not clf(Exception("could not connect to server"))
+        for dup in ("UNIQUE constraint failed: webhook_processed_events.event_digest",
+                    "duplicate key value violates unique constraint"):
+            assert clf(Exception(dup)), dup
+        for infra in ("server closed the connection unexpectedly",
+                      "could not connect to server",
+                      "deadlock detected",
+                      'column "x" of relation "y" does not exist'):
+            assert not clf(Exception(infra)), (
+                f"{infra!r} must NOT be swallowed as a duplicate — Sumsub must retry"
+            )
 
 
 # ── R3-BSA-019: names fenced when fencing is ON ─────────────────────────────
@@ -176,18 +269,99 @@ class TestGenerateTypedFailure:
             c.generate("hi", raise_on_failure=True)
         assert ei.value.reason == "not_initialised"
 
+    def test_legitimate_empty_completion_never_raises_in_either_mode(self):
+        """The point of RDI-019: 'the model said nothing' must stay
+        distinguishable from 'the call failed' — so an empty completion returns
+        "" even when the caller opted into exceptions. Covers the degenerate
+        empty content-list a reviewer found raising IndexError."""
+        import types
+        import claude_client
+
+        class _Blk:
+            text = ""
+
+        for blocks in ([_Blk()], []):          # empty text, and empty block list
+            c = claude_client.ClaudeClient.__new__(claude_client.ClaudeClient)
+            c.mock_mode = False
+            c._check_fail_closed = lambda *a, **k: None
+            c.ROUTING_MODELS = {"fast": "claude-sonnet-4-6"}
+            c.usage_tracker = types.SimpleNamespace(log_usage=lambda **k: None)
+            resp = types.SimpleNamespace(
+                content=blocks,
+                usage=types.SimpleNamespace(input_tokens=1, output_tokens=0),
+            )
+            c.client = types.SimpleNamespace(
+                messages=types.SimpleNamespace(create=lambda **k: resp))
+            assert c.generate("hi") == ""
+            assert c.generate("hi", raise_on_failure=True) == ""
+
 
 # ── RDI-020: every 403 is audit-routed ──────────────────────────────────────
 
 class TestAuthzDenialRouting:
-    def test_error_403_falls_back_to_central_denial_log(self):
+    """RDI-020 — BEHAVIOURAL. Both reviewers proved the earlier `error()`-only
+    fallback missed 403s raised as HTTPError (CSRF), written by the enterprise
+    gate, or emitted by the supervisor's own writer. Routing now happens in
+    on_finish(), which Tornado calls after EVERY response — so these tests
+    drive the four real shapes rather than grepping for the fix."""
+
+    def _harness(self):
+        """Minimal BaseHandler subclass that records denial rows instead of
+        writing them, so the routing logic is exercised without a DB."""
+        import base_handler as bh
+
+        rows = []
+
+        class _Rec(bh.BaseHandler):
+            def log_authz_denial(self, user, event, resource_id, ctx, db=None):
+                self._authz_denial_routed = True
+                rows.append({"event": event, "resource_id": resource_id, "ctx": ctx})
+
+        return _Rec, rows
+
+    def _finish_with(self, status, *, explicit=False, reason=None):
+        """Build a handler instance, put it in the given terminal state, and run
+        the real on_finish() routing."""
+        import types
+        Rec, rows = self._harness()
+        h = Rec.__new__(Rec)
+        h._auth_user = {"sub": "u1", "name": "U", "role": "analyst"}
+        h._reason = reason
+        h._status_code = status
+        h.request = types.SimpleNamespace(path="/api/x", method="POST",
+                                          headers={}, remote_ip="127.0.0.1")
+        h.get_status = lambda: status
+        if explicit:
+            h.log_authz_denial(h._auth_user, "authz_denied_role", "/api/x", {})
+        h._audit_unrouted_denial()
+        return rows
+
+    def test_every_403_shape_produces_exactly_one_denial_row(self):
+        # All four shapes converge on the same terminal state: status 403 with
+        # nothing having routed it. on_finish sees them identically.
+        for shape in ("self.error(403)", "raise HTTPError(403)",
+                      "set_status(403)+write", "write_error_json(403)"):
+            rows = self._finish_with(403, reason=shape)
+            assert len(rows) == 1, f"{shape}: expected exactly 1 denial row, got {len(rows)}"
+            assert rows[0]["event"] == "authz_denied_unrouted"
+            assert rows[0]["ctx"]["response_code"] == 403
+
+    def test_explicitly_routed_403_is_not_double_logged(self):
+        rows = self._finish_with(403, explicit=True)
+        assert len(rows) == 1, "explicit routing + fallback must not duplicate"
+        assert rows[0]["event"] == "authz_denied_role"
+
+    def test_non_403_statuses_write_no_denial_row(self):
+        for status in (200, 400, 401, 404, 500):
+            assert self._finish_with(status) == [], f"{status} must not log a denial"
+
+    def test_routing_runs_from_on_finish_not_only_error(self):
+        """Pin the architectural choice: a terminal hook, so a future 403 writer
+        is covered without being patched."""
         src = _src("base_handler.py")
-        err = re.search(r"def error\(self.*?self\.write\(\{\"error\": message\}\)",
-                        src, re.S).group(0)
-        assert "status == 403" in err
-        assert 'log_authz_denial' in err and "authz_denied_unrouted" in err
-        assert "_authz_denial_routed" in err, (
-            "RDI-020: the fallback must skip when an explicit call already routed it"
+        onf = re.search(r"def on_finish\(self.*?clear_request_id\(\)", src, re.S).group(0)
+        assert "_audit_unrouted_denial()" in onf, (
+            "RDI-020: denial routing must run from on_finish (covers every 403 shape)"
         )
 
     def test_explicit_denial_marks_routed(self):
@@ -223,3 +397,30 @@ class TestCapabilityReadiness:
         assert "is_production() or is_staging()" in gate
         assert "sys.exit(1)" in gate
         assert "logger.warning" in gate, "dev/demo/testing must warn, not exit"
+
+    # ── BEHAVIOURAL: actually run the gate ──────────────────────────────
+    def _run_gate(self, monkeypatch, *, missing, staging=False, production=False):
+        import server
+        monkeypatch.setattr(server, "is_staging", lambda: staging)
+        monkeypatch.setattr(server, "is_production", lambda: production)
+        caps = tuple(
+            (name, (lambda: False) if name in missing else (lambda: True))
+            for name, _ in server._DEPLOY_MANDATORY_CAPABILITIES
+        )
+        monkeypatch.setattr(server, "_DEPLOY_MANDATORY_CAPABILITIES", caps)
+        return server.enforce_capability_readiness
+
+    def test_all_present_never_exits(self, monkeypatch):
+        gate = self._run_gate(monkeypatch, missing=set(), staging=True)
+        gate()  # must not raise
+
+    def test_missing_capability_exits_in_staging_and_production(self, monkeypatch):
+        for kw in ({"staging": True}, {"production": True}):
+            gate = self._run_gate(monkeypatch, missing={"gdpr_purge"}, **kw)
+            with pytest.raises(SystemExit) as ei:
+                gate()
+            assert ei.value.code == 1, f"{kw}: deployed env must fail closed"
+
+    def test_missing_capability_only_warns_outside_deployed_envs(self, monkeypatch):
+        gate = self._run_gate(monkeypatch, missing={"gdpr_purge", "pdf_generator"})
+        gate()  # dev/demo/testing: warn, no exit
