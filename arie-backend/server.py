@@ -18875,6 +18875,12 @@ def _directors_ubos_report_cte():
                 u.full_name AS assigned_officer,
                 a.updated_at AS last_updated_at,
                 g.created_at,
+                -- The fixture text-pattern vintage bound must key off the
+                -- APPLICATION's created_at. g.created_at is MIN(party.created_at),
+                -- which moves whenever a director/UBO is re-created, so it would
+                -- classify the same application differently here than on every
+                -- other surface.
+                a.created_at AS application_created_at,
                 a.prescreening_data,
                 a.is_fixture,
                 CASE WHEN EXISTS (SELECT 1 FROM periodic_reviews pr WHERE pr.application_id = g.application_id) THEN 1 ELSE 0 END AS has_periodic_review
@@ -18967,6 +18973,8 @@ def _directors_ubos_report_scope_from_request(handler, user):
             include_text_patterns=True,
             ref_column="application_ref",
             name_column="company_name",
+            # NOT report_rows.created_at — that is MIN(party.created_at).
+            created_column="application_created_at",
         )
         conditions.append(fx_excl)
         params.extend(fx_params)
@@ -24635,7 +24643,12 @@ def _screening_queue_row_triage(row):
         )
         buckets[category_key] += 1
         score = item.get("triage_score")
-        is_weak = isinstance(score, (int, float)) and score < _TRIAGE_WEAK_THRESHOLD
+        # ``bool`` is a subclass of ``int`` — a stored ``true``/``false`` would
+        # otherwise score as 1/0 and be silently classed "weak". The client
+        # uses ``typeof === 'number'``, which excludes booleans, so excluding
+        # them here keeps the two partitions identical.
+        numeric = isinstance(score, (int, float)) and not isinstance(score, bool)
+        is_weak = numeric and score < _TRIAGE_WEAK_THRESHOLD
         if is_weak:
             weak_buckets[category_key] += 1
         # Unscored hits are never assumed weak — they stay in-section and are
@@ -24644,7 +24657,7 @@ def _screening_queue_row_triage(row):
             weak_tail += 1
         else:
             section_buckets[category_key] += 1
-        if isinstance(score, (int, float)):
+        if numeric:
             if score < _TRIAGE_WEAK_THRESHOLD:
                 weak += 1
             scored.append({
@@ -36935,7 +36948,21 @@ def _monitoring_list_extra_fixture_clause():
             params.append(pattern)
     if not clauses:
         return "", []
-    return " AND NOT (" + " OR ".join(clauses) + ")", params
+    # Same vintage bound as fixture_filter's heuristic arm. These patterns match
+    # applicant-controlled text (app.ref / app.company_name) and alert text
+    # (ma.summary / ma.client_name), so unbounded they hide a REAL client's
+    # monitoring alerts forever — a sanctions-change or adverse-media alert on a
+    # live client silently vanishing from the monitoring queue. Applications
+    # created from the cutoff onward are classified by the authoritative markers
+    # only. NULL created_at counts as historical (fail-closed for fixtures).
+    from fixture_filter import FIXTURE_TEXT_PATTERN_CUTOFF
+
+    params.append(FIXTURE_TEXT_PATTERN_CUTOFF)
+    return (
+        " AND NOT ((" + " OR ".join(clauses) + ")"
+        " AND (app.created_at IS NULL OR app.created_at < ?))",
+        params,
+    )
 
 
 MONITORING_DECISION_OUTCOMES = {

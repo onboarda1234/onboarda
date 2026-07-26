@@ -283,10 +283,16 @@ def test_triage_strip_and_buckets_read_only_server_computed_triage():
     strip = _function_region(html, "screeningTriageStrip", "screeningTriageHitDisplayName")
     assert "row && row.triage" in strip
     assert "if (!triage || !triage.buckets) return '';" in strip
-    assert "buckets.sanctions" in strip
-    assert "buckets.pep" in strip
-    assert "buckets.adverse_media" in strip
-    assert "triage.weak_count" in strip
+    # Phase F (F4): the tiles read the server's reconciled split
+    # (section_buckets / weak_buckets / weak_tail_count) instead of the legacy
+    # overlapping buckets. Still server-computed only — the browser never
+    # re-derives a count.
+    assert "triage.section_buckets" in strip
+    assert "sectionBuckets.sanctions" in strip
+    assert "sectionBuckets.pep" in strip
+    assert "sectionBuckets.adverse_media" in strip
+    assert "triage.weak_tail_count" in strip
+    assert "triage.weak_count" in strip  # legacy fallback path retained
     assert "triage.unscored_count" in strip
     # Bucket order is Sanctions → PEP → Watchlist → Adverse media (then other):
     # watchlist/warning is more material than adverse media, so it ranks higher.
@@ -384,8 +390,11 @@ def test_phase_f_first_strip_tile_never_excludes_what_it_names():
     html = _html()
     strip = _function_region(html, "screeningTriageStrip", "screeningTriageHitDisplayName")
     assert "tile(sanctionsCount + watchlistCount, 'Sanctions & watchlist', sanctionsWatchlistSub" in strip
-    assert "Number(buckets.sanctions || 0)" in strip
-    assert "Number(buckets.watchlist || 0)" in strip
+    # Phase F (F4): counted from the reconciled split so the tile counts only
+    # what its section renders (weak watchlist hits are disclosed in the
+    # sub-caption and counted once, in the weak tile).
+    assert "Number(sectionBuckets.sanctions || 0)" in strip
+    assert "Number(sectionBuckets.watchlist || 0)" in strip
     assert "' sanctions · '" in strip
     assert "' watchlist/warning'" in strip
     assert "'Screened against sanction lists'" in strip

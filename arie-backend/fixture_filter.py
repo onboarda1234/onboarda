@@ -112,10 +112,31 @@ FIXTURE_APP_TEXT_PATTERNS: tuple = (
 #
 # The text patterns exist solely to catch *historical* smoke/E2E rows created
 # before ``is_fixture`` was reliably set (inline migration v2.29 / file
-# migration 020). Every application created from here on is marked at write
-# time via the ``f1xed%`` id namespace or the ``is_fixture`` column, so the
-# heuristic has no remaining job on new rows — while its false-EXCLUSION risk
-# against real applicants grows with every new application.
+# migration 020), while their false-EXCLUSION risk against real applicants
+# grows with every new application.
+#
+# ACCEPTED TRADE-OFF: the in-repo seeders mark rows at write time (``f1xed%``
+# id namespace and/or ``is_fixture``), so they stay excluded at any age. The
+# normal application-creation paths do NOT set either marker, so a test
+# harness that drives the real portal/registry HTTP endpoints produces an
+# unmarked row that, from the cutoff onward, WILL appear in the officer queue.
+# That is the deliberate direction: a leaked fixture is recoverable, a hidden
+# real applicant is not. Harnesses that create applications over HTTP must set
+# ``is_fixture`` or use the ``f1xed`` namespace.
+#
+# RESIDUAL: rows already in the database keep the old behaviour, so a real
+# applicant onboarded BEFORE the cutoff whose name matches a pattern stays
+# hidden. Detection query for founder disposition (each hit is either a real
+# applicant to mark visible or a fixture to mark ``is_fixture=1``):
+#
+#     SELECT id, ref, company_name, created_at FROM applications
+#      WHERE created_at < '2026-07-27 00:00:00'
+#        AND (is_fixture IS NULL OR NOT is_fixture)
+#        AND id NOT LIKE 'f1xed%'
+#        AND (<FIXTURE_APP_REF_PATTERNS on ref OR
+#             FIXTURE_APP_TEXT_PATTERNS on company_name>);
+#
+# Once dispositioned, the heuristic arm and this cutoff can both be deleted.
 #
 # Bounding it to rows created before this timestamp is exactly behaviour
 # preserving for every row that exists today (all of which predate it), and
@@ -180,6 +201,7 @@ def fixture_app_exclude_clause(
     include_text_patterns: bool = False,
     ref_column: Optional[str] = None,
     name_column: Optional[str] = None,
+    created_column: Optional[str] = None,
 ) -> Tuple[str, List[str]]:
     """Return ``(sql_fragment, params)`` that excludes fixture applications.
 
@@ -213,6 +235,7 @@ def fixture_app_exclude_clause(
         table_alias,
         ref_column=ref_column,
         name_column=name_column,
+        created_column=created_column,
     )
     return (
         f"{id_col} NOT LIKE ? AND ({fix_col} IS NULL OR NOT {fix_col}) "
@@ -284,12 +307,18 @@ def fixture_change_alert_exclude_clause(
         application_col,
         include_text_patterns=True,
     )
+    # Harness-produced provenance fields ONLY.
+    #
+    # ``reviewer_notes`` (compliance-officer free text) and ``source_payload``
+    # (raw provider JSON) were previously matched too. Both are wide-open text:
+    # an officer noting "audit-trail reviewed" or "no smoke", or a registry
+    # payload containing "audit-exempt" or a hex id happening to contain "e2e",
+    # silently deleted a real change alert from the CM queue. Neither field says
+    # anything about whether the ROW is a fixture, so neither is matched.
     source_columns = (
         "source_reference",
         "detected_by",
         "summary",
-        "reviewer_notes",
-        "source_payload",
     )
     clauses: List[str] = []
     params: List[str] = []
@@ -340,6 +369,7 @@ def _fixture_application_match_clause(
     *,
     ref_column: Optional[str] = None,
     name_column: Optional[str] = None,
+    created_column: Optional[str] = None,
 ) -> Tuple[str, List[str]]:
     """Return a positive fixture predicate for an applications table alias.
 
@@ -352,7 +382,16 @@ def _fixture_application_match_clause(
     """
     id_col = f"{table_alias}.id" if table_alias else "id"
     fix_col = f"{table_alias}.is_fixture" if table_alias else "is_fixture"
-    created_col = f"{table_alias}.created_at" if table_alias else "created_at"
+    # The vintage bound MUST read the APPLICATION's created_at. A caller whose
+    # alias is a projection/CTE (e.g. the Directors & UBOs report, whose
+    # created_at is MIN(party.created_at)) must pass ``created_column`` so the
+    # bound does not silently key off an unrelated timestamp.
+    created_name = created_column or "created_at"
+    created_col = (
+        f"{table_alias}.{created_name}"
+        if table_alias and "." not in created_name
+        else created_name
+    )
     ref_name = ref_column or "ref"
     name_name = name_column or "company_name"
     ref_col = f"{table_alias}.{ref_name}" if table_alias and "." not in ref_name else ref_name

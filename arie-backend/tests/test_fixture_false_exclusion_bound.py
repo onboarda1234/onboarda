@@ -139,3 +139,79 @@ def test_cutoff_not_applied_when_text_patterns_are_off():
 def test_alias_form_qualifies_the_created_at_column():
     sql, _ = fixture_app_exclude_clause(table_alias="a", include_text_patterns=True)
     assert "a.created_at" in sql
+
+
+# --- reviewer-found defects (second-pass fixes) ------------------------------
+
+def test_created_column_override_is_honoured():
+    # A caller whose alias is a projection/CTE must be able to point the vintage
+    # bound at the APPLICATION's created_at. The Directors & UBOs report's own
+    # created_at is MIN(party.created_at), which moves whenever a director/UBO
+    # is re-created — binding to it classified the same application differently
+    # there than on every other surface.
+    sql, params = fixture_app_exclude_clause(
+        table_alias="report_rows",
+        include_text_patterns=True,
+        ref_column="application_ref",
+        name_column="company_name",
+        created_column="application_created_at",
+    )
+    assert "report_rows.application_created_at" in sql
+    assert "report_rows.created_at" not in sql
+    assert FIXTURE_TEXT_PATTERN_CUTOFF in params
+
+
+def test_directors_report_binds_the_application_created_at():
+    import re
+    from pathlib import Path as _P
+
+    src = (_P(__file__).resolve().parents[1] / "server.py").read_text(encoding="utf-8")
+    # The CTE must project the application's own timestamp under a distinct
+    # name, and the report scope must bind the bound to it.
+    assert "a.created_at AS application_created_at" in src
+    assert 'created_column="application_created_at"' in src
+
+
+def test_monitoring_alert_extra_clause_is_vintage_bounded():
+    # The same patterns were re-applied unbounded on /api/monitoring/alerts, so
+    # a REAL client named e.g. "Smoke House Trading Ltd" had every monitoring
+    # alert silently dropped — the original defect on a higher-consequence
+    # surface.
+    import server
+
+    sql, params = server._monitoring_list_extra_fixture_clause()
+    assert "app.created_at IS NULL OR app.created_at <" in sql
+    assert params[-1] == FIXTURE_TEXT_PATTERN_CUTOFF
+    assert sql.count("?") == len(params)
+
+
+def test_change_alert_clause_does_not_match_officer_notes_or_raw_payload():
+    # reviewer_notes is compliance-officer free text and source_payload is raw
+    # provider JSON; matching "audit-"/"smoke"/"e2e" in either silently deleted
+    # real change alerts from the CM queue.
+    from fixture_filter import fixture_change_alert_exclude_clause
+
+    sql, params = fixture_change_alert_exclude_clause()
+    assert "reviewer_notes" not in sql
+    assert "source_payload" not in sql
+    assert sql.count("?") == len(params)
+
+
+def test_every_generator_has_matching_placeholder_and_param_counts():
+    # Cheapest guard against a future param-ordering regression.
+    from fixture_filter import (
+        fixture_app_id_exclude_clause,
+        fixture_audit_target_exclude_clause,
+        fixture_change_alert_exclude_clause,
+    )
+
+    generators = [
+        lambda: fixture_app_exclude_clause(table_alias="a", include_text_patterns=True),
+        lambda: fixture_app_exclude_clause(table_alias="", include_text_patterns=True),
+        lambda: fixture_app_id_exclude_clause(include_text_patterns=True),
+        lambda: fixture_audit_target_exclude_clause("target_id"),
+        lambda: fixture_change_alert_exclude_clause(),
+    ]
+    for gen in generators:
+        sql, params = gen()
+        assert sql.count("?") == len(params), sql

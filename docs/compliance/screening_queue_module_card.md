@@ -18,6 +18,19 @@ filters, pagination, and optional per-row evidence hydration.
 4. Fixtures (id namespace `f1xed%`, `is_fixture`, text patterns incl. `%e2e%`, `%smoke%`)
    are excluded from the default officer view; opt-in via `show_fixtures` for
    admin/SCO (+ staging audit-role exception).
+   **Vintage bound (2026-07-26):** the *heuristic text-pattern* arm applies only
+   to applications created before `FIXTURE_TEXT_PATTERN_CUTOFF`
+   (`fixture_filter.py`). The authoritative markers (`f1xed%`, `is_fixture`)
+   still match at any age. Rationale: the patterns are substring matches on
+   applicant-controlled text, so unbounded they hid REAL applicants
+   ("Smoke House Trading Ltd", "Audit-Pro Advisory") from every officer surface —
+   a hidden real subject is a worse failure than a leaked fixture. Consequence:
+   a harness that creates applications over the portal/registry HTTP endpoints
+   (which set neither marker) will now appear in the officer queue; such
+   harnesses must set `is_fixture` or use the `f1xed` namespace.
+   Residual: real applicants already in the DB before the cutoff whose name
+   matches a pattern stay hidden — detection query in `fixture_filter.py`,
+   pending founder disposition.
 5. Four-eyes: sensitive false-positive clearance → pending second review → distinct
    reviewer; queue exposes first reviewer while pending.
 6. Scan/evidence caps are reported honestly in `metrics`

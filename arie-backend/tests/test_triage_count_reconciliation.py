@@ -149,8 +149,8 @@ def test_tiles_read_the_reconciled_split():
     assert "tile(weakTailCount" in fn
     # Below-threshold remainder is disclosed, never silently dropped.
     assert "below threshold" in fn
-    # Graceful fallback for older cached payloads.
-    assert "triage.section_buckets || buckets" in fn
+    # Graceful fallback for older cached payloads (whole-strip legacy mode).
+    assert "hasSplit ? triage.section_buckets : buckets" in fn
 
 
 def test_list_partition_exempts_sanctions_from_the_weak_tail():
@@ -162,7 +162,80 @@ def test_list_partition_exempts_sanctions_from_the_weak_tail():
 def test_section_headers_count_what_they_render():
     fn = _fn("screeningTriageRankedHitSections")
     assert "sectionBuckets[meta.key]" in fn
-    assert "' below threshold'" in fn
+    assert "below threshold, in weak tail" in fn
     # A section whose hits are all weak still renders, with the honest note.
     assert "!serverCount && !bucketWeak && !entries.length" in fn
-    assert "if (bucketWeak > 0) {" in fn
+    assert "if (bucketWeak > 0 || (!hasSplit && serverCount > 0)) {" in fn
+
+
+# --- reviewer-found defects (second-pass fixes) ------------------------------
+
+def test_boolean_score_is_not_treated_as_numeric():
+    # bool is a subclass of int; a stored true/false must not score as 1/0 and
+    # be classed "weak". The client uses typeof === 'number', which excludes
+    # booleans — the server must agree or the two partitions diverge.
+    triage = server._screening_queue_row_triage(
+        _row([{"category": "pep", "matched_name": "x", "triage_score": False}])
+    )
+    assert triage["unscored_count"] == 1
+    assert triage["weak_count"] == 0
+    assert triage["weak_tail_count"] == 0
+    assert triage["section_buckets"]["pep"] == 1
+
+
+def test_weak_tail_header_uses_the_tailed_count_not_legacy_weak_count():
+    # Legacy weak_count still includes weak SANCTIONS hits, which are retained
+    # in their own section. Using it made the tail header announce more matches
+    # than its body contained.
+    fn = _fn("screeningTriageWeakTailSection")
+    assert "triage.weak_tail_count != null" in fn
+    assert "Number(triage.weak_tail_count)" in fn
+
+
+def test_weak_tail_is_not_rendered_for_a_sanctions_only_weak_set():
+    # Sanctions-only weak set => nothing is tailed => no phantom empty tail.
+    triage = server._screening_queue_row_triage(_row([_hit("sanctions", 3)]))
+    assert triage["weak_count"] == 1        # legacy still counts it
+    assert triage["weak_tail_count"] == 0   # but nothing is tailed
+    fn = _fn("screeningTriageRankedHitSections")
+    assert "var tailTotal = triage.weak_tail_count != null" in fn
+    assert "if (weakEntries.length || tailTotal > 0) {" in fn
+
+
+def test_every_tile_discloses_its_below_threshold_remainder():
+    fn = _fn("screeningTriageStrip")
+    # PEP previously had no disclosure at all while watchlist/adverse did.
+    assert "weakBuckets.pep" in fn
+    assert "weakBuckets.adverse_media" in fn
+    assert "weakBuckets.watchlist" in fn
+    assert "weakBuckets.sanctions" in fn
+    # The unclassified bucket has no tile, so it gets an explicit footnote.
+    assert 'data-screening-triage-other-note="true"' in fn
+
+
+def test_sanctions_header_suffix_states_it_is_a_subset():
+    # For sanctions the below-threshold hits are RETAINED in the count; for
+    # tailed buckets they are counted elsewhere. Identical wording for both
+    # would re-create the double-count.
+    fn = _fn("screeningTriageRankedHitSections")
+    assert "retained here" in fn
+    assert "in weak tail" in fn
+
+
+def test_legacy_payload_falls_back_coherently_not_into_a_hybrid():
+    fn = _fn("screeningTriageStrip")
+    assert "var hasSplit = !!triage.section_buckets;" in fn
+    sections = _fn("screeningTriageRankedHitSections")
+    # The sanctions exemption is applied only when the server actually split,
+    # so counts and list agree in BOTH modes.
+    assert "(!hasSplit || bucketKey !== 'sanctions')" in sections
+    # And the empty-copy chain must not print "No sanctions matches" under
+    # another bucket's heading.
+    assert "(!hasSplit && serverCount > 0)" in sections
+    assert "'No ' + String(meta.label).toLowerCase() + ' matches for this subject.'" in sections
+
+
+def test_rollup_strip_reconciles_with_the_adverse_tile():
+    fn = _fn("screeningSubjectRollupStrip")
+    assert "adverseSection" in fn
+    assert "above the triage threshold" in fn
