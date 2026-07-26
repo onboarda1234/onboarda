@@ -61,31 +61,68 @@ def _pinned_weasyprint(path):
 def test_weasyprint_pinned_at_or_above_the_fixed_version():
     req = _pinned_weasyprint(BACKEND / "requirements.txt")
     lock = _pinned_weasyprint(BACKEND / "requirements.lock")
-    assert req is not None, "weasyprint must be pinned in requirements.txt"
-    assert lock is not None, "weasyprint must be pinned in requirements.lock"
+    dev_lock = _pinned_weasyprint(BACKEND / "requirements-dev.lock")
+    # A pin the parser cannot read (spaced `== 69.0`, `===`, a range) fails
+    # CLOSED here: only the canonical `weasyprint==X.Y` form is accepted, so an
+    # unparseable spelling reads as "not pinned" and blocks rather than passes.
+    canonical = "canonical `weasyprint==X.Y` form required"
+    assert req is not None, f"weasyprint must be pinned in requirements.txt ({canonical})"
+    assert lock is not None, f"weasyprint must be pinned in requirements.lock ({canonical})"
+    assert dev_lock is not None, f"weasyprint must be pinned in requirements-dev.lock ({canonical})"
     fixed = ".".join(map(str, FIXED_VERSION))
-    assert req >= FIXED_VERSION, (
-        f"R3-BSA-025: requirements.txt pins weasyprint=={'.'.join(map(str, req))}, "
-        f"below the {CVE_ID} fix ({fixed}). Do not downgrade — there is no "
-        "allowlist to catch a reopened vulnerability."
-    )
-    assert lock >= FIXED_VERSION, (
-        f"R3-BSA-025: requirements.lock pins weasyprint below {fixed} — regenerate "
-        "the lock from requirements.txt."
-    )
-    assert req == lock, (
-        f"weasyprint version drift: requirements.txt={'.'.join(map(str, req))} "
-        f"lock={'.'.join(map(str, lock))} — regenerate the lock."
-    )
+    for name, ver in (("requirements.txt", req),
+                      ("requirements.lock", lock),
+                      ("requirements-dev.lock", dev_lock)):
+        assert ver >= FIXED_VERSION, (
+            f"R3-BSA-025: {name} pins weasyprint=={'.'.join(map(str, ver))}, below "
+            f"the {CVE_ID} fix ({fixed}). Do not downgrade — there is no allowlist "
+            "to catch a reopened vulnerability."
+        )
+        assert ver == req, (
+            f"weasyprint version drift: requirements.txt={'.'.join(map(str, req))} "
+            f"{name}={'.'.join(map(str, ver))} — regenerate the locks."
+        )
 
 
 # ── 2. No-allowlist guard: rely on the fix, not an exception ──────────────────
 
 def test_ci_does_not_allowlist_the_fixed_cve():
+    """pip-audit honors ALIASES: this finding suppresses under CVE-2026-49452,
+    GHSA-jhhc-3hcp-qhm5, OR PYSEC-2026-3412, and the flag accepts `=`/quoted
+    spellings — so an exact-substring check on one ID is bypassable (both
+    independent reviewers proved it live). ci.yml carries no --ignore-vuln at
+    all today, so ban the TOKEN outright: any future exception for any CVE must
+    consciously relocate/rewrite this guard, which is the review moment we want."""
     ci = _ci_text()
-    assert f"--ignore-vuln {CVE_ID}" not in ci, (
-        f"R3-BSA-025: {CVE_ID} is fixed in WeasyPrint {'.'.join(map(str, FIXED_VERSION))}; "
-        "remove the pip-audit --ignore-vuln exception so a future regression is caught."
+    assert "--ignore-vuln" not in ci, (
+        f"R3-BSA-025: ci.yml carries a pip-audit --ignore-vuln exception. "
+        f"{CVE_ID} (aka GHSA-jhhc-3hcp-qhm5 / PYSEC-2026-3412) is fixed in "
+        f"WeasyPrint {'.'.join(map(str, FIXED_VERSION))} — no allowlist, under any "
+        "alias or spelling, so pip-audit is free to flag any future regression."
+    )
+
+
+def test_ci_still_runs_pip_audit():
+    """The no-allowlist guard is vacuous if the whole audit step is deleted —
+    the old suite pinned the step's existence implicitly via the allowlist
+    assertions; pin it explicitly now."""
+    ci = _ci_text()
+    assert "pip-audit" in ci, (
+        "ci.yml no longer runs pip-audit — the dependency audit step must exist "
+        "for the no-allowlist guard to mean anything."
+    )
+    # The invocation must audit BOTH requirements files. Accept any pip-audit
+    # mention with both -r args in its following window (the real step is a
+    # multi-line `pip-audit \` continuation).
+    audited = any(
+        "-r arie-backend/requirements.txt" in ci[m.end():m.end() + 600]
+        and "-r arie-backend/requirements-dev.txt" in ci[m.end():m.end() + 600]
+        for m in re.finditer(r"pip-audit", ci)
+    )
+    assert audited, (
+        "ci.yml mentions pip-audit but no invocation auditing BOTH "
+        "arie-backend/requirements.txt and requirements-dev.txt is visible — "
+        "restore the audit step."
     )
 
 
@@ -95,9 +132,11 @@ def test_ci_does_not_allowlist_the_fixed_cve():
 # accepts it via **kwargs / a variable / positionally — so a scan for the literal
 # `=True` alone is evadable (dict key, `=1`, `=bool(x)`, `=flag`, line-split). We
 # forbid the token `presentational_hints` from appearing in production code
-# UNLESS it is an explicit `= False`. That one rule defeats every spelling.
+# UNLESS it is an explicit `= False` TERMINATED by `,`, `)` or end-of-line —
+# `False\b` alone accepted `False if False else True` (reviewer-found evasion);
+# the terminator requirement rejects any trailing expression.
 _PRESENTATIONAL_HINTS = re.compile(r"presentational_hints")
-_SAFE_DISABLE = re.compile(r"presentational_hints\s*=\s*False\b")
+_SAFE_DISABLE = re.compile(r"presentational_hints\s*=\s*False\s*(?:[,)]|$)")
 
 
 def test_no_production_source_enables_presentational_hints():

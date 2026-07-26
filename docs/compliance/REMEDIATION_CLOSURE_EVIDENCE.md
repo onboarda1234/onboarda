@@ -244,6 +244,10 @@ local Docker NA). pip-audit-driven minimal bumps + `pip-audit` CI gate
 (fails on HIGH/CRITICAL) with a documented, dated WeasyPrint allowlist
 (`CVE-2026-49452`, review 2026-08-09, unused vulnerable mode). Full suite
 6858 passed; Docker/PDF/Fernet/JWT compat verified.
+*Superseded 2026-07-26 (R3-BSA-025, PR #891): the allowlist rested on a
+false "no fixed release" premise — WeasyPrint 69.0 (2026-06-02) is the
+upstream fix. Upgraded to 69.0 and the `--ignore-vuln` exception was
+removed; guards now pin `>=69.0` and forbid any allowlist token.*
 
 ## app-727 PRs 731 732
 

@@ -145,7 +145,8 @@ jobs:
           /tmp/pip-audit-venv/bin/python -m pip install --upgrade pip pip-audit==2.10.1
           # No vulnerability allowlist. CVE-2026-49452 / GHSA-jhhc-3hcp-qhm5 was
           # fixed upstream in WeasyPrint 69.0 (2026-06-02); we pin >=69.0 (R3-BSA-025),
-          # so pip-audit passes without an --ignore-vuln exception.
+          # so pip-audit runs with no ignore/allowlist flag of any kind — the guard
+          # test bans that token outright (aliases made an exact-ID check bypassable).
           /tmp/pip-audit-venv/bin/pip-audit \
             -r arie-backend/requirements.txt \
             -r arie-backend/requirements-dev.txt \
