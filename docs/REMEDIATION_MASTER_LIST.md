@@ -302,7 +302,7 @@ are out of scope for every SRP item.
 | P12-7 | Verification-matrix fidelity — HYBRID only on deterministic INCONCLUSIVE; resolve 5 TODO mappings (DCI-014/015) | MED+LOW | [#835](https://github.com/onboarda1234/onboarda/pull/835) | ◐ mechanism (rules-first gate + INCONCLUSIVE-aware aggregation) merged + staging-validated 2026-07-22, flag-gated OFF · DCI-015 mappings + evaluator activation = founder sign-off ([memo](compliance/P12_7_VERIFICATION_MATRIX_DECISION_MEMO.md)) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#second-remediation-batch-prs-833-837) |
 | P12-8 | Retention purge enforceability + purge-log evidence (DCI-020/021, Migration v2.48) | MED | [#717](https://github.com/onboarda1234/onboarda/pull/717) + hotfix [#723](https://github.com/onboarda1234/onboarda/pull/723) | ✅ merged + deployed | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-8-prs-717-and-723) |
 | P12-9 | Observability hardening — JSON logs, request-correlation ids, readiness gates (DCI-028/029, Migration v2.49) | MED | [#718](https://github.com/onboarda1234/onboarda/pull/718) | ✅ merged + deployed | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-9-pr-718) |
-| P12-10 | Infra guards — upload body-size pre-buffering, deploy fails on `services-stable` timeout (DCI-016/025; stability half partly mitigated by #702) | MED+LOW | [#812](https://github.com/onboarda1234/onboarda/pull/812), [#875](https://github.com/onboarda1234/onboarda/pull/875) | ✅ upload limits 2026-07-21 · deploy-timeout half closed 2026-07-25 (#875: backend wait fails closed after 2×10-min attempts + diagnostics; proven live by the very deploy that shipped it) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#eight-remediation-prs-808-815) |
+| P12-10 | Infra guards — upload body-size pre-buffering, deploy fails on `services-stable` timeout (DCI-016/025; stability half partly mitigated by #702) | MED+LOW | [#812](https://github.com/onboarda1234/onboarda/pull/812), [#875](https://github.com/onboarda1234/onboarda/pull/875) | ◐ **upload pre-buffering REOPENED 2026-07-26** — the Audit-2 re-run (R3-BSA-022, independently CONFIRMED empirically) proved `max_body_size` was passed to the `Application()` constructor (`server.py:44262`), where Tornado ignores it; a 50KB body was accepted against a 1KB cap in test, while the same value on `HTTPServer`/`listen` rejected pre-buffer. The recorded "upload limits ✅ 2026-07-21" enforces only Tornado's ~100MB default pre-buffer, and per-route caps (10/20/25MB) run after full buffering · deploy-timeout half closed 2026-07-25 (#875: backend wait fails closed after 2×10-min attempts + diagnostics; proven live by the very deploy that shipped it) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#eight-remediation-prs-808-815) |
 
 ## Phase 12 — Frontend & Operational Readiness (FEO audit / Audit 4)
 
@@ -525,6 +525,77 @@ are out of scope for every SRP item.
 
 ---
 
+## Re-audit: Backend Security & Authorization (Audit 2 re-run, 2026-07-25)
+
+> Source: `regmind_audit_2_backend_security_authorization_20260725.md` (in
+> [`docs/audits/`](audits/regmind_audit_2_backend_security_authorization_20260725.md)),
+> audited at pinned revision `62c629d` (after #879, before the rest of the
+> overnight batch). **26 findings: 14 HIGH · 8 MEDIUM · 4 LOW.** Verdict:
+> REMEDIATE BEFORE PROCEEDING (13 blocking).
+>
+> **⚠️ ID-SPACE WARNING — THREE distinct `BSA-*` id spaces now exist.** The
+> report file uses bare `BSA-NN`; this register namespaces the new findings
+> `R3-BSA-NN` to keep all three separate:
+> - **bare `BSA-*`** = the ORIGINAL Audit 2 (Phase 10 rows P11-1…P11-9). e.g.
+>   original BSA-015 = dependency CVEs (closed by P11-2).
+> - **`R2-BSA-*`** = the 2026-07-11 consolidated re-run (`d23cc45`, the
+>   "Net-new findings" + "Merged items re-flagged PARTIAL" tables above). e.g.
+>   R2-BSA-001 = supervisor routes bypass BaseHandler (closed #743).
+> - **`R3-BSA-*`** = THIS 2026-07-25 re-run (`62c629d`). e.g. R3-BSA-015 = log
+>   PII/token leakage, R3-BSA-022 = ignored body-size cap.
+>
+> The three schemes collide numerically (each has a 001, a 015…) with entirely
+> different meanings. Do not merge, renumber, or cite one audit's BSA-NN when
+> you mean another's.
+>
+> **Two most consequential findings independently VERIFIED before fold-in:**
+> - **R3-BSA-022 (CONFIRMED, empirically):** `max_body_size` in the
+>   `Application()` constructor is silently ignored by `app.listen()` — proven
+>   with a live Tornado 6.5 test (50KB body accepted against a 1KB cap; the
+>   same value on `HTTPServer` rejected pre-buffer). This **reopens P12-10's
+>   upload-limits ✅** (annotated above).
+> - **R3-BSA-012 (CONFIRMED):** `SumsubDocumentHandler` (`server.py:30838`)
+>   checks the resolved upload path with `str(requested).startswith(str(allowed_dir))`
+>   — a string-prefix test a sibling dir (`.../uploads_evil/x.pdf`) passes.
+>   One-line fix (`allowed_dir in requested.parents`).
+>
+> **Counting:** 4 findings are pure cross-references to already-open rows and
+> are NOT counted (R3-BSA-002/003/004 → P11-4; R3-BSA-021 → P11-5). The other
+> **22 are net-new rows** (total 215 → 237). None is remediated yet; a
+> workflow-neutral remediation batch is the next step (blocking HIGHs first:
+> 012, 022, 017/018, 005/006, 007, 015, 019 name-fields, 020, 011).
+
+| ID | Sev | Finding | Status |
+|----|:--:|---------|--------|
+| R3-BSA-001 | MED | Production-capability modules imported under caught `ImportError` → GDPR purge / migrations / doc-verification / supervisor can silently degrade a deployed server instead of failing the deploy | ⬜ pending — make capabilities mandatory in deployed envs + readiness manifest |
+| R3-BSA-002 | HIGH | Awaited supervisor pipeline runs synchronous agents directly on the IOLoop | → **P11-4** (IOLoop offload, 📋 scoped) — re-confirmed, precise site added |
+| R3-BSA-003 | HIGH | ComplyAdvantage async callback opens sync DB/network/sleep on the IOLoop | → **P11-4** — cross-ref |
+| R3-BSA-004 | HIGH | Synchronous WeasyPrint rendering blocks request processing | → **P11-4** — cross-ref |
+| R3-BSA-005 | HIGH | EDD routing-audit / actuation failure is swallowed; the memo transaction still commits and returns success (fail-open, same family as RDI-006/007, new site `server.py:32337-32374`) | ⬜ pending |
+| R3-BSA-006 | MED | PDF audit/timestamp persistence failure is logged but the regulated PDF is still served | ⬜ pending |
+| R3-BSA-007 | HIGH | Login/registration brute-force limiter is per-process, non-atomic, and fails OPEN to memory on DB errors (legacy `RateLimiter`) | ⬜ pending — move to the shared DB-backed fail-closed limiter |
+| R3-BSA-008 | MED | The 21-entry permission matrix is descriptive only; no server-side `assertPermission()` exists, handlers duplicate literal role arrays → drift (structural cause of 009/010) | ⬜ pending — adjacent P9-13 |
+| R3-BSA-009 | HIGH | `analyst` can transition a case into `edd_required` via the generic application PATCH despite matrix exclusion from `escalate_to_sco` | ⬜ pending — authz gap; P10-4 / P9-13 family |
+| R3-BSA-010 | MED | Application-specific and supervisor audit routes allow `co`/`analyst` beyond the `view_audit_trail` admin/SCO matrix entry | ⬜ pending — cross-ref RDI-020 |
+| R3-BSA-011 | HIGH | An owning **client** can invoke authoritative Agent 1 (`DocumentVerifyHandler`) and persist `verification_status="verified"` with no mandatory human acceptance; `agent_executions` logged only after commit, log failure swallowed | ⬜ pending — authority-boundary defect |
+| R3-BSA-012 | HIGH | **CONFIRMED** — `SumsubDocumentHandler` path check is a string prefix (`startswith`), so a sibling dir (`uploads_evil`) passes; request-controlled `file_path` reaches Sumsub upload | ⬜ pending — one-line fix (`allowed_dir in requested.parents`) |
+| R3-BSA-013 | LOW | Root `/` uses Tornado's built-in `RedirectHandler`, which does not inherit BaseHandler security headers | ⬜ pending |
+| R3-BSA-014 | MED | `DocumentDownloadHandler` uses stored `mime_type` and permits `?view=inline` (incl. PDF/images) — **qualifies P11-7's attachment ✅** | ⬜ pending — P11-7 closure incomplete |
+| R3-BSA-015 | HIGH | Logs can carry PII, raw AI text, provider identifiers, and — on OpenCorporates connection exceptions — a token-bearing URL | ⬜ pending — scrub provider exception strings + PII |
+| R3-BSA-016 | LOW | Invalid Sumsub webhook signature returns 401 (audit wanted an indistinguishable 200) — **qualifies P11-7's webhook ✅** | ⬜ pending — likely a recorded design decision, not code |
+| R3-BSA-017 | HIGH | Sumsub idempotency: EVERY insert exception is treated as a uniqueness collision, so DB outages/schema errors are falsely acknowledged as duplicates | ⬜ pending — catch only unique-violation |
+| R3-BSA-018 | HIGH | Sumsub per-application update errors are swallowed, then the idempotency row commits — a retry can never repair the failed application | ⬜ pending |
+| R3-BSA-019 | HIGH | Prompt fencing defaults OFF (known founder call), AND `entity_name`/`person_name` are interpolated into `context_hint` UNSANITIZED even when fencing is ON (`claude_client.py:1797-1802`) — the second half is a new code defect | ◐ sub-defect of **P11-5**; the unsanitized-name half is net-new ⬜ |
+| R3-BSA-020 | HIGH | `extract_document_fields` has NO Pydantic schema registered in `_AGENT_SCHEMAS`; any parsed dict is fed into deterministic name/registration/date checks | ⬜ pending — sub-defect of P11-5's "output schema" claim |
+| R3-BSA-021 | MED | AI circuit breaker defaults off and is process-local (no service-wide breaker unless the flag is set) | → **P11-5** (◐, activation is a founder call) — cross-ref |
+| R3-BSA-022 | HIGH | **CONFIRMED empirically** — pre-buffer body cap set on `Application()` (ignored by Tornado); real cap is the ~100MB default; per-route caps (10/20/25MB) diverge and run post-buffer | ⬜ pending — pass `max_body_size` to `listen`/`HTTPServer`, one canonical policy; **reopens P12-10** |
+| R3-BSA-023 | MED | Supervisor `_pipeline_cache` is process-local — review-package generation/submission lost on restart, inconsistent across workers | ◐ materially mitigated: the supervisor is `PILOT_SCOPE`-vetoed in staging/production since #880 (post-audit); residual is the cache design for any enterprise enablement |
+| R3-BSA-024 | LOW | `aiosqlite` and `gunicorn` are direct prod pins but never imported (entrypoint is `python server.py`) | ⬜ pending — drop unused pins |
+| R3-BSA-025 | LOW | WeasyPrint 68.1 `CVE-2026-49452` allowlisted in CI until 2026-08-09 (no fixed release; vulnerable `presentational_hints=True` mode unused) | ⬜ tracked — **allowlist expires 2026-08-09**, revisit then |
+| R3-BSA-026 | MED | Stale deps: `webencodings` (2017), `distro` (2023) exceed the 18-month threshold; `anthropic==0.49.0` far behind current SDK | ⬜ pending |
+
+---
+
 ## Optional / Post-Production Modernization (NOT required for pilot or first production cut; excluded from roll-up)
 
 > Elective architecture/scale/enterprise upgrades for after production launch.
@@ -592,20 +663,29 @@ are out of scope for every SRP item.
 
 ---
 
-## Roll-up — computed by counting rows, 2026-07-25 (overnight batch)
+## Roll-up — computed by counting rows, 2026-07-26 (Audit-2 re-run fold-in)
 
 Counting rule: every row in Phases 0–14 + the Re-audit/RSMP tables counts once.
-The 3 cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 7
-APP-CONF-003, Phase 13 CA row) and the Optional Modernization tables are
-excluded. ◐ = items with one named half done and one open.
+The cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 7
+APP-CONF-003, Phase 13 CA row, and the four R3-BSA IOLoop/breaker cross-refs
+002/003/004/021 that point at P11-4/P11-5) and the Optional Modernization
+tables are excluded. ◐ = items with one named half done and one open.
 This count unions the #780 stream with the staged batches (#808–#815,
-#833–#837, #862–#870, #875–#884).
+#833–#837, #862–#870, #875–#886).
 
-**Net-new rows this pass: 16.** The 2026-07-21 re-audit reported 26 findings;
-only 10 were carried as rows (8 remediated + 2 deferred) and the other 16 were
-carried as the prose phrase "separate scope". They are now enumerated as rows
-in "Remaining findings from the same re-audit", so the register reflects the
-whole audit. Total 199 → 215.
+**Audit-2 re-run fold-in 2026-07-26: +22 net-new rows (215 → 237).** The
+2026-07-25 Backend Security & Authorization re-run (`62c629d`) reported 26
+findings; 4 are pure cross-refs to already-open rows (R3-BSA-002/003/004 →
+P11-4; R3-BSA-021 → P11-5) and the other 22 are enumerated as `R3-BSA-*` rows
+under "Re-audit: Backend Security & Authorization". Two were independently
+verified before fold-in: **R3-BSA-022 CONFIRMED empirically** (the `Application()`
+`max_body_size` is ignored by Tornado — reopens P12-10's upload-limits ✅,
+which moves ✅→◐) and **R3-BSA-012 CONFIRMED** (string-prefix path check).
+None of the 22 is remediated yet.
+
+**Prior net-new (2026-07-21 RDI re-audit): +16.** That re-audit reported 26
+findings; 10 were already rows, the other 16 are enumerated under "Remaining
+findings from the same re-audit". Total 199 → 215 → 237.
 
 Overnight batch 2026-07-25 (PRs #875–#884, all through fix → adversarial
 review → PR → green CI → merge → staging deploy):
@@ -638,11 +718,11 @@ operator steps lifted when #886 merged.
 
 | Status | Count |
 |--------|:--:|
-| ✅ done/merged | 136 |
-| ◐ split — one half open | 18 |
+| ✅ done/merged | 135 |
+| ◐ split — one half open | 21 |
 | 🟢 PR open | 0 |
 | 🔨 in progress | 3 |
 | 📋 scoped | 17 |
 | ⏸ blocked | 7 |
-| ⬜ pending | 34 |
-| **Total tracked items** | **215** |
+| ⬜ pending | 54 |
+| **Total tracked items** | **237** |
