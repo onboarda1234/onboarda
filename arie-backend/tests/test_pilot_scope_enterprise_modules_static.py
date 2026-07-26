@@ -34,7 +34,7 @@ def test_enterprise_sidebar_items_are_visible_but_badged():
     assert 'data-view="kpis" data-enterprise-coming-soon="true"' in html
     assert '<span class="snav-label">KPI Dashboard</span><span class="snav-badge">Coming Soon</span>' in html
     assert 'data-view="reg-intel" data-enterprise-coming-soon="true"' in html
-    assert '<span class="snav-label">Regulatory Intelligence</span><span class="snav-badge">Coming Soon</span>' in html
+    assert '<span class="snav-label">RegMind Regulatory Intelligence</span><span class="snav-badge">Coming Soon</span>' in html
     assert 'data-view="supervisor" data-enterprise-coming-soon="true"' in html
     assert '<span class="snav-label">Supervisor Dashboard</span><span class="snav-badge">Enterprise</span>' in html
     assert 'data-view="supervisor-audit" data-enterprise-coming-soon="true"' in html
@@ -58,9 +58,9 @@ def test_enterprise_views_render_coming_soon_placeholders_not_operational_ui():
         assert "Not active in pilot" in region
 
     assert "Enterprise Analytics will provide runtime-backed KPI reporting" in kpi_region
-    assert "Regulatory Intelligence will support regulatory change tracking" in reg_region
-    assert "The AI Compliance Supervisor will provide advanced supervisory oversight" in supervisor_region
-    assert "The AI Compliance Supervisor will provide advanced supervisory oversight" in supervisor_audit_region
+    assert "RegMind Regulatory Intelligence will support regulatory change tracking" in reg_region
+    assert "RegMind AI Compliance Supervisor will provide advanced supervisory oversight" in supervisor_region
+    assert "RegMind AI Compliance Supervisor will provide advanced supervisory oversight" in supervisor_audit_region
     assert "renderKPIDashboard()" not in kpi_region
     assert "exportKPIReport()" not in kpi_region
     assert "kpi-date-filter" not in kpi_region

@@ -247,7 +247,7 @@ class PilotScopeGuardVetoTest(AsyncHTTPTestCase):
 
     def test_regulatory_intelligence_refused_despite_flag_on(self):
         resp = self._fetch("/api/regulatory-intelligence")
-        self._assert_refused(resp, "Regulatory Intelligence", "/api/regulatory-intelligence")
+        self._assert_refused(resp, "RegMind Regulatory Intelligence", "/api/regulatory-intelligence")
 
     def test_ai_supervisor_routes_refused_despite_flag_on(self):
         for method, path in (
@@ -255,7 +255,7 @@ class PilotScopeGuardVetoTest(AsyncHTTPTestCase):
             ("GET", f"/api/applications/{self._app_id}/supervisor/result"),
         ):
             self._assert_refused(
-                self._fetch(path, method), "AI Compliance Supervisor", path)
+                self._fetch(path, method), "RegMind AI Compliance Supervisor", path)
 
     def test_memo_supervisor_surfaces_are_gated(self):
         """The PR-PILOT-SCOPE-1B gap: these two had NO enterprise gate at all."""
@@ -264,7 +264,7 @@ class PilotScopeGuardVetoTest(AsyncHTTPTestCase):
             ("GET", f"/api/applications/{self._app_id}/memo/supervisor"),
         ):
             self._assert_refused(
-                self._fetch(path, method), "AI Compliance Supervisor", path)
+                self._fetch(path, method), "RegMind AI Compliance Supervisor", path)
 
     def test_memo_supervisor_gap_closed_for_the_broader_role_too(self):
         """These handlers admit `analyst` — a role the gated siblings refuse —
@@ -275,12 +275,12 @@ class PilotScopeGuardVetoTest(AsyncHTTPTestCase):
         ):
             self._assert_refused(
                 self._fetch(path, method, token=self.analyst_token),
-                "AI Compliance Supervisor", path)
+                "RegMind AI Compliance Supervisor", path)
 
     def test_supervisor_audit_export_refused_despite_flags_on(self):
         resp = self._fetch("/api/audit/supervisor/export")
         self._assert_refused(
-            resp, "AI Compliance Supervisor Audit", "/api/audit/supervisor/export")
+            resp, "RegMind AI Compliance Supervisor Audit", "/api/audit/supervisor/export")
 
     def test_guard_off_restores_flag_driven_behaviour(self):
         """The veto must not be a one-way door: with PILOT_SCOPE explicitly

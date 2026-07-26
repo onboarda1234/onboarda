@@ -451,7 +451,7 @@ def make_base_memo(overrides=None):
                     "financial_crime_risk": {"rating": "LOW", "content": "No PEP or sanctions exposure"}
                 }
             },
-            "screening_results": {"content": "Screening completed via Onboarda screening engine. No sanctions matches across UN, EU, OFAC, HMT."},
+            "screening_results": {"content": "Screening completed via RegMind screening engine. No sanctions matches across UN, EU, OFAC, HMT."},
             "document_verification": {"content": "All documents verified. Consistent with submitted data. No discrepancies."},
             "ai_explainability": {
                 "content": "Risk assessed via multi-agent pipeline with weighted factor analysis.",

@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Onboarda — Client Onboarding Portal</title>
+<title>RegMind Portal — Applicant Workspace</title>
+<link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -1733,14 +1734,7 @@
 <!-- NAVBAR -->
 <nav class="navbar" role="navigation" aria-label="Main navigation">
   <div class="logo">
-    <div class="logo-icon">
-      <svg viewBox="0 0 38 30" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:26px;height:20px">
-        <path d="M19 2L37 28H27.5L23 17H15L10.5 28H1L19 2Z" fill="white" opacity="0.95"/>
-        <path d="M16.5 19h5l-2.5-7-2.5 7z" fill="var(--brand)"/>
-        <ellipse cx="19" cy="28" rx="4.5" ry="2.5" fill="#06080E"/>
-      </svg>
-    </div>
-    Onboarda
+    RegMind Portal
   </div>
   <div class="flex items-center gap-2">
     <div class="nav-badge">
@@ -1810,7 +1804,7 @@
   ══════════════════════════════════════ -->
   <div id="view-landing">
     <div class="landing">
-      <div class="landing-tag">⚡ FSC Licensed · Mauritius PIS</div>
+      <div class="landing-tag">Secure Applicant Workspace</div>
       <h1>Your gateway to<br/><span class="gradient">seamless payments</span></h1>
       <p>Open your corporate account through a secure guided workflow with bank-grade security and clear application updates.</p>
       <div class="btn-group">
@@ -1829,8 +1823,8 @@
       </div>
     </div>
     <div class="disclaimer">
-      Onboarda Ltd is licensed by the Financial Services Commission of Mauritius as a Payment Intermediary Services Provider.
-      All data is encrypted and processed in accordance with the Data Protection Act 2017.
+      RegMind provides the secure application workspace. Your financial institution remains responsible for
+      licensing, account terms, privacy notices, and application decisions.
     </div>
   </div>
 
@@ -1842,17 +1836,10 @@
     <div class="auth-wrap">
       <div class="auth-card">
         <div class="auth-logo">
-          <div class="logo-icon">
-            <svg viewBox="0 0 38 30" fill="none" style="width:24px;height:19px">
-              <path d="M19 2L37 28H27.5L23 17H15L10.5 28H1L19 2Z" fill="white" opacity="0.95"/>
-              <path d="M16.5 19h5l-2.5-7-2.5 7z" fill="var(--brand)"/>
-              <ellipse cx="19" cy="28" rx="4.5" ry="2.5" fill="#06080E"/>
-            </svg>
-          </div>
-          <div class="auth-logo-text">Onboarda</div>
+          <div class="auth-logo-text">RegMind Portal</div>
         </div>
         <div class="auth-title">Create your account</div>
-        <div class="auth-sub">Open a corporate account with Onboarda — the regulated payments platform built for international SMEs.</div>
+        <div class="auth-sub">Start your application in a secure workspace provided by RegMind.</div>
 
         <form id="register-form" onsubmit="submitRegister(event)">
           <div class="form-grid mb-2">
@@ -1914,7 +1901,7 @@
           </div>
           <div class="consent-box mb-3">
             <input type="checkbox" id="r-terms" required />
-            <p>I agree to Onboarda's <a href="#" style="color:var(--gold);">Terms of Service</a> and <a href="#" style="color:var(--gold);">Privacy Policy</a>, and consent to the processing of my personal data for account onboarding purposes. <span class="req">*</span></p>
+            <p>I agree to the financial institution's <a href="#" style="color:var(--gold);">Terms of Service</a> and <a href="#" style="color:var(--gold);">Privacy Policy</a>, and consent to the processing of my personal data for account onboarding purposes. <span class="req">*</span></p>
           </div>
           <button type="submit" class="btn-submit" id="register-btn">
             🚀 Create Account &amp; Start Onboarding
@@ -1923,8 +1910,8 @@
 
         <div class="auth-switch">Already have an account? <a onclick="showView('login')">Sign in →</a></div>
         <div class="auth-terms">
-          Onboarda Ltd is licensed by the Financial Services Commission of Mauritius.<br/>
-          Your data is encrypted and processed under the Data Protection Act 2017.
+          RegMind provides this secure applicant workspace.<br/>
+          Your financial institution's legal terms and privacy notices apply.
         </div>
       </div>
     </div>
@@ -1937,14 +1924,7 @@
     <div class="auth-wrap">
       <div class="auth-card">
         <div class="auth-logo">
-          <div class="logo-icon">
-            <svg viewBox="0 0 38 30" fill="none" style="width:24px;height:19px">
-              <path d="M19 2L37 28H27.5L23 17H15L10.5 28H1L19 2Z" fill="white" opacity="0.95"/>
-              <path d="M16.5 19h5l-2.5-7-2.5 7z" fill="var(--brand)"/>
-              <ellipse cx="19" cy="28" rx="4.5" ry="2.5" fill="#06080E"/>
-            </svg>
-          </div>
-          <div class="auth-logo-text">Onboarda</div>
+          <div class="auth-logo-text">RegMind Portal</div>
         </div>
         <div class="auth-title">Welcome back</div>
         <div class="auth-sub">Sign in to continue your onboarding application.</div>
@@ -2993,7 +2973,7 @@
             </div>
             <div class="form-group span-2">
               <label>Detailed Overview of Business Operations <span class="req">*</span></label>
-              <textarea id="f-biz-overview" placeholder="Describe your business model, products/services offered, revenue streams, and how you intend to use the Onboarda account…" style="min-height:120px;" required></textarea>
+              <textarea id="f-biz-overview" placeholder="Describe your business model, products/services offered, revenue streams, and how you intend to use the proposed account…" style="min-height:120px;" required></textarea>
             </div>
             <div class="form-group">
               <label>Target Markets / Countries you deal with <span class="req">*</span></label>
@@ -3117,7 +3097,7 @@
             </div>
             <div class="form-group" style="display:flex;flex-direction:column;">
               <label>Initial Source of Funds <span class="req">*</span></label>
-              <p style="font-size:11px;color:var(--text3);margin:-2px 0 8px 0;line-height:1.4;min-height:44px;">Where will the first deposit into your Onboarda account come from? This refers to the specific origin of the initial transfer.</p>
+              <p style="font-size:11px;color:var(--text3);margin:-2px 0 8px 0;line-height:1.4;min-height:44px;">Where will the first deposit into the proposed account come from? This refers to the specific origin of the initial transfer.</p>
               <select id="f-source-init-type" required>
                 <option value="">Select primary source…</option>
                 <option value="Transfer from company bank account">Transfer from company bank account</option>
@@ -3241,10 +3221,10 @@
           <div class="section-title">Referral & Introduction</div>
           <div class="form-grid">
             <div class="form-group">
-              <label>How were you introduced to Onboarda? <span class="req">*</span></label>
+              <label>How were you introduced to this service? <span class="req">*</span></label>
               <select id="f-intro-method" required>
                 <option value="">Select…</option>
-                <option value="Direct application — client initiated">Direct application — I found Onboarda myself</option>
+                <option value="Direct application — client initiated">Direct application — I found the service myself</option>
                 <option value="Introduced by regulated intermediary / agent">Introduced by a regulated intermediary / agent</option>
                 <option value="Introduced by non-regulated intermediary">Introduced by a non-regulated intermediary</option>
                 <option value="Unsolicited / unknown referral source">Other / Unsolicited</option>
@@ -3363,7 +3343,7 @@
           <div class="timeline-item">
             <div class="timeline-dot"></div>
             <div class="timeline-date">Account activation</div>
-            <div class="timeline-text">Account opened — welcome to Onboarda</div>
+            <div class="timeline-text">Account opened — welcome</div>
           </div>
         </div>
       </div>
@@ -3417,7 +3397,7 @@
               <span style="font-size:10px;color:var(--text3);margin-left:auto;">Hidden</span>
             </div>
             <div style="font-size:12px;color:var(--text2);line-height:1.7;margin-bottom:14px;">
-              Your application is being processed by Onboarda.
+              Your application is being processed through RegMind Portal.
             </div>
             <div id="portal-explain-dimensions" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;"></div>
             <div id="portal-explain-summary" style="padding:12px 16px;border-radius:8px;font-size:12px;line-height:1.6;"></div>
@@ -3553,7 +3533,7 @@
             </table>
 
             <div class="pricing-disclaimer">
-              <strong>Important Notice:</strong> The pricing above is based on the information provided in your application. Onboarda reserves the right to revise the applicable pricing if the information changes or if additional information is required before approval. Final pricing will be confirmed in your service agreement following full account approval.
+              <strong>Important Notice:</strong> The pricing above is based on the information provided in your application. Your financial institution reserves the right to revise the applicable pricing if the information changes or if additional information is required before approval. Final pricing will be confirmed in your service agreement following full account approval.
             </div>
 
             <div id="pricing-party-integrity-error" role="alert" aria-live="assertive" style="display:none;margin-top:16px;padding:12px 14px;border:1px solid #dc2626;border-left:4px solid #dc2626;border-radius:8px;background:#fef2f2;color:#991b1b;font-size:12px;line-height:1.5;"></div>
@@ -3562,7 +3542,7 @@
               <div class="consent-section-title">📋 Terms & Conditions</div>
               <div class="consent-check">
                 <input type="checkbox" id="pricing-tc-accept" />
-                <p><strong>I accept the Terms & Conditions</strong><br/>By checking this box, I acknowledge and accept the fee schedule above, understand that pricing is subject to revision upon final compliance review, and agree to the <span class="legal-link" onclick="showToast('info','Terms & Conditions','Full Terms & Conditions for Payment Intermediary Services will be provided in the service agreement. Contact compliance@onboarda.com for a copy.')">Terms & Conditions</span> governing Onboarda Ltd Payment Intermediary Services. I further confirm that I am duly authorised to enter into this arrangement on behalf of the entity.</p>
+                <p><strong>I accept the Terms & Conditions</strong><br/>By checking this box, I acknowledge and accept the fee schedule above, understand that pricing is subject to revision upon final compliance review, and agree to the <span class="legal-link" onclick="showToast('info','Terms & Conditions','Full Terms & Conditions will be provided in the service agreement. Contact your financial institution for a copy.')">Terms & Conditions</span> governing the financial institution's services. I further confirm that I am duly authorised to enter into this arrangement on behalf of the entity.</p>
               </div>
             </div>
 
@@ -4112,7 +4092,7 @@
         <div class="consent-section-title">✍️ Final Submission Declaration</div>
         <div class="consent-check">
           <input type="checkbox" id="kyc-final-declaration" />
-          <p><strong>I confirm that all documents uploaded are authentic, unaltered, and belong to the declared entity or individuals. <span class="req">*</span></strong><br/>I understand that submitting fraudulent, forged, or misleading documents is a criminal offence under Mauritius law. I authorise Onboarda Ltd to verify the authenticity of all documents submitted with the relevant issuing authorities and third-party verification providers.</p>
+          <p><strong>I confirm that all documents uploaded are authentic, unaltered, and belong to the declared entity or individuals. <span class="req">*</span></strong><br/>I understand that submitting fraudulent, forged, or misleading documents may be a criminal offence. I authorise the financial institution and its approved service providers to verify submitted documents with relevant issuing authorities and verification providers.</p>
         </div>
       </div>
 
@@ -4421,7 +4401,7 @@
           Need assistance? Our team is here to help.
         </p>
         <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
-          <a href="mailto:support@onboarda.com" class="btn btn-outline">📧 Contact Support</a>
+          <a href="mailto:support@regmind.co" class="btn btn-outline">📧 Contact Support</a>
           <button class="btn btn-outline" onclick="startNewApplication()">↩ Start New Application</button>
         </div>
       </div>
@@ -4464,7 +4444,7 @@
           Need assistance? Our team is here to help.
         </p>
         <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
-          <a href="mailto:support@onboarda.com" class="btn btn-outline">📧 Contact Support</a>
+          <a href="mailto:support@regmind.co" class="btn btn-outline">📧 Contact Support</a>
           <button class="btn btn-outline" onclick="startNewApplication()">↩ Start New Application</button>
         </div>
       </div>
@@ -7966,7 +7946,7 @@ async function submitPrescreening(e) {
   var incCountry = document.getElementById('f-inc-country');
   if (incCountry && !checkSanctionedCountry(incCountry)) {
     btn.disabled = false; btn.innerHTML = '🚀 Submit Initial Review';
-    showToast('error', 'Restricted Jurisdiction', 'Onboarda cannot onboard clients from sanctioned jurisdictions.');
+    showToast('error', 'Restricted Jurisdiction', 'Applications from sanctioned jurisdictions cannot proceed through RegMind Portal.');
     return;
   }
   if (incCountry && isEnhancedRiskJurisdiction(incCountry.value) && !getFieldValue('f-jurisdiction-rationale')) {
@@ -8010,7 +7990,7 @@ async function submitPrescreening(e) {
   });
   if (sanctionedFound) {
     btn.disabled = false; btn.innerHTML = '🚀 Submit Initial Review';
-    showToast('error', 'Restricted Jurisdiction', 'Onboarda cannot onboard clients involved in sanctioned or prohibited jurisdictions. Flagged: ' + sanctionedField);
+    showToast('error', 'Restricted Jurisdiction', 'Applications involving sanctioned or prohibited jurisdictions cannot proceed through RegMind Portal. Flagged: ' + sanctionedField);
     return;
   }
   // Incorporation date validation
@@ -12332,7 +12312,7 @@ function recheckMSSanctions(id) {
     var err = document.createElement('div');
     err.id = errId;
     err.style.cssText = 'color:#dc2626;font-size:12px;font-weight:600;margin-top:6px;padding:8px 12px;background:rgba(220,38,38,0.06);border:1px solid rgba(220,38,38,0.15);border-radius:8px;';
-    err.textContent = 'Onboarda cannot onboard clients involved in sanctioned or prohibited jurisdictions. Restricted: ' + flagged.join(', ') + '.';
+    err.textContent = 'Applications involving sanctioned or prohibited jurisdictions cannot proceed through RegMind Portal. Restricted: ' + flagged.join(', ') + '.';
     wrap.parentElement.appendChild(err);
   }
 }
@@ -12659,7 +12639,7 @@ function checkSanctionedCountry(selectEl) {
     var err = document.createElement('div');
     err.id = errId;
     err.style.cssText = 'color:#dc2626;font-size:12px;font-weight:600;margin-top:6px;padding:8px 12px;background:rgba(220,38,38,0.06);border:1px solid rgba(220,38,38,0.15);border-radius:8px;';
-    err.textContent = 'Onboarda cannot onboard clients involved in sanctioned or prohibited jurisdictions.';
+    err.textContent = 'Applications involving sanctioned or prohibited jurisdictions cannot proceed through RegMind Portal.';
     selectEl.parentElement.appendChild(err);
     selectEl.style.borderColor = '#dc2626';
     return false;
@@ -12733,7 +12713,7 @@ function submitRegister(e) {
       prefillApplicationForm();
       showView('company-lookup');
       resetLookup();
-      showToast('success', 'Account created!', 'Welcome to Onboarda. Let\'s complete your application.');
+      showToast('success', 'Account created!', 'Welcome to RegMind Portal. Let\'s complete your application.');
     } catch (err) {
       btn.disabled = false; btn.innerHTML = '🚀 Create Account & Start Onboarding';
       showToast('error', 'Registration Failed', err.message || 'Could not create account. Please try again.');
@@ -13948,7 +13928,7 @@ function renderCompanyIntakePSCs() {
     html += '<div class="company-intake-alert info">These are candidates for compliance review, not final approved UBOs.</div>';
     html += renderCompanyIntakePscOwners(owners);
   } else if (state === 'no_psc') {
-    html += '<div class="company-intake-alert info">Companies House did not return an active PSC record. ARIE may still require ownership confirmation during compliance review.</div>';
+    html += '<div class="company-intake-alert info">Companies House did not return an active PSC record. The compliance team may still require ownership confirmation during review.</div>';
   } else if (state === 'psc_exempt') {
     html += '<div class="company-intake-alert warn">Companies House indicates PSC information may be exempt or unavailable. This will be flagged for compliance review.</div>';
   } else if (state === 'corporate_psc') {

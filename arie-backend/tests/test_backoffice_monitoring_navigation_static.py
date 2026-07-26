@@ -32,8 +32,8 @@ def test_sidebar_lists_periodic_review_signals_above_monitoring_alerts():
     periodic_index = html.index('data-view="periodic-review-signals"')
     monitoring_index = html.index('data-view="monitoring"')
     assert periodic_index < monitoring_index
-    assert '> Periodic Review Queue</div>' in html
-    assert '> Monitoring Alerts</div>' in html
+    assert '> RegMind Periodic Reviews</div>' in html
+    assert '> RegMind Monitoring</div>' in html
 
 
 def test_periodic_review_signals_is_a_standalone_view():
@@ -49,7 +49,7 @@ def test_periodic_review_signals_is_a_standalone_view():
     assert 'id="review-risk-filter"' in view_region
     assert 'id="periodic-reviews-body"' in view_region
     assert "Open Lifecycle Queue" in view_region
-    assert "'periodic-review-signals':'Periodic Review Queue'" in show_view_region
+    assert "'periodic-review-signals':'RegMind Periodic Reviews'" in show_view_region
     assert "if (name === 'periodic-review-signals')" in show_view_region
     assert "renderPeriodicReviewQueue();" in show_view_region
     assert "if (loaded) renderPeriodicReviewQueue();" in show_view_region
@@ -67,7 +67,7 @@ def test_monitoring_alerts_view_keeps_agents_and_drops_review_signals_tab():
     switch_tab_region = _function_region(html, "switchMonitoringTab", "renderMonitoringAlerts")
     lifecycle_region = _function_region(html, "lifecycleSourceModuleLabel", "lifecycleObjectLabel")
 
-    assert "Monitoring Alerts</h3>" in view_region
+    assert "RegMind Monitoring</h3>" in view_region
     assert "Track event-based monitoring alerts between formal reviews" in view_region
     assert "document expiry and financial-crime screening changes" in view_region
     assert "Periodic reviews are managed in the Periodic Review module" in view_region

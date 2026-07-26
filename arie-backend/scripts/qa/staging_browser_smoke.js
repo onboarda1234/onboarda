@@ -10,10 +10,10 @@ const REQUIRED_SMOKE_AREAS = [
   "Application Detail",
   "KYC Documents",
   "Screening Review",
-  "AI Compliance Supervisor",
+  "RegMind AI Compliance Supervisor",
   "Lifecycle Tab",
   "Case Management",
-  "Ongoing Monitoring",
+  "RegMind Monitoring",
   "Monitoring Alerts",
   "Monitoring Pilot Scope",
   "Lifecycle Queue",
@@ -576,7 +576,7 @@ async function main() {
     await clickNav(page, "monitoring");
     report.checks.ongoingMonitoringLoads = await visible(page, "#view-monitoring.active");
     report.checks.monitoringAlertsLoad = await visible(page, "#monitoring-alerts-tab");
-    await captureSurface(page, "ongoing-monitoring-alerts", "Monitoring Alerts");
+    await captureSurface(page, "ongoing-monitoring-alerts", "RegMind Monitoring");
     await page.locator('#view-monitoring .tab:has-text("Pilot Scope")').click();
     await page.waitForFunction(() => document.getElementById("monitoring-agents-tab")?.style.display !== "none", {
       timeout: 30000,

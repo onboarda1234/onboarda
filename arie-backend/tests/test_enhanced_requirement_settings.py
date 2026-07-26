@@ -895,7 +895,7 @@ def test_pr6c_backoffice_renders_typed_enhanced_requirement_workflows():
     assert "Internal control" in html
     assert "Not submitted in portal" in html
     assert "Captured from portal" in html
-    assert "Open AI Compliance Supervisor" in html
+    assert "Open RegMind AI Compliance Supervisor" in html
     assert "View monitoring status" in html
     assert "Enhanced Review Requirements · " in html
     assert "Portal disclosures: " in html

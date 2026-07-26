@@ -1540,7 +1540,7 @@ def send_portal_email(to_addr: str, subject: str, text_body: str) -> bool:
     smtp_user = os.environ.get("SMTP_USER")
     smtp_password = os.environ.get("SMTP_PASSWORD")
     smtp_from = BRAND.get("email_from_address") or smtp_user
-    smtp_from_name = BRAND.get("email_from_name") or "Onboarda"
+    smtp_from_name = BRAND.get("email_from_name") or "RegMind"
 
     if not smtp_host or not smtp_user:
         logger.warning("SMTP not configured. Transactional email not sent: %s", subject)
@@ -5449,12 +5449,12 @@ class ForgotPasswordHandler(BaseHandler):
         portal_base = os.environ.get("PORTAL_BASE_URL") or BRAND.get("website") or ""
         reset_link = f"{portal_base.rstrip('/')}/?reset_token={reset_token}" if portal_base else ""
         email_body = (
-            "A password reset was requested for your Onboarda portal account.\n\n"
+            "A password reset was requested for your RegMind Portal account.\n\n"
             f"Use this reset token: {reset_token}\n\n"
             + (f"Reset link: {reset_link}\n\n" if reset_link else "")
             + "This token will expire in 1 hour. If you did not request this change, you can ignore this email."
         )
-        email_sent = send_portal_email(email, "Onboarda password reset", email_body)
+        email_sent = send_portal_email(email, "RegMind Portal password reset", email_body)
 
         if not IS_PRODUCTION:
             result["reset_token"] = reset_token  # Only expose token in non-production
@@ -14680,6 +14680,32 @@ class DocumentDownloadHandler(BaseHandler):
 # COMPLIANCE RESOURCES ENDPOINTS
 # ══════════════════════════════════════════════════════════
 
+_SYSTEM_COMPLIANCE_RESOURCE_PRESENTATION = {
+    "regulatory-compliance-report": {
+        "title": "RegMind Regulatory Compliance Report",
+        "file_name": "RegMind_Regulatory_Compliance_Report.docx",
+        "file_path": "docs/compliance/RegMind_Regulatory_Compliance_Report.docx",
+    },
+    "sample-compliance-memo": {
+        "title": "RegMind Sample Compliance Memo",
+        "file_name": "RegMind_Sample_Compliance_Memo.pdf",
+        "file_path": "docs/compliance/RegMind_Sample_Compliance_Memo.pdf",
+    },
+}
+
+
+def _present_compliance_resource(resource):
+    """Apply current display metadata without mutating persisted resource evidence."""
+    presented = dict(resource)
+    override = _SYSTEM_COMPLIANCE_RESOURCE_PRESENTATION.get(presented.get("slug"))
+    if override:
+        presented.update({
+            "title": override["title"],
+            "file_name": override["file_name"],
+        })
+    return presented
+
+
 class ComplianceResourcesHandler(BaseHandler):
     """GET/POST /api/resources — list and upload compliance reference resources"""
     def get(self):
@@ -14700,7 +14726,7 @@ class ComplianceResourcesHandler(BaseHandler):
                 r.title ASC
         """).fetchall()
         db.close()
-        self.success({"resources": [dict(r) for r in rows]})
+        self.success({"resources": [_present_compliance_resource(r) for r in rows]})
 
     def post(self):
         user = self.require_auth(roles=["admin", "sco", "co"])
@@ -14787,7 +14813,9 @@ class ComplianceResourceDownloadHandler(BaseHandler):
         if not resource:
             return self.error("Resource not found", 404)
 
-        file_path = resource["file_path"]
+        presented_resource = _present_compliance_resource(resource)
+        override = _SYSTEM_COMPLIANCE_RESOURCE_PRESENTATION.get(resource["slug"])
+        file_path = override["file_path"] if override else resource["file_path"]
         if not file_path:
             return self.error("Resource file is not configured", 404)
         if not os.path.isabs(file_path):
@@ -14797,11 +14825,11 @@ class ComplianceResourceDownloadHandler(BaseHandler):
 
         self.set_header("Content-Type", resource.get("mime_type") or "application/octet-stream")
         # P11-7 (BSA-008): sanitize the stored name before header interpolation.
-        safe_resource_name = re.sub(r'[^\w \-.]', '_', resource["file_name"] or "document")[:255] or "document"
+        safe_resource_name = re.sub(r'[^\w \-.]', '_', presented_resource["file_name"] or "document")[:255] or "document"
         self.set_header("Content-Disposition", f'attachment; filename="{safe_resource_name}"')
         with open(file_path, "rb") as f:
             self.write(f.read())
-        self.log_audit(user, "Download", "Resources", f"Compliance resource downloaded: {resource['file_name']}")
+        self.log_audit(user, "Download", "Resources", f"Compliance resource downloaded: {presented_resource['file_name']}")
         self.finish()
 
 
@@ -14816,7 +14844,7 @@ class RegulatoryIntelligenceHandler(BaseHandler):
         if not user:
             return
         if not _regulatory_intelligence_enabled():
-            return _enterprise_module_disabled(self, "Regulatory Intelligence")
+            return _enterprise_module_disabled(self, "RegMind Regulatory Intelligence")
 
         db = get_db()
         rows = db.execute("""
@@ -14851,7 +14879,7 @@ class RegulatoryIntelligenceHandler(BaseHandler):
         if not user:
             return
         if not _regulatory_intelligence_enabled():
-            return _enterprise_module_disabled(self, "Regulatory Intelligence")
+            return _enterprise_module_disabled(self, "RegMind Regulatory Intelligence")
 
         if not self.check_rate_limit("regulatory_upload", max_attempts=10, window_seconds=60):
             return
@@ -14898,9 +14926,9 @@ class RegulatoryIntelligenceHandler(BaseHandler):
             }
             ext_check = os.path.splitext(file_name)[1].lower()
             if ext_check not in reg_allowed_ext:
-                return self.error(f"Regulatory Intelligence accepts PDF and DOCX files only (got {ext_check})", 400)
+                return self.error(f"RegMind Regulatory Intelligence accepts PDF and DOCX files only (got {ext_check})", 400)
             if mime_type not in reg_allowed_mime:
-                return self.error(f"Regulatory Intelligence accepts PDF and DOCX files only", 400)
+                return self.error("RegMind Regulatory Intelligence accepts PDF and DOCX files only", 400)
 
             is_valid, upload_error = FileUploadValidator.validate(file_name, mime_type, file_body)
             if not is_valid:
@@ -15019,7 +15047,7 @@ class RegulatoryIntelligenceHandler(BaseHandler):
         finally:
             db.close()
 
-        self.log_audit(user, "Upload", "Regulatory Intelligence", f"Regulatory document uploaded: {title} ({status})")
+        self.log_audit(user, "Upload", "RegMind Regulatory Intelligence", f"Regulatory document uploaded: {title} ({status})")
         self.success({
             "id": doc_id,
             "title": title,
@@ -15043,7 +15071,7 @@ class RegulatoryIntelligenceReviewHandler(BaseHandler):
         if not user:
             return
         if not _regulatory_intelligence_enabled():
-            return _enterprise_module_disabled(self, "Regulatory Intelligence")
+            return _enterprise_module_disabled(self, "RegMind Regulatory Intelligence")
 
         data = self.get_json()
         suggestion_id = (data.get("suggestion_id") or "").strip()
@@ -15104,7 +15132,7 @@ class RegulatoryIntelligenceReviewHandler(BaseHandler):
         db.commit()
         db.close()
 
-        self.log_audit(user, "Review", "Regulatory Intelligence", f"Suggestion {suggestion_id} {decision} for document {document_id}")
+        self.log_audit(user, "Review", "RegMind Regulatory Intelligence", f"Suggestion {suggestion_id} {decision} for document {document_id}")
         self.success({"status": "recorded", "document_id": document_id, "suggestion": suggestion})
 
 
@@ -15115,7 +15143,7 @@ class RegulatoryIntelligenceSourceTextHandler(BaseHandler):
         if not user:
             return
         if not _regulatory_intelligence_enabled():
-            return _enterprise_module_disabled(self, "Regulatory Intelligence")
+            return _enterprise_module_disabled(self, "RegMind Regulatory Intelligence")
 
         data = self.get_json()
         source_text = (data.get("source_text") or "").strip()
@@ -15183,7 +15211,7 @@ class RegulatoryIntelligenceSourceTextHandler(BaseHandler):
         self.log_audit(
             user,
             "Update",
-            "Regulatory Intelligence",
+            "RegMind Regulatory Intelligence",
             f"Manual source text {'updated' if prior_source_text else 'added'} and structured review re-run for document {document_id}"
         )
         self.success({
@@ -15209,7 +15237,7 @@ class RegulatoryIntelligenceDownloadHandler(BaseHandler):
         if not user:
             return
         if not _regulatory_intelligence_enabled():
-            return _enterprise_module_disabled(self, "Regulatory Intelligence")
+            return _enterprise_module_disabled(self, "RegMind Regulatory Intelligence")
 
         db = get_db()
         row = db.execute("SELECT * FROM regulatory_documents WHERE id = ?", (document_id,)).fetchone()
@@ -15227,7 +15255,7 @@ class RegulatoryIntelligenceDownloadHandler(BaseHandler):
                     response_filename=row.get("file_name") or f"{document_id}.bin"
                 )
                 if success:
-                    self.log_audit(user, "Download", "Regulatory Intelligence", f"Downloaded regulatory document via S3: {row.get('title')}")
+                    self.log_audit(user, "Download", "RegMind Regulatory Intelligence", f"Downloaded regulatory document via S3: {row.get('title')}")
                     return self.success({"download_url": url_or_error, "source": "s3", "expires_in": 900})
             except Exception as e:
                 logger.warning("Regulatory intelligence download via S3 failed: %s", e)
@@ -15246,7 +15274,7 @@ class RegulatoryIntelligenceDownloadHandler(BaseHandler):
         self.set_header("Content-Disposition", f'attachment; filename="{safe_reg_name}"')
         with open(file_path, "rb") as f:
             self.write(f.read())
-        self.log_audit(user, "Download", "Regulatory Intelligence", f"Downloaded regulatory document locally: {row.get('title')}")
+        self.log_audit(user, "Download", "RegMind Regulatory Intelligence", f"Downloaded regulatory document locally: {row.get('title')}")
         self.finish()
 
 
@@ -15382,7 +15410,7 @@ def _validate_system_settings_payload(data, current=None):
             errors.append({"code": "secret_field_not_allowed", "field": key, "message": f"{key} cannot be updated through system settings"})
 
     normalized = {
-        "company_name": text_field("company_name", "Onboarda Ltd", max_len=120),
+        "company_name": text_field("company_name", "Your Financial Institution", max_len=120),
         "licence_number": text_field("licence_number", "FSC-PIS-2024-001", max_len=80),
         "default_retention_years": int_field("default_retention_years", 7, 1, 25),
         "auto_approve_max_score": int_field("auto_approve_max_score", 40, 0, 100),
@@ -16109,13 +16137,16 @@ class SystemSettingsHandler(BaseHandler):
         db.close()
         if not row:
             return self.success({
-                "company_name": "Onboarda Ltd",
+                "company_name": "Your Financial Institution",
                 "licence_number": "FSC-PIS-2024-001",
                 "default_retention_years": 7,
                 "auto_approve_max_score": 40,
                 "edd_threshold_score": 55,
             })
-        self.success(dict(row))
+        payload = dict(row)
+        if str(payload.get("company_name") or "").strip().lower() == "onboarda ltd":
+            payload["company_name"] = "Your Financial Institution"
+        self.success(payload)
 
     def put(self):
         user = self.require_backoffice_auth(
@@ -20309,7 +20340,7 @@ class SupervisorAuditExportHandler(BaseHandler):
         if not user:
             return
         if not _supervisor_audit_enabled():
-            return _enterprise_module_disabled(self, "AI Compliance Supervisor Audit")
+            return _enterprise_module_disabled(self, "RegMind AI Compliance Supervisor Audit")
 
         fmt = self.get_argument("format", "json").lower()
         if fmt not in ("json", "csv"):
@@ -32456,7 +32487,7 @@ class SupervisorRunHandler(BaseHandler):
         if not user:
             return
         if not _ai_supervisor_enabled():
-            return _enterprise_module_disabled(self, "AI Compliance Supervisor")
+            return _enterprise_module_disabled(self, "RegMind AI Compliance Supervisor")
 
         if not SUPERVISOR_AVAILABLE:
             return self.error("Supervisor framework not available", 503)
@@ -32588,7 +32619,7 @@ class SupervisorResultHandler(BaseHandler):
         if not user:
             return
         if not _ai_supervisor_enabled():
-            return _enterprise_module_disabled(self, "AI Compliance Supervisor")
+            return _enterprise_module_disabled(self, "RegMind AI Compliance Supervisor")
 
         if not SUPERVISOR_AVAILABLE:
             return self.error("Supervisor framework not available", 503)
@@ -34794,7 +34825,7 @@ class MemoSupervisorHandler(BaseHandler):
         # /supervisor/run and /supervisor/result) and was reachable by a
         # BROADER role set than its gated siblings.
         if not _ai_supervisor_enabled():
-            return _enterprise_module_disabled(self, "AI Compliance Supervisor")
+            return _enterprise_module_disabled(self, "RegMind AI Compliance Supervisor")
 
         db = get_db()
         memo_row = latest_compliance_memo_row_for_identifier(db, app_id)
@@ -34978,7 +35009,7 @@ class MemoSupervisorResultHandler(BaseHandler):
             return
         # Item 33: see MemoSupervisorHandler — same missed enterprise surface.
         if not _ai_supervisor_enabled():
-            return _enterprise_module_disabled(self, "AI Compliance Supervisor")
+            return _enterprise_module_disabled(self, "RegMind AI Compliance Supervisor")
 
         db = get_db()
         memo_row = latest_compliance_memo_row_for_identifier(

@@ -160,8 +160,8 @@ class PilotScopeBackendLockdownTest(AsyncHTTPTestCase):
 
         assert run.code == 403
         assert result.code == 403
-        assert self._json(run)["module"] == "AI Compliance Supervisor"
-        assert self._json(result)["module"] == "AI Compliance Supervisor"
+        assert self._json(run)["module"] == "RegMind AI Compliance Supervisor"
+        assert self._json(result)["module"] == "RegMind AI Compliance Supervisor"
         count = self._conn.execute("SELECT COUNT(*) AS c FROM supervisor_pipeline_results").fetchone()["c"]
         audit_count = self._conn.execute("SELECT COUNT(*) AS c FROM supervisor_audit_log").fetchone()["c"]
         assert count == 0
@@ -183,8 +183,8 @@ class PilotScopeBackendLockdownTest(AsyncHTTPTestCase):
 
         assert reg.code == 403
         assert audit.code == 403
-        assert self._json(reg)["module"] == "Regulatory Intelligence"
-        assert self._json(audit)["module"] == "AI Compliance Supervisor Audit"
+        assert self._json(reg)["module"] == "RegMind Regulatory Intelligence"
+        assert self._json(audit)["module"] == "RegMind AI Compliance Supervisor Audit"
 
     def test_agent_8_9_10_cannot_be_enabled_via_config_api(self):
         response = self._post_json("/api/config/ai-agents", {
