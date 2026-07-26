@@ -20926,6 +20926,26 @@ class SecureStaticFileHandler(tornado.web.StaticFileHandler):
         )
 
 
+class SecureRootRedirectHandler(tornado.web.RedirectHandler):
+    """R3-BSA-013: `/` redirect with the same security posture as every page.
+
+    Tornado's built-in RedirectHandler does not inherit BaseHandler, so the
+    front-door 301 was the one response served without the security headers.
+    Same redirect, same headers as SecureStaticFileHandler above.
+    """
+    def set_default_headers(self):
+        self.set_header("Server", "RegMind")
+        self.set_header("X-Content-Type-Options", "nosniff")
+        self.set_header("X-Frame-Options", "DENY")
+        self.set_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        self.set_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+        self.set_header(
+            "Content-Security-Policy",
+            "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+        )
+
+
 def _screening_hit_facts(screening_record):
     results = (screening_record or {}).get("results", []) or []
     sanctions_hits = sum(1 for hit in results if hit.get("is_sanctioned"))
@@ -30829,13 +30849,17 @@ class SumsubDocumentHandler(BaseHandler):
         file_data = data.get("file_data")
         file_name = data.get("file_name", "document.pdf")
 
-        # Security: restrict file_path to uploads directory only (Finding S-15)
+        # Security: restrict file_path to uploads directory only (Finding S-15).
+        # R3-BSA-012: the check must be a PARENT-DIRECTORY test, not a string
+        # prefix — `startswith("<...>/uploads")` also matched sibling dirs like
+        # `uploads_evil/x.pdf`, letting request-controlled paths escape the
+        # uploads root while appearing contained.
         file_path = data.get("file_path")
         if file_path:
             import pathlib
             allowed_dir = pathlib.Path(os.path.join(os.path.dirname(__file__), "uploads")).resolve()
             requested = pathlib.Path(file_path).resolve()
-            if not str(requested).startswith(str(allowed_dir)):
+            if allowed_dir not in requested.parents:
                 logger.warning(f"SumsubDocumentHandler: blocked path traversal attempt: {file_path}")
                 return self.error("file_path must be within the uploads directory", 400)
             file_path = str(requested)
@@ -30932,6 +30956,19 @@ class SumsubWebhookHandler(BaseHandler):
         # Verify webhook signature — always verify, never skip (Finding S-16).
         # F-2: pass the advertised algorithm through to the verifier, which
         # hard-gates against ALLOWED_DIGEST_ALGS fail-closed.
+        #
+        # R3-BSA-016 (recorded design decision): the audit suggested returning an
+        # indistinguishable 200 on a bad signature to avoid confirming the
+        # endpoint to a prober. We deliberately return 401 instead:
+        #   * 401 is the correct, standard semantics for a failed HMAC and leaks
+        #     nothing actionable — the endpoint's existence is already public in
+        #     the Sumsub dashboard config; a 200-on-invalid would instead risk a
+        #     legitimate misconfigured delivery being silently black-holed.
+        #   * Sumsub retries on non-2xx, so 401 gives the correct redelivery
+        #     behaviour for a transient signing/rotation error; a masking 200
+        #     would suppress that retry.
+        # No behaviour change — this comment records the decision so the finding
+        # is closed as accepted, not open.
         if not sumsub_verify_webhook(body, signature, digest_alg=_digest_alg or None):
             logger.warning("Sumsub webhook: Invalid or missing signature")
             return self.error("Invalid signature", 401)
@@ -31010,7 +31047,25 @@ class SumsubWebhookHandler(BaseHandler):
                         (event_digest, event_type, applicant_id, external_user_id, review_answer, received_at)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (_event_digest, event_type, applicant_id, external_user_id, review_answer, _now_utc))
-            except Exception:
+            except Exception as _dedup_exc:
+                # R3-BSA-017: ONLY a UNIQUE violation means "already processed".
+                # The previous blanket except acknowledged EVERY insert failure
+                # (DB outage, schema error, connection loss) as a duplicate —
+                # returning 200 so Sumsub never retried and the event was lost
+                # forever. A genuine infrastructure error must propagate to the
+                # outer handler (5xx), which is what makes Sumsub redeliver.
+                if not SaveResumeHandler._is_unique_constraint_error(_dedup_exc):
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                    logger.error(
+                        "Sumsub webhook: idempotency insert failed with a "
+                        "NON-duplicate error — surfacing for retry. applicant=%s "
+                        "event=%s error=%s",
+                        _masked_id, event_type, type(_dedup_exc).__name__,
+                    )
+                    raise
                 # UNIQUE constraint violation — this event was already processed.
                 try:
                     db.rollback()
@@ -44240,8 +44295,8 @@ def make_app():
         # Prometheus Metrics
         (r"/metrics", MetricsHandler),
 
-        # Root redirect
-        (r"/", tornado.web.RedirectHandler, {"url": "/portal"}),
+        # Root redirect (R3-BSA-013: security headers on the front-door 301)
+        (r"/", SecureRootRedirectHandler, {"url": "/portal"}),
 
         # Serve portal HTML files and static assets
         (r"/portal", PortalHandler),
@@ -44306,6 +44361,47 @@ def _singleton_tick(name):
                 lease.release()
         return wrapper
     return decorate
+
+
+# ── R3-BSA-001: deployment capability readiness ──────────────────────
+# Several production-capability modules import under a caught ImportError and
+# set a HAS_* flag False on failure (GDPR purge, doc-verification, PDF,
+# supervisor, Claude client, change-management). That is correct for local unit
+# tests, but on a DEPLOYED box (staging/production) a missing capability means
+# the container silently serves a degraded compliance platform — e.g. no GDPR
+# purge, no document verification — instead of failing the deploy. This gate
+# emits a readiness manifest every boot and, in deployed envs, refuses to start
+# when a mandatory capability is unavailable (matching the psycopg2 / security-
+# hardening / migration fail-closed precedents).
+_DEPLOY_MANDATORY_CAPABILITIES = (
+    ("document_verification", lambda: HAS_DOC_VERIFICATION),
+    ("pdf_generator", lambda: HAS_PDF_GENERATOR),
+    ("supervisor_framework", lambda: SUPERVISOR_AVAILABLE),
+    ("gdpr_purge", lambda: HAS_GDPR_PURGE),
+    ("claude_client", lambda: HAS_CLAUDE_CLIENT),
+    ("change_management", lambda: HAS_CHANGE_MANAGEMENT),
+)
+
+
+def enforce_capability_readiness():
+    """Emit the capability readiness manifest; fail closed in deployed envs."""
+    manifest = {name: bool(check()) for name, check in _DEPLOY_MANDATORY_CAPABILITIES}
+    logger.info("startup: capability readiness manifest: %s", json.dumps(manifest))
+    missing = sorted(name for name, ok in manifest.items() if not ok)
+    if not missing:
+        return
+    if is_production() or is_staging():
+        logger.critical(
+            "STARTUP BLOCKED — mandatory capabilities unavailable in %s: %s. "
+            "A deployed compliance platform must not run degraded. Fix the "
+            "failed import(s) (usually a missing dependency) before deploying.",
+            ENV, missing,
+        )
+        sys.exit(1)
+    logger.warning(
+        "capability readiness: %s unavailable (tolerated in %s — deployed envs "
+        "would refuse to start)", missing, ENV,
+    )
 
 
 if __name__ == "__main__":
@@ -44435,6 +44531,11 @@ if __name__ == "__main__":
     logger.info("startup: entering enforce_startup_safety (+%s)", _elapsed())
     enforce_startup_safety()
     logger.info("startup: completed enforce_startup_safety (+%s)", _elapsed())
+
+    # R3-BSA-001: capability readiness manifest + deployed-env fail-closed.
+    logger.info("startup: entering enforce_capability_readiness (+%s)", _elapsed())
+    enforce_capability_readiness()
+    logger.info("startup: completed enforce_capability_readiness (+%s)", _elapsed())
 
     # DCI-008 boot probe: in fail-closed environments, surface a broken live
     # risk config IMMEDIATELY at boot (operators should not discover it via

@@ -14,7 +14,16 @@ from typing import Any
 
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(authorization[:=]\s*bearer\s+)[A-Za-z0-9._~+/=-]+"),
-    re.compile(r"(?i)((?:token|secret|api[_-]?key|access[_-]?sig|authorization|password)=)([^&\s]+)"),
+    # R3-BSA-015: a BARE `key=` must be covered too. The IP-geolocation client
+    # builds `?key=<KEY>` (screening.py), and connection/timeout exceptions
+    # stringify with a RELATIVE url ("...with url: /ipgeo?key=SECRET..."), which
+    # the https:// URL-collapse below never touches — so the key leaked into
+    # logs. `\b` keeps innocuous suffixes ("monkey=") from matching, while
+    # `api_key=` stays covered by its own alternative.
+    re.compile(
+        r"(?i)(\b(?:token|secret|api[_-]?key|key|access[_-]?sig|"
+        r"signature|authorization|password|passwd)=)([^&\s]+)"
+    ),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"),
     re.compile(r"(?i)(x-app-access-sig[:=]\s*)[A-Za-z0-9._~+/=-]+"),
 )
