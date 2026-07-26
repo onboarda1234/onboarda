@@ -382,6 +382,208 @@ def get_backoffice_runtime_config() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════
+# 2c. FEATURE-FLAG LIFECYCLE REGISTRY (register item RDI-023)
+# ══════════════════════════════════════════════════════════════
+# RDI-023: without lifecycle metadata a PERMANENT environment differentiator
+# (config that will always exist to separate demo/staging/production) is
+# indistinguishable from a TEMPORARY rollout flag (one that should be deleted
+# once fully shipped or abandoned). Over time the temporary ones rot into
+# permanent-looking dead conditionals that nobody dares remove.
+#
+# This registry attaches, to EVERY governed flag — the FeatureFlags-declared
+# flags AND the flags sibling modules resolve directly via os.environ.get()
+# (see all_governed_flags() / _EXTERNALLY_RESOLVED_FLAGS) — the four attributes
+# the audit asked for: owner, the point it was introduced, a lifecycle
+# classification, and — for temporary flags — the sunset condition that ends
+# its life.
+#
+# It is PURE METADATA. Nothing here is read by FeatureFlags resolution, by
+# get_environment_info(), or by any request path, so it cannot change runtime
+# behaviour or the client contract. Its teeth are a guard test
+# (test_feature_flag_lifecycle.py) that fails if a flag has no entry, or a
+# temporary flag has no sunset condition — so a new flag cannot merge without
+# being classified.
+#
+# Honesty notes:
+#   * `owner` is a FUNCTIONAL-DOMAIN owner inferred from each flag's purpose at
+#     registry creation, not a named individual — confirm/adjust as team
+#     ownership is formalised.
+#   * `introduced` is INTRODUCED_PRE_REGISTRY for every existing flag: these
+#     predate the registry and their exact introduction version was not
+#     archaeologised during the RDI-023 backfill. New flags should record a
+#     real version/date.
+
+FLAG_PERMANENT = "permanent"   # environment/config differentiator — no sunset
+FLAG_TEMPORARY = "temporary"   # staged rollout / experiment / deliberate
+                               # activation — MUST carry a removal condition
+
+_FLAG_CLASSIFICATIONS = (FLAG_PERMANENT, FLAG_TEMPORARY)
+
+# Sentinel: the flag predates this registry; exact introduction not backfilled.
+INTRODUCED_PRE_REGISTRY = "pre-registry"
+
+
+def _perm(owner, notes):
+    return {"owner": owner, "introduced": INTRODUCED_PRE_REGISTRY,
+            "classification": FLAG_PERMANENT, "sunset": None, "notes": notes}
+
+
+def _temp(owner, sunset, notes):
+    return {"owner": owner, "introduced": INTRODUCED_PRE_REGISTRY,
+            "classification": FLAG_TEMPORARY, "sunset": sunset, "notes": notes}
+
+
+FLAG_LIFECYCLE = {
+    # ── Permanent environment/config differentiators (demo vs real behaviour) ──
+    "ENABLE_DEMO_MODE": _perm("demo-tooling", "Master demo toggle; permanent env split."),
+    "ENABLE_DEMO_BANNER": _perm("demo-tooling", "Demo UI banner; permanent env split."),
+    "ENABLE_DEMO_DATA_SEEDING": _perm("demo-tooling", "Seed demo fixtures; forbidden in prod."),
+    "ENABLE_MOCK_FALLBACKS": _perm("platform", "Mock external providers; forbidden in prod."),
+    "ENABLE_ROLE_SWITCHER": _perm("demo-tooling", "Dev/demo role switch; forbidden in prod."),
+    "ENABLE_MONITORING_DASHBOARD": _perm("compliance", "Monitoring surface; on in every env."),
+    "ENABLE_DOCUMENT_AI_ANALYSIS": _perm("ai-pipeline", "Document AI checks; on in every env."),
+    "ENABLE_SUMSUB_LIVE": _perm("kyc", "Live Sumsub vs sandbox; permanent env split."),
+    "ENABLE_SUMSUB_SANDBOX": _perm("kyc", "Sandbox Sumsub; forbidden in prod."),
+    "ENABLE_REAL_SCREENING": _perm("screening", "Real AML screening; permanent env split."),
+    "ENABLE_SIMULATED_SCREENING": _perm("screening", "Simulated screening; forbidden in prod."),
+    "REQUIRE_REAL_API_KEYS": _perm("platform", "Require real credentials; permanent env split."),
+    "ENABLE_DEBUG_ENDPOINTS": _perm("platform", "Debug endpoints; forbidden in prod."),
+    "ENABLE_SHORTCUT_LOGIN": _perm("demo-tooling", "Shortcut login; forbidden in prod."),
+    "ENABLE_KPI_DEMO_DATA": _perm("demo-tooling", "KPI demo data; forbidden in prod."),
+
+    # ── Temporary: umbrella rollout, now on in every env (retirement candidate) ──
+    "ENABLE_PHASE2_FEATURES": _temp(
+        "platform", "Retire once Phase 2 is the unconditional baseline (already True in every env).",
+        "Umbrella rollout flag, now on everywhere; a retirement candidate."),
+
+    # ── Temporary: enterprise modules, pilot-scope vetoed (see
+    #    _PILOT_SCOPE_VETOED_FLAGS) — gated, not yet GA ──
+    "ENABLE_REGULATORY_INTELLIGENCE_FULL": _temp(
+        "compliance", "Remove gate at Regulatory Intelligence enterprise GA.",
+        "Enterprise module; pilot-scope vetoed."),
+    "ENABLE_SAR_WORKFLOW": _temp(
+        "compliance", "Remove gate at SAR/STR enterprise GA.",
+        "Enterprise module; pilot-scope vetoed."),
+    "ENABLE_SAR_STR": _temp(
+        "compliance", "Remove gate at SAR/STR enterprise GA.",
+        "Enterprise module; pilot-scope vetoed."),
+    "ENABLE_AI_SUPERVISOR": _temp(
+        "ai-pipeline", "Remove gate at AI Supervisor enterprise GA.",
+        "Enterprise module; pilot-scope vetoed."),
+    "ENABLE_SUPERVISOR_DASHBOARD": _temp(
+        "ai-pipeline", "Remove gate at Supervisor Dashboard enterprise GA.",
+        "Enterprise module; pilot-scope vetoed."),
+    "ENABLE_SUPERVISOR_AUDIT": _temp(
+        "ai-pipeline", "Remove gate at Supervisor Audit enterprise GA.",
+        "Enterprise module; pilot-scope vetoed."),
+
+    # ── Temporary: enterprise module, not yet routed to pilot (NOT vetoed) ──
+    "ENABLE_KPI_DASHBOARD": _temp(
+        "compliance", "Remove gate once the KPI dashboard ships to pilot.",
+        "Enterprise module; no server route yet."),
+
+    # ── Temporary: deliberate activation flag (RSMP Tier 0A) ──
+    RSMP_TIER0A_ACTIVATION_FLAG: _temp(
+        "compliance", "Remove after Tier 0A scoring is permanently activated post staging dry-run.",
+        "Activated deliberately after the staging config diff + historical dry run are approved."),
+
+    # ── Temporary: upload-latency staged rollout / experiments (FF_*) ──
+    "FF_POLLING_SLOW": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+    "FF_SIZE_CAP_CLIENT_REJECT": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+    "FF_UX_SPLIT_UPLOAD_VERIFY": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+    "FF_UPLOAD_ASYNC": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+    "FF_ASYNC_VERIFY": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+    "FF_GATE03_INDEXED_DEDUP": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+    "FF_PRESIGNED_UPLOAD": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+
+    # ── Externally-resolved flags (RDI-023 completeness) ──
+    # These ENABLE_*/*_ENABLED flags are resolved by os.environ.get() in SIBLING
+    # modules, not by FeatureFlags. environment.py does NOT resolve them; they
+    # are registered here only so the lifecycle registry is complete. The module
+    # that owns each resolution is named in its notes. See _EXTERNALLY_RESOLVED_FLAGS.
+    "ENABLE_SCREENING_ABSTRACTION": _temp(
+        "screening", "Remove once the ComplyAdvantage screening abstraction is the unconditional path.",
+        "screening_config.py — OFF by default in every env; selects the CA Mesh AML provider path."),
+    "ENABLE_CA_RESCREEN": _temp(
+        "screening", "Remove once Mesh rescreen is the default existing-customer path (SRP-2a Phase D).",
+        "screening_config.py — OFF by default; requires 'monitor on demand' on the CA account."),
+    "ENABLE_CA_PROFILE_HYDRATION": _temp(
+        "screening", "Remove once ComplyAdvantage profile hydration is standard (Phase G).",
+        "screening_config.py — OFF by default; display/audit enrichment only."),
+    # NOTE: the draft Claude-memo enablement flag (resolved in
+    # claude_memo_integration.py) is DELIBERATELY NOT registered here. Its
+    # lifecycle is governed by a stronger, dedicated control — the H1/PC-4
+    # memo-truthfulness guard (tests/test_h1_memo_claim_truthfulness.py) forbids
+    # that flag from being set or defaulted on ANY config surface, environment.py
+    # included, so its literal name must not appear in this file at all. See the
+    # doc + the exclusion invariant in tests/test_feature_flag_lifecycle.py.
+    "ENABLE_HYBRID_INCONCLUSIVE_GATE": _temp(
+        "ai-pipeline", "Remove gate once HYBRID rules-first per-check evaluators are authored and approved (P12-7).",
+        "config.py — OFF by default; live verification behaviour unchanged until enabled."),
+    "ENABLE_AI_CIRCUIT_BREAKER": _temp(
+        "ai-pipeline", "Remove flag once the cross-call Anthropic breaker is permanently activated (P11-5).",
+        "config.py — OFF by default; per-call retry/backoff already active."),
+    "ENABLE_AI_PROMPT_FENCING": _temp(
+        "ai-pipeline", "Remove flag once prompt fencing is permanently activated (P11-5).",
+        "config.py — OFF by default; live prompts byte-identical until enabled."),
+    "MONITORING_AUTOMATION_ENABLED": _perm(
+        "compliance", "monitoring_automation.py — operational scheduler toggle; env-defaulted ON in staging/production."),
+    "DOCUMENT_HEALTH_SCHEDULER_ENABLED": _temp(
+        "compliance", "Remove once the document-health scheduler rollout reaches Phase D / GA (M3.1).",
+        "document_health_scheduler.py — explicit opt-in; OFF by default in every env during staged rollout."),
+    "PERIODIC_REVIEW_MEMO_RECOVERY_ENABLED": _perm(
+        "compliance", "server.py — operational recovery-sweep toggle for periodic-review memos."),
+    "PERIODIC_REVIEW_NOTIFICATIONS_ENABLED": _perm(
+        "compliance", "server.py — operational periodic-review notification toggle; default ON."),
+}
+
+
+def all_declared_flags() -> set:
+    """Every feature-flag name the platform declares a default for in
+    _DEFAULT_FLAGS, across all environments — i.e. the FeatureFlags-resolved
+    surface. Derived the same way FeatureFlags resolves, so the guard test and
+    the registry can never silently disagree about which flags exist."""
+    names = set()
+    for env_flags in _DEFAULT_FLAGS.values():
+        names.update(env_flags.keys())
+    return names
+
+
+# Flags resolved by os.environ.get() in SIBLING modules rather than by
+# FeatureFlags (RDI-023 completeness). environment.py does NOT resolve these —
+# the named module does; they are listed so the lifecycle registry can cover the
+# whole flag surface, not just the FeatureFlags-declared half.
+# NOTE: the draft Claude-memo enablement flag (claude_memo_integration.py) is
+# intentionally absent — it is governed by the stronger H1/PC-4 memo-truthfulness
+# guard, which forbids its literal name from appearing on any config surface
+# (this file included). See the exclusion invariant in the guard test.
+_EXTERNALLY_RESOLVED_FLAGS = (
+    "ENABLE_SCREENING_ABSTRACTION",           # screening_config.py
+    "ENABLE_CA_RESCREEN",                      # screening_config.py
+    "ENABLE_CA_PROFILE_HYDRATION",            # screening_config.py
+    "ENABLE_HYBRID_INCONCLUSIVE_GATE",        # config.py
+    "ENABLE_AI_CIRCUIT_BREAKER",              # config.py
+    "ENABLE_AI_PROMPT_FENCING",               # config.py
+    "MONITORING_AUTOMATION_ENABLED",          # monitoring_automation.py
+    "DOCUMENT_HEALTH_SCHEDULER_ENABLED",      # document_health_scheduler.py
+    "PERIODIC_REVIEW_MEMO_RECOVERY_ENABLED",  # server.py
+    "PERIODIC_REVIEW_NOTIFICATIONS_ENABLED",  # server.py
+)
+
+
+def all_governed_flags() -> set:
+    """The complete RDI-023 surface the lifecycle registry must classify: the
+    FeatureFlags-declared flags PLUS the externally-resolved flags that sibling
+    modules read directly from the environment."""
+    return all_declared_flags() | set(_EXTERNALLY_RESOLVED_FLAGS)
+
+
+def get_flag_lifecycle(flag: str) -> dict:
+    """Return the lifecycle metadata for a flag, or None if unregistered."""
+    return FLAG_LIFECYCLE.get(flag)
+
+
+# ══════════════════════════════════════════════════════════════
 # 3. SAFETY GUARDS — CRITICAL
 # ══════════════════════════════════════════════════════════════
 

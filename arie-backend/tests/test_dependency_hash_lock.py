@@ -66,3 +66,27 @@ def test_dev_lock_covers_direct_runtime_and_dev_pins():
     for pkg, ver in direct.items():
         assert pkg in lock, f"{pkg} pinned but absent from requirements-dev.lock — regenerate the lock"
         assert lock[pkg] == ver, f"{pkg} version drift vs requirements-dev.lock — regenerate the lock"
+
+
+# R3-BSA-024: gunicorn and aiosqlite were removed as unused direct pins. The
+# container entrypoint is `python server.py` (Dockerfile CMD / Procfile /
+# render.yaml startCommand), not gunicorn, and no production module imports
+# aiosqlite. This guard fails if either is reintroduced into the RUNTIME
+# dependency surface — requirements.txt or requirements.lock — which also
+# catches a partial revert that touches only one of the two files.
+_REMOVED_UNUSED_RUNTIME = ("gunicorn", "aiosqlite")
+
+
+def test_unused_runtime_deps_stay_removed():
+    direct = _direct_pins(ROOT / "requirements.txt")
+    runtime_lock = _lock_pins(ROOT / "requirements.lock")
+    for pkg in _REMOVED_UNUSED_RUNTIME:
+        norm = _normalize(pkg)
+        assert norm not in direct, (
+            f"R3-BSA-024: {pkg} was removed as an unused pin — do not reintroduce "
+            f"it into requirements.txt (the container runs `python server.py`)"
+        )
+        assert norm not in runtime_lock, (
+            f"R3-BSA-024: {pkg} still present in requirements.lock — regenerate "
+            f"the runtime lock after removing it from requirements.txt"
+        )
