@@ -512,7 +512,7 @@ are out of scope for every SRP item.
 | RDI-020 | Decorator-level and back-office denials are logged, but complete routing of every custom authorization denial is an acknowledged open control | HIGH | ⬜ pending — partially evidenced by the P9-13 runtime role probes (#881) |
 | RDI-021 | Officer-visible `rules_checked` metadata under-enumerates the actual pre-generation rules | MEDIUM | ⬜ pending |
 | RDI-022 | Monitoring status treated as free text; DB CHECK hardening incomplete | MEDIUM | ⬜ pending — same family as P12-5/DCI-006 status lockstep |
-| RDI-023 | Feature flags carry no owner, introduction version, expiry or sunset state, so permanent conditional paths are indistinguishable from temporary rollouts | MEDIUM | ⬜ pending |
+| RDI-023 | Feature flags carry no owner, introduction version, expiry or sunset state, so permanent conditional paths are indistinguishable from temporary rollouts | MEDIUM | ✅ done ([#888](https://github.com/onboarda1234/onboarda/pull/888)) — `FLAG_LIFECYCLE` registry (owner/introduced/classification/sunset) covers all 41 governed flags incl. externally-resolved; pure metadata (resolution + `/api/config/environment` contract byte-unchanged); doc `docs/compliance/FEATURE_FLAG_LIFECYCLE.md`. Draft Claude-memo flag excluded by design — governed by the stronger H1/PC-4 guard |
 | RDI-024 | The repository proves flag/provider DEFAULTS but not the live deployed values | MEDIUM | ◐ partially addressed by item 33: `PILOT_SCOPE` makes the enterprise exclusion independent of unprovable deployed flag values ([#880](https://github.com/onboarda1234/onboarda/pull/880)). The general problem (no evidence of live values) stands |
 | RDI-025 | Pipeline persistence stores a summary of agent results, not the full agent evidence needed to reconstruct each output | MEDIUM | ⬜ pending |
 | RDI-026 | The fallback memo claims "Full audit trail maintained" even though it is generated specifically when the AI pipeline failed | MEDIUM | ⬜ pending — wording/claim accuracy fix |
@@ -590,9 +590,9 @@ are out of scope for every SRP item.
 | R3-BSA-021 | MED | AI circuit breaker defaults off and is process-local (no service-wide breaker unless the flag is set) | → **P11-5** (◐, activation is a founder call) — cross-ref |
 | R3-BSA-022 | HIGH | **CONFIRMED empirically** — pre-buffer body cap set on `Application()` (ignored by Tornado); real cap is the ~100MB default; per-route caps (10/20/25MB) diverge and run post-buffer | ⬜ pending — pass `max_body_size` to `listen`/`HTTPServer`, one canonical policy; **reopens P12-10** |
 | R3-BSA-023 | MED | Supervisor `_pipeline_cache` is process-local — review-package generation/submission lost on restart, inconsistent across workers | ◐ materially mitigated: the supervisor is `PILOT_SCOPE`-vetoed in staging/production since #880 (post-audit); residual is the cache design for any enterprise enablement |
-| R3-BSA-024 | LOW | `aiosqlite` and `gunicorn` are direct prod pins but never imported (entrypoint is `python server.py`) | ⬜ pending — drop unused pins |
-| R3-BSA-025 | LOW | WeasyPrint 68.1 `CVE-2026-49452` allowlisted in CI until 2026-08-09 (no fixed release; vulnerable `presentational_hints=True` mode unused) | ⬜ tracked — **allowlist expires 2026-08-09**, revisit then |
-| R3-BSA-026 | MED | Stale deps: `webencodings` (2017), `distro` (2023) exceed the 18-month threshold; `anthropic==0.49.0` far behind current SDK | ⬜ pending |
+| R3-BSA-024 | LOW | `aiosqlite` and `gunicorn` are direct prod pins but never imported (entrypoint is `python server.py`) | ✅ done ([#888](https://github.com/onboarda1234/onboarda/pull/888)) — dropped both pins + regenerated both hash-pinned locks (`packaging` orphan removed from the runtime lock); guard `test_unused_runtime_deps_stay_removed` blocks re-introduction into requirements.txt or the runtime lock |
+| R3-BSA-025 | LOW | WeasyPrint 68.1 `CVE-2026-49452` allowlisted in CI until 2026-08-09 (no fixed release; vulnerable `presentational_hints=True` mode unused) | ✅ done ([#888](https://github.com/onboarda1234/onboarda/pull/888)) — allowlist bounded by two guards: mitigation (no non-`False` `presentational_hints`, whole-backend `rglob` scan) + expiry (fails CI once **2026-08-09** passes, single source of truth in ci.yml). Date **enforced, not moved** — still revisit at expiry |
+| R3-BSA-026 | MED | Stale deps: `webencodings` (2017), `distro` (2023) exceed the 18-month threshold; `anthropic==0.49.0` far behind current SDK | ◐ risk-accepted (documented, [#888](https://github.com/onboarda1234/onboarda/pull/888)) — `webencodings`/`distro` are already the LATEST upstream (unmaintained, transitive-only) so a bump is a no-op; `anthropic` SDK bump deferred as higher-risk (document-verification path, not hygiene). Compensating control: CI `pip-audit` + hash-pinned locks. Open half = the deferred `anthropic` upgrade |
 
 ---
 
@@ -716,13 +716,26 @@ P13-5**) · #885 register verdicts
 upheld except the P13-3 row, corrected here. Codex's hold on the runbook §5/§6
 operator steps lifted when #886 merged.
 
+Hygiene batch 2026-07-26 ([#888](https://github.com/onboarda1234/onboarda/pull/888),
+through fix → independent adversarial review → green CI → merge → staging deploy):
+* ✅ **R3-BSA-024** (unused `gunicorn`/`aiosqlite` pins dropped + locks regenerated),
+  **R3-BSA-025** (WeasyPrint CVE allowlist bounded by mitigation + dated-expiry guards),
+  **RDI-023** (feature-flag lifecycle registry over all 41 governed flags)
+* ◐ **R3-BSA-026** risk-accepted: the two dormant leaf deps are already latest upstream;
+  the `anthropic` SDK bump is deferred (higher-risk, document-verification path)
+* Reviews caught and fixed real gaps before merge: a non-recursive WeasyPrint scan
+  and literal-only match (both broadened), a whole second population of
+  externally-resolved flags omitted from the registry (added), and — via the full
+  suite — an H1/PC-4 collision where registering the draft Claude-memo flag put its
+  name on a config surface (excluded; that flag stays governed by the stronger H1 guard)
+
 | Status | Count |
 |--------|:--:|
-| ✅ done/merged | 135 |
-| ◐ split — one half open | 21 |
+| ✅ done/merged | 138 |
+| ◐ split — one half open | 22 |
 | 🟢 PR open | 0 |
 | 🔨 in progress | 3 |
 | 📋 scoped | 17 |
 | ⏸ blocked | 7 |
-| ⬜ pending | 54 |
+| ⬜ pending | 50 |
 | **Total tracked items** | **237** |
