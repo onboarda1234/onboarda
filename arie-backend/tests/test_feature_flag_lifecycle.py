@@ -37,6 +37,28 @@ def test_registry_has_no_orphan_entries():
     )
 
 
+def test_claude_memo_flag_is_excluded_and_governed_by_h1():
+    """ENABLE_CLAUDE_MEMO is DELIBERATELY not in this registry. It is governed by
+    the stronger H1/PC-4 memo-truthfulness guard
+    (test_h1_memo_claim_truthfulness.py), which forbids its literal name on any
+    config surface — environment.py included. Registering it here would put that
+    name back into environment.py and break H1, so pin the exclusion in both
+    directions."""
+    flag = "ENABLE_CLAUDE_MEMO"
+    assert flag not in env.FLAG_LIFECYCLE, (
+        f"{flag} must not be in FLAG_LIFECYCLE — it is governed by the H1 memo "
+        "guard; registering it reintroduces its name into environment.py"
+    )
+    assert flag not in env._EXTERNALLY_RESOLVED_FLAGS, (
+        f"{flag} must not be in _EXTERNALLY_RESOLVED_FLAGS — see H1 governance"
+    )
+    env_src = pathlib.Path(env.__file__).resolve().read_text(encoding="utf-8")
+    assert flag not in env_src, (
+        f"{flag} appears in environment.py — this breaks the H1/PC-4 guard "
+        "(test_h1_memo_claim_truthfulness.py). Reference it obliquely instead."
+    )
+
+
 def test_externally_resolved_flags_are_genuinely_external_and_real():
     """Each externally-resolved flag must (a) actually be read somewhere in the
     backend outside environment.py — no fictional entries — and (b) not also be

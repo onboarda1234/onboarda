@@ -22,10 +22,22 @@ surface is the union of two resolution paths:
 - **Externally-resolved flags** — `ENABLE_*` / `*_ENABLED` flags that sibling
   modules read directly via `os.environ.get()` rather than through
   `FeatureFlags` (`_EXTERNALLY_RESOLVED_FLAGS`), e.g. the ComplyAdvantage
-  screening toggles in `screening_config.py`, the AI gates in `config.py`,
-  `ENABLE_CLAUDE_MEMO`, and the monitoring/periodic-review schedulers. These are
-  registered so the registry covers the whole flag surface, not just the half
-  `FeatureFlags` owns — `environment.py` does not resolve them.
+  screening toggles in `screening_config.py`, the AI gates in `config.py`, and
+  the monitoring/periodic-review schedulers. These are registered so the
+  registry covers the whole flag surface, not just the half `FeatureFlags` owns
+  — `environment.py` does not resolve them.
+
+### One deliberate exclusion — the draft Claude-memo flag
+
+The draft Claude-memo enablement flag (resolved in `claude_memo_integration.py`)
+is intentionally **not** in this registry. It is governed by a *stronger*,
+dedicated control: the H1/PC-4 memo-truthfulness guard
+(`tests/test_h1_memo_claim_truthfulness.py`) forbids the flag from being set or
+defaulted on **any** config surface — `environment.py` included — so its literal
+name must not appear in this file at all. That "must never be enabled anywhere,
+enforced by CI" guarantee is a tighter lifecycle guard than an owner/sunset
+registry entry. `tests/test_feature_flag_lifecycle.py` pins the exclusion in
+both directions so it can't be re-added and silently break H1.
 
 Each entry carries:
 

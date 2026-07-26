@@ -510,9 +510,13 @@ FLAG_LIFECYCLE = {
     "ENABLE_CA_PROFILE_HYDRATION": _temp(
         "screening", "Remove once ComplyAdvantage profile hydration is standard (Phase G).",
         "screening_config.py — OFF by default; display/audit enrichment only."),
-    "ENABLE_CLAUDE_MEMO": _temp(
-        "ai-pipeline", "Remove once the Claude memo path is wired through validation+supervisor and GA'd, or drop if abandoned (PC-4).",
-        "claude_memo_integration.py — draft integration, OFF by default; not on the live deterministic memo path."),
+    # NOTE: the draft Claude-memo enablement flag (resolved in
+    # claude_memo_integration.py) is DELIBERATELY NOT registered here. Its
+    # lifecycle is governed by a stronger, dedicated control — the H1/PC-4
+    # memo-truthfulness guard (tests/test_h1_memo_claim_truthfulness.py) forbids
+    # that flag from being set or defaulted on ANY config surface, environment.py
+    # included, so its literal name must not appear in this file at all. See the
+    # doc + the exclusion invariant in tests/test_feature_flag_lifecycle.py.
     "ENABLE_HYBRID_INCONCLUSIVE_GATE": _temp(
         "ai-pipeline", "Remove gate once HYBRID rules-first per-check evaluators are authored and approved (P12-7).",
         "config.py — OFF by default; live verification behaviour unchanged until enabled."),
@@ -549,11 +553,14 @@ def all_declared_flags() -> set:
 # FeatureFlags (RDI-023 completeness). environment.py does NOT resolve these —
 # the named module does; they are listed so the lifecycle registry can cover the
 # whole flag surface, not just the FeatureFlags-declared half.
+# NOTE: the draft Claude-memo enablement flag (claude_memo_integration.py) is
+# intentionally absent — it is governed by the stronger H1/PC-4 memo-truthfulness
+# guard, which forbids its literal name from appearing on any config surface
+# (this file included). See the exclusion invariant in the guard test.
 _EXTERNALLY_RESOLVED_FLAGS = (
     "ENABLE_SCREENING_ABSTRACTION",           # screening_config.py
     "ENABLE_CA_RESCREEN",                      # screening_config.py
     "ENABLE_CA_PROFILE_HYDRATION",            # screening_config.py
-    "ENABLE_CLAUDE_MEMO",                      # claude_memo_integration.py
     "ENABLE_HYBRID_INCONCLUSIVE_GATE",        # config.py
     "ENABLE_AI_CIRCUIT_BREAKER",              # config.py
     "ENABLE_AI_PROMPT_FENCING",               # config.py
