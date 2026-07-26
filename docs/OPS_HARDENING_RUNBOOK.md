@@ -108,8 +108,8 @@ holds DELETE. The script grants the maintenance role the minimal purge-path
 set (policy read, window marker INSERT/SELECT/DELETE + sequence USAGE,
 audit_log SELECT+DELETE, data_purge_log evidence INSERT + sequence USAGE —
 completed per Codex 2026-07-25 item 5(b), minimised per Codex 2026-07-26; the
-evidence VERIFY read in step 6 below runs as the admin role, since the
-maintenance role deliberately cannot read data_purge_log), and `tests/test_audit_log_grants_pg.py` proves the
+evidence VERIFY read in MANUAL_PURGE_PROCEDURE.md step 6 runs as the admin
+role, since the maintenance role deliberately cannot read data_purge_log), and `tests/test_audit_log_grants_pg.py` proves the
 literal script + this exact invocation end-to-end on PostgreSQL in CI.
 Run it from a one-off task container (app code present):
 
