@@ -216,11 +216,13 @@ the CI smoke account `github-actions-day6-staging-smoke@onboarda.internal` —
 `db.ensure_qa_smoke_user()` re-creates **and force-reactivates** it on every
 boot, so quarantining it would be silently undone by the next deploy.
 
-**Before running:** `raj.patel@onboarda.com` and `m.dubois@onboarda.com` are the
-identities prior staging QA evidence runs used (`STAGING_QA_EMAIL`,
-`scripts/qa/staging_browser_smoke.js`). Deactivating them breaks that smoke
-path until you point it at a replacement account. Do that first, or accept the
-smoke gap for the window.
+**Mandatory before running:** `raj.patel@onboarda.com` and
+`m.dubois@onboarda.com` are the identities prior staging QA evidence runs used
+(`STAGING_QA_EMAIL`, `scripts/qa/staging_browser_smoke.js`). Repoint the
+`STAGING_QA_EMAIL` secret to an approved replacement account and complete one
+successful authenticated smoke with that replacement **before** quarantine.
+Do not accept a smoke gap and do not count this row complete without that
+evidence.
 
 **Verify:** re-run the dry-run — the plan skips already-inactive accounts, so a
 successful run leaves an empty match list. Then confirm login is refused for
@@ -297,12 +299,26 @@ single-AZ by design; production is tracked separately).
    aws rds modify-db-instance --db-instance-identifier regmind-dr-drill \
      --no-deletion-protection --apply-immediately --region af-south-1
 
-   # wait until DeletionProtection is REALLY false before deleting
-   until [ "$(aws rds describe-db-instances \
-       --db-instance-identifier regmind-dr-drill --region af-south-1 \
-       --query 'DBInstances[0].DeletionProtection' --output text)" = "False" ]; do
-     echo "waiting for deletion protection to clear…"; sleep 10
+   # Wait until DeletionProtection is REALLY false before deleting. Fail on an
+   # AWS error or after 60 attempts (10 minutes); never spin forever.
+   protection=""
+   poll_attempt=1
+   while [ "$poll_attempt" -le 60 ]; do
+     if ! protection="$(aws rds describe-db-instances \
+         --db-instance-identifier regmind-dr-drill --region af-south-1 \
+         --query 'DBInstances[0].DeletionProtection' --output text)"; then
+       echo "failed to read deletion-protection state" >&2
+       exit 1
+     fi
+     [ "$protection" = "False" ] && break
+     echo "waiting for deletion protection to clear ($poll_attempt/60)"
+     sleep 10
+     poll_attempt=$((poll_attempt + 1))
    done
+   if [ "$protection" != "False" ]; then
+     echo "timed out waiting for deletion protection to clear" >&2
+     exit 1
+   fi
 
    aws rds delete-db-instance --db-instance-identifier regmind-dr-drill \
      --skip-final-snapshot --delete-automated-backups --region af-south-1
@@ -329,15 +345,24 @@ change is needed — the telemetry is already being written.
 
 ```bash
 cd arie-backend
-python scripts/provision_production_monitoring.py            # dry-run
-python scripts/provision_production_monitoring.py --apply \
-  --alarm-action-arn arn:aws:sns:af-south-1:<acct>:regmind-staging-pilot-alerts
+python scripts/provision_production_monitoring.py \
+  --environment production --log-group "$PRODUCTION_LOG_GROUP" \
+  --alarm-action-arn "$ALARM_ACTION_ARN"                    # dry-run
+python scripts/provision_production_monitoring.py \
+  --environment production --log-group "$PRODUCTION_LOG_GROUP" \
+  --alarm-action-arn "$ALARM_ACTION_ARN" \
+  --apply --confirm-production
 ```
 
-**Without `--alarm-action-arn` the alarms are created with no actions and page
-nobody** — the dry-run says so explicitly. The SNS topic must have a confirmed
-subscription; an unconfirmed subscription is indistinguishable from working
-until the first real incident.
+`PRODUCTION_LOG_GROUP` must be the deployed production backend/worker log
+group; do not substitute the staging group and call P9-10 complete.
+`ALARM_ACTION_ARN` must be an SNS topic in the target account/region with a
+confirmed subscription into the named on-call rota.
+
+**Without `--alarm-action-arn` alarms page nobody.** The script now refuses
+`--apply` without it. The SNS topic must have a confirmed subscription; an
+unconfirmed subscription is indistinguishable from working until the first
+real incident.
 
 Two alarms are worth understanding before you tune them:
 
@@ -360,17 +385,21 @@ produces:
 ```bash
 aws cloudwatch get-metric-statistics --region af-south-1 \
   --namespace RegMind/Pilot --metric-name ScreeningQueueDepth \
-  --dimensions Name=Environment,Value=staging Name=Service,Value=verification-worker \
+  --dimensions Name=Environment,Value=production Name=Service,Value=verification-worker \
   --start-time $(date -u -d '30 minutes ago' +%FT%TZ) \
   --end-time $(date -u +%FT%TZ) --period 300 --statistics SampleCount
 ```
 
 An empty `Datapoints` list means the filter is not matching — usually because
 `$.environment` does not equal what the service actually emits. Repeat for
-`ApplicationErrorCount-staging` (no dimensions).
+`ApplicationErrorCount-production` (no dimensions).
 
 **On-call:** alarm actions must route to a rota with a confirmed subscription.
 Recording the rota itself is a commercial/process step outside this repo.
+
+The exact commands, prerequisites, and evidence templates for §§5–7 are
+consolidated in
+[`OPERATOR_RUNSHEET_REMAINING_OPS.md`](OPERATOR_RUNSHEET_REMAINING_OPS.md).
 
 ---
 

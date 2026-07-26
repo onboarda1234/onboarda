@@ -68,6 +68,21 @@ ERROR_METRIC_NAME = "ApplicationErrorCount"
 HEARTBEAT_METRIC = "ScreeningQueueDepth"
 
 
+def apply_refusal(*, apply: bool, environment: str,
+                  confirm_production: bool, alarm_action_arn: str) -> str:
+    """Return a fail-closed refusal reason before any AWS client is loaded."""
+    if not apply:
+        return ""
+    if environment == "production" and not confirm_production:
+        return "REFUSED: --apply against production requires --confirm-production."
+    if not str(alarm_action_arn or "").strip():
+        return (
+            "REFUSED: --apply requires --alarm-action-arn; actionless alarms "
+            "page nobody. Confirm the SNS subscription before applying."
+        )
+    return ""
+
+
 def error_metric_name(environment: str) -> str:
     """Environment goes in the NAME because the metric carries no dimensions."""
     return f"{ERROR_METRIC_NAME}-{environment}"
@@ -270,8 +285,14 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--region", default="af-south-1")
     parser.add_argument("--environment", default="staging")
     parser.add_argument("--log-group", default="/ecs/regmind-staging")
-    parser.add_argument("--alarm-action-arn", default="",
-                        help="SNS topic ARN for ALARM/OK actions (optional)")
+    parser.add_argument(
+        "--alarm-action-arn",
+        default="",
+        help=(
+            "SNS topic ARN for ALARM/OK actions; required with --apply "
+            "(the topic must have a confirmed subscription)"
+        ),
+    )
     parser.add_argument("--screening-backlog-threshold", type=int, default=50)
     parser.add_argument("--screening-age-threshold-s", type=int, default=1800)
     parser.add_argument("--error-threshold", type=int, default=5)
@@ -281,9 +302,14 @@ def main(argv: List[str] | None = None) -> int:
                         help="Required with --apply when --environment=production")
     args = parser.parse_args(argv)
 
-    if args.apply and args.environment == "production" and not args.confirm_production:
-        print("REFUSED: --apply against production requires --confirm-production.",
-              file=sys.stderr)
+    refusal = apply_refusal(
+        apply=args.apply,
+        environment=args.environment,
+        confirm_production=args.confirm_production,
+        alarm_action_arn=args.alarm_action_arn,
+    )
+    if refusal:
+        print(refusal, file=sys.stderr)
         return 2
 
     filters = [

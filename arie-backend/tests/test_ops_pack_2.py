@@ -94,6 +94,18 @@ class TestProductionMonitoringAlarms:
         assert proc.returncode == 2, proc.stdout
         assert "REFUSED" in proc.stderr
 
+    def test_apply_refuses_actionless_alarms_before_loading_aws(self):
+        """An applied alarm without an action can sit in OK while paging
+        nobody; the executable guard must match the runbook requirement."""
+        reason = monitoring.apply_refusal(
+            apply=True,
+            environment="staging",
+            confirm_production=False,
+            alarm_action_arn="",
+        )
+        assert "--alarm-action-arn" in reason
+        assert "page nobody" in reason
+
     def test_error_filter_counts_only_error_level(self):
         """4xx is logged at WARNING on purpose, so an ERROR-level filter counts
         genuine server-side failures and cannot be driven by unauthenticated
