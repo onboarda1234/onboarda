@@ -239,7 +239,11 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
             }
 
     except Exception as e:
-        logger.error("Legacy screening adapter error: %s", e)
+        # R3-BSA-015: the raw exception carries the provider URL, whose path
+        # embeds applicant identifiers (PII) — scrub for BOTH the log sink and
+        # the officer-visible `error` field.
+        _safe_err = sanitize_provider_error(e, max_len=200)
+        logger.error("Legacy screening adapter error: %s", _safe_err)
         client = None
         try:
             client = get_sumsub_client()
@@ -251,7 +255,7 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
                 "results": [],
                 "source": "sumsub",
                 "api_status": "error",
-                "error": f"Legacy screening adapter failed: {str(e)[:200]}",
+                "error": f"Legacy screening adapter failed: {_safe_err}",
                 "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             }
         return _simulate_aml_screen(name)
@@ -351,7 +355,10 @@ def lookup_opencorporates(company_name, jurisdiction=None):
             return _simulate_company_lookup(company_name, note=f"API returned {resp.status_code} — simulated")
 
     except Exception as e:
-        logger.error(f"OpenCorporates error: {e}")
+        # R3-BSA-015: a raw requests exception stringifies with the FULL request
+        # URL — which for OpenCorporates carries api_token=<secret> as a query
+        # param. Sanitize before the string reaches any log sink.
+        logger.error("OpenCorporates error: %s", sanitize_provider_error(e))
         return _simulate_company_lookup(company_name, note=f"API error — simulated result")
 
 
@@ -470,7 +477,9 @@ def geolocate_ip(ip_address):
             return _simulate_ip_geolocation(ip_address, note=f"API returned {resp.status_code}")
 
     except Exception as e:
-        logger.error(f"IP Geolocation error: {e}")
+        # R3-BSA-015: same class as the OpenCorporates leak — the provider URL
+        # (with its key query param) rides in the raw exception string.
+        logger.error("IP Geolocation error: %s", sanitize_provider_error(e))
         return _simulate_ip_geolocation(ip_address, note=f"API error — simulated")
 
 

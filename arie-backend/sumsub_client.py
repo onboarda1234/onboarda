@@ -331,17 +331,27 @@ class SumsubClient:
                         )
 
             except Timeout as e:
-                logger.error(f"Sumsub request timeout: {e}")
+                # R3-BSA-015: requests exceptions stringify with the full URL
+                # (applicant identifiers in the path); scrub before logging.
+                logger.error("Sumsub request timeout: %s", sanitize_provider_error(e))
                 raise
             except RequestException as e:
                 if attempt < self.max_retries:
                     backoff = 2 ** attempt
-                    logger.warning(f"Sumsub request error: {e}. Retrying in {backoff}s")
+                    logger.warning(
+                        "Sumsub request error: %s. Retrying in %ss",
+                        sanitize_provider_error(e), backoff,
+                    )
                     time.sleep(backoff)
                     continue
                 else:
-                    logger.error(f"Sumsub request failed after {self.max_retries} retries: {e}")
-                    raise SumsubRetryError(f"Sumsub API request failed: {str(e)}")
+                    logger.error(
+                        "Sumsub request failed after %s retries: %s",
+                        self.max_retries, sanitize_provider_error(e),
+                    )
+                    raise SumsubRetryError(
+                        f"Sumsub API request failed: {sanitize_provider_error(e, max_len=160)}"
+                    )
 
         raise SumsubRetryError("Max retries exceeded")
 
