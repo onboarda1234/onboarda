@@ -43,7 +43,7 @@ prometheus-client==0.24.1
 psutil==7.2.2
 
 # Server-side PDF Generation
-weasyprint==68.1
+weasyprint==69.0
 
 # Country code normalisation (ISO 3166 alpha-2 → alpha-3)
 pycountry==26.2.16
