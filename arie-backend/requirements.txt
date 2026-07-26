@@ -30,9 +30,6 @@ anthropic==0.49.0
 # Environment & Configuration
 python-dotenv==1.2.2
 
-# Production WSGI Server (use with reverse proxy)
-gunicorn==25.1.0
-
 # PostgreSQL Support (production database)
 psycopg2-binary==2.9.11
 
@@ -44,9 +41,6 @@ prometheus-client==0.24.1
 
 # System Health Monitoring (disk/memory in health endpoint)
 psutil==7.2.2
-
-# Async SQLite support
-aiosqlite==0.22.1
 
 # Server-side PDF Generation
 weasyprint==68.1

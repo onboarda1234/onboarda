@@ -382,6 +382,132 @@ def get_backoffice_runtime_config() -> dict:
 
 
 # ══════════════════════════════════════════════════════════════
+# 2c. FEATURE-FLAG LIFECYCLE REGISTRY (register item RDI-023)
+# ══════════════════════════════════════════════════════════════
+# RDI-023: without lifecycle metadata a PERMANENT environment differentiator
+# (config that will always exist to separate demo/staging/production) is
+# indistinguishable from a TEMPORARY rollout flag (one that should be deleted
+# once fully shipped or abandoned). Over time the temporary ones rot into
+# permanent-looking dead conditionals that nobody dares remove.
+#
+# This registry attaches, to EVERY declared flag, the four attributes the audit
+# asked for: owner, the point it was introduced, a lifecycle classification,
+# and — for temporary flags — the sunset condition that ends its life.
+#
+# It is PURE METADATA. Nothing here is read by FeatureFlags resolution, by
+# get_environment_info(), or by any request path, so it cannot change runtime
+# behaviour or the client contract. Its teeth are a guard test
+# (test_feature_flag_lifecycle.py) that fails if a flag has no entry, or a
+# temporary flag has no sunset condition — so a new flag cannot merge without
+# being classified.
+#
+# Honesty notes:
+#   * `owner` is a FUNCTIONAL-DOMAIN owner inferred from each flag's purpose at
+#     registry creation, not a named individual — confirm/adjust as team
+#     ownership is formalised.
+#   * `introduced` is INTRODUCED_PRE_REGISTRY for every existing flag: these
+#     predate the registry and their exact introduction version was not
+#     archaeologised during the RDI-023 backfill. New flags should record a
+#     real version/date.
+
+FLAG_PERMANENT = "permanent"   # environment/config differentiator — no sunset
+FLAG_TEMPORARY = "temporary"   # staged rollout / experiment / deliberate
+                               # activation — MUST carry a removal condition
+
+_FLAG_CLASSIFICATIONS = (FLAG_PERMANENT, FLAG_TEMPORARY)
+
+# Sentinel: the flag predates this registry; exact introduction not backfilled.
+INTRODUCED_PRE_REGISTRY = "pre-registry"
+
+
+def _perm(owner, notes):
+    return {"owner": owner, "introduced": INTRODUCED_PRE_REGISTRY,
+            "classification": FLAG_PERMANENT, "sunset": None, "notes": notes}
+
+
+def _temp(owner, sunset, notes):
+    return {"owner": owner, "introduced": INTRODUCED_PRE_REGISTRY,
+            "classification": FLAG_TEMPORARY, "sunset": sunset, "notes": notes}
+
+
+FLAG_LIFECYCLE = {
+    # ── Permanent environment/config differentiators (demo vs real behaviour) ──
+    "ENABLE_DEMO_MODE": _perm("demo-tooling", "Master demo toggle; permanent env split."),
+    "ENABLE_DEMO_BANNER": _perm("demo-tooling", "Demo UI banner; permanent env split."),
+    "ENABLE_DEMO_DATA_SEEDING": _perm("demo-tooling", "Seed demo fixtures; forbidden in prod."),
+    "ENABLE_MOCK_FALLBACKS": _perm("platform", "Mock external providers; forbidden in prod."),
+    "ENABLE_ROLE_SWITCHER": _perm("demo-tooling", "Dev/demo role switch; forbidden in prod."),
+    "ENABLE_MONITORING_DASHBOARD": _perm("compliance", "Monitoring surface; on in every env."),
+    "ENABLE_DOCUMENT_AI_ANALYSIS": _perm("ai-pipeline", "Document AI checks; on in every env."),
+    "ENABLE_SUMSUB_LIVE": _perm("kyc", "Live Sumsub vs sandbox; permanent env split."),
+    "ENABLE_SUMSUB_SANDBOX": _perm("kyc", "Sandbox Sumsub; forbidden in prod."),
+    "ENABLE_REAL_SCREENING": _perm("screening", "Real AML screening; permanent env split."),
+    "ENABLE_SIMULATED_SCREENING": _perm("screening", "Simulated screening; forbidden in prod."),
+    "REQUIRE_REAL_API_KEYS": _perm("platform", "Require real credentials; permanent env split."),
+    "ENABLE_DEBUG_ENDPOINTS": _perm("platform", "Debug endpoints; forbidden in prod."),
+    "ENABLE_SHORTCUT_LOGIN": _perm("demo-tooling", "Shortcut login; forbidden in prod."),
+    "ENABLE_KPI_DEMO_DATA": _perm("demo-tooling", "KPI demo data; forbidden in prod."),
+
+    # ── Temporary: enterprise modules under phased/gated rollout ──
+    # These are pilot-scope vetoed (see _PILOT_SCOPE_VETOED_FLAGS) — not yet GA.
+    "ENABLE_PHASE2_FEATURES": _temp(
+        "platform", "Retire once Phase 2 is the unconditional baseline (already True in every env).",
+        "Umbrella rollout flag, now on everywhere; a retirement candidate."),
+    "ENABLE_REGULATORY_INTELLIGENCE_FULL": _temp(
+        "compliance", "Remove gate at Regulatory Intelligence enterprise GA.",
+        "Enterprise module; pilot-scope vetoed."),
+    "ENABLE_SAR_WORKFLOW": _temp(
+        "compliance", "Remove gate at SAR/STR enterprise GA.",
+        "Enterprise module; pilot-scope vetoed."),
+    "ENABLE_SAR_STR": _temp(
+        "compliance", "Remove gate at SAR/STR enterprise GA.",
+        "Enterprise module; pilot-scope vetoed."),
+    "ENABLE_AI_SUPERVISOR": _temp(
+        "ai-pipeline", "Remove gate at AI Supervisor enterprise GA.",
+        "Enterprise module; pilot-scope vetoed."),
+    "ENABLE_SUPERVISOR_DASHBOARD": _temp(
+        "ai-pipeline", "Remove gate at Supervisor Dashboard enterprise GA.",
+        "Enterprise module; pilot-scope vetoed."),
+    "ENABLE_SUPERVISOR_AUDIT": _temp(
+        "ai-pipeline", "Remove gate at Supervisor Audit enterprise GA.",
+        "Enterprise module; pilot-scope vetoed."),
+    "ENABLE_KPI_DASHBOARD": _temp(
+        "compliance", "Remove gate once the KPI dashboard ships to pilot.",
+        "Enterprise module; no server route yet."),
+
+    # ── Temporary: deliberate activation flag (RSMP Tier 0A) ──
+    RSMP_TIER0A_ACTIVATION_FLAG: _temp(
+        "compliance", "Remove after Tier 0A scoring is permanently activated post staging dry-run.",
+        "Activated deliberately after the staging config diff + historical dry run are approved."),
+
+    # ── Temporary: upload-latency staged rollout / experiments (FF_*) ──
+    "FF_POLLING_SLOW": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+    "FF_SIZE_CAP_CLIENT_REJECT": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+    "FF_UX_SPLIT_UPLOAD_VERIFY": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+    "FF_UPLOAD_ASYNC": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+    "FF_ASYNC_VERIFY": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+    "FF_GATE03_INDEXED_DEDUP": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+    "FF_PRESIGNED_UPLOAD": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+}
+
+
+def all_declared_flags() -> set:
+    """Every feature-flag name the platform declares a default for, across all
+    environments — the single source of truth the lifecycle registry must
+    cover. Derived the same way FeatureFlags resolves, so the guard test and the
+    registry can never silently disagree about which flags exist."""
+    names = set()
+    for env_flags in _DEFAULT_FLAGS.values():
+        names.update(env_flags.keys())
+    return names
+
+
+def get_flag_lifecycle(flag: str) -> dict:
+    """Return the lifecycle metadata for a flag, or None if unregistered."""
+    return FLAG_LIFECYCLE.get(flag)
+
+
+# ══════════════════════════════════════════════════════════════
 # 3. SAFETY GUARDS — CRITICAL
 # ══════════════════════════════════════════════════════════════
 
