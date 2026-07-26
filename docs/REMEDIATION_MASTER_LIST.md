@@ -182,7 +182,7 @@ are out of scope for every SRP item.
 |----|-------|:--:|:--:|----|:--:|
 | PR-APP-STATUS-CANONICALIZATION-1 | Canonical status labels + senior queue + parity | P1 | #685 | ✅ merged | — |
 | PR-APP-ACTION-OWNERSHIP-SCOPE-1 | Terminal decision & memo-approval ownership gate (= **FEO-013**) | P1/P2 | [#713](https://github.com/onboarda1234/onboarda/pull/713) | ✅ merged + validated 2026-07-09; sign-off memo awaiting founder signature | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#ownership-gate-pr-713) |
-| 🟠 ops-enforce-staging-sha-alignment-gate | Staging-SHA gate + delete test logins | P0 | [#702](https://github.com/onboarda1234/onboarda/pull/702), [#882](https://github.com/onboarda1234/onboarda/pull/882) | ◐ code ✅ (SW-3) · test-login quarantine script + runbook merged 2026-07-25 (#882 — quarantine only; review proved a delete path would orphan memo/SAR/EDD attribution, so it was removed) · staging execution = operator step ([runbook](OPS_HARDENING_RUNBOOK.md) §5) · 🟠 gate open | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#wave-a-prs-700-703) |
+| 🟠 ops-enforce-staging-sha-alignment-gate | Staging-SHA gate + delete test logins | P0 | [#702](https://github.com/onboarda1234/onboarda/pull/702), [#882](https://github.com/onboarda1234/onboarda/pull/882) | ◐ code ✅ (SW-3) · test-login quarantine script + runbook merged 2026-07-25 (#882 — quarantine only; review proved a delete path would orphan memo/SAR/EDD attribution, so it was removed). **Codex validation 2026-07-26: FAIL** — the denylist-only identity guard accepted the live demo DSN and an arbitrary PG host; closed by [#886](https://github.com/onboarda1234/onboarda/pull/886) (positive `QUARANTINE_ALLOWED_DB_HOST` exact-host allowlist, 24-case bypass probe clean) · staging execution = operator step ([runbook](OPS_HARDENING_RUNBOOK.md) §5) · 🟠 gate open | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#wave-a-prs-700-703) |
 | perf-applications-default-list-projection | Slim paginated projection as default `/api/applications` payload | P2 | [#719](https://github.com/onboarda1234/onboarda/pull/719) | ✅ merged + staging-validated | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#applications-page-pair-prs-719-720-727) |
 | audit-log-tamper-evidence-1 | *(cross-ref: = Phase 4 item 27, #691 — not counted)* | P2 | #691 | ✅ see item 27 | — |
 | ux-applications-list-sort-status-tabs | Server-side sort + status tabs + fake-AI chat removal + toolbar declutter | P3 | [#720](https://github.com/onboarda1234/onboarda/pull/720) → [#727](https://github.com/onboarda1234/onboarda/pull/727) | ✅ merged + staging-validated (re-landed as #727 after wrong-base merge) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#applications-page-pair-prs-719-720-727) |
@@ -255,7 +255,7 @@ are out of scope for every SRP item.
 | P10-4 | Per-decision-type prerequisite gates (RDI-003/008) | HIGH | — | 📋 scoped — policy decision needed | — |
 | P10-5 | Decision-record coverage + provenance (RDI-009 non-SAR, 010) — includes RDI-002 residual assertions | HIGH | — | 📋 scoped (P10-2 dependency now met) | — |
 | P10-6 | Sign-off IP attribution (RDI-012) — RDI-107 explicit allowlist delivered default-off | HIGH | [#708](https://github.com/onboarda1234/onboarda/pull/708), [#809](https://github.com/onboarda1234/onboarda/pull/809) | ✅ merged + staging-validated 2026-07-21 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#eight-remediation-prs-808-815) |
-| P10-7 | Append-only audit at DB level (RDI-013 non-SAR) | MEDIUM | [#837](https://github.com/onboarda1234/onboarda/pull/837), [#875](https://github.com/onboarda1234/onboarda/pull/875) | ◐ code half ✅ (DB triggers, 2026-07-22) · grants pack + runbook merged 2026-07-25 (#875, review-hardened: TRIGGER retained for boot safety; purge moves to admin DSN + `SET ROLE`) · RDS psql execution = operator step ([runbook](OPS_HARDENING_RUNBOOK.md) §3); documented residual: app role remains table owner | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#second-remediation-batch-prs-833-837) |
+| P10-7 | Append-only audit at DB level (RDI-013 non-SAR) | MEDIUM | [#837](https://github.com/onboarda1234/onboarda/pull/837), [#875](https://github.com/onboarda1234/onboarda/pull/875), [#879](https://github.com/onboarda1234/onboarda/pull/879), [#886](https://github.com/onboarda1234/onboarda/pull/886) | ◐ code half ✅ (DB triggers, 2026-07-22) · grants pack merged 2026-07-25 (#875) — Codex r1 5(b) found the maint role could not execute the sanctioned purge, closed by #879 (full privilege set, proven on PG in CI); Codex r2 found the set overprivileged (UPDATE/TRUNCATE + evidence-read never used), minimised by #886 with convergence REVOKEs + behavioural negatives · RDS psql execution = operator step ([runbook](OPS_HARDENING_RUNBOOK.md) §3); documented residual: app role remains table owner | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#second-remediation-batch-prs-833-837) |
 | RDI-002 | LOW/MEDIUM fast-path — by-design HIGH policy-exception; policy approved & signed (Aisha Sudally, 2026-07-07): [`LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md`](compliance/LOW_MEDIUM_FASTPATH_APPROVAL_POLICY.md) | HIGH | — | ✅ policy approved · residual code assertions → P10-5 | — |
 | RDI-005 | SAR permanence (= **DCI-002**) — Enterprise pre-enable blocker; safe only while `ENABLE_SAR_WORKFLOW`/`ENABLE_SAR_STR` stay false; same guard covers SAR slices of RDI-009/013 | HIGH | — | ⏸ deferred until Enterprise SAR/STR enablement | — |
 
@@ -302,7 +302,7 @@ are out of scope for every SRP item.
 | P12-7 | Verification-matrix fidelity — HYBRID only on deterministic INCONCLUSIVE; resolve 5 TODO mappings (DCI-014/015) | MED+LOW | [#835](https://github.com/onboarda1234/onboarda/pull/835) | ◐ mechanism (rules-first gate + INCONCLUSIVE-aware aggregation) merged + staging-validated 2026-07-22, flag-gated OFF · DCI-015 mappings + evaluator activation = founder sign-off ([memo](compliance/P12_7_VERIFICATION_MATRIX_DECISION_MEMO.md)) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#second-remediation-batch-prs-833-837) |
 | P12-8 | Retention purge enforceability + purge-log evidence (DCI-020/021, Migration v2.48) | MED | [#717](https://github.com/onboarda1234/onboarda/pull/717) + hotfix [#723](https://github.com/onboarda1234/onboarda/pull/723) | ✅ merged + deployed | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-8-prs-717-and-723) |
 | P12-9 | Observability hardening — JSON logs, request-correlation ids, readiness gates (DCI-028/029, Migration v2.49) | MED | [#718](https://github.com/onboarda1234/onboarda/pull/718) | ✅ merged + deployed | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p12-9-pr-718) |
-| P12-10 | Infra guards — upload body-size pre-buffering, deploy fails on `services-stable` timeout (DCI-016/025; stability half partly mitigated by #702) | MED+LOW | [#812](https://github.com/onboarda1234/onboarda/pull/812), [#875](https://github.com/onboarda1234/onboarda/pull/875) | ✅ upload limits 2026-07-21 · deploy-timeout half closed 2026-07-25 (#875: backend wait fails closed after 2×10-min attempts + diagnostics; proven live by the very deploy that shipped it) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#eight-remediation-prs-808-815) |
+| P12-10 | Infra guards — upload body-size pre-buffering, deploy fails on `services-stable` timeout (DCI-016/025; stability half partly mitigated by #702) | MED+LOW | [#812](https://github.com/onboarda1234/onboarda/pull/812), [#875](https://github.com/onboarda1234/onboarda/pull/875) | ◐ **upload pre-buffering REOPENED 2026-07-26** — the Audit-2 re-run (R3-BSA-022, independently CONFIRMED empirically) proved `max_body_size` was passed to the `Application()` constructor (`server.py:44262`), where Tornado ignores it; a 50KB body was accepted against a 1KB cap in test, while the same value on `HTTPServer`/`listen` rejected pre-buffer. The recorded "upload limits ✅ 2026-07-21" enforces only Tornado's ~100MB default pre-buffer, and per-route caps (10/20/25MB) run after full buffering · deploy-timeout half closed 2026-07-25 (#875: backend wait fails closed after 2×10-min attempts + diagnostics; proven live by the very deploy that shipped it) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#eight-remediation-prs-808-815) |
 
 ## Phase 12 — Frontend & Operational Readiness (FEO audit / Audit 4)
 
@@ -318,9 +318,9 @@ are out of scope for every SRP item.
 |----|-------|:--:|:--:|----|:--:|
 | P13-1 | Back-office stored-XSS elimination (FEO-001/002) — 🔴 blocker, closed; screening/notes/doc-metadata renderers are follow-up | HIGH | [#729](https://github.com/onboarda1234/onboarda/pull/729) | ✅ merged + validated 2026-07-09 | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p13-1-pr-729) |
 | P13-2 | Single API wrapper + consistent CSRF for all 23 raw `fetch()` sites (FEO-003) | MED | — | 📋 scoped | — |
-| P13-3 | Defensive API response parsing — status/Content-Type before `res.json()` (FEO-004) | MED | [#883](https://github.com/onboarda1234/onboarda/pull/883) | ✅ merged (`0acbcc4`) 2026-07-25 — `boApiCall` (transport for ~161 sites incl. every frozen decision/memo/detail path) parsed BEFORE its status checks, so a non-JSON error threw SyntaxError and the branch building `apiErr.status`/`.payload` never ran; downstream `err.status === 403` checks were testing a status-less SyntaxError. Review verified success-path identity across 84 body-shape × content-type combinations (incl. `null`/`false`/`0`/`""`/arrays) — the only divergences are cases where the old code threw. Review REJECT r2 caught two real defects, both fixed: the new helper broke `test_p13_backoffice_xss_static.py` (red CI — it is defined outside the regions that test slices, so converted renderers hit a swallowed ReferenceError), and it silently returned `{}` for any response exposing neither `headers` nor `text()` — the repo's house mock shape — now falling back to `res.json()`. One of its own tests was proven vacuous and fixed | — |
+| P13-3 | Defensive API response parsing — status/Content-Type before `res.json()` (FEO-004) | MED | [#883](https://github.com/onboarda1234/onboarda/pull/883) | ✅ merged (`0acbcc4`) 2026-07-25 — `boApiCall` (transport for ~161 sites incl. every frozen decision/memo/detail path) parsed BEFORE its status checks, so a non-JSON error threw SyntaxError and the branch building `apiErr.status`/`.payload` never ran; downstream `err.status === 403` checks were testing a status-less SyntaxError. Review verified success-path identity across 84 body-shape × content-type combinations (incl. `null`/`false`/`0`/`""`/arrays) — the only divergences are cases where the old code threw. Review REJECT r2 caught two real defects, both fixed: the new helper broke `test_p13_backoffice_xss_static.py` (red CI — it is defined outside the regions that test slices, so converted renderers hit a swallowed ReferenceError), and it silently returned `{}` for any response exposing neither `headers` nor `text()` — the repo's house mock shape — now falling back to `res.json()`. One of its own tests was proven vacuous and fixed. **Codex validation 2026-07-26: PARTIAL** — a valid-JSON `null` error body still lost its status (boApiCall dereferenced `data.error` → status-less TypeError); closed by [#886](https://github.com/onboarda1234/onboarda/pull/886) (error branches read a normalized object view; success path verbatim, 2xx `null` returns `null`, pinned + mutation-verified) | — |
 | P13-4 | App-detail render race guard — request nonce in `openAppDetail` (FEO-005) | MED | — | 📋 scoped | — |
-| P13-5 | Role-UI fail-closed until RBAC matrix loads (FEO-006) | LOW | [#884](https://github.com/onboarda1234/onboarda/pull/884) | ◐ **delivered as race-elimination, NOT as fail-closed** — merged (`f0f7a81`) 2026-07-25: the matrix now settles before the shell paints (bounded 3s so sign-in cannot be blocked), removing the optimistic-render window, and a failed load is surfaced via the degraded-load banner. The literal fail-CLOSED inversion was NOT done — `test_approval_ux_gates_static.py::test_ux_gates_fail_open_when_permission_matrix_unloaded` pins fail-open by name after a staging smoke blocker (a legitimate CO lost Approve); **inverting it needs founder sign-off**. Independent review upheld that call on stronger grounds: the decision actions already `await` the matrix before acting and the server enforces roles on every decision endpoint, so FEO-006's residual content is a cosmetic flicker, not an authz hole. It also cleared the cross-session question — `/config/roles-permissions` returns a module-level STATIC matrix, identical for every caller, so no per-user matrix can leak. Review REJECT r2 caught that the first revision was a silent NO-OP on the common auto-login path (`resetBackofficeSessionData()` nulled the preloaded matrix between kick-off and settle, and the settle still reported success, suppressing the banner); fixed by hoisting the reset, with runtime tests that drive the real sequence rather than its shape | — |
+| P13-5 | Role-UI fail-closed until RBAC matrix loads (FEO-006) | LOW | [#884](https://github.com/onboarda1234/onboarda/pull/884) | ✅ **closed as race-elimination, founder-accepted (Aisha Sudally, 2026-07-26)** — merged (`f0f7a81`) 2026-07-25: the matrix now settles before the shell paints (bounded 3s so sign-in cannot be blocked), removing the optimistic-render window, and a failed load is surfaced via the degraded-load banner. The literal fail-CLOSED inversion was NOT done — `test_approval_ux_gates_static.py::test_ux_gates_fail_open_when_permission_matrix_unloaded` pins fail-open by name after a staging smoke blocker (a legitimate CO lost Approve); **the founder accepted the race-elimination version as satisfying the item's intent (2026-07-26)** — the literal inversion is declined: it would trade a cosmetic flicker (every decision action is re-checked server-side and awaits the matrix before acting) for re-creating a known lockout of a legitimate officer. Independent review upheld that call on stronger grounds: the decision actions already `await` the matrix before acting and the server enforces roles on every decision endpoint, so FEO-006's residual content is a cosmetic flicker, not an authz hole. It also cleared the cross-session question — `/config/roles-permissions` returns a module-level STATIC matrix, identical for every caller, so no per-user matrix can leak. Review REJECT r2 caught that the first revision was a silent NO-OP on the common auto-login path (`resetBackofficeSessionData()` nulled the preloaded matrix between kick-off and settle, and the settle still reported success, suppressing the banner); fixed by hoisting the reset, with runtime tests that drive the real sequence rather than its shape | — |
 | P13-6 | Portal intake PII out of sessionStorage — server-side save/resume (FEO-007) | MED | — | 📋 scoped | — |
 | 🟠 P13-7 | Compliance-officer SOP pack (FEO-014) | MED | [#745](https://github.com/onboarda1234/onboarda/pull/745) | ◐ docs ✅ merged 2026-07-13 (`02eeae5`) · 🟠 Section 16 execution open (officers named/trained, scope approved, signatures) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p13-7-pr-745) |
 
@@ -358,7 +358,7 @@ are out of scope for every SRP item.
 | P9-5 | Drill prod deploy + rollback with evidence (+ **FEO-008**) | ops | — | ⬜ | — |
 | P9-6 | Load/performance test at prod scale | test/ops | — | ⬜ | — |
 | P9-7 | Pen test + security review + rehearsed secret rotation (+ **FEO-010**) | security | — | ⬜ | — |
-| P9-8 | DR/backup drill, restore/PITR, RTO/RPO (= **DCI-027 CRITICAL blocker** = **FEO-009**) | ops | [#882](https://github.com/onboarda1234/onboarda/pull/882) | ◐ posture check + drill runbook merged 2026-07-25 (retention/deletion-protection/encryption/**PITR freshness**, which proves point-in-time recovery works rather than is merely configured) · the timed restore drill that yields the measured RTO is the operator half ([runbook](OPS_HARDENING_RUNBOOK.md) §6) — the script reports `rto_seconds_observed: null` on purpose | — |
+| P9-8 | DR/backup drill, restore/PITR, RTO/RPO (= **DCI-027 CRITICAL blocker** = **FEO-009**) | ops | [#882](https://github.com/onboarda1234/onboarda/pull/882) | ◐ posture check + drill runbook merged 2026-07-25 (retention/deletion-protection/encryption/**PITR freshness**, which proves point-in-time recovery works rather than is merely configured) · the timed restore drill that yields the measured RTO is the operator half ([runbook](OPS_HARDENING_RUNBOOK.md) §6) — the script reports `rto_seconds_observed: null` on purpose. Codex 2026-07-26 caught a teardown race (`--apply-immediately` does not block, so the delete could fire with deletion protection still active); fixed by [#886](https://github.com/onboarda1234/onboarda/pull/886): poll `DeletionProtection=False` before delete + `db-instance-deleted` waiter | — |
 | P9-9 | Legal/compliance sign-off (residency, DPA, regulator) | legal | — | ⬜ | — |
 | P9-10 | Prod monitoring/alerting/on-call (+ **DCI-030**, **FEO-011**) | ops | [#882](https://github.com/onboarda1234/onboarda/pull/882) | ◐ metric filters + alarms for the 7 emitted-but-unalarmed metrics, a worker HEARTBEAT alarm (catches running-but-wedged, which ECS LiveTaskCount cannot) and a log-based error rate, merged 2026-07-25 · AWS `--apply` + SNS subscription + on-call rota = operator steps ([runbook](OPS_HARDENING_RUNBOOK.md) §7) | — |
 | P9-11 | Close parked prod-posture decisions (PR-25 + PR-17) | decision | — | ⬜ | — |
@@ -525,6 +525,77 @@ are out of scope for every SRP item.
 
 ---
 
+## Re-audit: Backend Security & Authorization (Audit 2 re-run, 2026-07-25)
+
+> Source: `regmind_audit_2_backend_security_authorization_20260725.md` (in
+> [`docs/audits/`](audits/regmind_audit_2_backend_security_authorization_20260725.md)),
+> audited at pinned revision `62c629d` (after #879, before the rest of the
+> overnight batch). **26 findings: 14 HIGH · 8 MEDIUM · 4 LOW.** Verdict:
+> REMEDIATE BEFORE PROCEEDING (13 blocking).
+>
+> **⚠️ ID-SPACE WARNING — THREE distinct `BSA-*` id spaces now exist.** The
+> report file uses bare `BSA-NN`; this register namespaces the new findings
+> `R3-BSA-NN` to keep all three separate:
+> - **bare `BSA-*`** = the ORIGINAL Audit 2 (Phase 10 rows P11-1…P11-9). e.g.
+>   original BSA-015 = dependency CVEs (closed by P11-2).
+> - **`R2-BSA-*`** = the 2026-07-11 consolidated re-run (`d23cc45`, the
+>   "Net-new findings" + "Merged items re-flagged PARTIAL" tables above). e.g.
+>   R2-BSA-001 = supervisor routes bypass BaseHandler (closed #743).
+> - **`R3-BSA-*`** = THIS 2026-07-25 re-run (`62c629d`). e.g. R3-BSA-015 = log
+>   PII/token leakage, R3-BSA-022 = ignored body-size cap.
+>
+> The three schemes collide numerically (each has a 001, a 015…) with entirely
+> different meanings. Do not merge, renumber, or cite one audit's BSA-NN when
+> you mean another's.
+>
+> **Two most consequential findings independently VERIFIED before fold-in:**
+> - **R3-BSA-022 (CONFIRMED, empirically):** `max_body_size` in the
+>   `Application()` constructor is silently ignored by `app.listen()` — proven
+>   with a live Tornado 6.5 test (50KB body accepted against a 1KB cap; the
+>   same value on `HTTPServer` rejected pre-buffer). This **reopens P12-10's
+>   upload-limits ✅** (annotated above).
+> - **R3-BSA-012 (CONFIRMED):** `SumsubDocumentHandler` (`server.py:30838`)
+>   checks the resolved upload path with `str(requested).startswith(str(allowed_dir))`
+>   — a string-prefix test a sibling dir (`.../uploads_evil/x.pdf`) passes.
+>   One-line fix (`allowed_dir in requested.parents`).
+>
+> **Counting:** 4 findings are pure cross-references to already-open rows and
+> are NOT counted (R3-BSA-002/003/004 → P11-4; R3-BSA-021 → P11-5). The other
+> **22 are net-new rows** (total 215 → 237). None is remediated yet; a
+> workflow-neutral remediation batch is the next step (blocking HIGHs first:
+> 012, 022, 017/018, 005/006, 007, 015, 019 name-fields, 020, 011).
+
+| ID | Sev | Finding | Status |
+|----|:--:|---------|--------|
+| R3-BSA-001 | MED | Production-capability modules imported under caught `ImportError` → GDPR purge / migrations / doc-verification / supervisor can silently degrade a deployed server instead of failing the deploy | ⬜ pending — make capabilities mandatory in deployed envs + readiness manifest |
+| R3-BSA-002 | HIGH | Awaited supervisor pipeline runs synchronous agents directly on the IOLoop | → **P11-4** (IOLoop offload, 📋 scoped) — re-confirmed, precise site added |
+| R3-BSA-003 | HIGH | ComplyAdvantage async callback opens sync DB/network/sleep on the IOLoop | → **P11-4** — cross-ref |
+| R3-BSA-004 | HIGH | Synchronous WeasyPrint rendering blocks request processing | → **P11-4** — cross-ref |
+| R3-BSA-005 | HIGH | EDD routing-audit / actuation failure is swallowed; the memo transaction still commits and returns success (fail-open, same family as RDI-006/007, new site `server.py:32337-32374`) | ⬜ pending |
+| R3-BSA-006 | MED | PDF audit/timestamp persistence failure is logged but the regulated PDF is still served | ⬜ pending |
+| R3-BSA-007 | HIGH | Login/registration brute-force limiter is per-process, non-atomic, and fails OPEN to memory on DB errors (legacy `RateLimiter`) | ⬜ pending — move to the shared DB-backed fail-closed limiter |
+| R3-BSA-008 | MED | The 21-entry permission matrix is descriptive only; no server-side `assertPermission()` exists, handlers duplicate literal role arrays → drift (structural cause of 009/010) | ⬜ pending — adjacent P9-13 |
+| R3-BSA-009 | HIGH | `analyst` can transition a case into `edd_required` via the generic application PATCH despite matrix exclusion from `escalate_to_sco` | ⬜ pending — authz gap; P10-4 / P9-13 family |
+| R3-BSA-010 | MED | Application-specific and supervisor audit routes allow `co`/`analyst` beyond the `view_audit_trail` admin/SCO matrix entry | ⬜ pending — cross-ref RDI-020 |
+| R3-BSA-011 | HIGH | An owning **client** can invoke authoritative Agent 1 (`DocumentVerifyHandler`) and persist `verification_status="verified"` with no mandatory human acceptance; `agent_executions` logged only after commit, log failure swallowed | ⬜ pending — authority-boundary defect |
+| R3-BSA-012 | HIGH | **CONFIRMED** — `SumsubDocumentHandler` path check is a string prefix (`startswith`), so a sibling dir (`uploads_evil`) passes; request-controlled `file_path` reaches Sumsub upload | ⬜ pending — one-line fix (`allowed_dir in requested.parents`) |
+| R3-BSA-013 | LOW | Root `/` uses Tornado's built-in `RedirectHandler`, which does not inherit BaseHandler security headers | ⬜ pending |
+| R3-BSA-014 | MED | `DocumentDownloadHandler` uses stored `mime_type` and permits `?view=inline` (incl. PDF/images) — **qualifies P11-7's attachment ✅** | ⬜ pending — P11-7 closure incomplete |
+| R3-BSA-015 | HIGH | Logs can carry PII, raw AI text, provider identifiers, and — on OpenCorporates connection exceptions — a token-bearing URL | ⬜ pending — scrub provider exception strings + PII |
+| R3-BSA-016 | LOW | Invalid Sumsub webhook signature returns 401 (audit wanted an indistinguishable 200) — **qualifies P11-7's webhook ✅** | ⬜ pending — likely a recorded design decision, not code |
+| R3-BSA-017 | HIGH | Sumsub idempotency: EVERY insert exception is treated as a uniqueness collision, so DB outages/schema errors are falsely acknowledged as duplicates | ⬜ pending — catch only unique-violation |
+| R3-BSA-018 | HIGH | Sumsub per-application update errors are swallowed, then the idempotency row commits — a retry can never repair the failed application | ⬜ pending |
+| R3-BSA-019 | HIGH | Prompt fencing defaults OFF (known founder call), AND `entity_name`/`person_name` are interpolated into `context_hint` UNSANITIZED even when fencing is ON (`claude_client.py:1797-1802`) — the second half is a new code defect | ◐ sub-defect of **P11-5**; the unsanitized-name half is net-new ⬜ |
+| R3-BSA-020 | HIGH | `extract_document_fields` has NO Pydantic schema registered in `_AGENT_SCHEMAS`; any parsed dict is fed into deterministic name/registration/date checks | ⬜ pending — sub-defect of P11-5's "output schema" claim |
+| R3-BSA-021 | MED | AI circuit breaker defaults off and is process-local (no service-wide breaker unless the flag is set) | → **P11-5** (◐, activation is a founder call) — cross-ref |
+| R3-BSA-022 | HIGH | **CONFIRMED empirically** — pre-buffer body cap set on `Application()` (ignored by Tornado); real cap is the ~100MB default; per-route caps (10/20/25MB) diverge and run post-buffer | ⬜ pending — pass `max_body_size` to `listen`/`HTTPServer`, one canonical policy; **reopens P12-10** |
+| R3-BSA-023 | MED | Supervisor `_pipeline_cache` is process-local — review-package generation/submission lost on restart, inconsistent across workers | ◐ materially mitigated: the supervisor is `PILOT_SCOPE`-vetoed in staging/production since #880 (post-audit); residual is the cache design for any enterprise enablement |
+| R3-BSA-024 | LOW | `aiosqlite` and `gunicorn` are direct prod pins but never imported (entrypoint is `python server.py`) | ⬜ pending — drop unused pins |
+| R3-BSA-025 | LOW | WeasyPrint 68.1 `CVE-2026-49452` allowlisted in CI until 2026-08-09 (no fixed release; vulnerable `presentational_hints=True` mode unused) | ⬜ tracked — **allowlist expires 2026-08-09**, revisit then |
+| R3-BSA-026 | MED | Stale deps: `webencodings` (2017), `distro` (2023) exceed the 18-month threshold; `anthropic==0.49.0` far behind current SDK | ⬜ pending |
+
+---
+
 ## Optional / Post-Production Modernization (NOT required for pilot or first production cut; excluded from roll-up)
 
 > Elective architecture/scale/enterprise upgrades for after production launch.
@@ -592,29 +663,37 @@ are out of scope for every SRP item.
 
 ---
 
-## Roll-up — computed by counting rows, 2026-07-25 (overnight batch)
+## Roll-up — computed by counting rows, 2026-07-26 (Audit-2 re-run fold-in)
 
 Counting rule: every row in Phases 0–14 + the Re-audit/RSMP tables counts once.
-The 3 cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 7
-APP-CONF-003, Phase 13 CA row) and the Optional Modernization tables are
-excluded. ◐ = items with one named half done and one open.
+The cross-reference rows (Phase 7 audit-log-tamper-evidence-1, Phase 7
+APP-CONF-003, Phase 13 CA row, and the four R3-BSA IOLoop/breaker cross-refs
+002/003/004/021 that point at P11-4/P11-5) and the Optional Modernization
+tables are excluded. ◐ = items with one named half done and one open.
 This count unions the #780 stream with the staged batches (#808–#815,
-#833–#837, #862–#870, #875–#884).
+#833–#837, #862–#870, #875–#886).
 
-**Net-new rows this pass: 16.** The 2026-07-21 re-audit reported 26 findings;
-only 10 were carried as rows (8 remediated + 2 deferred) and the other 16 were
-carried as the prose phrase "separate scope". They are now enumerated as rows
-in "Remaining findings from the same re-audit", so the register reflects the
-whole audit. Total 199 → 215.
+**Audit-2 re-run fold-in 2026-07-26: +22 net-new rows (215 → 237).** The
+2026-07-25 Backend Security & Authorization re-run (`62c629d`) reported 26
+findings; 4 are pure cross-refs to already-open rows (R3-BSA-002/003/004 →
+P11-4; R3-BSA-021 → P11-5) and the other 22 are enumerated as `R3-BSA-*` rows
+under "Re-audit: Backend Security & Authorization". Two were independently
+verified before fold-in: **R3-BSA-022 CONFIRMED empirically** (the `Application()`
+`max_body_size` is ignored by Tornado — reopens P12-10's upload-limits ✅,
+which moves ✅→◐) and **R3-BSA-012 CONFIRMED** (string-prefix path check).
+None of the 22 is remediated yet.
+
+**Prior net-new (2026-07-21 RDI re-audit): +16.** That re-audit reported 26
+findings; 10 were already rows, the other 16 are enumerated under "Remaining
+findings from the same re-audit". Total 199 → 215 → 237.
 
 Overnight batch 2026-07-25 (PRs #875–#884, all through fix → adversarial
 review → PR → green CI → merge → staging deploy):
-* ✅ item 33 (#880), P12-4 and P12-10 (#875/#877), P13-3 (#883), APP-CONF-003 (#881)
+* ✅ item 33 (#880), P12-4 and P12-10 (#875/#877), P13-3 (#883), APP-CONF-003 (#881), P13-5 (#884 — race-elimination, founder-accepted 2026-07-26)
 * ◐ P9-13 (#881 — cross-client half closed; runtime coverage deliberately
   under-claimed after review mutation-tested it), P9-8 / P9-10 / staging-SHA
   test-login half (#882 — repo halves merged, AWS/DB execution outstanding),
-  P13-5 (#884 — delivered as race-elimination; the literal fail-closed
-  inversion needs founder sign-off), P10-7 (#879 — grants pack completed after
+  P10-7 (#879 — grants pack completed after
   Codex found the maintenance role could not execute the sanctioned purge)
 * Three re-audit findings materially strengthened without being closed:
   RDI-017 and RDI-024 (item 33's veto) and RDI-018 (P10-7 grants).
@@ -624,13 +703,26 @@ Two review REJECTs in this batch were substantive, not cosmetic: a
 removed), and two P9-13 tests that passed with the gate they named deleted
 (one fixed, one deleted as tautological).
 
+**Codex validation 2026-07-26 (of the merged batch): overall FAIL → remediated
+same day by [#886](https://github.com/onboarda1234/onboarda/pull/886).**
+Verdicts: #880 PASS · #881 PASS · #882(c) PASS · #879 PARTIAL (grants
+sufficient but overprivileged → minimised) · #882(a) FAIL (identity guard
+bypassable → positive host allowlist) · #882(b) PARTIAL (DR teardown race →
+waiters) · #883 PARTIAL (valid-JSON `null` error body lost status →
+normalized) · #884 PARTIAL by design (race-elimination, not literal
+fail-closed — Codex concurs the literal inversion is a founder
+risk-acceptance decision; **accepted by the founder 2026-07-26, closing
+P13-5**) · #885 register verdicts
+upheld except the P13-3 row, corrected here. Codex's hold on the runbook §5/§6
+operator steps lifted when #886 merged.
+
 | Status | Count |
 |--------|:--:|
 | ✅ done/merged | 135 |
-| ◐ split — one half open | 19 |
+| ◐ split — one half open | 21 |
 | 🟢 PR open | 0 |
 | 🔨 in progress | 3 |
 | 📋 scoped | 17 |
 | ⏸ blocked | 7 |
-| ⬜ pending | 34 |
-| **Total tracked items** | **215** |
+| ⬜ pending | 54 |
+| **Total tracked items** | **237** |
