@@ -31,11 +31,29 @@ AFTER_CUTOFF = "2026-12-01 09:00:00"
 
 @pytest.fixture
 def apps(temp_db):
+    """Connection that removes every row this module inserts.
+
+    ``applications`` is shared across the suite, so rows left behind here
+    collide with the fixture-seeding tests that run later
+    (``UNIQUE constraint failed: applications.ref``). Track and delete exactly
+    what we insert — never a blanket ``DELETE FROM applications``, which would
+    destroy other tests' state.
+    """
     from db import get_db
 
     conn = get_db()
-    yield conn
-    conn.close()
+    inserted = []
+    conn._inserted_app_ids = inserted
+    try:
+        yield conn
+    finally:
+        if inserted:
+            placeholders = ",".join("?" for _ in inserted)
+            conn.execute(
+                f"DELETE FROM applications WHERE id IN ({placeholders})", inserted
+            )
+            conn.commit()
+        conn.close()
 
 
 def _insert(conn, *, app_id, ref, name, created_at, is_fixture=0):
@@ -45,6 +63,7 @@ def _insert(conn, *, app_id, ref, name, created_at, is_fixture=0):
         (app_id, ref, name, is_fixture, created_at),
     )
     conn.commit()
+    getattr(conn, "_inserted_app_ids", []).append(app_id)
 
 
 def _visible_refs(conn):
