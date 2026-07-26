@@ -591,7 +591,7 @@ are out of scope for every SRP item.
 | R3-BSA-022 | HIGH | **CONFIRMED empirically** — pre-buffer body cap set on `Application()` (ignored by Tornado); real cap is the ~100MB default; per-route caps (10/20/25MB) diverge and run post-buffer | ⬜ pending — pass `max_body_size` to `listen`/`HTTPServer`, one canonical policy; **reopens P12-10** |
 | R3-BSA-023 | MED | Supervisor `_pipeline_cache` is process-local — review-package generation/submission lost on restart, inconsistent across workers | ◐ materially mitigated: the supervisor is `PILOT_SCOPE`-vetoed in staging/production since #880 (post-audit); residual is the cache design for any enterprise enablement |
 | R3-BSA-024 | LOW | `aiosqlite` and `gunicorn` are direct prod pins but never imported (entrypoint is `python server.py`) | ✅ done ([#888](https://github.com/onboarda1234/onboarda/pull/888)) — dropped both pins + regenerated both hash-pinned locks (`packaging` orphan removed from the runtime lock); guard `test_unused_runtime_deps_stay_removed` blocks re-introduction into requirements.txt or the runtime lock |
-| R3-BSA-025 | LOW | WeasyPrint 68.1 `CVE-2026-49452` allowlisted in CI until 2026-08-09 (no fixed release; vulnerable `presentational_hints=True` mode unused) | ✅ done ([#888](https://github.com/onboarda1234/onboarda/pull/888)) — allowlist bounded by two guards: mitigation (no non-`False` `presentational_hints`, whole-backend `rglob` scan) + expiry (fails CI once **2026-08-09** passes, single source of truth in ci.yml). Date **enforced, not moved** — still revisit at expiry |
+| R3-BSA-025 | LOW | WeasyPrint 68.1 `CVE-2026-49452` — the #888 closure allowlisted it in CI on a **false "no fixed release" premise**; **Codex 2026-07-26** found WeasyPrint **69.0 (2026-06-02) is the upstream fix** | ✅ done ([#891](https://github.com/onboarda1234/onboarda/pull/891)) — **upgraded WeasyPrint 68.1→69.0** (the upstream fix), regenerated both hash-pinned locks, and **removed the CI `--ignore-vuln` allowlist** (pip-audit now clears the CVE, verified). Guards: pin `>=69.0` in requirements.txt **and** the lock (blocks a downgrade back into the vulnerable range), CI carries no allowlist for it, and `presentational_hints` stays unused (defense-in-depth). PDF suite + a live render smoke pass on 69.0. Supersedes the #888 allowlist-bounding (correct closure premise) |
 | R3-BSA-026 | MED | Stale deps: `webencodings` (2017), `distro` (2023) exceed the 18-month threshold; `anthropic==0.49.0` far behind current SDK | ◐ risk-accepted (documented, [#888](https://github.com/onboarda1234/onboarda/pull/888)) — `webencodings`/`distro` are already the LATEST upstream (unmaintained, transitive-only) so a bump is a no-op; `anthropic` SDK bump deferred as higher-risk (document-verification path, not hygiene). Compensating control: CI `pip-audit` + hash-pinned locks. Open half = the deferred `anthropic` upgrade |
 
 ---
@@ -719,7 +719,7 @@ operator steps lifted when #886 merged.
 Hygiene batch 2026-07-26 ([#888](https://github.com/onboarda1234/onboarda/pull/888),
 through fix → independent adversarial review → green CI → merge → staging deploy):
 * ✅ **R3-BSA-024** (unused `gunicorn`/`aiosqlite` pins dropped + locks regenerated),
-  **R3-BSA-025** (WeasyPrint CVE allowlist bounded by mitigation + dated-expiry guards),
+  **R3-BSA-025** (WeasyPrint CVE allowlist bounded by mitigation + dated-expiry guards — later corrected: see below),
   **RDI-023** (feature-flag lifecycle registry over all 41 governed flags)
 * ◐ **R3-BSA-026** risk-accepted: the two dormant leaf deps are already latest upstream;
   the `anthropic` SDK bump is deferred (higher-risk, document-verification path)
@@ -728,6 +728,17 @@ through fix → independent adversarial review → green CI → merge → stagin
   externally-resolved flags omitted from the registry (added), and — via the full
   suite — an H1/PC-4 collision where registering the draft Claude-memo flag put its
   name on a config surface (excluded; that flag stays governed by the stronger H1 guard)
+
+**R3-BSA-025 correction 2026-07-26 (Codex validation of #888): FAIL → remediated.**
+Codex found the #888 closure rested on a false premise — the CI comment claimed
+"no fixed WeasyPrint release" but **69.0 (2026-06-02) is the upstream fix for
+CVE-2026-49452**. Bounding an allowlist was the wrong remedy. Corrected by
+upgrading WeasyPrint 68.1→69.0, regenerating both locks, and removing the CI
+`--ignore-vuln` exception (pip-audit clears the CVE; PDF suite + live render pass
+on 69.0). Guards replaced: a `>=69.0` pin check (blocks downgrade) + a
+no-allowlist assertion, keeping the `presentational_hints` mitigation as
+defense-in-depth. The other three #888 items (R3-BSA-024, RDI-023, R3-BSA-026)
+Codex validated as accurately recorded.
 
 | Status | Count |
 |--------|:--:|
