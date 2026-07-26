@@ -73,7 +73,9 @@ shows datapoints (namespace `RegMind/Pilot`, metric `ScreeningQueueLatencyMs`).
 
 Redundant permission-layer enforcement beneath the merged trigger layer
 (#837). The app role loses UPDATE/DELETE/TRUNCATE on `audit_log`; a NOLOGIN
-maintenance role receives them for sanctioned retention purges only.
+maintenance role receives ONLY what the sanctioned purge uses — DELETE (plus
+the reads/marker/evidence set), never UPDATE or TRUNCATE. Re-running the
+script converges a previously-applied broader revision to this minimal set.
 **TRIGGER is deliberately NOT revoked** — the app role owns the table and the
 boot path re-creates the append-only triggers every start; revoking TRIGGER
 would crash-loop the next deploy.
@@ -102,10 +104,12 @@ with TWO end-to-end checks:
 `docs/compliance/MANUAL_PURGE_PROCEDURE.md` habits): the manual audit-log
 retention purge must now execute over an **admin DSN** with
 `SET ROLE regmind_audit_maint` on the SAME connection — the app DSN no longer
-holds DELETE. The script grants the maintenance role the complete purge-path
-set (policy read, window marker INSERT/DELETE + sequence, audit_log
-SELECT+DELETE, data_purge_log evidence INSERT + sequence — Codex validation
-2026-07-25 item 5(b)), and `tests/test_audit_log_grants_pg.py` proves the
+holds DELETE. The script grants the maintenance role the minimal purge-path
+set (policy read, window marker INSERT/SELECT/DELETE + sequence USAGE,
+audit_log SELECT+DELETE, data_purge_log evidence INSERT + sequence USAGE —
+completed per Codex 2026-07-25 item 5(b), minimised per Codex 2026-07-26; the
+evidence VERIFY read in MANUAL_PURGE_PROCEDURE.md step 6 runs as the admin
+role, since the maintenance role deliberately cannot read data_purge_log), and `tests/test_audit_log_grants_pg.py` proves the
 literal script + this exact invocation end-to-end on PostgreSQL in CI.
 Run it from a one-off task container (app code present):
 
@@ -190,8 +194,13 @@ cd arie-backend
 # 1. dry-run — lists exactly what would be deactivated, changes nothing
 python scripts/quarantine_staging_test_logins.py
 
-# 2. apply — all four conditions are required; any missing one refuses
+# 2. apply — ALL FIVE conditions are required; any missing one refuses.
+#    QUARANTINE_ALLOWED_DB_HOST must be the EXACT staging RDS hostname the
+#    resolved connection points at (find it: the host part of DATABASE_URL in
+#    the regmind-staging task definition). A denylist alone proved bypassable —
+#    it accepted the demo DB and an arbitrary PG host (Codex 2026-07-26).
 ENVIRONMENT=staging ALLOW_TEST_LOGIN_QUARANTINE=1 \
+QUARANTINE_ALLOWED_DB_HOST=<staging-rds-hostname> \
 python scripts/quarantine_staging_test_logins.py --apply \
   --confirm I-UNDERSTAND-STAGING-LOGIN-QUARANTINE
 ```
@@ -280,13 +289,26 @@ single-AZ by design; production is tracked separately).
    measured RTO**. The RPO is bounded by the PITR lag reported in step 1.
 
 4. Tear down (the restored instance bills until deleted, and RDS may copy the
-   source's deletion protection):
+   source's deletion protection). **`--apply-immediately` does not block** —
+   deleting before the modification lands fails with deletion protection still
+   active, so poll until it is actually off, and wait for the delete to finish:
 
    ```bash
    aws rds modify-db-instance --db-instance-identifier regmind-dr-drill \
      --no-deletion-protection --apply-immediately --region af-south-1
+
+   # wait until DeletionProtection is REALLY false before deleting
+   until [ "$(aws rds describe-db-instances \
+       --db-instance-identifier regmind-dr-drill --region af-south-1 \
+       --query 'DBInstances[0].DeletionProtection' --output text)" = "False" ]; do
+     echo "waiting for deletion protection to clear…"; sleep 10
+   done
+
    aws rds delete-db-instance --db-instance-identifier regmind-dr-drill \
      --skip-final-snapshot --delete-automated-backups --region af-south-1
+   # confirm the drill instance is actually gone (it bills until it is)
+   aws rds wait db-instance-deleted \
+     --db-instance-identifier regmind-dr-drill --region af-south-1
    ```
 
 5. File the evidence JSON plus the measured RTO/RPO against the P9-8 row.

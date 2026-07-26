@@ -290,7 +290,32 @@ class TestTestLoginQuarantine:
         with pytest.raises(RuntimeError):
             quarantine.assert_quarantine_allowed(
                 "postgresql://u@regmind-staging-db.example/regmind",
-                environment, allow_value=allow, confirm=confirm)
+                environment, allow_value=allow, confirm=confirm,
+                allowed_host="regmind-staging-db.example")
+
+    def test_guard_refuses_without_a_positive_host_allowlist(self):
+        """Codex 2026-07-26: the denylist-only guard accepted the live demo DB
+        and an arbitrary PG host. 'Not obviously production' is not 'the
+        staging database'."""
+        for dsn in ("postgresql://u@demo.regmind.co/demo",
+                    "postgresql://u@attacker.example/anything"):
+            with pytest.raises(RuntimeError):
+                quarantine.assert_quarantine_allowed(
+                    dsn, "staging", allow_value="1",
+                    confirm=quarantine.CONFIRM_TOKEN, allowed_host="")
+
+    def test_guard_refuses_a_host_that_does_not_match_the_allowlist(self):
+        with pytest.raises(RuntimeError):
+            quarantine.assert_quarantine_allowed(
+                "postgresql://u@demo.regmind.co/demo", "staging",
+                allow_value="1", confirm=quarantine.CONFIRM_TOKEN,
+                allowed_host="regmind-staging-db.xyz.af-south-1.rds.amazonaws.com")
+
+    def test_guard_accepts_only_the_exact_allowlisted_host(self):
+        host = "regmind-staging-db.xyz.af-south-1.rds.amazonaws.com"
+        quarantine.assert_quarantine_allowed(
+            f"postgresql://u@{host}/regmind", "staging",
+            allow_value="1", confirm=quarantine.CONFIRM_TOKEN, allowed_host=host)
 
     def test_guard_refuses_when_no_database_identity_resolves(self):
         """Absence of evidence is not evidence of staging."""
@@ -299,18 +324,24 @@ class TestTestLoginQuarantine:
                 "", "staging", allow_value="1", confirm=quarantine.CONFIRM_TOKEN)
 
     def test_guard_refuses_sqlite_and_production_markers(self):
-        for dsn in ("sqlite:///arie.db",
-                    "postgresql://u@prod-db.example/regmind",
-                    "postgresql://u@host/regmind_production"):
+        """The denylist stays as belt-and-braces BELOW the allowlist: even an
+        exactly-allowlisted host is refused if it carries a production marker."""
+        cases = (
+            ("sqlite:///arie.db", "arie.db"),
+            ("postgresql://u@prod-db.example/regmind", "prod-db.example"),
+            ("postgresql://u@host/regmind_production", "host"),
+        )
+        for dsn, host in cases:
             with pytest.raises(RuntimeError):
                 quarantine.assert_quarantine_allowed(
                     dsn, "staging", allow_value="1",
-                    confirm=quarantine.CONFIRM_TOKEN)
+                    confirm=quarantine.CONFIRM_TOKEN, allowed_host=host)
 
     def test_guard_accepts_a_fully_declared_staging_run(self):
         quarantine.assert_quarantine_allowed(
             "postgresql://u@regmind-staging-db.example/regmind",
-            "staging", allow_value="1", confirm=quarantine.CONFIRM_TOKEN)
+            "staging", allow_value="1", confirm=quarantine.CONFIRM_TOKEN,
+            allowed_host="regmind-staging-db.example")
 
 
 class TestQuarantineBehaviour:
@@ -420,3 +451,17 @@ class TestRunbookDocumentsEachOpsStep:
 
     def test_runbook_warns_that_alarms_without_sns_page_nobody(self):
         assert "--alarm-action-arn" in RUNBOOK
+
+    def test_runbook_teardown_waits_for_deletion_protection_and_deletion(self):
+        """Codex 2026-07-26: --apply-immediately does not block; deleting
+        before the modification lands fails with protection still active, and
+        an undeleted drill instance bills forever."""
+        assert "DeletionProtection" in RUNBOOK
+        assert "db-instance-deleted" in RUNBOOK
+        # the poll must come BEFORE the delete command in §6
+        poll_at = RUNBOOK.index("'DBInstances[0].DeletionProtection'")
+        delete_at = RUNBOOK.index("aws rds delete-db-instance")
+        assert poll_at < delete_at
+
+    def test_runbook_quarantine_command_carries_the_host_allowlist(self):
+        assert "QUARANTINE_ALLOWED_DB_HOST" in RUNBOOK

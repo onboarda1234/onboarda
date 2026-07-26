@@ -4383,26 +4383,36 @@ async function boApiCall(method, path, body) {
   }
   try {
     var res = await fetch(BO_API_BASE + path, opts);
-    // FEO-004: parse AFTER the status checks and only when the body is
-    // actually JSON. Parsing first meant a 502 HTML error page, an nginx
-    // plaintext body or a 204 threw SyntaxError here — so the !res.ok branch
-    // below (which builds apiErr.status / .payload / .cmGuidance) never ran,
-    // and every downstream `err.status === 403` check silently mis-classified
-    // a bare SyntaxError that carries no status at all.
+    // FEO-004: the body is read BEFORE the status checks, but through a
+    // reader that NEVER throws — so a 502 HTML page, an nginx plaintext body
+    // or a 204 can no longer abort with a SyntaxError before the !res.ok
+    // branch below builds apiErr.status / .payload / .cmGuidance. (The old
+    // code parsed with res.json() here, and every downstream
+    // `err.status === 403` check silently mis-classified a bare SyntaxError
+    // that carries no status at all.)
     var data = await readApiResponseBody(res);
+    // FEO-004 round 2: a VALID-JSON error body can be null or a scalar
+    // ("null", "0", a bare string). Dereferencing .error on those threw a
+    // TypeError and erased the status — the exact failure this helper exists
+    // to prevent. Error branches read through this normalized object view;
+    // the SUCCESS return below stays verbatim (a 2xx null body returns null,
+    // byte-identical to res.json()).
+    var errData = (data !== null && typeof data === 'object') ? data : {};
     if (res.status === 401 && BO_AUTH_TOKEN && !options.suppressAuthReset && callSessionId && callSessionId === BO_ACTIVE_SESSION_ID) {
       showToast('Your session has expired. Please sign in again.', 'warning');
       clearBoAuthState();
       showLoginScreen();
       throw new Error('Session expired');
     }
-    if (res.status === 401) throw new Error(data.error || 'Authentication required');
+    if (res.status === 401) throw new Error(errData.error || 'Authentication required');
     if (!res.ok) {
-      var guidance = cmLockGuidanceFor(data);
+      var guidance = cmLockGuidanceFor(errData);
       if (guidance) showCmGuidanceToast(guidance);
-      var apiErr = new Error(guidance ? guidance.message : (data.error || 'Request failed'));
+      var apiErr = new Error(guidance ? guidance.message : (errData.error || 'Request failed'));
       apiErr.status = res.status;
-      apiErr.payload = data;
+      // Always an OBJECT: downstream consumers read named keys off
+      // err.payload, and a null payload would TypeError there too.
+      apiErr.payload = errData;
       apiErr.cmGuidance = guidance;
       throw apiErr;
     }
