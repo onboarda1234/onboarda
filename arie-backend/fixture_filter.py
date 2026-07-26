@@ -76,6 +76,15 @@ FIXTURE_APP_ID_PATTERN: str = "f1xed%"
 # created before they were reliably marked with ``is_fixture``. These mirror
 # the Back Office display classifier and deliberately avoid a generic "test"
 # match to reduce false positives.
+#
+# IMPORTANT — these are *substring* matches on applicant-controlled text
+# (``ref`` / ``company_name``). A genuine applicant whose name happens to
+# contain one of these tokens ("Smoke House Trading Ltd", "Fixture Supplies
+# Ltd", "Audit-Pro Ltd") would be silently dropped from every officer's
+# default queue — a real screened subject vanishing from the compliance queue
+# is a worse failure than a fixture leaking in. They are therefore bounded to
+# rows created BEFORE :data:`FIXTURE_TEXT_PATTERN_CUTOFF`; see
+# :func:`_fixture_application_match_clause`.
 FIXTURE_APP_REF_PATTERNS: tuple = (
     "%e2e%",
     "%smoke%",
@@ -97,6 +106,50 @@ FIXTURE_APP_TEXT_PATTERNS: tuple = (
     "%browser-smoke%",
     "%audit-%",
 )
+
+# Upper bound (exclusive) on ``applications.created_at`` for the text-pattern
+# arm above.
+#
+# The text patterns exist solely to catch *historical* smoke/E2E rows created
+# before ``is_fixture`` was reliably set (inline migration v2.29 / file
+# migration 020), while their false-EXCLUSION risk against real applicants
+# grows with every new application.
+#
+# ACCEPTED TRADE-OFF: the in-repo seeders mark rows at write time (``f1xed%``
+# id namespace and/or ``is_fixture``), so they stay excluded at any age. The
+# normal application-creation paths do NOT set either marker, so a test
+# harness that drives the real portal/registry HTTP endpoints produces an
+# unmarked row that, from the cutoff onward, WILL appear in the officer queue.
+# That is the deliberate direction: a leaked fixture is recoverable, a hidden
+# real applicant is not. Harnesses that create applications over HTTP must set
+# ``is_fixture`` or use the ``f1xed`` namespace.
+#
+# RESIDUAL: rows already in the database keep the old behaviour, so a real
+# applicant onboarded BEFORE the cutoff whose name matches a pattern stays
+# hidden. Detection query for founder disposition (each hit is either a real
+# applicant to mark visible or a fixture to mark ``is_fixture=1``):
+#
+#     SELECT id, ref, company_name, created_at FROM applications
+#      WHERE created_at < '2026-07-27 00:00:00'
+#        AND (is_fixture IS NULL OR NOT is_fixture)
+#        AND id NOT LIKE 'f1xed%'
+#        AND (<FIXTURE_APP_REF_PATTERNS on ref OR
+#             FIXTURE_APP_TEXT_PATTERNS on company_name>);
+#
+# Once dispositioned, the heuristic arm and this cutoff can both be deleted.
+#
+# Bounding it to rows created before this timestamp is exactly behaviour
+# preserving for every row that exists today (all of which predate it), and
+# closes the false-exclusion hole for everything created afterwards. Rows with
+# a NULL ``created_at`` are treated as historical so the guard stays
+# fail-closed for fixtures of unknown vintage.
+#
+# The literal is compared as text against a TIMESTAMP column on PostgreSQL
+# (implicitly cast) and against SQLite's ``datetime('now')`` text format
+# ("YYYY-MM-DD HH:MM:SS"), where lexicographic ordering matches chronological
+# ordering. Do NOT move this date forward — doing so re-opens the hole for
+# applications onboarded in the interim.
+FIXTURE_TEXT_PATTERN_CUTOFF: str = "2026-07-27 00:00:00"
 
 # Stable ``ref`` values of historical test rows that pre-date the
 # ``f1xed`` namespace or were created by smoke/QA probes before the Day 1
@@ -148,6 +201,7 @@ def fixture_app_exclude_clause(
     include_text_patterns: bool = False,
     ref_column: Optional[str] = None,
     name_column: Optional[str] = None,
+    created_column: Optional[str] = None,
 ) -> Tuple[str, List[str]]:
     """Return ``(sql_fragment, params)`` that excludes fixture applications.
 
@@ -181,6 +235,7 @@ def fixture_app_exclude_clause(
         table_alias,
         ref_column=ref_column,
         name_column=name_column,
+        created_column=created_column,
     )
     return (
         f"{id_col} NOT LIKE ? AND ({fix_col} IS NULL OR NOT {fix_col}) "
@@ -252,12 +307,18 @@ def fixture_change_alert_exclude_clause(
         application_col,
         include_text_patterns=True,
     )
+    # Harness-produced provenance fields ONLY.
+    #
+    # ``reviewer_notes`` (compliance-officer free text) and ``source_payload``
+    # (raw provider JSON) were previously matched too. Both are wide-open text:
+    # an officer noting "audit-trail reviewed" or "no smoke", or a registry
+    # payload containing "audit-exempt" or a hex id happening to contain "e2e",
+    # silently deleted a real change alert from the CM queue. Neither field says
+    # anything about whether the ROW is a fixture, so neither is matched.
     source_columns = (
         "source_reference",
         "detected_by",
         "summary",
-        "reviewer_notes",
-        "source_payload",
     )
     clauses: List[str] = []
     params: List[str] = []
@@ -308,10 +369,29 @@ def _fixture_application_match_clause(
     *,
     ref_column: Optional[str] = None,
     name_column: Optional[str] = None,
+    created_column: Optional[str] = None,
 ) -> Tuple[str, List[str]]:
-    """Return a positive fixture predicate for an applications table alias."""
+    """Return a positive fixture predicate for an applications table alias.
+
+    The authoritative markers (``f1xed%`` id namespace and ``is_fixture``)
+    match at any age. The heuristic text patterns are additionally bounded to
+    rows created before :data:`FIXTURE_TEXT_PATTERN_CUTOFF` so a genuine
+    applicant whose name merely contains "e2e"/"smoke"/"fixture"/"audit-" is
+    never silently hidden from the officer queue. See the note beside
+    :data:`FIXTURE_APP_REF_PATTERNS`.
+    """
     id_col = f"{table_alias}.id" if table_alias else "id"
     fix_col = f"{table_alias}.is_fixture" if table_alias else "is_fixture"
+    # The vintage bound MUST read the APPLICATION's created_at. A caller whose
+    # alias is a projection/CTE (e.g. the Directors & UBOs report, whose
+    # created_at is MIN(party.created_at)) must pass ``created_column`` so the
+    # bound does not silently key off an unrelated timestamp.
+    created_name = created_column or "created_at"
+    created_col = (
+        f"{table_alias}.{created_name}"
+        if table_alias and "." not in created_name
+        else created_name
+    )
     ref_name = ref_column or "ref"
     name_name = name_column or "company_name"
     ref_col = f"{table_alias}.{ref_name}" if table_alias and "." not in ref_name else ref_name
@@ -321,12 +401,24 @@ def _fixture_application_match_clause(
         f"{fix_col}",
     ]
     params: List[str] = [FIXTURE_APP_ID_PATTERN]
+    text_clauses: List[str] = []
+    text_params: List[str] = []
     for pattern in FIXTURE_APP_REF_PATTERNS:
-        clauses.append(f"LOWER(COALESCE({ref_col}, '')) LIKE ?")
-        params.append(pattern)
+        text_clauses.append(f"LOWER(COALESCE({ref_col}, '')) LIKE ?")
+        text_params.append(pattern)
     for pattern in FIXTURE_APP_TEXT_PATTERNS:
-        clauses.append(f"LOWER(COALESCE({name_col}, '')) LIKE ?")
-        params.append(pattern)
+        text_clauses.append(f"LOWER(COALESCE({name_col}, '')) LIKE ?")
+        text_params.append(pattern)
+    if text_clauses:
+        # Heuristic arm: only ever applies to rows of historical vintage. A
+        # NULL created_at counts as historical (fail-closed for fixtures).
+        clauses.append(
+            "(("
+            + " OR ".join(text_clauses)
+            + f") AND ({created_col} IS NULL OR {created_col} < ?))"
+        )
+        params.extend(text_params)
+        params.append(FIXTURE_TEXT_PATTERN_CUTOFF)
     return "(" + " OR ".join(clauses) + ")", params
 
 

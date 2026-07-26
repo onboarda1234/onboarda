@@ -18875,6 +18875,12 @@ def _directors_ubos_report_cte():
                 u.full_name AS assigned_officer,
                 a.updated_at AS last_updated_at,
                 g.created_at,
+                -- The fixture text-pattern vintage bound must key off the
+                -- APPLICATION's created_at. g.created_at is MIN(party.created_at),
+                -- which moves whenever a director/UBO is re-created, so it would
+                -- classify the same application differently here than on every
+                -- other surface.
+                a.created_at AS application_created_at,
                 a.prescreening_data,
                 a.is_fixture,
                 CASE WHEN EXISTS (SELECT 1 FROM periodic_reviews pr WHERE pr.application_id = g.application_id) THEN 1 ELSE 0 END AS has_periodic_review
@@ -18967,6 +18973,8 @@ def _directors_ubos_report_scope_from_request(handler, user):
             include_text_patterns=True,
             ref_column="application_ref",
             name_column="company_name",
+            # NOT report_rows.created_at — that is MIN(party.created_at).
+            created_column="application_created_at",
         )
         conditions.append(fx_excl)
         params.extend(fx_params)
@@ -24607,7 +24615,26 @@ def _screening_queue_row_triage(row):
 
     items = ((row.get("screening_evidence") or {}).get("items")) or []
     buckets = {"sanctions": 0, "pep": 0, "adverse_media": 0, "watchlist": 0, "other": 0}
-    scored, weak, unscored = [], 0, 0
+    # SRP-3 Phase F (F4) — reconciliation split.
+    #
+    # ``buckets`` counts EVERY hit in its category and ``weak_count`` re-counts
+    # the below-threshold ones across all categories, so the two overlap: a
+    # weak watchlist hit is in both. The review page renders them as adjacent
+    # tiles, which reads as a partition and overstated the material exposure
+    # (e.g. "15 Sanctions & watchlist" for a subject with zero of either, all
+    # 15 being weak name-only matches also counted in the weak tile).
+    #
+    # These additive fields express the partition the hit list already
+    # performs — every below-threshold hit is pulled out of its section and
+    # rendered in the weak tail — so counts and list agree:
+    #     sum(section_buckets) + weak_tail_count == total
+    #
+    # Sanctions are deliberately exempt from the tail: a sanctions hit is
+    # material regardless of how the name-match scored, and must never be
+    # buried behind a "weak name-only" disclosure.
+    section_buckets = {"sanctions": 0, "pep": 0, "adverse_media": 0, "watchlist": 0, "other": 0}
+    weak_buckets = {"sanctions": 0, "pep": 0, "adverse_media": 0, "watchlist": 0, "other": 0}
+    scored, weak, weak_tail, unscored = [], 0, 0, 0
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -24616,7 +24643,21 @@ def _screening_queue_row_triage(row):
         )
         buckets[category_key] += 1
         score = item.get("triage_score")
-        if isinstance(score, (int, float)):
+        # ``bool`` is a subclass of ``int`` — a stored ``true``/``false`` would
+        # otherwise score as 1/0 and be silently classed "weak". The client
+        # uses ``typeof === 'number'``, which excludes booleans, so excluding
+        # them here keeps the two partitions identical.
+        numeric = isinstance(score, (int, float)) and not isinstance(score, bool)
+        is_weak = numeric and score < _TRIAGE_WEAK_THRESHOLD
+        if is_weak:
+            weak_buckets[category_key] += 1
+        # Unscored hits are never assumed weak — they stay in-section and are
+        # disclosed separately as "unscored".
+        if is_weak and category_key != "sanctions":
+            weak_tail += 1
+        else:
+            section_buckets[category_key] += 1
+        if numeric:
             if score < _TRIAGE_WEAK_THRESHOLD:
                 weak += 1
             scored.append({
@@ -24636,6 +24677,12 @@ def _screening_queue_row_triage(row):
         "total": sum(buckets.values()),
         "buckets": buckets,
         "weak_count": weak,
+        # Additive reconciliation fields (see note above). Legacy ``buckets``
+        # and ``weak_count`` keep their original overlapping semantics for
+        # back-compatibility with stored/cached payloads.
+        "section_buckets": section_buckets,
+        "weak_buckets": weak_buckets,
+        "weak_tail_count": weak_tail,
         "unscored_count": unscored,
         "weak_threshold": _TRIAGE_WEAK_THRESHOLD,
         "top_hits": scored[:5],
@@ -36901,7 +36948,21 @@ def _monitoring_list_extra_fixture_clause():
             params.append(pattern)
     if not clauses:
         return "", []
-    return " AND NOT (" + " OR ".join(clauses) + ")", params
+    # Same vintage bound as fixture_filter's heuristic arm. These patterns match
+    # applicant-controlled text (app.ref / app.company_name) and alert text
+    # (ma.summary / ma.client_name), so unbounded they hide a REAL client's
+    # monitoring alerts forever — a sanctions-change or adverse-media alert on a
+    # live client silently vanishing from the monitoring queue. Applications
+    # created from the cutoff onward are classified by the authoritative markers
+    # only. NULL created_at counts as historical (fail-closed for fixtures).
+    from fixture_filter import FIXTURE_TEXT_PATTERN_CUTOFF
+
+    params.append(FIXTURE_TEXT_PATTERN_CUTOFF)
+    return (
+        " AND NOT ((" + " OR ".join(clauses) + ")"
+        " AND (app.created_at IS NULL OR app.created_at < ?))",
+        params,
+    )
 
 
 MONITORING_DECISION_OUTCOMES = {

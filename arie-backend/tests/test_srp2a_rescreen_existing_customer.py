@@ -1311,10 +1311,17 @@ class TestMockupGapStaticPins:
         assert "screeningTriageHitCard(row, entry.item, entry.index, weakThreshold)" in overflow_block
 
     def test_bucket_header_counts_stay_full_server_numbers(self, html):
+        # Original intent (preserved): the header shows a SERVER-computed count,
+        # never the number of cards left after the per-bucket visible cap.
+        # Phase F (F4) changed which server number: section_buckets (what the
+        # section renders) rather than the legacy overlapping buckets, with the
+        # below-threshold remainder disclosed alongside it.
         sections = _extract_js_function(html, "screeningTriageRankedHitSections")
-        assert "var serverCount = buckets[meta.key] != null ? Number(buckets[meta.key]) : 0;" in sections
+        assert "var serverCount = sectionBuckets[meta.key] != null ? Number(sectionBuckets[meta.key]) : 0;" in sections
         assert "String(serverCount) + ' matches'" in sections, \
-            "header count must remain the full server-computed number, not the capped count"
+            "header count must remain the server-computed number, not the capped count"
+        assert "below threshold, in weak tail" in sections, \
+            "the tailed remainder must be disclosed, not silently dropped"
 
     def test_weak_tail_section_unchanged(self, html):
         tail = _extract_js_function(html, "screeningTriageWeakTailSection")

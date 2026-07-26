@@ -35,7 +35,9 @@ Usage::
     python3 seed_screening_qa_fixtures.py --wipe   # remove the set
 
 The seeder is idempotent (each run deletes and re-inserts the fixed refs) and
-refuses to run when ``ENVIRONMENT`` is ``production``.
+runs only in the environments listed in :data:`SEEDER_ALLOWED_ENVIRONMENTS`
+(testing / test / staging) — anything else, including an unset ``ENVIRONMENT``,
+is refused.
 """
 
 import json
@@ -204,11 +206,49 @@ FIXTURES = [
 FIXTURE_REFS = tuple(f["ref"] for f in FIXTURES)
 
 
+# Fail-closed allow-list of environments this seeder may write to.
+#
+# The previous guard denied only the literal string ``"production"``: an unset,
+# empty, misspelt or simply unrecognised ``ENVIRONMENT`` ("prod", "PRODUCTION "
+# with stray whitespace, or a production database whose env var was never
+# wired) passed this check. In practice such a run still failed closed, because
+# :func:`seed_screening_qa_fixtures` wipes before it inserts and the wipe enters
+# the ``fixture_cleanup_nonprod`` regulated-delete context, which refuses any
+# environment outside testing/test/staging — so no SQL executed. This guard is
+# therefore defense in depth and legibility, not the removal of a reachable
+# production-write path: it fails at the seeder's own boundary, with an
+# actionable message, instead of surfacing an opaque ValueError from the
+# deletion layer.
+#
+# The set MUST stay a subset of the ``fixture_cleanup_nonprod`` policy in
+# ``regulated_deletion._validate_context``. Advertising an environment that the
+# deletion layer then rejects sends operators down a dead end, and would leave
+# the INSERT path declaring a wider policy than anything actually enforces it.
+# ``test_seeder_environment_allowlist.py`` pins that subset relationship.
+#
+# ACCEPTED RESIDUAL RISK — ``staging`` is also the pilot stack
+# (staging.regmind.co, per CLAUDE.md), so a single unconfirmed CLI run can
+# write fixtures into a pilot database. Blast radius is bounded (five
+# hard-coded ``f1xed*`` ids plus the qafix client, all ``is_fixture=True`` and
+# therefore hidden from the default officer queue), but the runbook records two
+# effects the wipe cannot undo: fixture-linked ``edd_cases`` are not cleared,
+# and re-seeding reuses application ids, which conflicts on the live
+# ComplyAdvantage Mesh account. ``arie-backend/fixtures/cli.py`` already
+# implements the stronger pattern (ENVIRONMENT=staging AND ALLOW_FIXTURE_SEED=1
+# AND an explicit --confirm token); adopting it here is the tracked follow-up.
+# It is deliberately NOT changed in this commit because it alters the operator
+# contract documented in the screening operations runbook.
+SEEDER_ALLOWED_ENVIRONMENTS = frozenset({"testing", "test", "staging"})
+
+
 def _guard_environment():
     environment = str(os.environ.get("ENVIRONMENT") or "").strip().lower()
-    if environment == "production":
+    if environment not in SEEDER_ALLOWED_ENVIRONMENTS:
         raise RuntimeError(
-            "seed_screening_qa_fixtures refuses to run with ENVIRONMENT=production"
+            "seed_screening_qa_fixtures refuses to run with ENVIRONMENT="
+            + (environment or "(unset)")
+            + " — seeding is allowed only in: "
+            + ", ".join(sorted(SEEDER_ALLOWED_ENVIRONMENTS))
         )
 
 
