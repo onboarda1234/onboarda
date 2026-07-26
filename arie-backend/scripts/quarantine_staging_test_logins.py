@@ -20,13 +20,19 @@ ADMIN-AUDIT-006 ("remove **or quarantine**").
 Every status change writes an `audit_log` row with before/after state, matching
 what the application's own user-status control records.
 
-Default mode is DRY-RUN, and `--apply` requires the same class of positive
-guard the role-matrix harness uses (explicit staging environment + confirm
-token + a database identity check against the connection actually in use).
+Default mode is DRY-RUN, and `--apply` requires the same POSITIVE guard set the
+role-matrix harness uses: explicit staging environment + allowlist var +
+confirm token + an EXACT host match between the resolved connection and
+QUARANTINE_ALLOWED_DB_HOST. Codex validation 2026-07-26 proved the earlier
+denylist-only identity check accepted the live demo database and an arbitrary
+PostgreSQL host; a denylist proves "not obviously production", never "the
+staging database".
 
 Usage:
     python scripts/quarantine_staging_test_logins.py     # dry-run
-    ALLOW_TEST_LOGIN_QUARANTINE=1 python scripts/quarantine_staging_test_logins.py \
+    ENVIRONMENT=staging ALLOW_TEST_LOGIN_QUARANTINE=1 \
+    QUARANTINE_ALLOWED_DB_HOST=<staging-rds-hostname> \
+    python scripts/quarantine_staging_test_logins.py \
         --apply --confirm I-UNDERSTAND-STAGING-LOGIN-QUARANTINE
 """
 
@@ -45,6 +51,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 PRODUCTION_MARKERS = ("production", "prod-db", "prod_", "-prod", ".prod.")
 CONFIRM_TOKEN = "I-UNDERSTAND-STAGING-LOGIN-QUARANTINE"
 ALLOW_ENV = "ALLOW_TEST_LOGIN_QUARANTINE"
+# Positive identity allowlist (Codex validation 2026-07-26): the previous
+# guard proved only "PostgreSQL and not obviously production" — it accepted
+# the live demo database and an arbitrary attacker host. The operator must
+# name the exact staging DB host, mirroring the role-matrix harness's
+# ROLE_AUDIT_ALLOWED_DB_HOST.
+ALLOWED_HOST_ENV = "QUARANTINE_ALLOWED_DB_HOST"
 
 # Seeded demo personas. These are fictional and must not survive a pilot
 # window; the founder account is protected below and never appears here.
@@ -75,7 +87,8 @@ PROTECTED_EMAILS = (
 )
 
 def assert_quarantine_allowed(database_url: str, environment: str,
-                              allow_value: str = None, confirm: str = None) -> None:
+                              allow_value: str = None, confirm: str = None,
+                              allowed_host: str = None) -> None:
     """Fail CLOSED — positive checks only, mirroring enforce_staging_seed_guard.
 
     An earlier revision checked only "environment is not production" plus a
@@ -98,7 +111,22 @@ def assert_quarantine_allowed(database_url: str, environment: str,
         raise RuntimeError(
             "REFUSED: the staging database must be PostgreSQL; refusing to run "
             f"against {parsed.scheme or 'an unidentified engine'}.")
-    identity = f"{(parsed.hostname or '').lower()}/{parsed.path.lstrip('/').lower()}"
+    host = (parsed.hostname or "").lower()
+    identity = f"{host}/{parsed.path.lstrip('/').lower()}"
+    # POSITIVE allowlist first — a denylist proves "not obviously production",
+    # not "the staging database". The demo DB and an arbitrary PG host both
+    # sailed through the denylist-only revision.
+    allowed_host = (allowed_host if allowed_host is not None
+                    else os.environ.get(ALLOWED_HOST_ENV, "")).strip().lower()
+    if not allowed_host:
+        raise RuntimeError(
+            f"REFUSED: {ALLOWED_HOST_ENV} must name the exact staging DB host "
+            "(compare the harness's ROLE_AUDIT_ALLOWED_DB_HOST).")
+    if host != allowed_host:
+        raise RuntimeError(
+            f"REFUSED: resolved DB host {host!r} does not match "
+            f"{ALLOWED_HOST_ENV}={allowed_host!r}.")
+    # Denylist retained as belt-and-braces beneath the allowlist.
     if any(marker in identity for marker in PRODUCTION_MARKERS):
         raise RuntimeError(
             f"REFUSED: database identity {identity!r} contains a production marker.")

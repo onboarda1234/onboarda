@@ -162,6 +162,14 @@ def test_script_applies_and_privileges_land(grants_env, applied):
                 "app_select": ("has_table_privilege(%s,'audit_log','SELECT')", grants_env["app_role"], True),
                 "maint_delete": ("has_table_privilege(%s,'audit_log','DELETE')", grants_env["maint_role"], True),
                 "maint_select": ("has_table_privilege(%s,'audit_log','SELECT')", grants_env["maint_role"], True),
+                # Minimality (Codex 2026-07-26): the purge never runs UPDATE or
+                # TRUNCATE, never reads data_purge_log, and nextval needs only
+                # USAGE — an append-only maintenance role must not hold any of
+                # them.
+                "maint_update": ("has_table_privilege(%s,'audit_log','UPDATE')", grants_env["maint_role"], False),
+                "maint_truncate": ("has_table_privilege(%s,'audit_log','TRUNCATE')", grants_env["maint_role"], False),
+                "maint_ev_sel": ("has_table_privilege(%s,'data_purge_log','SELECT')", grants_env["maint_role"], False),
+                "maint_ev_seq_sel": ("has_sequence_privilege(%s,'data_purge_log_id_seq','SELECT')", grants_env["maint_role"], False),
                 "maint_policy": ("has_table_privilege(%s,'data_retention_policies','SELECT')", grants_env["maint_role"], True),
                 "maint_win_ins": ("has_table_privilege(%s,'audit_maintenance_window','INSERT')", grants_env["maint_role"], True),
                 "maint_win_del": ("has_table_privilege(%s,'audit_maintenance_window','DELETE')", grants_env["maint_role"], True),
@@ -204,6 +212,26 @@ def test_app_role_is_append_only(grants_env, applied):
                 cur.execute(
                     "DELETE FROM audit_log WHERE action = %s", ("grants-pg-test-insert",)
                 )
+        dbw.rollback()
+    finally:
+        _close(dbw)
+
+
+def test_maintenance_role_cannot_update_or_read_evidence(grants_env, applied):
+    """Minimality is behavioural, not just a privilege matrix: UPDATE on
+    audit_log and SELECT on data_purge_log must actually be refused."""
+    import psycopg2
+    dbw = _wrapped(grants_env, grants_env["admin_scratch_dsn"], "admin-maint-neg")
+    try:
+        dbw.execute(f"SET ROLE \"{grants_env['maint_role']}\"")
+        with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+            with dbw.conn.cursor() as cur:
+                cur.execute("UPDATE audit_log SET action = 'tampered' WHERE 1=0")
+        dbw.rollback()
+        dbw.execute(f"SET ROLE \"{grants_env['maint_role']}\"")
+        with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+            with dbw.conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM data_purge_log")
         dbw.rollback()
     finally:
         _close(dbw)
@@ -260,11 +288,16 @@ def test_sanctioned_purge_under_maintenance_role(grants_env, applied):
         assert "grants-pg-test-expired" not in actions
         assert "grants-pg-test-recent" in actions
 
+        # Evidence verification happens over the ADMIN role — the minimal
+        # grant deliberately withholds data_purge_log SELECT from the
+        # maintenance role, and the runbook's verify step reads as admin too.
+        dbw.execute("RESET ROLE")
         evidence = dbw.execute(
             "SELECT * FROM data_purge_log WHERE purge_batch_id = ?", (batch_id,)
         ).fetchone()
         assert evidence is not None, "DCI-021: purge must not commit without evidence"
         assert evidence["data_category"] == "audit_logs"
+        dbw.execute(f"SET ROLE \"{grants_env['maint_role']}\"")
 
         window = dbw.execute("SELECT COUNT(*) AS c FROM audit_maintenance_window").fetchone()
         assert window["c"] == 0, "maintenance-window marker must not survive the purge"

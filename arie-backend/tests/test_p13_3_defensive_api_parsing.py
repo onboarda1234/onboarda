@@ -149,6 +149,24 @@ class TestErrorObjectFidelity:
         assert result["status"] == 500
         assert result["name"] != "SyntaxError"
 
+    def test_valid_json_null_error_body_keeps_its_status(self):
+        """Codex validation 2026-07-26: a non-2xx body of literal `null` is
+        VALID JSON, so the reader returned JavaScript null — and boApiCall
+        then dereferenced data.error, throwing a status-less TypeError. That
+        recreates the central FEO-004 failure mode for a valid JSON body."""
+        result = self._call_with(_response(status=403, body="null"))
+        assert result["threw"] is True
+        assert result["status"] == 403
+        assert result["name"] not in ("TypeError", "SyntaxError"), result
+        assert result["hasPayload"] is True  # payload normalized to an object
+
+    def test_scalar_json_error_bodies_keep_their_status(self):
+        for body in ('"upstream said no"', "0", "false"):
+            result = self._call_with(_response(status=500, body=body))
+            assert result["threw"] is True, body
+            assert result["status"] == 500, body
+            assert result["name"] not in ("TypeError", "SyntaxError"), (body, result)
+
     def test_missing_headers_object_does_not_crash(self):
         """Several runtime harnesses mock responses without a headers object;
         a naive res.headers.get() would TypeError."""
@@ -184,6 +202,19 @@ class TestSuccessPathUnchanged:
             }})();
         """))
         assert result["data"] == payload
+
+    def test_2xx_null_body_is_returned_verbatim(self):
+        """The success path must stay byte-identical to res.json(): the error
+        normalization applies ONLY to error branches, so a 2xx null body
+        returns null, not {}."""
+        result = _run(textwrap.dedent(f"""
+            global.fetch = async () => ({_response(status=200, body="null")});
+            (async () => {{
+              const data = await boApiCall('GET', '/x');
+              console.log(JSON.stringify({{ data, isNull: data === null }}));
+            }})();
+        """))
+        assert result["isNull"] is True
 
     def test_204_no_content_returns_an_empty_object_not_a_throw(self):
         """A real 204 carries a JSON content-type and an EMPTY body, so
