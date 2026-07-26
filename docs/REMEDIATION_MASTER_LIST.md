@@ -320,7 +320,7 @@ are out of scope for every SRP item.
 | P13-2 | Single API wrapper + consistent CSRF for all 23 raw `fetch()` sites (FEO-003) | MED | — | 📋 scoped | — |
 | P13-3 | Defensive API response parsing — status/Content-Type before `res.json()` (FEO-004) | MED | [#883](https://github.com/onboarda1234/onboarda/pull/883) | ✅ merged (`0acbcc4`) 2026-07-25 — `boApiCall` (transport for ~161 sites incl. every frozen decision/memo/detail path) parsed BEFORE its status checks, so a non-JSON error threw SyntaxError and the branch building `apiErr.status`/`.payload` never ran; downstream `err.status === 403` checks were testing a status-less SyntaxError. Review verified success-path identity across 84 body-shape × content-type combinations (incl. `null`/`false`/`0`/`""`/arrays) — the only divergences are cases where the old code threw. Review REJECT r2 caught two real defects, both fixed: the new helper broke `test_p13_backoffice_xss_static.py` (red CI — it is defined outside the regions that test slices, so converted renderers hit a swallowed ReferenceError), and it silently returned `{}` for any response exposing neither `headers` nor `text()` — the repo's house mock shape — now falling back to `res.json()`. One of its own tests was proven vacuous and fixed. **Codex validation 2026-07-26: PARTIAL** — a valid-JSON `null` error body still lost its status (boApiCall dereferenced `data.error` → status-less TypeError); closed by [#886](https://github.com/onboarda1234/onboarda/pull/886) (error branches read a normalized object view; success path verbatim, 2xx `null` returns `null`, pinned + mutation-verified) | — |
 | P13-4 | App-detail render race guard — request nonce in `openAppDetail` (FEO-005) | MED | — | 📋 scoped | — |
-| P13-5 | Role-UI fail-closed until RBAC matrix loads (FEO-006) | LOW | [#884](https://github.com/onboarda1234/onboarda/pull/884) | ◐ **delivered as race-elimination, NOT as fail-closed** — merged (`f0f7a81`) 2026-07-25: the matrix now settles before the shell paints (bounded 3s so sign-in cannot be blocked), removing the optimistic-render window, and a failed load is surfaced via the degraded-load banner. The literal fail-CLOSED inversion was NOT done — `test_approval_ux_gates_static.py::test_ux_gates_fail_open_when_permission_matrix_unloaded` pins fail-open by name after a staging smoke blocker (a legitimate CO lost Approve); **inverting it needs founder sign-off**. Independent review upheld that call on stronger grounds: the decision actions already `await` the matrix before acting and the server enforces roles on every decision endpoint, so FEO-006's residual content is a cosmetic flicker, not an authz hole. It also cleared the cross-session question — `/config/roles-permissions` returns a module-level STATIC matrix, identical for every caller, so no per-user matrix can leak. Review REJECT r2 caught that the first revision was a silent NO-OP on the common auto-login path (`resetBackofficeSessionData()` nulled the preloaded matrix between kick-off and settle, and the settle still reported success, suppressing the banner); fixed by hoisting the reset, with runtime tests that drive the real sequence rather than its shape | — |
+| P13-5 | Role-UI fail-closed until RBAC matrix loads (FEO-006) | LOW | [#884](https://github.com/onboarda1234/onboarda/pull/884) | ✅ **closed as race-elimination, founder-accepted (Aisha Sudally, 2026-07-26)** — merged (`f0f7a81`) 2026-07-25: the matrix now settles before the shell paints (bounded 3s so sign-in cannot be blocked), removing the optimistic-render window, and a failed load is surfaced via the degraded-load banner. The literal fail-CLOSED inversion was NOT done — `test_approval_ux_gates_static.py::test_ux_gates_fail_open_when_permission_matrix_unloaded` pins fail-open by name after a staging smoke blocker (a legitimate CO lost Approve); **the founder accepted the race-elimination version as satisfying the item's intent (2026-07-26)** — the literal inversion is declined: it would trade a cosmetic flicker (every decision action is re-checked server-side and awaits the matrix before acting) for re-creating a known lockout of a legitimate officer. Independent review upheld that call on stronger grounds: the decision actions already `await` the matrix before acting and the server enforces roles on every decision endpoint, so FEO-006's residual content is a cosmetic flicker, not an authz hole. It also cleared the cross-session question — `/config/roles-permissions` returns a module-level STATIC matrix, identical for every caller, so no per-user matrix can leak. Review REJECT r2 caught that the first revision was a silent NO-OP on the common auto-login path (`resetBackofficeSessionData()` nulled the preloaded matrix between kick-off and settle, and the settle still reported success, suppressing the banner); fixed by hoisting the reset, with runtime tests that drive the real sequence rather than its shape | — |
 | P13-6 | Portal intake PII out of sessionStorage — server-side save/resume (FEO-007) | MED | — | 📋 scoped | — |
 | 🟠 P13-7 | Compliance-officer SOP pack (FEO-014) | MED | [#745](https://github.com/onboarda1234/onboarda/pull/745) | ◐ docs ✅ merged 2026-07-13 (`02eeae5`) · 🟠 Section 16 execution open (officers named/trained, scope approved, signatures) | [E](compliance/REMEDIATION_CLOSURE_EVIDENCE.md#p13-7-pr-745) |
 
@@ -609,12 +609,11 @@ whole audit. Total 199 → 215.
 
 Overnight batch 2026-07-25 (PRs #875–#884, all through fix → adversarial
 review → PR → green CI → merge → staging deploy):
-* ✅ item 33 (#880), P12-4 and P12-10 (#875/#877), P13-3 (#883), APP-CONF-003 (#881)
+* ✅ item 33 (#880), P12-4 and P12-10 (#875/#877), P13-3 (#883), APP-CONF-003 (#881), P13-5 (#884 — race-elimination, founder-accepted 2026-07-26)
 * ◐ P9-13 (#881 — cross-client half closed; runtime coverage deliberately
   under-claimed after review mutation-tested it), P9-8 / P9-10 / staging-SHA
   test-login half (#882 — repo halves merged, AWS/DB execution outstanding),
-  P13-5 (#884 — delivered as race-elimination; the literal fail-closed
-  inversion needs founder sign-off), P10-7 (#879 — grants pack completed after
+  P10-7 (#879 — grants pack completed after
   Codex found the maintenance role could not execute the sanctioned purge)
 * Three re-audit findings materially strengthened without being closed:
   RDI-017 and RDI-024 (item 33's veto) and RDI-018 (P10-7 grants).
@@ -632,14 +631,15 @@ bypassable → positive host allowlist) · #882(b) PARTIAL (DR teardown race →
 waiters) · #883 PARTIAL (valid-JSON `null` error body lost status →
 normalized) · #884 PARTIAL by design (race-elimination, not literal
 fail-closed — Codex concurs the literal inversion is a founder
-risk-acceptance decision, tracked on the P13-5 row) · #885 register verdicts
+risk-acceptance decision; **accepted by the founder 2026-07-26, closing
+P13-5**) · #885 register verdicts
 upheld except the P13-3 row, corrected here. Codex's hold on the runbook §5/§6
 operator steps lifted when #886 merged.
 
 | Status | Count |
 |--------|:--:|
-| ✅ done/merged | 135 |
-| ◐ split — one half open | 19 |
+| ✅ done/merged | 136 |
+| ◐ split — one half open | 18 |
 | 🟢 PR open | 0 |
 | 🔨 in progress | 3 |
 | 📋 scoped | 17 |
