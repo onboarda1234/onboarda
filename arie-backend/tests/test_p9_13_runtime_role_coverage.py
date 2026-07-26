@@ -13,34 +13,31 @@ passed vacuously — one of the harness's advertised 53 checks was a false
 positive from the day #733 merged. `TestHarnessCrossTenantSeedInvariant`
 pins the invariant so it cannot silently revert.
 
-**Runtime coverage — what is and is NOT covered here.** The pre-existing
-entrypoint test probes actions against a *non-existent* application id, so it
-proves only that the `require_auth` decorator fires. This file adds probes
-against REAL seeded rows, which reach in-handler rules the decorator cannot.
-Adversarial review mutation-tested an earlier revision and proved two of its
-tests passed with the very gate they named deleted; the honest ledger is:
+**Runtime coverage — mutation-verified deep-handler boundaries.** The
+pre-existing entrypoint test probes actions against a *non-existent*
+application id, so it proves only that the `require_auth` decorator fires.
+This file adds probes against realistic seeded rows that reach the in-handler
+rules the decorator cannot:
 
-  COVERED (mutation-verified to fail when the rule is removed):
-    * decision authority — CO refused approve on HIGH. The probed row is
-      assigned TO that CO deliberately: assigned elsewhere,
-      authorize_signoff_ownership refuses first and the authority rule is
-      never reached (that was the earlier false pass).
-    * IDV senior-outcome escalation (`_idv_resolution_role_error`).
-    * reassignment authority (senior-only `assigned_to` change).
-    * cross-tenant isolation, both directions, with a positive control.
+  * decision authority — CO refused approve on HIGH on its own assigned case;
+  * HIGH dual control — a decision-ready case passes risk provenance, memo,
+    document, screening and IDV prerequisites before same-officer rejection;
+  * memo approval — peer-supervisor ownership requires an explicit override;
+  * screening — CO is admitted by the decorator but refused at the sensitive
+    second-review senior-role gate;
+  * IDV read — unmatched reconciliation evidence is visible to admin/SCO only;
+  * IDV senior-outcome escalation (`_idv_resolution_role_error`);
+  * reassignment authority (senior-only `assigned_to` change);
+  * cross-tenant isolation, both directions, with a positive control.
 
-  NOT COVERED, deliberately and stated rather than implied:
-    * dual control — see the note above `_approve_payload`.
-    * memo approve, screening review admission, IDV read: these reach only
-      the decorator, duplicating coverage that already exists in
-      test_application_role_matrix.py. They are kept as cheap regression
-      pins, not claimed as new in-handler coverage.
-    * the two deepest screening role rules — pinned statically by
-      TestScreeningRoleRulesArePinned below.
-
-These are role-boundary assertions only: every probe asserts an authorization
-outcome, never a workflow result, so nothing here depends on (or pins) the
-frozen Application Review workflow behaviour.
+Each newly deepened authorization assertion was self-adversarially
+mutation-verified: deleting or loosening its named server-side check turns the
+targeted test red. The remaining screening clearance-disposition role rule is
+also pinned statically by `TestScreeningRoleRulesArePinned`. Success-path
+assertions are reachability controls: they prove the realistic fixture can
+advance past the prerequisite chain before the authorization denial under
+test. This is test-only coverage; no Application Review or Screening Queue
+production handler is changed.
 """
 
 import json
@@ -48,7 +45,7 @@ import os
 import sys
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("ENVIRONMENT", "testing")
@@ -62,6 +59,30 @@ from scripts.qa.application_role_matrix_harness import (
 )
 
 OFFICER_ROLES = ("admin", "sco", "co", "analyst")
+
+
+def _live_clear_prescreening():
+    now = datetime.now(timezone.utc)
+    return json.dumps({
+        "screening_report": {
+            "screening_mode": "live",
+            "screened_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
+            "company_screening": {
+                "provider": "complyadvantage",
+                "source": "complyadvantage",
+                "api_status": "live",
+                "matched": False,
+                "results": [],
+                "provider_references": {"case_id": "ca-p913-decision-ready"},
+            },
+            "company_registry": {"api_status": "live"},
+            "ip_geolocation": {"api_status": "live"},
+        },
+        "screening_valid_until": (
+            now + timedelta(days=90)
+        ).strftime("%Y-%m-%dT%H:%M:%S"),
+        "screening_validity_days": 90,
+    })
 
 
 class TestHarnessCrossTenantSeedInvariant:
@@ -225,10 +246,29 @@ class RuntimeRoleCoverageTest(AsyncHTTPTestCase):
         # fires FIRST and the test passes even with the authority gate deleted
         # (proven by mutation testing in review).
         self._seed_app("high_risk", status="compliance_review", risk="HIGH", assigned_to="p13_co")
-        self._seed_app("memo_stage", status="compliance_review", assigned_to="p13_sco")
+        self._seed_decision_ready_high_risk_app(
+            "dual_control", assigned_to="p13_sco")
+        memo_app = self._seed_app(
+            "memo_stage", status="compliance_review", assigned_to="p13_sco_peer")
+        self._seed_compliance_memo(memo_app["id"])
+        self._seed_sensitive_screening_app()
         self._seed_app("idv_stage", status="kyc_documents", risk="HIGH", assigned_to="p13_sco")
         self._seed_app("assign_stage", status="compliance_review", assigned_to="p13_co")
         self._seed_app("other_tenant", status="draft", client_id="p13_other_client")
+        self.db.execute(
+            """
+            INSERT INTO sumsub_unmatched_webhooks
+                (applicant_id, external_user_id, event_type, review_answer,
+                 payload, status, received_at)
+            VALUES (?, ?, 'applicantReviewed', 'RED', '{}', 'pending', ?)
+            """,
+            (
+                f"p13-unmatched-{uuid.uuid4().hex[:10]}",
+                "p13-unreconciled-person",
+                datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ),
+        )
+        self.db.commit()
 
     def tearDown(self):
         try:
@@ -266,6 +306,153 @@ class RuntimeRoleCoverageTest(AsyncHTTPTestCase):
         self.db.commit()
         self.apps[label] = {"id": app_id, "ref": ref, "status": status}
         return self.apps[label]
+
+    def _seed_compliance_memo(self, app_id):
+        self.db.execute(
+            """
+            INSERT INTO compliance_memos
+                (application_id, memo_data, generated_by, ai_recommendation,
+                 review_status, quality_score, validation_status,
+                 supervisor_status, approval_reason)
+            VALUES (?, ?, 'system', 'APPROVE', 'approved', 9.0, 'pass',
+                    'CONSISTENT', 'P9-13 fixture approval reason')
+            """,
+            (
+                app_id,
+                json.dumps({
+                    "ai_source": "deterministic",
+                    "metadata": {
+                        "ai_source": "deterministic",
+                        "edd_routing": {"route": "standard", "triggers": []},
+                    },
+                    "supervisor": {
+                        "verdict": "CONSISTENT",
+                        "can_approve": True,
+                        "mandatory_escalation": False,
+                    },
+                }),
+            ),
+        )
+        self.db.commit()
+
+    def _seed_decision_ready_high_risk_app(self, label, *, assigned_to):
+        """A production-shaped HIGH case that reaches the dual-control gate.
+
+        This deliberately mirrors the proven authority-matrix fixture instead
+        of bypassing gates: current risk provenance, live-clear screening,
+        canonical memo, verified required documents, accepted enhanced-review
+        requirement, and webhook-backed client IDV are all present.
+        """
+        from rule_engine import _get_validated_risk_config_version_strict
+        from tests.conftest import insert_verified_required_documents
+
+        app = self._seed_app(
+            label,
+            status="compliance_review",
+            risk="HIGH",
+            assigned_to=assigned_to,
+        )
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        risk_version = _get_validated_risk_config_version_strict(self.db)
+        self.db.execute(
+            """
+            UPDATE applications
+               SET risk_config_version=?, prescreening_data=?,
+                   screening_mode='live', submitted_at=?
+             WHERE id=?
+            """,
+            (risk_version, _live_clear_prescreening(), now, app["id"]),
+        )
+        self._seed_compliance_memo(app["id"])
+        insert_verified_required_documents(self.db, app["id"])
+        self.db.execute(
+            """
+            INSERT INTO application_enhanced_requirements
+                (application_id, trigger_key, trigger_label, requirement_key,
+                 requirement_label, requirement_type, waivable,
+                 blocking_approval, mandatory, status)
+            VALUES (?, 'high_risk', 'High Risk', 'source_wealth',
+                    'Source of Wealth', 'declaration', 1, 1, 1, 'accepted')
+            """,
+            (app["id"],),
+        )
+        applicant_id = f"p13-idv-{uuid.uuid4().hex[:12]}"
+        self.db.execute(
+            """
+            INSERT INTO sumsub_applicant_mappings
+                (application_id, applicant_id, external_user_id, person_name,
+                 person_type, created_at)
+            VALUES (?, ?, 'p13_client', 'P913 p13_client', 'client', ?)
+            """,
+            (app["id"], applicant_id, now),
+        )
+        self.db.execute(
+            """
+            INSERT INTO webhook_processed_events
+                (event_digest, event_type, applicant_id, external_user_id,
+                 review_answer, received_at)
+            VALUES (?, 'applicantReviewed', ?, 'p13_client', 'GREEN', ?)
+            """,
+            (f"p13-event-{uuid.uuid4().hex}", applicant_id, now),
+        )
+        self.db.commit()
+        return app
+
+    def _seed_sensitive_screening_app(self):
+        subject_name = "P913 Sensitive Director"
+        screening = {
+            "screening_report": {
+                "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "screening_mode": "live",
+                "company_screening": {
+                    "found": True,
+                    "sanctions": {
+                        "matched": False,
+                        "results": [],
+                        "api_status": "live",
+                    },
+                },
+                "director_screenings": [{
+                    "person_name": subject_name,
+                    "person_type": "director",
+                    "screening": {
+                        "matched": True,
+                        "results": [{
+                            "name": subject_name,
+                            "is_sanctioned": True,
+                            "is_pep": False,
+                        }],
+                        "api_status": "live",
+                    },
+                }],
+                "ubo_screenings": [],
+                "ip_geolocation": {"risk_level": "LOW"},
+                "kyc_applicants": [],
+                "overall_flags": ["Director sanctions match"],
+                "total_hits": 1,
+            },
+        }
+        app = self._seed_app(
+            "screening_second_review",
+            status="in_review",
+            risk="MEDIUM",
+            assigned_to="p13_co",
+        )
+        self.db.execute(
+            "UPDATE applications SET prescreening_data=? WHERE id=?",
+            (json.dumps(screening), app["id"]),
+        )
+        self.db.execute(
+            """
+            INSERT INTO directors
+                (id, application_id, full_name, nationality, is_pep)
+            VALUES (?, ?, ?, 'Mauritius', 'No')
+            """,
+            (f"p13-director-{uuid.uuid4().hex[:10]}", app["id"], subject_name),
+        )
+        self.db.commit()
+        app["subject_name"] = subject_name
+        return app
 
     def _request(self, role, path, method="GET", payload=None):
         headers = {
@@ -310,15 +497,52 @@ class RuntimeRoleCoverageTest(AsyncHTTPTestCase):
                                 "source_context": "ai_advisory"},
         }
 
-    # NOTE — dual control is NOT covered here. Reaching the second-leg pairing
-    # rule requires passing risk-staleness, memo-exists, memo-freshness,
-    # validate_approval and the document-reliance gate first; against a bare
-    # fixture every attempt dies at risk staleness (409), so a "status never
-    # became approved" assertion holds even with dual control deleted. Review
-    # mutation-tested exactly that and proved the assertion tautological, so
-    # the test was removed rather than left as false coverage. The dual-control
-    # state machine is exercised by test_dual_approval_race.py and
-    # test_e2e_authority_matrix.py, which seed the full precondition chain.
+    def test_dual_control_rejects_same_officer_after_all_prior_gates_pass(self):
+        app_id = self.apps["dual_control"]["id"]
+        first = self._request(
+            "sco",
+            f"/api/applications/{app_id}/decision",
+            method="POST",
+            payload=self._approve_payload(),
+        )
+        assert first.code == 202, (first.code, first.body[:500])
+        assert json.loads(first.body)["status"] == "first_approval_recorded"
+
+        same_officer = self._request(
+            "sco",
+            f"/api/applications/{app_id}/decision",
+            method="POST",
+            payload=self._approve_payload(),
+        )
+        assert same_officer.code == 409, (
+            same_officer.code,
+            same_officer.body[:500],
+        )
+        assert "already recorded the first approval" in same_officer.body.decode()
+        row = self.db.execute(
+            "SELECT status, first_approver_id FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+        assert row["status"] != "approved"
+        assert row["first_approver_id"] == "p13_sco"
+
+        # Reachability control: the correct distinct SCO+Admin pair completes
+        # this exact fixture, proving the 409 above was the dual-control gate.
+        distinct_admin = self._request(
+            "admin",
+            f"/api/applications/{app_id}/decision",
+            method="POST",
+            payload=self._approve_payload(),
+        )
+        assert distinct_admin.code in (200, 201), (
+            distinct_admin.code,
+            distinct_admin.body[:500],
+        )
+        approved = self.db.execute(
+            "SELECT status FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+        assert approved["status"] == "approved"
 
     # ── Cell 2: memo approve ───────────────────────────────────────────────
     def test_memo_approve_role_boundary_on_a_real_application(self):
@@ -327,6 +551,29 @@ class RuntimeRoleCoverageTest(AsyncHTTPTestCase):
             resp = self._request(role, f"/api/applications/{app_id}/memo/approve",
                                  method="POST", payload={})
             assert resp.code == 403, (role, resp.code, resp.body[:200])
+
+    def test_memo_approve_reaches_peer_supervisor_ownership_gate(self):
+        app_id = self.apps["memo_stage"]["id"]
+        resp = self._request(
+            "sco",
+            f"/api/applications/{app_id}/memo/approve",
+            method="POST",
+            payload={},
+        )
+        assert resp.code == 403, (resp.code, resp.body[:500])
+        assert "Supervisor override reason is required" in resp.body.decode()
+        denial = self.db.execute(
+            """
+            SELECT detail FROM audit_log
+             WHERE target=? AND action='Governance Attempt'
+             ORDER BY id DESC LIMIT 1
+            """,
+            (self.apps["memo_stage"]["ref"],),
+        ).fetchone()
+        assert denial is not None
+        assert json.loads(denial["detail"])["action"] == (
+            "memo.approve.ownership_denied"
+        )
 
     # ── Cell 3: screening second review ────────────────────────────────────
     def test_screening_review_denies_client_and_admits_officers(self):
@@ -345,13 +592,43 @@ class RuntimeRoleCoverageTest(AsyncHTTPTestCase):
                                  payload=payload)
             assert resp.code != 403, (role, resp.code, resp.body[:200])
 
-    # NOTE: the two deepest screening role rules — the second-review
-    # escalation and the clearance-disposition escalation — sit BEHIND a
-    # subject lookup that 404s without a seeded screening report, so they
-    # cannot be reached from a bare application fixture. They are pinned
-    # statically by TestScreeningRoleRulesArePinned below; driving them at
-    # runtime needs a screening fixture and is recorded as the residual on
-    # the P9-13 row rather than claimed here.
+    def test_screening_second_review_admits_co_then_refuses_at_senior_gate(self):
+        app = self.apps["screening_second_review"]
+        payload = {
+            "application_id": app["ref"],
+            "subject_type": "director",
+            "subject_name": app["subject_name"],
+            "disposition": "cleared",
+            "disposition_code": "false_positive",
+            "rationale": (
+                "Provider hit reviewed against identity documents and assessed "
+                "as a false positive."
+            ),
+            "evidence_reference": "P9-13 provider case and identity evidence.",
+        }
+        first = self._request(
+            "admin", "/api/screening/review", method="POST", payload=payload)
+        assert first.code == 202, (first.code, first.body[:500])
+        assert json.loads(first.body)["status"] == "second_review_required"
+
+        payload["rationale"] = (
+            "A line officer cannot complete the senior second-review control."
+        )
+        second = self._request(
+            "co", "/api/screening/review", method="POST", payload=payload)
+        assert second.code == 403, (second.code, second.body[:500])
+        assert "Senior Compliance Officer" in second.body.decode()
+        review = self.db.execute(
+            """
+            SELECT reviewer_id, second_reviewer_id
+              FROM screening_reviews
+             WHERE application_id=? AND subject_type='director'
+                   AND subject_name=?
+            """,
+            (app["id"], app["subject_name"]),
+        ).fetchone()
+        assert review["reviewer_id"] == "p13_admin"
+        assert not review["second_reviewer_id"]
 
     # ── Cell 4: IDV ────────────────────────────────────────────────────────
     def test_idv_read_denies_client_and_resolution_denies_analyst(self):
@@ -369,6 +646,24 @@ class RuntimeRoleCoverageTest(AsyncHTTPTestCase):
                          "rationale": "Synthetic role-boundary probe; authority check only.",
                          "confirmation": True})
             assert resp.code == 403, (role, resp.code, resp.body[:200])
+
+    def test_idv_read_limits_unmatched_reconciliation_evidence_to_seniors(self):
+        app_id = self.apps["idv_stage"]["id"]
+        co = self._request(
+            "co", f"/api/applications/{app_id}/kyc/identity-verifications")
+        admin = self._request(
+            "admin", f"/api/applications/{app_id}/kyc/identity-verifications")
+        assert co.code == 200, (co.code, co.body[:500])
+        assert admin.code == 200, (admin.code, admin.body[:500])
+        co_payload = json.loads(co.body)
+        admin_payload = json.loads(admin.body)
+        assert co_payload["unmatched_webhooks"]["count"] == 0
+        assert co_payload["unmatched_webhooks"]["items"] == []
+        assert admin_payload["unmatched_webhooks"]["count"] == 1
+        assert (
+            admin_payload["unmatched_webhooks"]["items"][0]["verification_status"]
+            == "unmatched"
+        )
 
     def test_idv_senior_outcomes_are_refused_for_co_on_high_risk(self):
         """HIGH-risk IDV resolution escalates to sco|admin — a real-row-only
@@ -407,13 +702,11 @@ class RuntimeRoleCoverageTest(AsyncHTTPTestCase):
 
 
 class TestScreeningRoleRulesArePinned:
-    """Static guard for the two screening role escalations that a bare
-    application fixture cannot reach (see the note in RuntimeRoleCoverageTest).
+    """Static belt-and-suspenders guard for screening role escalations.
 
-    These are the in-handler rules an entrypoint probe cannot see: the
-    decorator admits all four officer roles, and only these checks distinguish
-    who may complete a second review or clear a hit. Pinning them keeps a
-    silent removal from passing CI; it does not substitute for a runtime run.
+    The second-review rule is now covered at runtime above. The related
+    clearance-disposition rule remains pinned here, including its position
+    before the durable commit.
     """
 
     def _handler_source(self):
