@@ -13,9 +13,21 @@ permanent-looking dead conditionals that nobody dares remove.
 
 ## The registry
 
-`arie-backend/environment.py` declares `FLAG_LIFECYCLE`, mapping **every**
-feature flag the platform defines a default for (see `all_declared_flags()`) to
-four attributes:
+`arie-backend/environment.py` declares `FLAG_LIFECYCLE`, mapping **every
+governed flag** (see `all_governed_flags()`) to four attributes. The governed
+surface is the union of two resolution paths:
+
+- **FeatureFlags-declared flags** — the `_DEFAULT_FLAGS` per-environment table
+  resolved by `FeatureFlags` (`all_declared_flags()`).
+- **Externally-resolved flags** — `ENABLE_*` / `*_ENABLED` flags that sibling
+  modules read directly via `os.environ.get()` rather than through
+  `FeatureFlags` (`_EXTERNALLY_RESOLVED_FLAGS`), e.g. the ComplyAdvantage
+  screening toggles in `screening_config.py`, the AI gates in `config.py`,
+  `ENABLE_CLAUDE_MEMO`, and the monitoring/periodic-review schedulers. These are
+  registered so the registry covers the whole flag surface, not just the half
+  `FeatureFlags` owns — `environment.py` does not resolve them.
+
+Each entry carries:
 
 | Field | Meaning |
 |-------|---------|
@@ -47,20 +59,23 @@ flags are untouched.
 
 `arie-backend/tests/test_feature_flag_lifecycle.py` fails CI if:
 
-1. any declared flag has no `FLAG_LIFECYCLE` entry (a new flag can't merge
+1. any governed flag has no `FLAG_LIFECYCLE` entry (a new flag can't merge
    unclassified);
-2. the registry references a flag no environment declares (stale entry after a
-   removal);
+2. the registry references a flag nothing governs (stale entry after a removal);
 3. an entry is missing `owner`, `introduced`, or a valid `classification`;
 4. a `temporary` flag has no sunset condition, or a `permanent` flag declares one;
 5. a pilot-scope-vetoed enterprise module is classified anything but `temporary`;
 6. the lifecycle metadata leaks into the client `/api/config/environment`
-   response, or is consulted by flag resolution.
+   response, or is consulted by flag resolution;
+7. an entry in `_EXTERNALLY_RESOLVED_FLAGS` is fictional (not referenced by any
+   sibling module) or is actually a `FeatureFlags`-declared flag.
 
 ## Adding a flag
 
-1. Add the default(s) to `_DEFAULT_FLAGS` (and any specialised tuple, e.g.
-   `UPLOAD_LATENCY_FLAGS`) as before.
+1. Add the flag as usual: either a default in `_DEFAULT_FLAGS` (and any
+   specialised tuple, e.g. `UPLOAD_LATENCY_FLAGS`), **or** — for a flag a
+   sibling module reads directly via `os.environ.get()` — add its name to
+   `_EXTERNALLY_RESOLVED_FLAGS`.
 2. Add a `FLAG_LIFECYCLE` entry via the `_perm(...)` or `_temp(...)` helper.
    Record a real `introduced` version for new flags rather than the
    `pre-registry` sentinel.
@@ -69,10 +84,11 @@ flags are untouched.
 
 ## Retiring a temporary flag
 
-When a temporary flag's sunset condition is met, delete the flag from
-`_DEFAULT_FLAGS`, remove its `FLAG_LIFECYCLE` entry, and delete the now-dead
-conditional in code. The orphan-entry guard (rule 2) keeps the registry honest
-if the entry is forgotten.
+When a temporary flag's sunset condition is met, delete the flag from its
+resolution site (`_DEFAULT_FLAGS` or the sibling module + its entry in
+`_EXTERNALLY_RESOLVED_FLAGS`), remove its `FLAG_LIFECYCLE` entry, and delete the
+now-dead conditional in code. The orphan-entry guard (rule 2) keeps the registry
+honest if the entry is forgotten.
 
 ## Backfill honesty note
 

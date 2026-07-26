@@ -32,11 +32,16 @@ CI = REPO / ".github" / "workflows" / "ci.yml"
 
 CVE_ID = "CVE-2026-49452"
 
-# Production Python that could invoke WeasyPrint. Tests are excluded — a test
-# is allowed to reference the flag to prove it is forbidden.
+# Production Python across the WHOLE backend, including subpackages
+# (supervisor/, screening_complyadvantage/, prescreening/, utils/, tools/,
+# migrations/, …). A non-recursive scan would miss a WeasyPrint call in any of
+# them, so recurse and exclude only tests and bytecode. Tests are excluded
+# because a test is allowed to reference the flag to prove it is forbidden.
+_EXCLUDED_PARTS = {"tests", "__pycache__", ".pytest_cache"}
 _PROD_PY = sorted(
-    p for p in BACKEND.glob("*.py")
-    if p.name != "conftest.py"
+    p for p in BACKEND.rglob("*.py")
+    if not _EXCLUDED_PARTS.intersection(p.parts)
+    and p.name != "conftest.py"
 )
 
 
@@ -46,35 +51,49 @@ def _ci_text():
 
 
 # ── 1. Mitigation guard: the vulnerable mode must stay unused ────────────────
+#
+# The flag's default is False (safe). CVE-2026-49452 triggers on ANY truthy
+# value, and WeasyPrint accepts it via **kwargs / a variable / positionally —
+# so a scan for the literal `=True` alone is evadable (dict key, `=1`,
+# `=bool(x)`, `=flag`, line-split). We instead forbid the token
+# `presentational_hints` from appearing in production code UNLESS it is an
+# explicit `= False` (a redundant but harmless safe-disable). That one rule
+# defeats every spelling.
+_PRESENTATIONAL_HINTS = re.compile(r"presentational_hints")
+_SAFE_DISABLE = re.compile(r"presentational_hints\s*=\s*False\b")
+
 
 def test_no_production_source_enables_presentational_hints():
-    """CVE-2026-49452 affects `presentational_hints=True`. The allowlist is
-    only honest while no production call enables it."""
+    """CVE-2026-49452 affects `presentational_hints` set to any truthy value.
+    The allowlist is only honest while no production call enables it — in any
+    spelling, in any backend subpackage."""
     offenders = []
-    pat = re.compile(r"presentational_hints\s*=\s*True")
     for path in _PROD_PY:
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if line.lstrip().startswith("#"):
                 continue
-            if pat.search(line):
-                offenders.append(f"{path.name}:{n}: {line.strip()}")
+            if _PRESENTATIONAL_HINTS.search(line) and not _SAFE_DISABLE.search(line):
+                offenders.append(f"{path.relative_to(REPO)}:{n}: {line.strip()}")
     assert not offenders, (
-        "R3-BSA-025: presentational_hints=True is the mode vulnerable to "
-        f"{CVE_ID}; the CI allowlist assumes it is never enabled. Remove it or "
-        "revisit the allowlist:\n" + "\n".join(offenders)
+        f"R3-BSA-025: `presentational_hints` set to a non-False value is the mode "
+        f"vulnerable to {CVE_ID}; the CI allowlist assumes it is never enabled. "
+        "Remove it (or write an explicit `=False`), or revisit the allowlist:\n"
+        + "\n".join(offenders)
     )
 
 
-def test_the_guard_actually_scans_the_pdf_generators():
-    """Defends the guard above: if the PDF modules were renamed/moved so the
-    scan hit nothing, the mitigation claim would be vacuously 'true'."""
-    scanned = {p.name for p in _PROD_PY}
-    assert "pdf_generator.py" in scanned
-    assert "evidence_pack_export.py" in scanned
-    # And WeasyPrint really is invoked in the scanned set (write_pdf present),
-    # so "no presentational_hints" is a statement about live call sites.
-    joined = "\n".join(p.read_text(encoding="utf-8") for p in _PROD_PY)
-    assert "write_pdf(" in joined
+def test_the_guard_scans_every_weasyprint_call_site():
+    """Defends the mitigation guard against BOTH a vacuous pass (scan hits
+    nothing) AND a refactor that moves a render call into a subpackage:
+    independently discover every production file that calls write_pdf( and
+    assert each is inside the scanned set. Coverage holds by construction —
+    call sites are drawn FROM _PROD_PY — as long as _PROD_PY recurses (it does)."""
+    callers = [p for p in _PROD_PY
+               if "write_pdf(" in p.read_text(encoding="utf-8")]
+    assert callers, "no write_pdf( call sites found — the mitigation scan would be vacuous"
+    names = {p.name for p in callers}
+    assert "pdf_generator.py" in names, names
+    assert "evidence_pack_export.py" in names, names
 
 
 # ── 2. Expiry guard: the dated exception cannot outlive its review ───────────

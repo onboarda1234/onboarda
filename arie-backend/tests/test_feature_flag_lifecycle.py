@@ -8,6 +8,8 @@ prove the registry is PURE METADATA that never leaks into runtime behaviour or
 the client contract (so the frozen Application Review / Screening surfaces that
 read flags are untouched).
 """
+import pathlib
+
 import environment as env
 
 
@@ -15,11 +17,11 @@ def _entries():
     return env.FLAG_LIFECYCLE
 
 
-# ── Completeness: registry and declared flags are in exact correspondence ────
+# ── Completeness: registry and governed flags are in exact correspondence ────
 
-def test_every_declared_flag_has_lifecycle_metadata():
-    declared = env.all_declared_flags()
-    missing = sorted(declared - set(_entries()))
+def test_every_governed_flag_has_lifecycle_metadata():
+    governed = env.all_governed_flags()
+    missing = sorted(governed - set(_entries()))
     assert not missing, (
         "RDI-023: these flags have no FLAG_LIFECYCLE entry — classify them "
         f"(permanent config vs temporary rollout) before merge: {missing}"
@@ -27,12 +29,35 @@ def test_every_declared_flag_has_lifecycle_metadata():
 
 
 def test_registry_has_no_orphan_entries():
-    declared = env.all_declared_flags()
-    orphans = sorted(set(_entries()) - declared)
+    governed = env.all_governed_flags()
+    orphans = sorted(set(_entries()) - governed)
     assert not orphans, (
-        "RDI-023: FLAG_LIFECYCLE references flags no environment declares — a "
+        "RDI-023: FLAG_LIFECYCLE references flags nothing governs — a "
         f"stale entry after a flag removal: {orphans}"
     )
+
+
+def test_externally_resolved_flags_are_genuinely_external_and_real():
+    """Each externally-resolved flag must (a) actually be read somewhere in the
+    backend outside environment.py — no fictional entries — and (b) not also be
+    a FeatureFlags-declared flag (those belong in _DEFAULT_FLAGS)."""
+    backend = pathlib.Path(env.__file__).resolve().parent
+    sources = [
+        p for p in backend.rglob("*.py")
+        if "tests" not in p.parts and "__pycache__" not in p.parts
+        and p.name != "environment.py"
+    ]
+    blob = "\n".join(p.read_text(encoding="utf-8") for p in sources)
+    declared = env.all_declared_flags()
+    for flag in env._EXTERNALLY_RESOLVED_FLAGS:
+        assert flag in blob, (
+            f"{flag}: listed in _EXTERNALLY_RESOLVED_FLAGS but not referenced in "
+            "any sibling module — remove the fictional entry"
+        )
+        assert flag not in declared, (
+            f"{flag}: is FeatureFlags-declared (_DEFAULT_FLAGS) — it is not "
+            "externally resolved; drop it from _EXTERNALLY_RESOLVED_FLAGS"
+        )
 
 
 # ── Each entry is well-formed ────────────────────────────────────────────────

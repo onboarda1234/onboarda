@@ -390,9 +390,12 @@ def get_backoffice_runtime_config() -> dict:
 # once fully shipped or abandoned). Over time the temporary ones rot into
 # permanent-looking dead conditionals that nobody dares remove.
 #
-# This registry attaches, to EVERY declared flag, the four attributes the audit
-# asked for: owner, the point it was introduced, a lifecycle classification,
-# and — for temporary flags — the sunset condition that ends its life.
+# This registry attaches, to EVERY governed flag — the FeatureFlags-declared
+# flags AND the flags sibling modules resolve directly via os.environ.get()
+# (see all_governed_flags() / _EXTERNALLY_RESOLVED_FLAGS) — the four attributes
+# the audit asked for: owner, the point it was introduced, a lifecycle
+# classification, and — for temporary flags — the sunset condition that ends
+# its life.
 #
 # It is PURE METADATA. Nothing here is read by FeatureFlags resolution, by
 # get_environment_info(), or by any request path, so it cannot change runtime
@@ -448,11 +451,13 @@ FLAG_LIFECYCLE = {
     "ENABLE_SHORTCUT_LOGIN": _perm("demo-tooling", "Shortcut login; forbidden in prod."),
     "ENABLE_KPI_DEMO_DATA": _perm("demo-tooling", "KPI demo data; forbidden in prod."),
 
-    # ── Temporary: enterprise modules under phased/gated rollout ──
-    # These are pilot-scope vetoed (see _PILOT_SCOPE_VETOED_FLAGS) — not yet GA.
+    # ── Temporary: umbrella rollout, now on in every env (retirement candidate) ──
     "ENABLE_PHASE2_FEATURES": _temp(
         "platform", "Retire once Phase 2 is the unconditional baseline (already True in every env).",
         "Umbrella rollout flag, now on everywhere; a retirement candidate."),
+
+    # ── Temporary: enterprise modules, pilot-scope vetoed (see
+    #    _PILOT_SCOPE_VETOED_FLAGS) — gated, not yet GA ──
     "ENABLE_REGULATORY_INTELLIGENCE_FULL": _temp(
         "compliance", "Remove gate at Regulatory Intelligence enterprise GA.",
         "Enterprise module; pilot-scope vetoed."),
@@ -471,6 +476,8 @@ FLAG_LIFECYCLE = {
     "ENABLE_SUPERVISOR_AUDIT": _temp(
         "ai-pipeline", "Remove gate at Supervisor Audit enterprise GA.",
         "Enterprise module; pilot-scope vetoed."),
+
+    # ── Temporary: enterprise module, not yet routed to pilot (NOT vetoed) ──
     "ENABLE_KPI_DASHBOARD": _temp(
         "compliance", "Remove gate once the KPI dashboard ships to pilot.",
         "Enterprise module; no server route yet."),
@@ -488,18 +495,80 @@ FLAG_LIFECYCLE = {
     "FF_ASYNC_VERIFY": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
     "FF_GATE03_INDEXED_DEDUP": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
     "FF_PRESIGNED_UPLOAD": _temp("platform", "Remove when upload-latency rollout concludes.", "Upload-latency rollout flag."),
+
+    # ── Externally-resolved flags (RDI-023 completeness) ──
+    # These ENABLE_*/*_ENABLED flags are resolved by os.environ.get() in SIBLING
+    # modules, not by FeatureFlags. environment.py does NOT resolve them; they
+    # are registered here only so the lifecycle registry is complete. The module
+    # that owns each resolution is named in its notes. See _EXTERNALLY_RESOLVED_FLAGS.
+    "ENABLE_SCREENING_ABSTRACTION": _temp(
+        "screening", "Remove once the ComplyAdvantage screening abstraction is the unconditional path.",
+        "screening_config.py — OFF by default in every env; selects the CA Mesh AML provider path."),
+    "ENABLE_CA_RESCREEN": _temp(
+        "screening", "Remove once Mesh rescreen is the default existing-customer path (SRP-2a Phase D).",
+        "screening_config.py — OFF by default; requires 'monitor on demand' on the CA account."),
+    "ENABLE_CA_PROFILE_HYDRATION": _temp(
+        "screening", "Remove once ComplyAdvantage profile hydration is standard (Phase G).",
+        "screening_config.py — OFF by default; display/audit enrichment only."),
+    "ENABLE_CLAUDE_MEMO": _temp(
+        "ai-pipeline", "Remove once the Claude memo path is wired through validation+supervisor and GA'd, or drop if abandoned (PC-4).",
+        "claude_memo_integration.py — draft integration, OFF by default; not on the live deterministic memo path."),
+    "ENABLE_HYBRID_INCONCLUSIVE_GATE": _temp(
+        "ai-pipeline", "Remove gate once HYBRID rules-first per-check evaluators are authored and approved (P12-7).",
+        "config.py — OFF by default; live verification behaviour unchanged until enabled."),
+    "ENABLE_AI_CIRCUIT_BREAKER": _temp(
+        "ai-pipeline", "Remove flag once the cross-call Anthropic breaker is permanently activated (P11-5).",
+        "config.py — OFF by default; per-call retry/backoff already active."),
+    "ENABLE_AI_PROMPT_FENCING": _temp(
+        "ai-pipeline", "Remove flag once prompt fencing is permanently activated (P11-5).",
+        "config.py — OFF by default; live prompts byte-identical until enabled."),
+    "MONITORING_AUTOMATION_ENABLED": _perm(
+        "compliance", "monitoring_automation.py — operational scheduler toggle; env-defaulted ON in staging/production."),
+    "DOCUMENT_HEALTH_SCHEDULER_ENABLED": _temp(
+        "compliance", "Remove once the document-health scheduler rollout reaches Phase D / GA (M3.1).",
+        "document_health_scheduler.py — explicit opt-in; OFF by default in every env during staged rollout."),
+    "PERIODIC_REVIEW_MEMO_RECOVERY_ENABLED": _perm(
+        "compliance", "server.py — operational recovery-sweep toggle for periodic-review memos."),
+    "PERIODIC_REVIEW_NOTIFICATIONS_ENABLED": _perm(
+        "compliance", "server.py — operational periodic-review notification toggle; default ON."),
 }
 
 
 def all_declared_flags() -> set:
-    """Every feature-flag name the platform declares a default for, across all
-    environments — the single source of truth the lifecycle registry must
-    cover. Derived the same way FeatureFlags resolves, so the guard test and the
-    registry can never silently disagree about which flags exist."""
+    """Every feature-flag name the platform declares a default for in
+    _DEFAULT_FLAGS, across all environments — i.e. the FeatureFlags-resolved
+    surface. Derived the same way FeatureFlags resolves, so the guard test and
+    the registry can never silently disagree about which flags exist."""
     names = set()
     for env_flags in _DEFAULT_FLAGS.values():
         names.update(env_flags.keys())
     return names
+
+
+# Flags resolved by os.environ.get() in SIBLING modules rather than by
+# FeatureFlags (RDI-023 completeness). environment.py does NOT resolve these —
+# the named module does; they are listed so the lifecycle registry can cover the
+# whole flag surface, not just the FeatureFlags-declared half.
+_EXTERNALLY_RESOLVED_FLAGS = (
+    "ENABLE_SCREENING_ABSTRACTION",           # screening_config.py
+    "ENABLE_CA_RESCREEN",                      # screening_config.py
+    "ENABLE_CA_PROFILE_HYDRATION",            # screening_config.py
+    "ENABLE_CLAUDE_MEMO",                      # claude_memo_integration.py
+    "ENABLE_HYBRID_INCONCLUSIVE_GATE",        # config.py
+    "ENABLE_AI_CIRCUIT_BREAKER",              # config.py
+    "ENABLE_AI_PROMPT_FENCING",               # config.py
+    "MONITORING_AUTOMATION_ENABLED",          # monitoring_automation.py
+    "DOCUMENT_HEALTH_SCHEDULER_ENABLED",      # document_health_scheduler.py
+    "PERIODIC_REVIEW_MEMO_RECOVERY_ENABLED",  # server.py
+    "PERIODIC_REVIEW_NOTIFICATIONS_ENABLED",  # server.py
+)
+
+
+def all_governed_flags() -> set:
+    """The complete RDI-023 surface the lifecycle registry must classify: the
+    FeatureFlags-declared flags PLUS the externally-resolved flags that sibling
+    modules read directly from the environment."""
+    return all_declared_flags() | set(_EXTERNALLY_RESOLVED_FLAGS)
 
 
 def get_flag_lifecycle(flag: str) -> dict:
