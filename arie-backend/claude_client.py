@@ -61,6 +61,21 @@ from verification_failure_taxonomy import (
     classify_verification_provider_failure,
 )
 
+
+class ClaudeGenerationError(RuntimeError):
+    """RDI-019: typed failure for the free-form generate() path.
+
+    The legacy contract converted every provider/breaker/programming failure
+    into an empty string, which is indistinguishable from a legitimately empty
+    completion. Callers that opt in via ``generate(..., raise_on_failure=True)``
+    get this exception instead, carrying a machine-readable ``reason``:
+    ``breaker_open`` | ``not_initialised`` | ``provider_error``.
+    """
+
+    def __init__(self, reason: str, detail: str = ""):
+        self.reason = reason
+        super().__init__(f"claude generate() failed [{reason}]: {detail}".strip())
+
 # C-03: Pydantic validation for AI outputs
 try:
     from pydantic import BaseModel, Field, field_validator, ValidationError
@@ -1795,11 +1810,6 @@ CRITICAL REQUIREMENTS:
             return {}  # No mock extraction — rule engine uses pre-screening data
 
         schema_list = "\n".join(f"- {f}" for f in schema)
-        context_hint = ""
-        if entity_name:
-            context_hint += f" The expected entity name is '{entity_name}'."
-        if person_name:
-            context_hint += f" The expected person name is '{person_name}'."
 
         system_prompt = (
             "You are a document field extraction assistant. Extract the specified fields "
@@ -1811,6 +1821,17 @@ CRITICAL REQUIREMENTS:
         _fencing = _prompt_fencing_enabled()
         display_doc_type = self._sanitize_for_prompt(str(doc_type or ""), max_length=100) if _fencing else doc_type
         display_file_name = self._sanitize_for_prompt(str(file_name or ""), max_length=200) if _fencing else file_name
+        # R3-BSA-019 (net-new half): entity/person names are applicant-controlled
+        # metadata too — with fencing ON they were still interpolated RAW into
+        # context_hint, bypassing the very shield the flag turns on. Fence them
+        # exactly like doc_type/file_name; fencing OFF stays byte-identical.
+        display_entity_name = self._sanitize_for_prompt(str(entity_name or ""), max_length=150) if _fencing else entity_name
+        display_person_name = self._sanitize_for_prompt(str(person_name or ""), max_length=150) if _fencing else person_name
+        context_hint = ""
+        if display_entity_name:
+            context_hint += f" The expected entity name is '{display_entity_name}'."
+        if display_person_name:
+            context_hint += f" The expected person name is '{display_person_name}'."
         if _fencing:
             system_prompt += _ANTI_INJECTION_DIRECTIVE
         user_prompt = (
@@ -2148,6 +2169,7 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
         max_tokens: int = 300,
         model: str = None,
         timeout: int = 30,
+        raise_on_failure: bool = False,
     ) -> str:
         """
         Public text-generation method for monitoring agents and free-form prompts.
@@ -2160,9 +2182,18 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
             max_tokens: Maximum tokens in the response (default 300).
             model: Model override. Defaults to the fast model (Sonnet).
             timeout: Timeout in seconds.
+            raise_on_failure: RDI-019 — when True, provider/breaker/programming
+                failures raise ``ClaudeGenerationError`` (with a ``reason``)
+                instead of returning "". The default (False) preserves the
+                legacy return-"" contract for the existing monitoring callers,
+                whose fallback narratives depend on it. A LEGITIMATE empty
+                completion still returns "" without raising in both modes, so
+                opting in makes "the model said nothing" distinguishable from
+                "the call failed" — the exact confusion RDI-019 flagged.
 
         Returns:
-            Raw text string from Claude, or empty string on failure.
+            Raw text string from Claude, or empty string on failure
+            (default mode only).
         """
         if self.mock_mode:
             logger.info("generate() called in mock mode — returning empty string")
@@ -2182,12 +2213,15 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
             )
 
         # P11-5 (BSA-012): cross-call breaker — no-op unless enabled.
-        # generate() never raises to callers (returns "" on failure), so the
-        # breaker-open signal is converted here rather than propagated.
+        # In legacy mode generate() never raises for these (returns ""); with
+        # raise_on_failure the breaker-open signal propagates typed.
         try:
             _ai_breaker_preflight(operation="generate")
         except VerificationProviderError:
             logger.error("generate() blocked: AI circuit breaker open")
+            if raise_on_failure:
+                raise ClaudeGenerationError("breaker_open",
+                                            "AI circuit breaker open")
             return ""
 
         chosen_model = model or self.ROUTING_MODELS["fast"]
@@ -2196,6 +2230,9 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
         try:
             if not self.client:
                 logger.warning("generate() called but Claude client not initialised")
+                if raise_on_failure:
+                    raise ClaudeGenerationError("not_initialised",
+                                                "Claude client not initialised")
                 return ""
 
             response = self.client.messages.create(
@@ -2220,9 +2257,15 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
             _ai_breaker_record_success()
             return text_content
 
+        except ClaudeGenerationError:
+            raise
         except Exception as e:
             logger.error(f"generate() failed: {e}")
             _ai_breaker_record_failure()
+            if raise_on_failure:
+                raise ClaudeGenerationError(
+                    "provider_error", f"{type(e).__name__}: {e}"
+                ) from e
             return ""
 
     def _call_claude(

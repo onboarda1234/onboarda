@@ -873,6 +873,29 @@ class BaseHandler(tornado.web.RequestHandler):
         self.write(json.dumps(data, default=str))
 
     def error(self, message, status=400):
+        # RDI-020: every 403 leaving the API must appear in the audit trail.
+        # Explicit log_authz_denial call sites mark the request as routed; any
+        # OTHER 403 (custom checks that never called it) gets a uniform
+        # `authz_denied_unrouted` row here — complete by construction. Purely
+        # additive: never alters the response, and a failed audit write only
+        # logs (log_authz_denial has its own stderr fallback).
+        if status == 403 and not getattr(self, "_authz_denial_routed", False):
+            try:
+                user = getattr(self, "_auth_user", None) or {}
+                resource_id = str(getattr(self.request, "path", "") or "")[:160]
+                self.log_authz_denial(
+                    user,
+                    "authz_denied_unrouted",
+                    resource_id,
+                    {
+                        "message": str(message)[:200],
+                        "method": self.request.method if hasattr(self, "request") else "",
+                        "source": "base_error_403",
+                        "response_code": 403,
+                    },
+                )
+            except Exception:
+                logger.exception("authz_denied_unrouted audit write failed")
         self.set_status(status)
         self.write({"error": message})
 
@@ -1033,6 +1056,10 @@ class BaseHandler(tornado.web.RequestHandler):
             resource_id: The resource the caller tried to access.
             context_dict: Extra context merged into the audit detail.
         """
+        # RDI-020: mark this request as routed so the central 403 fallback in
+        # error() does not write a second, duplicate denial row.
+        self._authz_denial_routed = True
+        user = user or {}
         payload = {
             "event": event,
             "client_id": user.get("sub", ""),
