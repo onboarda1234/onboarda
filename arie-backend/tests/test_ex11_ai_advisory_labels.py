@@ -103,7 +103,7 @@ class TestPartB_AdvisoryLabeling:
     def test_supervisor_tab_has_advisory_banner(self, backoffice_html):
         supervisor_region = _extract_detail_tab_region(backoffice_html, 'supervisor', 'lifecycle')
         assert 'Coming Soon — Enterprise Module' in supervisor_region
-        assert 'The AI Compliance Supervisor will provide advanced supervisory oversight' in supervisor_region
+        assert 'RegMind AI Compliance Supervisor will provide advanced supervisory oversight' in supervisor_region
         assert 'Not active in pilot' in supervisor_region
 
     def test_ai_explainability_layer_moved_to_supervisor_tab(self, backoffice_html):

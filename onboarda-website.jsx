@@ -116,7 +116,7 @@ function DashboardMockup() {
         <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#ff5f57" }} />
         <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#febc2e" }} />
         <div style={{ width: 12, height: 12, borderRadius: "50%", background: "#28c840" }} />
-        <span style={{ marginLeft: 12, fontSize: 12, color: "rgba(255,255,255,0.35)", fontWeight: 500 }}>Onboarda — Back Office</span>
+        <span style={{ marginLeft: 12, fontSize: 12, color: "rgba(255,255,255,0.35)", fontWeight: 500 }}>RegMind Compliance Workspace</span>
       </div>
       {/* Stats row */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, padding: "16px 20px 12px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
@@ -267,13 +267,7 @@ export default function OnboardaWebsite() {
       }}>
         <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{
-              width: 34, height: 34, borderRadius: 10,
-              background: "linear-gradient(135deg, #4f46e5, #6366f1)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              color: "#fff", fontWeight: 800, fontSize: 16,
-            }}>O</div>
-            <span style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.5 }}>Onboarda</span>
+            <span style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.5 }}>RegMind</span>
           </div>
           <nav className="hide-mobile" style={{ display: "flex", gap: 32 }}>
             <a className="nav-link" href="#features">Features</a>
@@ -391,7 +385,7 @@ export default function OnboardaWebsite() {
                   A Compliance<br /><span className="gradient-text">Operating System</span>
                 </h2>
                 <p style={{ fontSize: 17, color: "rgba(15,17,23,0.55)", lineHeight: 1.75, marginBottom: 32 }}>
-                  Onboarda replaces spreadsheets, email chains, and disconnected tools with a single platform that automates the entire compliance lifecycle — from first application to ongoing monitoring.
+                  RegMind replaces spreadsheets, email chains, and disconnected tools with a single platform that automates the entire compliance lifecycle — from first application to ongoing monitoring.
                 </p>
                 <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                   {[
@@ -648,13 +642,13 @@ export default function OnboardaWebsite() {
               Transform your onboarding process
             </h2>
             <p style={{ fontSize: 18, color: "rgba(255,255,255,0.5)", lineHeight: 1.7, marginBottom: 40 }}>
-              Join the regulated institutions replacing manual compliance with intelligent automation. See Onboarda in action.
+              Join the regulated institutions replacing manual compliance with intelligent automation. See RegMind in action.
             </p>
             <div style={{ display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
-              <a className="btn-primary" href="mailto:hello@onboarda.com" style={{ fontSize: 16, padding: "16px 36px" }}>
+              <a className="btn-primary" href="mailto:hello@regmind.co" style={{ fontSize: 16, padding: "16px 36px" }}>
                 Request Demo {Icons.arrow}
               </a>
-              <a className="btn-secondary" href="mailto:hello@onboarda.com" style={{ fontSize: 16, padding: "16px 36px", color: "rgba(255,255,255,0.7)", borderColor: "rgba(255,255,255,0.15)" }}>
+              <a className="btn-secondary" href="mailto:hello@regmind.co" style={{ fontSize: 16, padding: "16px 36px", color: "rgba(255,255,255,0.7)", borderColor: "rgba(255,255,255,0.15)" }}>
                 Book a Call
               </a>
             </div>
@@ -668,8 +662,7 @@ export default function OnboardaWebsite() {
           <div className="grid-4" style={{ marginBottom: 48 }}>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-                <div style={{ width: 30, height: 30, borderRadius: 8, background: "linear-gradient(135deg, #4f46e5, #6366f1)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, fontSize: 14 }}>O</div>
-                <span style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>Onboarda</span>
+                <span style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>RegMind</span>
               </div>
               <p style={{ fontSize: 13, color: "rgba(255,255,255,0.35)", lineHeight: 1.7, maxWidth: 250 }}>
                 AI-powered compliance onboarding and monitoring for regulated institutions.
@@ -692,7 +685,7 @@ export default function OnboardaWebsite() {
             ))}
           </div>
           <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 24, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.25)" }}>2026 Onboarda. All rights reserved.</span>
+            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.25)" }}>2026 RegMind. All rights reserved.</span>
             <div style={{ display: "flex", gap: 24 }}>
               {["Privacy Policy", "Terms of Service", "Cookie Policy"].map((l, i) => (
                 <span key={i} style={{ fontSize: 12, color: "rgba(255,255,255,0.25)", cursor: "pointer", transition: "color 0.2s" }}

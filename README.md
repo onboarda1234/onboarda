@@ -1,13 +1,13 @@
-# Onboarda
+# RegMind
 
 **AI-powered compliance onboarding for regulated financial institutions.**
 
-Onboarda automates KYC/AML due diligence for banks, EMIs, and payment providers using a deterministic multi-layer AI pipeline. It combines rule-based risk scoring, external screening APIs, Claude AI–assisted document verification, and deterministic compliance-memo generation into a single auditable workflow.
+RegMind automates KYC/AML due diligence for banks, EMIs, and payment providers using a deterministic multi-layer AI pipeline. It combines rule-based risk scoring, external screening APIs, Claude AI–assisted document verification, and deterministic compliance-memo generation into a single auditable workflow.
 
-The platform ships as two branded surfaces:
+The product ships as two consistently branded surfaces:
 
-- **Onboarda** — Client-facing portal where applicants submit documents and forms
-- **RegMind** — Internal back-office where compliance officers review, approve, or reject applications
+- **RegMind Portal** — Applicant workspace where clients submit documents and forms
+- **RegMind Compliance Workspace** — Internal workspace where compliance officers review, approve, or reject applications
 
 ---
 
@@ -64,7 +64,7 @@ onboarda/
 │   ├── docker-compose.yml         # Backend + PostgreSQL stack
 │   └── requirements.txt           # Pinned Python dependencies
 ├── arie-portal.html               # Client portal UI
-├── arie-backoffice.html           # RegMind back-office UI
+├── arie-backoffice.html           # RegMind Compliance Workspace UI
 ├── index.html                     # Marketing landing page
 ├── render.yaml                    # Render.com deployment blueprint
 ├── docs/                          # Compliance, investor & sprint docs
@@ -242,8 +242,8 @@ All brand names are config-driven via `branding.py` — never hardcode brand str
 ```python
 from branding import BRAND
 
-BRAND["portal_name"]      # "Onboarda"  (client-facing)
-BRAND["backoffice_name"]  # "RegMind"   (internal)
+BRAND["portal_name"]      # "RegMind Portal"                (applicant-facing)
+BRAND["backoffice_name"]  # "RegMind Compliance Workspace"  (internal)
 BRAND["system_id"]        # "regmind"   (logs, metrics)
 ```
 
@@ -264,4 +264,4 @@ BRAND["system_id"]        # "regmind"   (logs, metrics)
 
 ## License
 
-Proprietary — © 2026 Onboarda Ltd. All rights reserved.
+Proprietary — © 2026 RegMind. All rights reserved.

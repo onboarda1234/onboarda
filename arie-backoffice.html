@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>RegMind — Back Office</title>
+<title>RegMind Compliance Workspace</title>
 <!-- R5: inline favicon suppresses the browser's default /favicon.ico request
      (no favicon route exists), removing the cosmetic 404 on /backoffice.
      Self-contained data URI; no backend/routing/visual change. -->
@@ -1206,7 +1206,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div class="login-card">
     <div class="login-logo">
       <h1>RegMind</h1>
-      <p>Back Office Compliance Portal</p>
+      <p>Compliance Workspace</p>
     </div>
     <form class="login-form" id="login-form" onsubmit="handleLogin(event)">
       <div class="login-error" id="login-error">
@@ -1215,7 +1215,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       </div>
       <div class="form-group">
         <label class="form-label" for="login-email">Email Address</label>
-        <input class="form-input" type="email" id="login-email" placeholder="you@onboarda.com" required autocomplete="email" />
+        <input class="form-input" type="email" id="login-email" placeholder="you@your-institution.example" required autocomplete="email" />
       </div>
       <div class="form-group">
         <label class="form-label" for="login-password">Password</label>
@@ -1231,7 +1231,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     </form>
     <div class="login-footer">
       Secure access for authorised compliance personnel only.<br>
-      <a href="mailto:support@onboarda.com">Contact IT Support</a> if you need access.
+      <a href="mailto:support@regmind.co">Contact IT Support</a> if you need access.
     </div>
   </div>
 </div>
@@ -1240,13 +1240,13 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 <div class="sidebar" role="complementary">
   <div class="sidebar-brand">
     <h2>RegMind</h2>
-    <span>Back Office Portal</span>
+    <span>Compliance Workspace</span>
     <span class="sidebar-mark" aria-hidden="true">R</span>
     <button class="sidebar-toggle" id="sidebar-toggle" type="button" onclick="toggleSidebar()" aria-label="Collapse navigation sidebar" aria-expanded="true">
       <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>
     </button>
   </div>
-  <nav class="sidebar-nav" aria-label="Back office navigation">
+  <nav class="sidebar-nav" aria-label="Compliance workspace navigation">
     <div class="snav-section">Main</div>
     <div class="snav-item active" data-view="dashboard" onclick="showView('dashboard',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span> Dashboard</div>
     <div class="snav-item" data-view="kpis" data-enterprise-coming-soon="true" onclick="showView('kpis',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span><span class="snav-label">KPI Dashboard</span><span class="snav-badge">Coming Soon</span></div>
@@ -1254,13 +1254,13 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="snav-item" data-view="cases" onclick="showView('cases',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span> Case Management</div>
     <div class="snav-section">Compliance</div>
     <div class="snav-item" data-view="screening-queue" onclick="showView('screening-queue',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span> Screening Queue</div>
-    <div class="snav-item" data-view="periodic-review-signals" onclick="showView('periodic-review-signals',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M5 8h14"/><path d="M7 13h10"/><path d="M9 18h6"/></svg></span> Periodic Review Queue</div>
-    <div class="snav-item" data-view="monitoring" onclick="showView('monitoring',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Monitoring Alerts</div>
+    <div class="snav-item" data-view="periodic-review-signals" onclick="showView('periodic-review-signals',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M5 8h14"/><path d="M7 13h10"/><path d="M9 18h6"/></svg></span> RegMind Periodic Reviews</div>
+    <div class="snav-item" data-view="monitoring" onclick="showView('monitoring',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> RegMind Monitoring</div>
     <div class="snav-item" data-view="change-mgmt" onclick="showView('change-mgmt',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span> Change Management</div>
     <div class="snav-item" data-view="lifecycle" onclick="showView('lifecycle',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M21 12a9 9 0 0 1-9 9"/><path d="M16 7l5 0 0-5"/><path d="M8 17l-5 0 0 5"/></svg></span> Lifecycle</div>
     <div class="snav-item role-reporting" data-view="reports" onclick="showView('reports',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span> Reports</div>
-    <div class="snav-item" data-view="reg-intel" data-enterprise-coming-soon="true" onclick="showView('reg-intel',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M9 17h1"/></svg></span><span class="snav-label">Regulatory Intelligence</span><span class="snav-badge">Coming Soon</span></div>
-    <div class="snav-section">AI Compliance Supervisor</div>
+    <div class="snav-item" data-view="reg-intel" data-enterprise-coming-soon="true" onclick="showView('reg-intel',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M9 17h1"/></svg></span><span class="snav-label">RegMind Regulatory Intelligence</span><span class="snav-badge">Coming Soon</span></div>
+    <div class="snav-section">RegMind AI Compliance Supervisor</div>
     <div class="snav-item" data-view="supervisor" data-enterprise-coming-soon="true" onclick="showView('supervisor',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><span class="snav-label">Supervisor Dashboard</span><span class="snav-badge">Enterprise</span></div>
     <div class="snav-item role-sco-only" data-view="supervisor-audit" data-enterprise-coming-soon="true" onclick="showView('supervisor-audit',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span><span class="snav-label">Audit Chain</span><span class="snav-badge">Enterprise</span></div>
     <div class="snav-section role-admin-only">Administration</div>
@@ -1421,7 +1421,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <!-- Monitoring and review signals -->
   <div class="stats-grid" style="margin-top:24px;" id="dashboard-monitoring-stats">
     <div class="stat-card">
-      <div class="stat-card-label">Periodic Review Queue</div>
+      <div class="stat-card-label">RegMind Periodic Reviews</div>
       <div class="stat-card-value" style="color:var(--text3);" id="dash-mon-files-due">0</div>
       <div class="stat-card-change" id="dash-mon-files-due-note">Scheduled reviews stay separate</div>
     </div>
@@ -1567,8 +1567,8 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <button class="btn btn-outline btn-sm" id="tab-overview" onclick="switchDetailTab('overview')" style="border:none;border-bottom:2px solid var(--brand);border-radius:0;font-weight:600;color:var(--brand);padding:8px 20px;">Overview</button>
     <button class="btn btn-outline btn-sm" id="tab-kyc-docs" onclick="switchDetailTab('kyc-docs')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">KYC Documents &amp; Verifications</button>
     <button class="btn btn-outline btn-sm" id="tab-screening" onclick="switchDetailTab('screening')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Screening Review</button>
-    <button class="btn btn-outline btn-sm" id="tab-supervisor" onclick="switchDetailTab('supervisor')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">AI Compliance Supervisor <span class="badge" style="font-size:9px;background:rgba(99,102,241,0.1);color:#4f46e5;">Enterprise</span></button>
-    <button class="btn btn-outline btn-sm" id="tab-lifecycle" onclick="switchDetailTab('lifecycle')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Periodic Reviews</button>
+    <button class="btn btn-outline btn-sm" id="tab-supervisor" onclick="switchDetailTab('supervisor')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">RegMind AI Compliance Supervisor <span class="badge" style="font-size:9px;background:rgba(99,102,241,0.1);color:#4f46e5;">Enterprise</span></button>
+    <button class="btn btn-outline btn-sm" id="tab-lifecycle" onclick="switchDetailTab('lifecycle')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">RegMind Periodic Reviews</button>
     <button class="btn btn-outline btn-sm" id="tab-alerts" onclick="switchDetailTab('alerts')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Alerts</button>
     <button class="btn btn-outline btn-sm" id="tab-activity" onclick="switchDetailTab('activity')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Activity Log</button>
   </div>
@@ -1862,7 +1862,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <div class="enterprise-coming-soon-eyebrow">Enterprise Module</div>
       <h2>Coming Soon — Enterprise Module</h2>
       <p>This module is not active in the pilot environment. It is part of RegMind’s enterprise roadmap and will be enabled in a future release.</p>
-      <div class="enterprise-coming-soon-note">The AI Compliance Supervisor will provide advanced supervisory oversight, cross-workflow audit intelligence, and control monitoring.</div>
+      <div class="enterprise-coming-soon-note">RegMind AI Compliance Supervisor will provide advanced supervisory oversight, cross-workflow audit intelligence, and control monitoring.</div>
       <div class="enterprise-coming-soon-tags">
         <span>Coming Soon</span>
         <span>Enterprise</span>
@@ -2047,7 +2047,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 <div class="view" id="view-periodic-review-signals">
   <div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;">
     <div>
-      <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">Periodic Review Queue</h3>
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">RegMind Periodic Reviews</h3>
       <p style="font-size:13px;color:var(--text3);line-height:1.6;max-width:760px;">Scheduled review workflow for periodic and annual client reviews with due-date, owner, status, and trigger truth.</p>
       <p style="font-size:12px;color:var(--text3);line-height:1.6;margin-top:6px;max-width:760px;">Monitoring Alerts remains a separate event-based signal inbox for document-expiry and screening/adverse-media changes between formal reviews.</p>
     </div>
@@ -2095,7 +2095,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 <div class="view" id="view-monitoring">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;">
     <div>
-      <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">Monitoring Alerts</h3>
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">RegMind Monitoring</h3>
       <p style="font-size:13px;color:var(--text3);line-height:1.6;max-width:820px;">Track event-based monitoring alerts between formal reviews, including document expiry and financial-crime screening changes.</p>
       <p style="font-size:12px;color:var(--text3);line-height:1.6;margin-top:6px;max-width:820px;">Periodic reviews are managed in the Periodic Review module. Client profile changes are managed in Change Management. Transaction monitoring is not included in this pilot scope.</p>
     </div>
@@ -2406,7 +2406,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <option value="companies_house">Companies House</option>
           <option value="open_corporates">OpenCorporates</option>
           <option value="registry_api">Registry API</option>
-          <option value="backoffice">Back Office (manual)</option>
+          <option value="backoffice">Compliance Workspace (manual)</option>
           <option value="ongoing_monitoring">Ongoing Monitoring</option>
           <option value="other">Other</option>
         </select></div>
@@ -2995,7 +2995,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div style="font-size:12px;color:var(--text3);margin-bottom:14px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border1);border-radius:var(--radius-sm);">
       These settings are loaded from persisted back-office configuration. Changes here affect future operational defaults after admin save.
     </div>
-    <div class="form-group"><div class="form-label">Company Name</div><input class="form-input" id="setting-company-name" value="Onboarda Ltd" /></div>
+    <div class="form-group"><div class="form-label">Company Name</div><input class="form-input" id="setting-company-name" value="Your Financial Institution" /></div>
     <div class="form-group"><div class="form-label">FSC Licence Number</div><input class="form-input" id="setting-fsc-licence" value="FSC-PIS-2024-001" /></div>
     <div class="form-group"><div class="form-label">Default Data Retention (years)</div><input class="form-input" type="number" id="setting-retention" value="7" /></div>
     <div class="form-group"><div class="form-label">Risk Appetite — Low Risk Ceiling (reference only, not auto-enforced)</div><input class="form-input" type="number" id="setting-auto-approve" value="40" /></div>
@@ -3105,7 +3105,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       </div>
       <h3 class="enterprise-coming-soon-title">Coming Soon — Enterprise Module</h3>
       <p class="enterprise-coming-soon-body">This module is not active in the pilot environment. It is part of RegMind’s enterprise roadmap and will be enabled in a future release.</p>
-      <div class="enterprise-coming-soon-note">Regulatory Intelligence will support regulatory change tracking, source monitoring, impact assessment, and policy update workflows.</div>
+      <div class="enterprise-coming-soon-note">RegMind Regulatory Intelligence will support regulatory change tracking, source monitoring, impact assessment, and policy update workflows.</div>
     </div>
   </div>
 </div>
@@ -3285,7 +3285,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       </div>
       <h3 class="enterprise-coming-soon-title">Coming Soon — Enterprise Module</h3>
       <p class="enterprise-coming-soon-body">This module is not active in the pilot environment. It is part of RegMind’s enterprise roadmap and will be enabled in a future release.</p>
-      <div class="enterprise-coming-soon-note">The AI Compliance Supervisor will provide advanced supervisory oversight, cross-workflow audit intelligence, and control monitoring.</div>
+      <div class="enterprise-coming-soon-note">RegMind AI Compliance Supervisor will provide advanced supervisory oversight, cross-workflow audit intelligence, and control monitoring.</div>
     </div>
   </div>
 </div>
@@ -3301,7 +3301,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       </div>
       <h3 class="enterprise-coming-soon-title">Coming Soon — Enterprise Module</h3>
       <p class="enterprise-coming-soon-body">This module is not active in the pilot environment. It is part of RegMind’s enterprise roadmap and will be enabled in a future release.</p>
-      <div class="enterprise-coming-soon-note">The AI Compliance Supervisor will provide advanced supervisory oversight, cross-workflow audit intelligence, and control monitoring.</div>
+      <div class="enterprise-coming-soon-note">RegMind AI Compliance Supervisor will provide advanced supervisory oversight, cross-workflow audit intelligence, and control monitoring.</div>
     </div>
   </div>
 </div>
@@ -3315,7 +3315,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="modal-header"><h3>Add New User</h3><button class="modal-close" onclick="closeModal('modal-add-user')">&times;</button></div>
     <div class="modal-body">
       <div class="form-group"><div class="form-label">Full Name</div><input class="form-input" id="new-user-name" placeholder="e.g. Jean-Marc Laurent" /></div>
-      <div class="form-group"><div class="form-label">Email</div><input class="form-input" type="email" id="new-user-email" placeholder="e.g. jm.laurent@onboarda.com" /></div>
+      <div class="form-group"><div class="form-label">Email</div><input class="form-input" type="email" id="new-user-email" placeholder="e.g. officer@your-institution.example" /></div>
       <div class="form-group"><div class="form-label">Role</div>
         <select class="form-select" id="new-user-role">
           <option value="analyst">Analyst</option>
@@ -7082,7 +7082,7 @@ function showView(name, navItem) {
     navItem.classList.add('active');
   }
 
-  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', 'periodic-review-signals':'Periodic Review Queue', monitoring:'Monitoring Alerts', 'monitoring-alert-detail':'Monitoring Alert Detail', lifecycle:'Lifecycle Queue', edd:'Investigation Queue', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'Document Verification Policies', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Compliance Supervisor', 'supervisor-audit':'Supervisor Audit Chain' };
+  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', 'periodic-review-signals':'RegMind Periodic Reviews', monitoring:'RegMind Monitoring', 'monitoring-alert-detail':'Monitoring Alert Detail', lifecycle:'Lifecycle Queue', edd:'Investigation Queue', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'RegMind Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'Document Verification Policies', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'RegMind AI Compliance Supervisor', 'supervisor-audit':'Supervisor Audit Chain' };
   document.getElementById('topbar-title').textContent = titles[name] || name;
   var globalSearch = document.getElementById('global-search');
   if (globalSearch) globalSearch.placeholder = name === 'screening' ? 'Search screening queue...' : 'Search applications, clients...';
@@ -13344,7 +13344,7 @@ function enhancedRequirementInternalControlHtml(req) {
   var fallbackResolveLabel = text.indexOf('monitor') !== -1
     ? 'View monitoring status'
     : text.indexOf('senior') !== -1 || text.indexOf('supervisor') !== -1
-      ? 'Open AI Compliance Supervisor'
+      ? 'Open RegMind AI Compliance Supervisor'
       : 'Open relevant control';
   var fallbackTarget = text.indexOf('monitor') !== -1 ? 'lifecycle' : text.indexOf('senior') !== -1 || text.indexOf('supervisor') !== -1 ? 'supervisor' : 'overview';
   return '<div style="padding:9px 10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
@@ -31121,14 +31121,14 @@ var NOTIF_TYPE_MAP = {
 
 function showClientNotificationModal(decision) {
   var templates = {
-    'Approve': 'Dear [Company Name],\n\nWe are pleased to inform you that your application for an account with Onboarda has been APPROVED.\n\nYour account will be activated within 24 hours. You will receive separate correspondence with your account details and next steps.\n\nThank you for choosing Onboarda.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind',
-    'Reject': 'Dear [Company Name],\n\nAfter careful review of your application, we regret to inform you that we are unable to proceed at this time.\n\nThis decision is final and based on our risk assessment and compliance requirements. Should you have any questions, please contact our compliance department.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind',
-    'EDD': 'Dear [Company Name],\n\nThank you for your application. Our compliance team requires additional documentation to complete our Enhanced Due Diligence review.\n\nPlease provide the following within 10 business days:\n- Enhanced beneficial ownership documentation\n- Bank references\n- Regulatory compliance certifications\n\nPlease reply to this email with the requested documents.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind'
+    'Approve': 'Dear [Company Name],\n\nWe are pleased to inform you that your account application has been APPROVED.\n\nYour financial institution will send separate correspondence with account details and next steps.\n\nBest regards,\nCompliance Team\n[Institution Name]\nSent via RegMind',
+    'Reject': 'Dear [Company Name],\n\nAfter careful review of your application, we regret to inform you that we are unable to proceed at this time.\n\nThis decision is final and based on our risk assessment and compliance requirements. Should you have any questions, please contact our compliance department.\n\nBest regards,\nCompliance Team\n[Institution Name]\nSent via RegMind',
+    'EDD': 'Dear [Company Name],\n\nThank you for your application. Our compliance team requires additional documentation to complete our Enhanced Due Diligence review.\n\nPlease provide the following within 10 business days:\n- Enhanced beneficial ownership documentation\n- Bank references\n- Regulatory compliance certifications\n\nPlease reply to this email with the requested documents.\n\nBest regards,\nCompliance Team\n[Institution Name]\nSent via RegMind'
   };
 
   pendingNotificationType = NOTIF_TYPE_MAP[decision] || 'approved';
 
-  document.getElementById('notification-message').value = templates[decision] || 'Dear Client,\\n\\nThank you for your application.\\n\\nBest regards,\\nCompliance Team\\nOnboarda\\nPowered by RegMind';
+  document.getElementById('notification-message').value = templates[decision] || 'Dear Client,\\n\\nThank you for your application.\\n\\nBest regards,\\nCompliance Team\\n[Institution Name]\\nSent via RegMind';
   document.getElementById('modal-client-notification').classList.add('open');
 }
 
@@ -35978,7 +35978,7 @@ window._lastSupervisorResult = null;
 
 async function runSupervisorPipeline() {
   if (!isAiSupervisorPilotActive()) {
-    showEnterprisePilotInactive('AI Compliance Supervisor');
+    showEnterprisePilotInactive('RegMind AI Compliance Supervisor');
     return;
   }
   var app = window._currentDetailApp;
@@ -35986,7 +35986,7 @@ async function runSupervisorPipeline() {
   var btn = document.getElementById('btn-run-supervisor');
   var statusBadge = document.getElementById('sv-pipeline-status');
   if (!btn || !statusBadge) {
-    showEnterprisePilotInactive('AI Compliance Supervisor');
+    showEnterprisePilotInactive('RegMind AI Compliance Supervisor');
     return;
   }
   btn.innerHTML = '⏳ Running Pipeline...'; btn.disabled = true;

@@ -1654,7 +1654,7 @@ def _internal_control_summary(requirement, app):
     summary = _clean_text(requirement.get("requirement_description")) or "Internal control must be completed before closure where applicable."
 
     if "senior" in key or "supervisor" in key:
-        resolve_label = "Open AI Compliance Supervisor"
+        resolve_label = "Open RegMind AI Compliance Supervisor"
         target_tab = "supervisor"
         if completed:
             summary = "Senior/supervisor review has been recorded as completed for this requirement."

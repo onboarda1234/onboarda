@@ -34,7 +34,7 @@ def test_application_detail_tabs_include_periodic_reviews_and_alerts_in_required
         "alerts",
         "activity",
     ]
-    assert ">Periodic Reviews</button>" in tabs_html
+    assert ">RegMind Periodic Reviews</button>" in tabs_html
     assert ">Alerts</button>" in tabs_html
 
 
@@ -352,7 +352,7 @@ def test_ongoing_monitoring_review_surface_is_signal_only_launchpad():
     start = html.index('<div class="view" id="view-periodic-review-signals">')
     end = html.index('<div class="view" id="view-monitoring">', start)
     section = html[start:end]
-    assert "Periodic Review Queue" in section
+    assert "RegMind Periodic Reviews" in section
     assert "Scheduled review workflow for periodic and annual client reviews" in section
     assert "Monitoring Alerts remains a separate event-based signal inbox" in section
     assert "Open Lifecycle Queue" in section

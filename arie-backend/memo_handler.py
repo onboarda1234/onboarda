@@ -2432,7 +2432,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                 ] if f is not None],
                 "factor_enforcement_applied": True,
                 "content": (
-                    f"Risk scoring model: Onboarda Composite Risk Engine v2.1. "
+                    f"Risk scoring model: RegMind Composite Risk Engine v2.1. "
                     f"Scoring methodology: Weighted multi-factor analysis across 5 risk dimensions, calibrated against Basel Committee and Wolfsberg Group risk factor guidance. "
                     + (
                         f"Overall risk score: {risk_score}/100 ({risk_level}). "
