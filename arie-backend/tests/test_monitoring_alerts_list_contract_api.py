@@ -160,8 +160,10 @@ def _seed_users_applications_and_alerts(conn):
         ("app_list_fixture", "ARF-2026-900099", "RegMind E2E Fixture Ltd", 1),
     ]:
         conn.execute(
-            "INSERT OR REPLACE INTO applications (id, ref, company_name, status, is_fixture) VALUES (?, ?, ?, 'approved', ?)",
-            (app_id, ref, name, is_fixture),
+            "INSERT OR REPLACE INTO applications "
+            "(id, ref, company_name, status, is_fixture, created_at) "
+            "VALUES (?, ?, ?, 'approved', ?, ?)",
+            (app_id, ref, name, is_fixture, "2020-01-01 00:00:00"),
         )
 
     conn.execute("DELETE FROM monitoring_alerts WHERE id BETWEEN 9401 AND 9412")

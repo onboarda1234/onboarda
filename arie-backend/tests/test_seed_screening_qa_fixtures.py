@@ -131,8 +131,9 @@ def test_text_pattern_fixture_rows_hidden_from_default_queue(db):
     db.execute(
         """
         INSERT INTO applications
-        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data, is_fixture)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, ref, client_id, company_name, country, sector, entity_type, status,
+         prescreening_data, is_fixture, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             "qagate0000000001", ref, "testclient001",
@@ -149,7 +150,7 @@ def test_text_pattern_fixture_rows_hidden_from_default_queue(db):
                 },
                 "director_screenings": [], "ubo_screenings": [], "intermediary_screenings": [],
                 "overall_flags": [], "total_hits": 0,
-            }}), False,
+            }}), False, "2020-01-01 00:00:00",
         ),
     )
     db.commit()
