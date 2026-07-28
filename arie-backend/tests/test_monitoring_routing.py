@@ -46,7 +46,7 @@ def routing_db(tmp_path, monkeypatch):
     import importlib
     import db as db_module
     importlib.reload(db_module)
-    db_module._DB_PATH = str(tmp_path / "test.db")
+    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "test.db"))
     db_module.init_db()
     conn = db_module.get_db()
 
@@ -764,3 +764,282 @@ class TestRdi008CriticalDismissalGate:
             )
         row = _alert(routing_db, alert_id)
         assert row["status"] == "open"
+
+
+@pytest.fixture()
+def monitoring_postgres_schema(monkeypatch):
+    """Initialize the production engine in an isolated PostgreSQL database."""
+    base_dsn = os.environ.get("TEST_POSTGRES_DSN")
+    if not base_dsn:
+        pytest.fail(
+            "TEST_POSTGRES_DSN is required for the protected PostgreSQL "
+            "schema contract",
+            pytrace=False,
+        )
+
+    from contextlib import suppress
+    from urllib.parse import urlsplit, urlunsplit
+
+    import psycopg2
+    from psycopg2 import sql
+
+    database_name = f"monitoring_owner_{uuid.uuid4().hex[:12]}"
+    parts = urlsplit(base_dsn)
+    database_dsn = urlunsplit(
+        (parts.scheme, parts.netloc, f"/{database_name}", parts.query, parts.fragment)
+    )
+    admin = psycopg2.connect(base_dsn)
+    admin.autocommit = True
+    db_module = None
+    created = False
+    try:
+        with admin.cursor() as cursor:
+            cursor.execute(
+                sql.SQL("CREATE DATABASE {}").format(
+                    sql.Identifier(database_name)
+                )
+            )
+        created = True
+        monkeypatch.setenv("DATABASE_URL", database_dsn)
+        monkeypatch.setenv("ENVIRONMENT", "testing")
+
+        import db as loaded_db
+
+        db_module = loaded_db
+        db_module.close_pg_pool()
+        monkeypatch.setattr(db_module, "DATABASE_URL", database_dsn)
+        monkeypatch.setattr(db_module, "USE_POSTGRESQL", True)
+        db_module.init_db()
+        connection = db_module.get_db()
+        try:
+            yield connection
+        finally:
+            connection.close()
+    finally:
+        if db_module is not None:
+            with suppress(Exception):
+                db_module.close_pg_pool()
+        if created:
+            with admin.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL(
+                        "DROP DATABASE IF EXISTS {} WITH (FORCE)"
+                    ).format(sql.Identifier(database_name))
+                )
+        admin.close()
+
+
+class TestProtectedDomainOwnershipBoundary:
+    """Monitoring may orchestrate canonical owners, never become one.
+
+    These are behavioral architecture guards for the protected baseline.
+    Routing is allowed to create/link the canonical periodic-review or EDD
+    record. It must not create KYC, Screening Review, Change Management, or
+    memo/AI judgment state, and the monitoring table must not acquire columns
+    that duplicate those owners.
+    """
+
+    _NON_OWNER_TABLES = (
+        "documents",
+        "screening_reviews",
+        "change_requests",
+        "compliance_memos",
+    )
+    _MONITORING_SCHEMA_ALLOWLIST = {
+        "monitoring_agent_status": {
+            "id", "agent_name", "agent_type", "last_run", "next_run",
+            "run_frequency", "clients_monitored", "alerts_generated", "status",
+        },
+        "monitoring_alert_escalations": {
+            "id", "alert_id", "reason", "escalated_by", "escalated_by_role",
+            "escalated_at", "prior_status", "new_status", "sla_state",
+            "days_overdue", "sla_due_at", "sla_days",
+            "alert_severity_at_escalation",
+        },
+        "monitoring_alert_evidence": {
+            "id", "monitoring_alert_id", "application_id", "provider",
+            "case_identifier", "alert_identifier", "match_identifier",
+            "risk_identifier", "profile_identifier", "evidence_type",
+            "matched_subject_name", "relationship_to_client",
+            "match_category", "risk_indicator", "match_confidence",
+            "source_title", "source_name", "source_url",
+            "source_url_available", "source_url_unavailable_reason",
+            "publication_date", "snippet", "provider_case_url",
+            "evidence_json", "raw_provider_reference", "evidence_status",
+            "evidence_hash", "fetched_at", "created_at", "updated_at",
+        },
+        "monitoring_alert_followups": {
+            "id", "alert_id", "action", "note", "due_at", "created_by",
+            "created_at", "resolved_at", "resolved_by",
+        },
+        "monitoring_alert_review_requests": {
+            "id", "alert_id", "tier", "requested_outcome",
+            "dismissal_reason", "rationale", "evidence_ref", "state",
+            "initiated_by", "initiated_at", "approved_by", "approved_at",
+            "approval_note", "rejection_reason", "second_review_bypassed",
+            "sampled_for_qa",
+        },
+        "monitoring_alerts": {
+            "id", "application_id", "provider", "case_identifier",
+            "discovered_via", "discovered_at", "backfill_run_id",
+            "client_name", "alert_type", "severity", "detected_by", "summary",
+            "source_reference", "ai_recommendation", "status",
+            "officer_action", "officer_notes", "created_at", "reviewed_at",
+            "reviewed_by", "linked_periodic_review_id", "linked_edd_case_id",
+            "triaged_at", "assigned_at", "resolved_at",
+        },
+        "screening_monitoring_subscriptions": {
+            "id", "client_id", "application_id", "provider", "person_key",
+            "customer_identifier", "external_subscription_id", "status",
+            "subscribed_at", "last_event_at", "last_webhook_type",
+            "monitoring_event_count", "is_authoritative", "source",
+            "created_at", "updated_at",
+        },
+    }
+
+    @staticmethod
+    def _counts(connection):
+        existing = {
+            row["name"]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        return {
+            table: connection.execute(
+                f"SELECT COUNT(*) AS count FROM {table}"
+            ).fetchone()["count"]
+            for table in TestProtectedDomainOwnershipBoundary._NON_OWNER_TABLES
+            if table in existing
+        }
+
+    def test_monitoring_schema_is_an_explicit_signal_orchestration_allowlist(
+        self, routing_db
+    ):
+        tables = {
+            row["name"]
+            for row in routing_db.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name LIKE '%monitoring%'
+                """
+            ).fetchall()
+        }
+        assert tables == set(self._MONITORING_SCHEMA_ALLOWLIST)
+        for table, expected_columns in self._MONITORING_SCHEMA_ALLOWLIST.items():
+            actual_columns = {
+                row["name"]
+                for row in routing_db.execute(
+                    f"PRAGMA table_info({table})"
+                ).fetchall()
+            }
+            assert actual_columns == expected_columns, table
+
+    def test_postgresql_monitoring_schema_matches_the_same_allowlist(
+        self, monitoring_postgres_schema
+    ):
+        tables = {
+            row["table_name"]
+            for row in monitoring_postgres_schema.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_type = 'BASE TABLE'
+                  AND table_name LIKE ?
+                """,
+                ("%monitoring%",),
+            ).fetchall()
+        }
+        assert tables == set(self._MONITORING_SCHEMA_ALLOWLIST)
+        for table, expected_columns in self._MONITORING_SCHEMA_ALLOWLIST.items():
+            actual_columns = {
+                row["column_name"]
+                for row in monitoring_postgres_schema.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = ?
+                    """,
+                    (table,),
+                ).fetchall()
+            }
+            assert actual_columns == expected_columns, table
+
+    def test_route_to_edd_only_links_canonical_edd_owner(
+        self, routing_db, audit_sink
+    ):
+        from monitoring_routing import route_alert_to_edd
+
+        alert_id = _insert_alert(
+            routing_db,
+            application_id="protected-owner-edd",
+            client_name="Protected owner EDD",
+        )
+        before = self._counts(routing_db)
+        edd_before = routing_db.execute(
+            "SELECT COUNT(*) AS count FROM edd_cases"
+        ).fetchone()["count"]
+
+        result = route_alert_to_edd(
+            routing_db,
+            alert_id,
+            trigger_notes="Route signal to canonical EDD owner",
+            user=USER,
+            audit_writer=audit_sink,
+        )
+
+        assert self._counts(routing_db) == before
+        assert routing_db.execute(
+            "SELECT COUNT(*) AS count FROM edd_cases"
+        ).fetchone()["count"] == edd_before + 1
+        edd = _edd(routing_db, result["edd_case_id"])
+        assert edd["origin_context"] == "monitoring_alert"
+        assert edd["linked_monitoring_alert_id"] == alert_id
+        assert edd["stage"] == "triggered"
+        assert edd["decision"] is None
+        assert edd["decision_reason"] is None
+        assert edd["decided_by"] is None
+        alert = _alert(routing_db, alert_id)
+        assert alert["linked_edd_case_id"] == result["edd_case_id"]
+        assert alert["status"] == "routed_to_edd"
+        assert alert["ai_recommendation"] is None
+
+    def test_route_to_periodic_review_only_links_canonical_review_owner(
+        self, routing_db, audit_sink
+    ):
+        from monitoring_routing import route_alert_to_periodic_review
+
+        alert_id = _insert_alert(
+            routing_db,
+            application_id="protected-owner-review",
+            client_name="Protected owner review",
+        )
+        before = self._counts(routing_db)
+        review_before = routing_db.execute(
+            "SELECT COUNT(*) AS count FROM periodic_reviews"
+        ).fetchone()["count"]
+
+        result = route_alert_to_periodic_review(
+            routing_db,
+            alert_id,
+            review_reason="Route signal to canonical periodic-review owner",
+            user=USER,
+            audit_writer=audit_sink,
+        )
+
+        assert self._counts(routing_db) == before
+        assert routing_db.execute(
+            "SELECT COUNT(*) AS count FROM periodic_reviews"
+        ).fetchone()["count"] == review_before + 1
+        review = _review(routing_db, result["periodic_review_id"])
+        assert review["trigger_source"] == "monitoring_alert"
+        assert review["linked_monitoring_alert_id"] == alert_id
+        assert review["status"] == "pending"
+        assert review["decision"] is None
+        assert review["outcome"] is None
+        alert = _alert(routing_db, alert_id)
+        assert alert["linked_periodic_review_id"] == result["periodic_review_id"]
+        assert alert["status"] == "routed_to_review"
+        assert alert["ai_recommendation"] is None

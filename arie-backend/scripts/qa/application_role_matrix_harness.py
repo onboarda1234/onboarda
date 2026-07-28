@@ -560,13 +560,17 @@ def run_browser_smoke(base_url: str, manifest_path: str, credentials_path: str, 
     results = []
     for role in ("sco", "co", "analyst"):
         actor = credentials["actors"][role]
+        expected_application = applications[f"assigned_{role}"]
         role_out = root / role
+        report_path = role_out / "report.json"
         env = os.environ.copy()
         env.update({
             "STAGING_BASE_URL": base_url,
             "STAGING_QA_EMAIL": actor["email"],
             "STAGING_QA_PASSWORD": actor["password"],
-            "STAGING_SMOKE_APP_ID": applications[f"assigned_{role}"]["id"],
+            "STAGING_SMOKE_PROFILE": "role-matrix",
+            "STAGING_SMOKE_EXPECTED_ROLE": role,
+            "STAGING_SMOKE_APP_ID": expected_application["id"],
             "STAGING_SMOKE_OUT_DIR": str(role_out),
         })
         completed = subprocess.run(
@@ -574,15 +578,47 @@ def run_browser_smoke(base_url: str, manifest_path: str, credentials_path: str, 
             env=env,
             check=False,
         )
+        if completed.returncode != 0:
+            raise RuntimeError(f"{role} browser smoke failed with exit code {completed.returncode}")
+
+        browser_report = _read_json(str(report_path))
+        opened_application = browser_report.get("observations", {}).get(
+            "openedApplication", {}
+        )
+        authenticated_role = browser_report.get("observations", {}).get(
+            "authenticatedRole"
+        )
+        report_matches_request = (
+            browser_report.get("smokeProfile") == "role-matrix"
+            and browser_report.get("expectedRole") == role
+            and browser_report.get("requestedApplicationTarget")
+            == expected_application["id"]
+            and browser_report.get("applicationId") == expected_application["id"]
+            and opened_application.get("id") == expected_application["id"]
+            and authenticated_role == role
+            and browser_report.get("checks", {}).get(
+                "requestedApplicationOpened"
+            ) is True
+            and browser_report.get("checks", {}).get(
+                "authenticatedRoleMatchesExpected"
+            ) is True
+        )
+        if not report_matches_request:
+            raise RuntimeError(
+                f"{role} browser report did not prove its assigned application "
+                "and authenticated role."
+            )
+
         result = {
             "role": role,
             "exit_code": completed.returncode,
-            "report": str(role_out / "report.json"),
-            "application_id": applications[f"assigned_{role}"]["id"],
+            "report": str(report_path),
+            "requested_application_id": expected_application["id"],
+            "opened_application_id": opened_application["id"],
+            "opened_application_ref": opened_application.get("ref"),
+            "authenticated_role": authenticated_role,
         }
         results.append(result)
-        if completed.returncode != 0:
-            raise RuntimeError(f"{role} browser smoke failed with exit code {completed.returncode}")
 
     summary = {
         "run_id": manifest["run_id"],

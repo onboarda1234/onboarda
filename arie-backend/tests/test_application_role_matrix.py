@@ -206,6 +206,29 @@ def test_browser_runner_covers_sco_co_analyst_without_secret_command_arguments(t
 
     def fake_run(command, *, env, check):
         calls.append({"command": command, "env": env, "check": check})
+        role = env["STAGING_SMOKE_EXPECTED_ROLE"]
+        application_id = env["STAGING_SMOKE_APP_ID"]
+        _secure_write_json(
+            out_dir / role / "report.json",
+            {
+                "smokeProfile": env["STAGING_SMOKE_PROFILE"],
+                "expectedRole": role,
+                "requestedApplicationTarget": application_id,
+                "applicationId": application_id,
+                "applicationRef": plan["applications"][f"assigned_{role}"]["ref"],
+                "observations": {
+                    "authenticatedRole": role,
+                    "openedApplication": {
+                        "id": application_id,
+                        "ref": plan["applications"][f"assigned_{role}"]["ref"],
+                    },
+                },
+                "checks": {
+                    "requestedApplicationOpened": True,
+                    "authenticatedRoleMatchesExpected": True,
+                },
+            },
+        )
         return type("Completed", (), {"returncode": 0})()
 
     with mock.patch(
@@ -226,7 +249,15 @@ def test_browser_runner_covers_sco_co_analyst_without_secret_command_arguments(t
         assert call["command"][0] == "node"
         assert passwords[role] not in " ".join(call["command"])
         assert call["env"]["STAGING_QA_PASSWORD"] == passwords[role]
-        assert call["env"]["STAGING_SMOKE_APP_ID"] == plan["applications"][f"assigned_{role}"]["id"]
+        expected_app = plan["applications"][f"assigned_{role}"]
+        assert call["env"]["STAGING_SMOKE_PROFILE"] == "role-matrix"
+        assert call["env"]["STAGING_SMOKE_EXPECTED_ROLE"] == role
+        assert call["env"]["STAGING_SMOKE_APP_ID"] == expected_app["id"]
+        role_result = next(row for row in result["roles"] if row["role"] == role)
+        assert role_result["requested_application_id"] == expected_app["id"]
+        assert role_result["opened_application_id"] == expected_app["id"]
+        assert role_result["opened_application_ref"] == expected_app["ref"]
+        assert role_result["authenticated_role"] == role
     summary_text = (out_dir / "summary.json").read_text(encoding="utf-8")
     assert all(password not in summary_text for password in passwords.values())
 
