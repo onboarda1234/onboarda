@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -181,6 +184,96 @@ def test_runner_always_executes_contracts_and_fail_closed_pytest_policy():
     assert "report.skipped" in plugin
     assert "wasxfail" in plugin
     assert "pytest.ExitCode.TESTS_FAILED" in plugin
+
+
+def test_runner_rejects_pytest_arguments_that_can_weaken_execution():
+    forbidden_arguments = (
+        ("--collect-only", "-q"),
+        ("--co",),
+        ("-k", "screening"),
+        ("-m", "not slow"),
+        ("--ignore=tests/test_screening_queue.py",),
+        ("--deselect=tests/test_screening_queue.py",),
+        ("--maxfail=1",),
+        ("-p", "no:scripts.qa.protected_regression_pytest_plugin"),
+        ("--override-ini=addopts=--collect-only",),
+        ("tests/test_screening_queue.py",),
+    )
+    for arguments in forbidden_arguments:
+        result = subprocess.run(
+            [sys.executable, str(RUNNER_PATH), "--", *arguments],
+            cwd=BACKEND_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 2, arguments
+        assert "Refused pytest argument" in result.stderr
+
+
+def test_runner_accepts_only_benign_pytest_presentation_arguments():
+    from scripts.qa.run_protected_module_regression import (
+        validated_pytest_args,
+    )
+
+    accepted = [
+        "-q",
+        "-vv",
+        "--tb=short",
+        "--color=no",
+        "--durations=10",
+        "--durations-min=0.25",
+        "--showlocals",
+        "--no-header",
+        "--no-summary",
+    ]
+    assert validated_pytest_args(["--", *accepted]) == accepted
+
+
+def test_runner_rejects_pytest_environment_execution_controls():
+    forbidden_environment = {
+        "PYTEST_ADDOPTS": "--collect-only",
+        "PYTEST_PLUGINS": "scripts.qa.protected_regression_pytest_plugin",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+    }
+    for name, value in forbidden_environment.items():
+        env = dict(os.environ)
+        env[name] = value
+        result = subprocess.run(
+            [sys.executable, str(RUNNER_PATH), "--list"],
+            cwd=BACKEND_ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 2, name
+        assert name in result.stderr
+
+
+def test_runner_forces_empty_configured_addopts(monkeypatch):
+    from scripts.qa import run_protected_module_regression as runner
+
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return type("Completed", (), {"returncode": 0})()
+
+    for name in runner.FORBIDDEN_PYTEST_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(RUNNER_PATH), "--group", "rsmp", "--", "--tb=short"],
+    )
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    assert runner.main() == 0
+    command = captured["command"]
+    assert command[command.index("-o") + 1] == "addopts="
+    assert command[command.index("-p") + 1] == runner.PYTEST_PLUGIN
 
 
 def test_fixture_catalog_is_explicit_deterministic_hidden_and_non_mutating():

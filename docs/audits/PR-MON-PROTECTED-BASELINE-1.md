@@ -1,6 +1,6 @@
 # PR-MON-PROTECTED-BASELINE-1 — protected regression baseline
 
-Status: **BACKUP-ONLY BRANCH PRESERVED — AUTHENTICATED BROWSER GATE BLOCKED**
+Status: **PRE-PR — FOUNDER MANUAL BROWSER ACCEPTANCE REQUIRED AFTER DEPLOYMENT**
 Captured: 2026-07-27
 Scope: regression infrastructure and evidence only; no product behaviour, compliance logic, score, disposition, workflow, database schema/data, staging configuration, or feature activation is changed by this branch.
 
@@ -33,12 +33,15 @@ The mandatory SHA-alignment gate passed before baseline work began.
 - `codex/pr-mon-protected-baseline-1` was pushed to `origin` solely as a
   durable backup. The push did not trigger a workflow or staging mutation.
 - No pull request was opened. No merge or deployment was performed.
-- The authenticated browser gate remains blocked because approved browser
-  control is unavailable and the staging administrator credential has not been
-  supplied through an approved secure credential mechanism.
-- Work must not proceed to PR, merge, deployment, or a later Monitoring Alerts
-  workstream until both browser control and secure administrator access are
-  available and the protected browser validation passes.
+- Automated browser control is unavailable in this runtime. For this PR only,
+  founder manual browser acceptance replaces that stage and is required after
+  deployment of the exact merge SHA.
+- The sub-ten-minute checklist is
+  `docs/audits/PR-MON-PROTECTED-BASELINE-1-FOUNDER-MANUAL-BROWSER-ACCEPTANCE.md`.
+  PR, CI, merge, and staging deployment may proceed, but closure cannot pass
+  until the founder returns `PASS` or `PASS WITH LIMITATION`.
+- A later Monitoring Alerts workstream must not begin until this baseline is
+  fully closed.
 
 ## Authoritative-document audit
 
@@ -274,16 +277,13 @@ Application role-matrix harness uses a separate explicit profile that requires
 its per-role target and expected role, records the application actually opened,
 and fails before summarizing evidence if either value does not match.
 
-Current result: **not executed through browser control**. The browser skill
-requires the in-app Node REPL control tool, which is unavailable in this
-session; its instructions prohibit substituting another computer-control tool.
-In addition, the approved staging QA credential is `sco`, while the Risk
-Scoring Model page is admin-only. The harness records that role limitation and
-still validates the authenticated backend projection and application evidence.
-
-Planned report/screenshots location when an approved browser session is
-available: `/tmp/regmind-staging-browser-smoke/report.json` and sibling PNG
-files. No screenshot artifact is claimed in this baseline.
+Current result: **not executed through automated browser control**. Browser
+Control is unavailable in this runtime and, for this PR only, the founder has
+accepted a manual browser acceptance gate after deployment of the exact merge
+SHA. The fail-closed checklist requires the approved staging administrator,
+preserved Console/Network inspection, read-only API methods, redacted
+screenshots, and explicit Application Review, Screening, and RSMP results.
+No automated screenshot artifact is claimed in this baseline.
 
 ## Validation evidence
 
@@ -291,16 +291,17 @@ files. No screenshot artifact is claimed in this baseline.
 |---|---|
 | Revised contract/ownership/browser tests | `56 passed`, including isolated production PostgreSQL ownership schema |
 | Role-matrix/browser profile regression | `25 passed` after independent-review remediation |
-| Protected-module regression | `1567 passed` in `220.56s` with Python 3.11 and real SSL PostgreSQL; zero skips/xfails/xpasses |
-| Full repository suite using CI exclusion | `8190 passed, 2 skipped, 4 xfailed` in `1121.08s`; zero failures/errors |
+| Final fail-closed runner contracts | `10 passed`; forbidden CLI execution controls and `PYTEST_*` environment hooks exit `2` before pytest |
+| Protected-module regression | `1571 passed` in `242.87s` with Python 3.11 and fresh real SSL PostgreSQL; zero skips/xfails/xpasses |
+| Full repository suite using CI exclusion | `8190 passed, 2 skipped, 4 xfailed` in `1121.08s`; zero failures/errors — retained pre-final-runner-hardening evidence; no runtime/product code changed |
 | CI-excluded PDF suite | `8 passed` |
-| Collection floor | `8196` collected, required minimum `3800` |
+| Final collection floor | `8200` collected, required minimum `3800` |
 | Python syntax | PASS |
 | flake8 `E9,F63,F7,F82` | PASS, `0` findings |
 | Schema migration policy | PASS; no migration added |
 | JavaScript syntax | PASS |
 | Staging semantic API smoke | PASS, 33/33 including EDD, CM, provider/CA, environment-feature, RSMP, Application, KYC, and Screening comparisons |
-| Local/authenticated browser smoke | **Not run — limitation described above** |
+| Authenticated browser acceptance | Automated control unavailable; founder manual gate required after exact-SHA deployment |
 
 The first protected-suite attempt produced 26 PostgreSQL connection errors
 because the local Homebrew server did not support the repository-required
@@ -312,6 +313,12 @@ During independent-review remediation, one runner invocation accidentally used
 the macOS system Python 3.9 and stopped at six existing `X | None` annotations.
 The fail-closed plugin then named every requested file that collected zero
 tests. The required Python 3.11 rerun collected all tests and passed.
+
+The first final-runner rerun incorrectly supplied the fresh PostgreSQL DSN as
+the global `DATABASE_URL`, which forced SQLite-targeted contracts onto
+PostgreSQL and failed test setup. The corrected invocation supplied the same
+fresh SSL database through `TEST_POSTGRES_DSN`, leaving SQLite-targeted tests
+isolated; all 1,571 protected tests then passed with no skip, xfail, or xpass.
 
 ## Independent-review remediation
 
@@ -340,10 +347,24 @@ was addressed:
 10. The existing Application role-matrix browser wrapper now selects an
     explicit role-aware profile, proves the requested application was actually
     opened, and records only observed application/role values in its summary.
+11. The protected runner accepts only presentation-safe pytest arguments and
+    rejects collection-only, selectors, deselection, plugin overrides, and
+    other execution controls before pytest starts.
+12. The runner also rejects `PYTEST_ADDOPTS`, `PYTEST_PLUGINS`, and
+    `PYTEST_DISABLE_PLUGIN_AUTOLOAD`, and forces configured pytest `addopts`
+    empty before installing the mandatory policy plugin.
+13. The founder checklist authenticates before the exact-SHA gate, sources
+    application-specific RSMP evidence from the application API, requires
+    preserved Console/Network evidence, and fails on any protected-resource
+    mutation request or incomplete/ambiguous check.
 
-The final independent re-review is **READY** with no remaining actionable
-P0/P1/P2. No PR may be opened while the authenticated in-app browser execution
-remains outstanding.
+The final independent re-review of the manual-gate policy and runner
+remediation is **READY** with no remaining actionable P0/P1/P2. The reviewer
+independently passed 41 focused contract/role/browser tests, confirmed the
+8,200-test collection, parsed JSON/YAML, checked Python/JavaScript syntax,
+fatal flake8, and diff hygiene, and reproduced both CLI and environment
+collection-bypass rejections. Founder manual browser acceptance remains a
+separate mandatory post-deployment closure gate.
 
 ## Conditions every later Monitoring PR must preserve
 
