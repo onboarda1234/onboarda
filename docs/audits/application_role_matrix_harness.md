@@ -79,8 +79,11 @@ python3.11 -m pytest arie-backend/tests/test_api.py -k "applications or audit or
 3. Seed the harness with the guarded command.
 4. Run the API validator using the generated manifest and credential artifact.
 5. Run the harness `browser` command. It invokes `staging_browser_smoke.js`
-   separately for SCO, CO, and analyst, using each generated credential and
-   assigned application ID without putting passwords in command arguments.
+   with the explicit `role-matrix` profile separately for SCO, CO, and analyst,
+   using each generated credential and assigned application ID without putting
+   passwords in command arguments. Each browser report must prove the
+   authenticated role and the application actually opened; the summary records
+   those observed values and fails closed on any mismatch.
 6. Capture screenshots, browser console output, API report, and CloudWatch
    counts for the validation window.
 7. Disable all synthetic accounts with the guarded `disable` command.

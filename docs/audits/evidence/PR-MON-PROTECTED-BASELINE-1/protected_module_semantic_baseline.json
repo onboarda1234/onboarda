@@ -1,0 +1,185 @@
+{
+  "schema_version": 3,
+  "suite": "protected-module-regression",
+  "base_sha": "726d01d96cbbccddc68f1f665d51848f0f1adc1a",
+  "staging_sha": "726d01d96cbbccddc68f1f665d51848f0f1adc1a",
+  "captured_at": "2026-07-27T18:13:10.577512+00:00",
+  "staging": {
+    "backend_task_definition": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-staging:980",
+    "worker_task_definition": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-verification-worker:428",
+    "backend_desired_running": "2/2",
+    "worker_desired_running": "6/6"
+  },
+  "evaluated_runtime": {
+    "screening_provider": "ComplyAdvantage Mesh",
+    "screening_abstraction_enabled": true,
+    "screening_fallback_mode": "disabled",
+    "rsmp_mapping_fidelity_flag": {
+      "name": "ENABLE_RSMP_TIER0A_MAPPING_FIDELITY",
+      "value": true
+    },
+    "monitoring_flags": {
+      "ENABLE_MONITORING_DASHBOARD": true,
+      "MONITORING_AUTOMATION_ENABLED": true,
+      "MONITORING_AUTOMATION_ENABLED_source": "staging runtime default; no task override",
+      "ENABLE_CA_RESCREEN": false,
+      "ENABLE_CA_PROFILE_HYDRATION": false
+    }
+  },
+  "expected_semantics": {
+    "risk_model_semantic_sha256": "41832ee3963683c47051f53220ff78412eefc00c101f5f12154636f0ce8d3b76",
+    "screening_provider": {
+      "active_aml_screening_provider": "ComplyAdvantage Mesh",
+      "hydration_enabled": false,
+      "rescreen_enabled": false,
+      "screening_abstraction_enabled": true,
+      "simulation_fallback_mode": "disabled"
+    },
+    "environment_features": {
+      "ENABLE_AI_SUPERVISOR": false,
+      "ENABLE_DEMO_BANNER": false,
+      "ENABLE_DEMO_MODE": false,
+      "ENABLE_DOCUMENT_AI_ANALYSIS": true,
+      "ENABLE_KPI_DASHBOARD": false,
+      "ENABLE_KPI_DEMO_DATA": false,
+      "ENABLE_MONITORING_DASHBOARD": true,
+      "ENABLE_PHASE2_FEATURES": true,
+      "ENABLE_REGULATORY_INTELLIGENCE_FULL": false,
+      "ENABLE_ROLE_SWITCHER": false,
+      "ENABLE_SAR_STR": false,
+      "ENABLE_SAR_WORKFLOW": false,
+      "ENABLE_SUPERVISOR_AUDIT": false,
+      "ENABLE_SUPERVISOR_DASHBOARD": false,
+      "FF_SIZE_CAP_CLIENT_REJECT": true,
+      "FF_UX_SPLIT_UPLOAD_VERIFY": false
+    },
+    "change_management_semantic_sha256": "5e91bf5836e1835371a26724ba110b17cc50786c382d31d1ecf534bc2a295133",
+    "applications": {
+      "RM-PILOT-001": "3866a4092c3abfb5c65b3158cc16b98e28660b20925f2f8fe8536da1f474fe99",
+      "RM-PILOT-024": "8b3a2c41b74e770aee0eeec142b3275b8ce415b0ab7d51a88a7099e7a26f237b",
+      "RM-PILOT-028": "a7dcf2a4f77bb20fbf409741a8fbeed9d9babd85713b33ef8d3ff08a91fe08fd",
+      "RM-PILOT-039": "67238f01c2207b47ad99f9adc4d1dbb8fa4b874a654f54953961b1025ab11734",
+      "RM-PILOT-041": "176bea69f3309d4a218b923ae889da462b4f45aa937f8354b80eb0b7de5f6413"
+    },
+    "screening": {
+      "ARF-QAFIX-001": "b753e7bf6be8984b6e6c44d33eb6f5d275911614d516b1442d8d87cf63c663b8",
+      "ARF-QAFIX-002": "5407f4baf5eb59bee005c059fd77893af327f26c175193bea7d8282ece0e9e44",
+      "ARF-QAFIX-004": "653de083dbd1d62af812dfe397cd6b2585f454a10c472ea7145f625957dca706",
+      "ARF-QAFIX-005": "a3c7736da8496fc2c223ee663ea50faf00dd5a89c09ba14507178caca5562922",
+      "ARF-QAFIX-006": "5428c68bda00304dcf925571f2b7955c03f290bc3bd69384c74154366332c7e3"
+    },
+    "edd_cases": {
+      "RM-PILOT-024": "94fde689e8770e23de1b9f52d19d014f8a22a14484c371b228e6868b207683de",
+      "RM-PILOT-028": "63c31fda68389c225422de01ecfe6fe5b5b97f6a156144b40680fb461b089d00"
+    },
+    "fixture_visibility": {
+      "change_management_fixture_application_id": "qafix-confirmed-match-817",
+      "change_management_fixture_available_by_opt_in": true,
+      "change_management_fixture_hidden_by_default": true
+    }
+  },
+  "current_outputs": {
+    "applications": {
+      "RM-PILOT-001": {
+        "status": "approved",
+        "risk_score": 12.0,
+        "risk_level": "LOW",
+        "documents": 3,
+        "monitoring_alerts": 0
+      },
+      "RM-PILOT-024": {
+        "status": "approved",
+        "risk_score": 70.0,
+        "risk_level": "VERY_HIGH",
+        "documents": 3,
+        "monitoring_alerts": 1
+      },
+      "RM-PILOT-028": {
+        "status": "submitted_to_compliance",
+        "risk_score": 70.0,
+        "risk_level": "VERY_HIGH",
+        "documents": 8,
+        "monitoring_alerts": 0
+      },
+      "RM-PILOT-039": {
+        "status": "approved",
+        "risk_score": 43.3,
+        "risk_level": "MEDIUM",
+        "documents": 3,
+        "monitoring_alerts": 0
+      },
+      "RM-PILOT-041": {
+        "status": "approved",
+        "risk_score": 12.0,
+        "risk_level": "LOW",
+        "documents": 3,
+        "monitoring_alerts": 1
+      }
+    },
+    "screening": {
+      "ARF-QAFIX-001": {
+        "truth_state": "pending_provider",
+        "status": "screening_in_progress",
+        "defensible_clear": false
+      },
+      "ARF-QAFIX-002": {
+        "truth_state": "completed_match",
+        "status": "cleared_by_officer",
+        "requires_four_eyes": true,
+        "four_eyes_status": "complete",
+        "defensible_clear": true
+      },
+      "ARF-QAFIX-004": {
+        "truth_state": "failed",
+        "status": "failed",
+        "defensible_clear": false
+      },
+      "ARF-QAFIX-005": {
+        "truth_state": "stale",
+        "status": "stale",
+        "defensible_clear": false
+      },
+      "ARF-QAFIX-006": {
+        "truth_state": "completed_match",
+        "status": "review_required",
+        "requires_four_eyes": true,
+        "four_eyes_status": "pending_second_review",
+        "defensible_clear": false
+      }
+    },
+    "edd_cases": {
+      "RM-PILOT-024": {
+        "stage": "analysis",
+        "risk_score": 70.0,
+        "risk_level": "VERY_HIGH",
+        "terminal_outcome": null
+      },
+      "RM-PILOT-028": {
+        "stage": "information_gathering",
+        "risk_score": 70.0,
+        "risk_level": "VERY_HIGH",
+        "terminal_outcome": null
+      }
+    },
+    "change_management": {
+      "application_id": "qafix-confirmed-match-817",
+      "application_ref": "ARF-QAFIX-817",
+      "status": "approved",
+      "materiality": "tier3",
+      "decision_notes": "Controlled single-approval validation",
+      "changed_fields_count": 1
+    },
+    "fixture_visibility": {
+      "default_application_count_for_RM-PILOT": 0,
+      "opt_in_application_count_for_RM-PILOT": 41,
+      "default_screening_count_for_QAFIX": 0,
+      "opt_in_screening_row_count_for_QAFIX": 12,
+      "default_change_request_count": 0,
+      "opt_in_change_request_count": 1,
+      "change_management_fixture_application_id": "qafix-confirmed-match-817",
+      "change_management_fixture_hidden_by_default": true,
+      "change_management_fixture_available_by_opt_in": true
+    },
+    "semantic_smoke_sha256": "c67aa6501a564866b40528389f01179070ecd6dd22926e5a1cd4de3bd3532ed6"
+  }
+}
