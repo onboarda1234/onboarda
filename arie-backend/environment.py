@@ -27,6 +27,41 @@ CLIENT_SAFE_UPLOAD_LATENCY_FLAGS = (
 
 _UPLOAD_LATENCY_DEFAULTS = {flag: False for flag in UPLOAD_LATENCY_FLAGS}
 
+# PR-MON-FEATURE-FLAGS-1: governance-only switches for future Monitoring work.
+# These definitions provide stable operator labels and runtime evaluation, but
+# no business module consumes them in this PR. Every environment defaults OFF;
+# later implementation PRs must deliberately opt in and add their own guards.
+MONITORING_FEATURE_DEFINITIONS = (
+    (
+        "ENABLE_DOCUMENT_RENEWAL_AUTOMATION",
+        "Document Renewal",
+        "Document Renewal",
+    ),
+    (
+        "ENABLE_AGENT1_REFRESH_VERIFICATION",
+        "Agent 1 Refresh Verification",
+        "Agent 1",
+    ),
+    (
+        "ENABLE_MONITORING_SCREENING_CHANGE",
+        "Screening Monitoring",
+        "Screening Monitoring",
+    ),
+    (
+        "ENABLE_MONITORING_AUTO_RESOLUTION",
+        "Automatic Resolution",
+        "Automatic Closure",
+    ),
+)
+
+MONITORING_FEATURE_FLAGS = tuple(
+    flag for flag, _label, _consumer in MONITORING_FEATURE_DEFINITIONS
+)
+
+_MONITORING_FEATURE_DEFAULTS = {
+    flag: False for flag in MONITORING_FEATURE_FLAGS
+}
+
 # RSMP Tier 0A scoring changes must be activated deliberately after the
 # staging config diff and read-only historical dry run have been approved.
 RSMP_TIER0A_ACTIVATION_FLAG = "ENABLE_RSMP_TIER0A_MAPPING_FIDELITY"
@@ -226,6 +261,7 @@ _DEFAULT_FLAGS = {
 _DEFAULT_FLAGS["testing"] = dict(_DEFAULT_FLAGS["development"])
 for _env_flags in _DEFAULT_FLAGS.values():
     _env_flags.update(_UPLOAD_LATENCY_DEFAULTS)
+    _env_flags.update(_MONITORING_FEATURE_DEFAULTS)
     _env_flags.setdefault(RSMP_TIER0A_ACTIVATION_FLAG, False)
 
 
@@ -300,6 +336,55 @@ class FeatureFlags:
 
 # Singleton
 flags = FeatureFlags()
+
+
+def get_monitoring_feature_state(feature_flags=None) -> dict:
+    """Return the evaluated, governance-only Monitoring feature state."""
+    resolved_flags = feature_flags or flags
+    return {
+        flag: resolved_flags.is_enabled(flag)
+        for flag in MONITORING_FEATURE_FLAGS
+    }
+
+
+def get_monitoring_feature_status(feature_flags=None) -> dict:
+    """Return the read-only operator view for Monitoring feature governance."""
+    state = get_monitoring_feature_state(feature_flags)
+    return {
+        "read_only": True,
+        "activation_controls": False,
+        "features": {
+            flag: {
+                "label": label,
+                "enabled": state[flag],
+                "state": "ON" if state[flag] else "OFF",
+            }
+            for flag, label, _consumer in MONITORING_FEATURE_DEFINITIONS
+        },
+    }
+
+
+_monitoring_feature_state_logged = False
+
+
+def log_monitoring_feature_state_once(feature_flags=None) -> bool:
+    """Log one startup record containing every evaluated Monitoring flag."""
+    global _monitoring_feature_state_logged
+    if _monitoring_feature_state_logged:
+        return False
+
+    state = get_monitoring_feature_state(feature_flags)
+    labels = {
+        flag: label
+        for flag, label, _consumer in MONITORING_FEATURE_DEFINITIONS
+    }
+    summary = "; ".join(
+        f"{labels[flag]}: {'ON' if state[flag] else 'OFF'}"
+        for flag in MONITORING_FEATURE_FLAGS
+    )
+    logger.info("Monitoring Feature Flags — %s", summary)
+    _monitoring_feature_state_logged = True
+    return True
 
 
 # ══════════════════════════════════════════════════════════════
@@ -428,8 +513,8 @@ def _perm(owner, notes):
             "classification": FLAG_PERMANENT, "sunset": None, "notes": notes}
 
 
-def _temp(owner, sunset, notes):
-    return {"owner": owner, "introduced": INTRODUCED_PRE_REGISTRY,
+def _temp(owner, sunset, notes, *, introduced=INTRODUCED_PRE_REGISTRY):
+    return {"owner": owner, "introduced": introduced,
             "classification": FLAG_TEMPORARY, "sunset": sunset, "notes": notes}
 
 
@@ -481,6 +566,32 @@ FLAG_LIFECYCLE = {
     "ENABLE_KPI_DASHBOARD": _temp(
         "compliance", "Remove gate once the KPI dashboard ships to pilot.",
         "Enterprise module; no server route yet."),
+
+    # ── Temporary: future Monitoring workflows, governance only in this PR ──
+    "ENABLE_DOCUMENT_RENEWAL_AUTOMATION": _temp(
+        "compliance",
+        "Remove the gate after Document Renewal automation reaches approved GA.",
+        "Future Document Renewal consumer; no workflow is wired in this PR.",
+        introduced="PR-MON-FEATURE-FLAGS-1",
+    ),
+    "ENABLE_AGENT1_REFRESH_VERIFICATION": _temp(
+        "compliance",
+        "Remove the gate after Agent 1 refresh verification reaches approved GA.",
+        "Future Agent 1 consumer; no workflow is wired in this PR.",
+        introduced="PR-MON-FEATURE-FLAGS-1",
+    ),
+    "ENABLE_MONITORING_SCREENING_CHANGE": _temp(
+        "screening",
+        "Remove the gate after Screening Monitoring reaches approved GA.",
+        "Future Screening Monitoring consumer; no workflow is wired in this PR.",
+        introduced="PR-MON-FEATURE-FLAGS-1",
+    ),
+    "ENABLE_MONITORING_AUTO_RESOLUTION": _temp(
+        "compliance",
+        "Remove the gate after Automatic Closure reaches approved GA.",
+        "Future Automatic Closure consumer; no workflow is wired in this PR.",
+        introduced="PR-MON-FEATURE-FLAGS-1",
+    ),
 
     # ── Temporary: deliberate activation flag (RSMP Tier 0A) ──
     RSMP_TIER0A_ACTIVATION_FLAG: _temp(
@@ -679,6 +790,7 @@ def enforce_startup_safety():
     """
     logger.info(f"═══ Onboarda Platform Environment: {ENV.upper()} ═══")
     logger.info(f"Feature flags loaded: {len(flags.get_all())} flags")
+    log_monitoring_feature_state_once()
 
     errors = validate_environment()
 
@@ -696,8 +808,14 @@ def enforce_startup_safety():
         sys.exit(1)
 
     # Log active flags summary
-    enabled = [k for k, v in flags.get_all().items() if v]
-    disabled = [k for k, v in flags.get_all().items() if not v]
+    enabled = [
+        key for key, value in flags.get_all().items()
+        if value and key not in MONITORING_FEATURE_FLAGS
+    ]
+    disabled = [
+        key for key, value in flags.get_all().items()
+        if not value and key not in MONITORING_FEATURE_FLAGS
+    ]
     logger.info(f"Enabled flags ({len(enabled)}): {', '.join(enabled)}")
     logger.info(f"Disabled flags ({len(disabled)}): {', '.join(disabled)}")
 
@@ -877,6 +995,7 @@ def get_environment_info() -> dict:
         "is_production": is_production(),
         "features": flags.get_client_safe_flags(),
         "upload_latency_flags": flags.get_upload_latency_client_flags(),
+        "monitoring_feature_flags": get_monitoring_feature_status(),
         "backoffice": get_backoffice_runtime_config(),
         "version": os.environ.get("APP_VERSION", "1.0.0-pilot"),
     }
