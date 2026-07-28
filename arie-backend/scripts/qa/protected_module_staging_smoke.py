@@ -19,6 +19,12 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from branding import BRAND
+
 
 CANONICAL_REFS = (
     "RM-PILOT-001",
@@ -664,7 +670,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--base-url",
-        default=os.environ.get("STAGING_BASE_URL", "https://staging.regmind.co"),
+        default=os.environ.get(
+            "STAGING_BASE_URL",
+            f"https://staging.{BRAND['system_id']}.co",
+        ),
     )
     parser.add_argument("--expected-git-sha", required=True)
     parser.add_argument("--output", type=Path)

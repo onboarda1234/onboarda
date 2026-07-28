@@ -292,10 +292,11 @@ No automated screenshot artifact is claimed in this baseline.
 | Revised contract/ownership/browser tests | `56 passed`, including isolated production PostgreSQL ownership schema |
 | Role-matrix/browser profile regression | `25 passed` after independent-review remediation |
 | Final fail-closed runner contracts | `10 passed`; forbidden CLI execution controls and `PYTEST_*` environment hooks exit `2` before pytest |
-| Protected-module regression | `1571 passed` in `242.87s` with Python 3.11 and fresh real SSL PostgreSQL; zero skips/xfails/xpasses |
+| Protected-module regression | `1571 passed` in `242.87s` with Python 3.11 and fresh real SSL PostgreSQL; zero skips/xfails/xpasses, before the post-review contract-only additions |
 | Full repository suite using CI exclusion | `8190 passed, 2 skipped, 4 xfailed` in `1121.08s`; zero failures/errors — retained pre-final-runner-hardening evidence; no runtime/product code changed |
 | CI-excluded PDF suite | `8 passed` |
-| Final collection floor | `8200` collected, required minimum `3800` |
+| Post-review focused remediation | `17` runner/staging contracts passed; the four-test SQLite/PostgreSQL ownership class passed twice consecutively; missing `TEST_POSTGRES_DSN` fails explicitly rather than skipping |
+| Final collection floor | `8201` collected, required minimum `3800` |
 | Python syntax | PASS |
 | flake8 `E9,F63,F7,F82` | PASS, `0` findings |
 | Schema migration policy | PASS; no migration added |
@@ -357,13 +358,27 @@ was addressed:
     application-specific RSMP evidence from the application API, requires
     preserved Console/Network evidence, and fails on any protected-resource
     mutation request or incomplete/ambiguous check.
+14. The protected staging smoke derives its default host from the centralized
+    brand configuration instead of embedding the staging domain literal.
+15. The production-engine Monitoring schema contract treats a missing
+    `TEST_POSTGRES_DSN` as a hard prerequisite failure, never a protected-suite
+    skip.
+16. The four-eyes manifest describes the governed fresh seed as disposition
+    `cleared` with `requires_four_eyes=true`.
+17. Committed staging evidence retains ECS task family/revision but removes the
+    AWS account, region, and full ARN.
+18. The Monitoring ownership fixture now binds `db.DB_PATH` to its per-test
+    temporary SQLite database, so a PostgreSQL fixture run cannot leak stale
+    owner state into the subsequent permanent guards.
 
 The final independent re-review of the manual-gate policy and runner
-remediation is **READY** with no remaining actionable P0/P1/P2. The reviewer
-independently passed 41 focused contract/role/browser tests, confirmed the
-8,200-test collection, parsed JSON/YAML, checked Python/JavaScript syntax,
-fatal flake8, and diff hygiene, and reproduced both CLI and environment
-collection-bypass rejections. Founder manual browser acceptance remains a
+remediation was **READY** with no actionable P0/P1/P2 before PR creation. A
+final independent check of the four post-PR review remediations and the
+deterministic ownership-fixture correction is also **READY**, with no
+actionable P0/P1/P2. The reviewer independently reproduced the 17 focused
+contracts, the four-test ownership class twice on real SSL PostgreSQL, the
+missing-DSN hard failure, direct smoke CLI branding, redaction, static checks,
+and the 8,201-test CI collection. Founder manual browser acceptance remains a
 separate mandatory post-deployment closure gate.
 
 ## Conditions every later Monitoring PR must preserve

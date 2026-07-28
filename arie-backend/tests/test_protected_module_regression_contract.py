@@ -325,6 +325,9 @@ def test_four_eyes_fixture_matches_the_governed_seeder():
     assert seeded["id"] == fixture["application_id"]
     assert seeded["review"]["requires_four_eyes"] is True
     assert seeded["review"]["disposition"] == "cleared"
+    assert "disposition cleared" in fixture["notes"]
+    assert "requires_four_eyes=true" in fixture["notes"]
+    assert "pending_second_review" not in fixture["notes"]
 
 
 def test_local_change_management_fixture_uses_real_workflow_and_default_filter(

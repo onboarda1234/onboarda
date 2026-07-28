@@ -46,7 +46,7 @@ def routing_db(tmp_path, monkeypatch):
     import importlib
     import db as db_module
     importlib.reload(db_module)
-    db_module._DB_PATH = str(tmp_path / "test.db")
+    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "test.db"))
     db_module.init_db()
     conn = db_module.get_db()
 
@@ -771,7 +771,11 @@ def monitoring_postgres_schema(monkeypatch):
     """Initialize the production engine in an isolated PostgreSQL database."""
     base_dsn = os.environ.get("TEST_POSTGRES_DSN")
     if not base_dsn:
-        pytest.skip("No PostgreSQL DSN available")
+        pytest.fail(
+            "TEST_POSTGRES_DSN is required for the protected PostgreSQL "
+            "schema contract",
+            pytrace=False,
+        )
 
     from contextlib import suppress
     from urllib.parse import urlsplit, urlunsplit

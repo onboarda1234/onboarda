@@ -5,8 +5,8 @@
   "staging_sha": "726d01d96cbbccddc68f1f665d51848f0f1adc1a",
   "captured_at": "2026-07-27T18:13:10.577512+00:00",
   "staging": {
-    "backend_task_definition": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-staging:980",
-    "worker_task_definition": "arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-verification-worker:428",
+    "backend_task_definition": "regmind-staging:980",
+    "worker_task_definition": "regmind-verification-worker:428",
     "backend_desired_running": "2/2",
     "worker_desired_running": "6/6"
   },

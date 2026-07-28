@@ -84,6 +84,13 @@ def test_staging_smoke_never_emits_credentials_or_token():
     assert '"email": self.email' not in result_block
 
 
+def test_staging_smoke_uses_central_brand_for_default_url():
+    text = _text()
+    assert "from branding import BRAND" in text
+    assert "f\"https://staging.{BRAND['system_id']}.co\"" in text
+    assert '"https://staging.regmind.co"' not in text
+
+
 def test_semantic_hashes_exclude_volatile_timestamps_and_actor_fields():
     text = _text()
     assert "semantic_hash" in text
@@ -98,6 +105,12 @@ def test_compact_baseline_pins_every_protected_semantic_hash():
     import json
 
     baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+    assert baseline["staging"]["backend_task_definition"] == "regmind-staging:980"
+    assert (
+        baseline["staging"]["worker_task_definition"]
+        == "regmind-verification-worker:428"
+    )
+    assert "arn:aws" not in BASELINE.read_text(encoding="utf-8")
     expected = baseline["expected_semantics"]
     assert set(expected["applications"]) == {
         "RM-PILOT-001",

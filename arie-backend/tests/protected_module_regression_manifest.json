@@ -176,7 +176,7 @@
       "deterministic": true,
       "safe_to_recreate": true,
       "staging_write_allowed": false,
-      "notes": "A fresh deterministic seed is pending_second_review. Staging is read-only for this baseline and may show a later completed disposition."
+      "notes": "A fresh deterministic seed has disposition cleared with requires_four_eyes=true. Staging is read-only for this baseline and may show a later completed disposition."
     },
     {
       "case": "edd_case",
