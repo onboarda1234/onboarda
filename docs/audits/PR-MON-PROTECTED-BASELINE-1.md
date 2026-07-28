@@ -1,6 +1,6 @@
 # PR-MON-PROTECTED-BASELINE-1 — protected regression baseline
 
-Status: **PRE-PR BLOCKED — AUTHENTICATED IN-APP BROWSER EXECUTION PENDING**
+Status: **BACKUP-ONLY BRANCH PRESERVED — AUTHENTICATED BROWSER GATE BLOCKED**
 Captured: 2026-07-27
 Scope: regression infrastructure and evidence only; no product behaviour, compliance logic, score, disposition, workflow, database schema/data, staging configuration, or feature activation is changed by this branch.
 
@@ -24,6 +24,21 @@ Scope: regression infrastructure and evidence only; no product behaviour, compli
 | CA profile hydration | `ENABLE_CA_PROFILE_HYDRATION=false` (no task override; false default) |
 
 The mandatory SHA-alignment gate passed before baseline work began.
+
+## Backup-only preservation status
+
+- Implementation and all non-browser verification are complete.
+- The protected implementation commit is
+  `685f4731750d84e7e1dde09896080d32357a7034` and remains in branch history.
+- `codex/pr-mon-protected-baseline-1` was pushed to `origin` solely as a
+  durable backup. The push did not trigger a workflow or staging mutation.
+- No pull request was opened. No merge or deployment was performed.
+- The authenticated browser gate remains blocked because approved browser
+  control is unavailable and the staging administrator credential has not been
+  supplied through an approved secure credential mechanism.
+- Work must not proceed to PR, merge, deployment, or a later Monitoring Alerts
+  workstream until both browser control and secure administrator access are
+  available and the protected browser validation passes.
 
 ## Authoritative-document audit
 
