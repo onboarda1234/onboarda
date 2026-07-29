@@ -1,0 +1,225 @@
+{
+  "manifest_version": "1.0.0",
+  "migration_id": "PR-MON-M1-STATUS-BACKFILL-1",
+  "pr_identifier": "PR-MON-M1-STATUS-BACKFILL-1",
+  "audit_evidence": {
+    "audit_id": "PR-MON-M1-STATUS-AUDIT-1",
+    "audit_pr": 900,
+    "audit_repository_sha": "ff8f6e6721ccb7b4d6e9d1797740e996f07a2520",
+    "original_runtime_sha": "4b8b27690fbe5e639494f39607e3257bc0feef2d",
+    "report": "docs/audits/evidence/PR-MON-M1-STATUS-AUDIT-1/runtime_inventory.json",
+    "reconfirmed_at_utc": "2026-07-29T13:47:53.869360+00:00"
+  },
+  "baseline": {
+    "expected_alert_count": 19,
+    "postgres_full_row_md5": "550cf672ab40b98d3ec177f12248ecb1",
+    "expected_status_counts": {
+      "dismissed": 3,
+      "escalated": 1,
+      "in_review": 1,
+      "open": 13,
+      "resolved": 1
+    },
+    "expected_feature_flags": {
+      "ENABLE_AGENT1_REFRESH_VERIFICATION": false,
+      "ENABLE_DOCUMENT_RENEWAL_AUTOMATION": false,
+      "ENABLE_MONITORING_AUTO_RESOLUTION": false,
+      "ENABLE_MONITORING_SCREENING_CHANGE": false
+    }
+  },
+  "automatic_mappings": [
+    {
+      "source_status": "in_review",
+      "target_status": "routed_to_edd",
+      "mode": "automatic",
+      "expected_count": 1,
+      "allowed_alert_types": [
+        "sanctions"
+      ],
+      "reason": "PR #900 found an exact reverse EDD linkage and an existing create_edd officer action; the alert lifecycle status is the audited legacy synonym for the already-created EDD route.",
+      "evidence_source": "PR #900 STATUS_MAPPING_REPORT.md and runtime_inventory.json alert 583",
+      "rollback_target": "in_review",
+      "rows": [
+        {
+          "id": 583,
+          "application_id": "pcdv100000000024",
+          "application_ref": "RM-PILOT-024",
+          "alert_type": "sanctions",
+          "severity": "high",
+          "effective_updated_at": "2026-07-01 04:04:00",
+          "provider": "synthetic_fixture",
+          "case_identifier": "PILOT-024",
+          "source_reference": "RM-PILOT-024:MONITORING",
+          "officer_action": "create_edd",
+          "required_edd_link": {
+            "edd_case_id": 309,
+            "application_id": "pcdv100000000024",
+            "linked_monitoring_alert_id": 583,
+            "stage": "analysis"
+          }
+        }
+      ]
+    }
+  ],
+  "already_canonical": [
+    {
+      "id": 586,
+      "application_id": "f1xedqa000000006",
+      "status": "open",
+      "future_status": "open",
+      "effective_updated_at": "2026-07-19 05:31:50.013190",
+      "reason": "PR #900 migration-ready row already stores the canonical value."
+    },
+    {
+      "id": 587,
+      "application_id": "f1xedqa000000006",
+      "status": "open",
+      "future_status": "open",
+      "effective_updated_at": "2026-07-19 05:31:55.138371",
+      "reason": "PR #900 migration-ready row already stores the canonical value."
+    },
+    {
+      "id": 591,
+      "application_id": "f1xedqa000000007",
+      "status": "open",
+      "future_status": "open",
+      "effective_updated_at": "2026-07-19 09:52:15.724708",
+      "reason": "PR #900 migration-ready row already stores the canonical value."
+    },
+    {
+      "id": 592,
+      "application_id": "f1xedqa000000007",
+      "status": "open",
+      "future_status": "open",
+      "effective_updated_at": "2026-07-19 09:52:52.744209",
+      "reason": "PR #900 migration-ready row already stores the canonical value."
+    }
+  ],
+  "manual_review": [
+    {
+      "id": 1,
+      "application_id": null,
+      "status": "escalated",
+      "future_status": null,
+      "effective_updated_at": "2026-05-01 05:53:54.481901",
+      "reason": "Orphaned: missing application and screening-case linkage."
+    },
+    {
+      "id": 2,
+      "application_id": null,
+      "status": "dismissed",
+      "future_status": "dismissed",
+      "effective_updated_at": "2026-05-01 05:53:54.481901",
+      "reason": "Orphaned and terminal without resolved_at."
+    },
+    {
+      "id": 54,
+      "application_id": null,
+      "status": "open",
+      "future_status": "open",
+      "effective_updated_at": "2026-05-11 10:25:38.635857",
+      "reason": "Orphaned: missing application linkage."
+    },
+    {
+      "id": 55,
+      "application_id": null,
+      "status": "open",
+      "future_status": "open",
+      "effective_updated_at": "2026-05-11 10:32:20.342848",
+      "reason": "Orphaned: missing application linkage; repeated generic source reference is not proof of duplication."
+    },
+    {
+      "id": 581,
+      "application_id": "pcdv100000000004",
+      "status": "dismissed",
+      "future_status": "dismissed",
+      "effective_updated_at": "2026-07-01 00:47:00",
+      "reason": "Terminal without resolved_at."
+    },
+    {
+      "id": 582,
+      "application_id": "pcdv100000000005",
+      "status": "resolved",
+      "future_status": "resolved",
+      "effective_updated_at": "2026-07-01 00:57:00",
+      "reason": "Terminal without resolved_at."
+    },
+    {
+      "id": 584,
+      "application_id": "pcdv100000000025",
+      "status": "open",
+      "future_status": "routed_to_edd",
+      "effective_updated_at": "2026-07-01 04:14:00",
+      "reason": "Active status conflicts with EDD owner linkage; PR #900 requires manual review."
+    },
+    {
+      "id": 585,
+      "application_id": "pcdv100000000041",
+      "status": "dismissed",
+      "future_status": "dismissed",
+      "effective_updated_at": "2026-07-01 06:57:00",
+      "reason": "Terminal without resolved_at."
+    },
+    {
+      "id": 603,
+      "application_id": "ecf18d5d4d814108",
+      "status": "open",
+      "future_status": "open",
+      "effective_updated_at": "2026-07-25 05:55:32.890563",
+      "reason": "Test-like non-fixture provenance requires confirmation."
+    },
+    {
+      "id": 606,
+      "application_id": "ecf18d5d4d814108",
+      "status": "open",
+      "future_status": "open",
+      "effective_updated_at": "2026-07-25 05:56:03.883936",
+      "reason": "Test-like non-fixture provenance requires confirmation."
+    },
+    {
+      "id": 608,
+      "application_id": "4a247758771c4220",
+      "status": "open",
+      "future_status": "open",
+      "effective_updated_at": "2026-07-28 11:51:46.254528",
+      "reason": "Test-like non-fixture provenance requires confirmation."
+    },
+    {
+      "id": 609,
+      "application_id": "4a247758771c4220",
+      "status": "open",
+      "future_status": "open",
+      "effective_updated_at": "2026-07-28 11:51:46.254528",
+      "reason": "Test-like non-fixture provenance requires confirmation."
+    },
+    {
+      "id": 610,
+      "application_id": "85db5081e3454dd8",
+      "status": "open",
+      "future_status": "open",
+      "effective_updated_at": "2026-07-28 11:51:46.312243",
+      "reason": "Test-like non-fixture provenance requires confirmation."
+    },
+    {
+      "id": 611,
+      "application_id": "85db5081e3454dd8",
+      "status": "open",
+      "future_status": "open",
+      "effective_updated_at": "2026-07-28 11:51:46.312243",
+      "reason": "Test-like non-fixture provenance requires confirmation."
+    }
+  ],
+  "duplicate_alert_ids": [],
+  "orphan_alert_ids": [
+    1,
+    2,
+    54,
+    55
+  ],
+  "repeated_source_reference_groups": [
+    [
+      2,
+      55
+    ]
+  ]
+}
