@@ -16196,16 +16196,69 @@ function screeningEvidenceArrayText(value) {
   return value || '';
 }
 
+function screeningQueueIsTerminalNoHits(row) {
+  // A subject the provider TERMINALLY screened with zero hits.
+  //
+  // Deliberately narrow and fail-closed: it keys off the CANONICAL status, so
+  // degraded / pending / errored / stale / identifier-conflict states can never
+  // qualify, AND requires an explicit zero hit count. This is the same
+  // condition screeningQueueEvidenceQualityReason already uses to say the
+  // evidence is "not applicable" — extracted so the label, the state note and
+  // the hit list all agree instead of each deciding separately.
+  row = row || {};
+  // CANONICAL status only — no legacy `status_key` fallback.
+  //
+  // The raw key is not a safe substitute: server.py emits 'screened_no_match'
+  // for subjects that were NEVER SCREENED (no screening record ⇒ total_hits 0),
+  // which the canonical resolver correctly reports as screening_in_progress.
+  // Trusting it would render "No provider matches" over an unscreened subject —
+  // the exact inversion this module forbids. Every row reaching this panel has
+  // been through _apply_screening_queue_canonical_state, so requiring the
+  // canonical key costs nothing and removes the latent hole.
+  if (String(row.canonical_status_key || '').toLowerCase() !== 'clear') return false;
+  // An explicit integer zero. NOT Number(x || 0), which is also satisfied by
+  // undefined / null / '' / [] / false — i.e. by MISSING data. The load-bearing
+  // half of a fail-closed check must never be satisfied by absence.
+  if (typeof row.total_hits !== 'number' || row.total_hits !== 0) return false;
+  // Never assert "no matches" over a truncated evidence set: the queue caps
+  // monitoring evidence per application, and round-robin fairness can starve a
+  // subject to zero linked items on a capped application. The card would
+  // otherwise read "No provider matches" beside "not the complete evidence set".
+  var summary = row.evidence_summary || row.screening_evidence || {};
+  if (summary.evidence_capped) return false;
+  // And nothing rendered beneath the claim may contradict it. The server cannot
+  // produce clear-with-items, but the client can inject the uncapped set onto
+  // row.screening_evidence.items without re-deriving status or total_hits.
+  return !(((row.screening_evidence || {}).items) || []).length;
+}
+
 function screeningQueueEvidenceQuality(row) {
   var evidence = (row && row.screening_evidence) || {};
   var summary = (row && row.evidence_summary) || evidence || {};
-  return summary.evidence_quality_label || {
+  var label = summary.evidence_quality_label || {
     available: 'Complete',
     complete: 'Complete',
     partial: 'Partial',
     unavailable: 'Unavailable',
     failed: 'Failed'
   }[summary.evidence_status] || 'Unavailable';
+  // "Unavailable" means evidence is MISSING — on a compliance screen it reads
+  // as "we could not check". For a terminal zero-hit subject nothing is
+  // missing: there are no hits, so there is no per-hit evidence to have. That
+  // is "Not applicable". Applied to both the server-supplied label and the
+  // default fallback, since a clean result has no evidence status to map.
+  // Gated on the failure REASON as well as the label. The server's 'unavailable'
+  // is a lossy projection (`if not items`) that conflates "clean, nothing to
+  // link" with "we could not fetch"; the reason code carries the real signal.
+  // Renaming only when it is the clear-no-hit reason (or absent) means a
+  // genuinely degraded result can never be softened.
+  var reasonCode = String(summary.evidence_failure_reason || '');
+  if (String(label).toLowerCase() === 'unavailable'
+      && screeningQueueIsTerminalNoHits(row)
+      && (!reasonCode || reasonCode === 'clear_no_hit_source_detail_not_applicable')) {
+    return 'Not applicable';
+  }
+  return label;
 }
 
 function screeningQueueEvidenceStatusClass(label) {
@@ -16233,7 +16286,9 @@ function screeningQueueEvidenceQualityReason(row, qualityLabel, items) {
   if (normalizedLabel === 'partial' && (items || []).some(function(item) { return !item.source_url; })) {
     return 'Provider did not return source link.';
   }
-  if (normalizedLabel !== 'unavailable') return '';
+  // 'not applicable' is the zero-hit rename of 'unavailable' — it must still
+  // reach the explanatory sentence below, not be silenced.
+  if (normalizedLabel !== 'unavailable' && normalizedLabel !== 'not applicable') return '';
   if ((statusKey === 'clear' || statusKey === 'screened_no_match') && totalHits === 0) {
     return 'Provider screening completed with no hits; detailed source evidence is not applicable.';
   }
@@ -16323,9 +16378,16 @@ function screeningQueueEvidenceReadinessPanel(row, legacyResults, legacyContext)
   var isLoadingFullEvidence = !!(row.evidence_detail_available && row.evidence_detail_loading && !screeningQueueRowHasFullEvidence(row));
   var evidenceDetailError = row.evidence_detail_error || '';
   var qualityLabel = isLoadingFullEvidence ? 'Loading' : screeningQueueEvidenceQuality(row);
+  var isTerminalNoHits = screeningQueueIsTerminalNoHits(row);
   var partialMessage = isLoadingFullEvidence
     ? 'Detailed provider evidence is loading.'
-    : (summary.partial_evidence_message || (qualityLabel !== 'Complete' ? 'Detailed provider evidence is partial or unavailable for this screening result.' : ''));
+    // Zero hits: nothing is partial and nothing is missing, so neither the
+    // server-supplied partial message nor the generic fallback applies. Left
+    // in, the line contradicted itself — "…is not applicable · …is
+    // unavailable" — two opposite claims about the same clean result.
+    : (isTerminalNoHits
+        ? ''
+        : (summary.partial_evidence_message || (qualityLabel !== 'Complete' ? 'Detailed provider evidence is partial or unavailable for this screening result.' : '')));
   var missingSourceMessage = summary.source_url_unavailable_message || (items.some(function(item) { return !item.source_url; }) ? SCREENING_SOURCE_UNAVAILABLE_MESSAGE : '');
   var qualityReason = screeningQueueEvidenceQualityReason(row, qualityLabel, items);
   var evidenceCards = '';
@@ -16338,6 +16400,14 @@ function screeningQueueEvidenceReadinessPanel(row, legacyResults, legacyContext)
     evidenceCards = screeningTriageRankedHitSections(row) || items.map(screeningQueueEvidenceItemCard).join('');
   } else if (evidenceDetailError) {
     evidenceCards = '<div data-screening-evidence-error="true" style="font-size:12px;color:#991b1b;line-height:1.5;margin-top:8px;padding:10px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;">Detailed provider evidence could not be loaded. Summary evidence remains available.</div>';
+  } else if (isTerminalNoHits && !((legacyResults || []).length)) {
+    // Terminal zero-hit subject: there are no ranked hits and there never will
+    // be, so the lazy-fetch loading state below could never resolve — it
+    // fetched, got nothing (correctly), and re-entered the same branch,
+    // leaving "Loading ranked screening hits…" spinning permanently on what is
+    // the most common subject state in a pilot. Show the honest empty state
+    // instead, and skip the pointless fetch.
+    evidenceCards = '<div data-screening-no-hits-empty="true" style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:8px;padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:#fff;">No provider matches for this subject — there are no ranked hits to review.</div>';
   } else if ((row.triage && row.triage.buckets) || row.evidence_detail_available) {
     // Per-hit (triaged) subject whose detailed evidence has not hydrated yet,
     // OR a summary-mode queue row (include_evidence=false marks hydratable
