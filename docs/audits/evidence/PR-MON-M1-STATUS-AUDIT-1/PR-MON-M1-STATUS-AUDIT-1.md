@@ -15,9 +15,10 @@ delete, backfill, route, resolve, or otherwise mutate any alert or linked object
 
 The evidence output excludes client email addresses, credentials, free-form
 officer notes, raw provider payloads, and audit-log detail text. Application and
-client names never leave the database query: client labels are one-way hashed,
-staff are represented by pseudonymous ID/role, free-form source references are
-SHA-256 hashed, and provider payloads are reduced to identifier/scope fields.
+client names never leave the database query. Client labels are omitted, staff
+are represented by pseudonymous ID/role, free-form source references and human
+detector labels use HMAC-SHA-256 with a fresh per-run secret that is never
+persisted, and provider payloads are reduced to identifier/scope fields.
 
 ## Statistics
 
@@ -46,7 +47,7 @@ SHA-256 hashed, and provider payloads are reduced to identifier/scope fields.
   classification takes precedence in the single primary classification, while
   `status_validity` preserves the legacy finding.
 * Terminal status without `resolved_at`: **2, 581, 582, 585**.
-* Non-fixture applications with test-like names requiring provenance
+* Alerts on non-fixture applications with test-like names requiring provenance
   confirmation: **603, 606, 608, 609, 610, 611**.
 * Exact duplicate alert groups: **0**.
 * Repeated source-reference groups: **1**.
@@ -60,21 +61,21 @@ SHA-256 hashed, and provider payloads are reduced to identifier/scope fields.
 
 | ID | Application | Client | Type | Severity | Current status | Classification | Owner | Migration disposition |
 |---|---|---|---|---|---|---|---|---|
-| 1 | — | label-md5:98dc8e8843c3 | Sanctions Match | Critical | escalated | Orphaned | Screening Review | Manual review required |
-| 2 | — | label-md5:800238c8a6b6 | Risk Drift | Low | dismissed | Orphaned | Manual | Manual review required |
+| 1 | — | — | Sanctions Match | Critical | escalated | Orphaned | Screening Review | Manual review required |
+| 2 | — | — | Risk Drift | Low | dismissed | Orphaned | Manual | Manual review required |
 | 54 | — | — | manual_pr290_schema_validation | medium | open | Orphaned | Manual | Manual review required |
 | 55 | — | — | other | medium | open | Orphaned | Manual | Manual review required |
-| 581 | RM-PILOT-004 | label-md5:5a0e9241fec2 | adverse_media | low | dismissed | Valid | Screening Review | Manual review required |
-| 582 | RM-PILOT-005 | label-md5:b70237455ce0 | sanctions | low | resolved | Valid | Periodic Review | Manual review required |
-| 583 | RM-PILOT-024 | label-md5:cad2349c0fec | sanctions | high | in_review | Legacy | EDD | Candidate for future migration |
-| 584 | RM-PILOT-025 | label-md5:04714a4a45ed | adverse_media | medium | open | Valid | EDD | Manual review required |
-| 585 | RM-PILOT-041 | label-md5:c332ecd870c3 | adverse_media | low | dismissed | Valid | Periodic Review | Manual review required |
+| 581 | RM-PILOT-004 | — | adverse_media | low | dismissed | Valid | Screening Review | Manual review required |
+| 582 | RM-PILOT-005 | — | sanctions | low | resolved | Valid | Periodic Review | Manual review required |
+| 583 | RM-PILOT-024 | — | sanctions | high | in_review | Legacy | EDD | Candidate for future migration |
+| 584 | RM-PILOT-025 | — | adverse_media | medium | open | Valid | EDD | Manual review required |
+| 585 | RM-PILOT-041 | — | adverse_media | low | dismissed | Valid | Periodic Review | Manual review required |
 | 586 | ARF-QAFIX-006 | qafix-client | media | medium | open | Valid | Screening Review | Migration ready |
 | 587 | ARF-QAFIX-006 | qafix-client | media | medium | open | Valid | Screening Review | Migration ready |
 | 591 | ARF-QAFIX-007 | qafix-client | media | medium | open | Valid | Screening Review | Migration ready |
 | 592 | ARF-QAFIX-007 | qafix-client | media | medium | open | Valid | Screening Review | Migration ready |
-| 603 | ARF-2026-100432 | label-md5:85253ccbd05f | media | medium | open | Valid | Screening Review | Manual review required |
-| 606 | ARF-2026-100432 | label-md5:e6eec32792c7 | pep | medium | open | Valid | Screening Review | Manual review required |
+| 603 | ARF-2026-100432 | — | media | medium | open | Valid | Screening Review | Manual review required |
+| 606 | ARF-2026-100432 | — | pep | medium | open | Valid | Screening Review | Manual review required |
 | 608 | ARF-2026-100434 | 3c14dd0540c843fa | document_expiry_missing | medium | open | Valid | Documents | Manual review required |
 | 609 | ARF-2026-100434 | 3c14dd0540c843fa | document_expiry_missing | medium | open | Valid | Documents | Manual review required |
 | 610 | ARF-2026-100435 | 3c14dd0540c843fa | document_expiry_missing | medium | open | Valid | Documents | Manual review required |

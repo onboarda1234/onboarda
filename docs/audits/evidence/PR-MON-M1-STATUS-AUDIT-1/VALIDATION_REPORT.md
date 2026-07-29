@@ -22,9 +22,9 @@ before and after collection in the same read-only snapshot.
 
 | Gate | Result |
 |---|---|
-| Focused audit contracts | `26 passed` |
+| Focused audit contracts | `33 passed` |
 | Protected-module regression | `1,572 passed` with zero skip/xfail/xpass |
-| Full repository suite (CI PDF exclusion) | `8,252 passed, 2 expected skips, 4 expected xfails` |
+| Full repository suite (CI PDF exclusion) | `8,259 passed, 2 expected skips, 4 expected xfails` |
 | CI-excluded PDF lane | `8 passed` |
 | Python compilation | PASS |
 | CI fatal flake8 (`E9,F63,F7,F82`) | PASS, `0` findings |

@@ -16,9 +16,9 @@ does not merge, dismiss, or delete any alert.
 
 Detected repeated source-reference identities: **1**.
 
-| Alert IDs | Source identity SHA-256 |
+| Alert IDs | Source identity HMAC-SHA-256 |
 |---|---|
-| 2, 55 | 08ab70870262480333716cb46f361a3e3778843b8ef4349b34316018e1bba75a |
+| 2, 55 | 7bb2abd4168c6782bb6bb5a8ff3fea5e7ea741ce84dc5c66f2a798d2a192435d |
 
 A repeated generic manual label is a review signal, not proof that the underlying
 events are the same.

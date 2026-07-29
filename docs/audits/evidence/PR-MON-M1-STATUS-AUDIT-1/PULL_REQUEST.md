@@ -45,8 +45,9 @@ workflow, scheduler, endpoint, UI, or protected-module behaviour.
 - Alerts `1`, `2`, `54`, and `55` are orphaned.
 - Alerts `1` and `583` use legacy stored status.
 - Four terminal rows lack `resolved_at`.
-- Six non-fixture applications have test-like names and require provenance
-  confirmation before migration.
+- Six alerts across three non-fixture applications (`ARF-2026-100432`,
+  `ARF-2026-100434`, and `ARF-2026-100435`) have test-like application names
+  and require provenance confirmation before migration.
 - Alert `584` is `open` while explicitly linked to EDD; it is mapped as a future
   `routed_to_edd` candidate but blocked for manual review due to current
   owner/status drift.
@@ -65,12 +66,13 @@ workflow, scheduler, endpoint, UI, or protected-module behaviour.
 
 ## Validation
 
-- Focused audit contracts: **26 passed**
+- Focused audit contracts: **33 passed**
 - Protected-module regression: **1,572 passed**
-- Full repository suite: **8,252 passed, 2 expected skips, 4 expected xfails**
+- Full repository suite: **8,259 passed, 2 expected skips, 4 expected xfails**
 - PDF lane: **8 passed**
 - Python compilation and CI fatal flake8: **PASS**
-- Independent review: **READY — no actionable P0/P1/P2**
+- Independent review and post-CodeRabbit re-review:
+  **READY — no actionable P0/P1/P2**
 - All four Monitoring feature flags remained **OFF**
 
 ## Behaviour confirmation

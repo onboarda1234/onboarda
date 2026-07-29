@@ -37,14 +37,16 @@ re-reviewed:
    duplicate analysis.
 5. Risk Drift remains a Manual/internal Monitoring signal unless an explicit
    downstream workflow link establishes another owner.
-6. Human/free-form detector text is fail-closed to a SHA-256 pseudonym; only an
-   exact allowlist of governed machine labels may be emitted.
-7. Names and free-form source text were removed or one-way hashed in committed
-   evidence.
+6. Human/free-form detector text and opaque source text are fail-closed to
+   HMAC-SHA-256 pseudonyms under a fresh per-run key that is never persisted;
+   only an exact allowlist of governed machine labels may be emitted.
+7. Application and client labels are omitted from committed evidence. Staff
+   references retain only pseudonymous IDs/roles, and no unkeyed digest of a
+   human label is committed.
 
 ## Independent validation
 
-- Focused audit contracts: `26 passed`
+- Focused audit contracts: `33 passed`
 - Python compilation: PASS
 - CI fatal flake8 checks (`E9,F63,F7,F82`): PASS, `0` findings
 - JSON/Markdown reconciliation: PASS
@@ -52,3 +54,22 @@ re-reviewed:
 - Mutation-path review: PASS — none exists
 
 No files were edited by the reviewer.
+
+## Post-CodeRabbit re-review
+
+After the PR review identified audit-quality findings, the independent reviewer
+re-examined the complete follow-up diff and all generated evidence. The review
+confirmed that:
+
+- JSON scalar source references fail closed to keyed pseudonyms;
+- a single fresh, uncommitted per-run HMAC key covers free-form source,
+  human-detector, and duplicate-identity pseudonyms;
+- client-label digests are absent from the collector and committed evidence;
+- runtime environment, deployed SHA, and all four governed Monitoring flag
+  states are populated by existing runtime governance helpers;
+- status-mapping aggregation and test-like provenance wording are accurate;
+- all reports re-render byte-for-byte from the machine-readable inventory;
+- the 33 focused contracts, compilation, fatal flake8, reconciliation, and
+  sensitive-material scans pass.
+
+Final post-review verdict: **READY — no actionable P0/P1/P2**.

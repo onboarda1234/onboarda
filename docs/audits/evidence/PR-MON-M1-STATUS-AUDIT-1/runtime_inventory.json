@@ -26,8 +26,7 @@
       "change_request_links": [],
       "classification": "Orphaned",
       "client": {
-        "id": null,
-        "label_md5": "98dc8e8843c3582a0152c64eca1f37af"
+        "id": null
       },
       "client_id": null,
       "client_record_exists": false,
@@ -76,8 +75,8 @@
       "screening_review_context": [],
       "severity": "Critical",
       "source_reference": {
-        "kind": "opaque_text",
-        "sha256": "70e20fc012140dd6e4684e3ba6a8bdec08b848003286aa37646ff691bc4d4559"
+        "hmac_sha256": "036662a6c79d6fffd0b029e27e611e9cd3478efd88ad8fd7e22e624e50f77877",
+        "kind": "opaque_text"
       },
       "status": "escalated",
       "status_validity": "Legacy",
@@ -111,8 +110,7 @@
       "change_request_links": [],
       "classification": "Orphaned",
       "client": {
-        "id": null,
-        "label_md5": "800238c8a6b61aad9a7a0a5889dbda47"
+        "id": null
       },
       "client_id": null,
       "client_record_exists": false,
@@ -160,8 +158,8 @@
       "screening_review_context": [],
       "severity": "Low",
       "source_reference": {
-        "kind": "opaque_text",
-        "sha256": "a0d10c151dfff02e20e4e3b7ee1b2dcff1c27029bcf7c37deec49f2750ae8f0e"
+        "hmac_sha256": "703469cedbaa55b8558bb585a5d2683744c9bd6f9fdc5f88ab821fa84ab42be9",
+        "kind": "opaque_text"
       },
       "status": "dismissed",
       "status_validity": "Valid",
@@ -185,15 +183,14 @@
       "change_request_links": [],
       "classification": "Orphaned",
       "client": {
-        "id": null,
-        "label_md5": null
+        "id": null
       },
       "client_id": null,
       "client_record_exists": false,
       "created_at": "2026-05-11 10:25:38.635857",
       "detected_by": {
-        "kind": "pseudonymous",
-        "sha256": "517e2ad5d2b44de99ab75f1ed745319afe0f5b13fd095a123e09a2c92e98db21"
+        "hmac_sha256": "a526e51ab7ffbdc6480c5038a8d08ee8a79240e5ca15b08276bcd136dee79664",
+        "kind": "pseudonymous"
       },
       "discovered_at": "2026-05-11 10:25:38.635857",
       "discovered_via": "manual",
@@ -233,8 +230,8 @@
       "screening_review_context": [],
       "severity": "medium",
       "source_reference": {
-        "kind": "opaque_text",
-        "sha256": "ec8401f6ecff899832dbe5e6dfb0e2a3f19089130eda9d449b13fbeccda62294"
+        "hmac_sha256": "2c9659578c1e9273be6f804197a1d24a8217e2a8cd85ae77dc1823deae419f44",
+        "kind": "opaque_text"
       },
       "status": "open",
       "status_validity": "Valid",
@@ -258,15 +255,14 @@
       "change_request_links": [],
       "classification": "Orphaned",
       "client": {
-        "id": null,
-        "label_md5": null
+        "id": null
       },
       "client_id": null,
       "client_record_exists": false,
       "created_at": "2026-05-11 10:32:20.342848",
       "detected_by": {
-        "kind": "pseudonymous",
-        "sha256": "517e2ad5d2b44de99ab75f1ed745319afe0f5b13fd095a123e09a2c92e98db21"
+        "hmac_sha256": "a526e51ab7ffbdc6480c5038a8d08ee8a79240e5ca15b08276bcd136dee79664",
+        "kind": "pseudonymous"
       },
       "discovered_at": "2026-05-11 10:32:20.342848",
       "discovered_via": "manual",
@@ -306,8 +302,8 @@
       "screening_review_context": [],
       "severity": "medium",
       "source_reference": {
-        "kind": "opaque_text",
-        "sha256": "a0d10c151dfff02e20e4e3b7ee1b2dcff1c27029bcf7c37deec49f2750ae8f0e"
+        "hmac_sha256": "703469cedbaa55b8558bb585a5d2683744c9bd6f9fdc5f88ab821fa84ab42be9",
+        "kind": "opaque_text"
       },
       "status": "open",
       "status_validity": "Valid",
@@ -341,8 +337,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": null,
-        "label_md5": "5a0e9241fec272035469d901bcd341e6"
+        "id": null
       },
       "client_id": null,
       "client_record_exists": false,
@@ -432,8 +427,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": null,
-        "label_md5": "b70237455ce0a0212fb87581b22b6796"
+        "id": null
       },
       "client_id": null,
       "client_record_exists": false,
@@ -533,8 +527,7 @@
       "change_request_links": [],
       "classification": "Legacy",
       "client": {
-        "id": null,
-        "label_md5": "cad2349c0fec9cbd458df525bb3dbcca"
+        "id": null
       },
       "client_id": null,
       "client_record_exists": false,
@@ -632,8 +625,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": null,
-        "label_md5": "04714a4a45ed70bd97d1340de4f985e5"
+        "id": null
       },
       "client_id": null,
       "client_record_exists": false,
@@ -733,8 +725,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": null,
-        "label_md5": "c332ecd870c30e6ad57c6c008a088782"
+        "id": null
       },
       "client_id": null,
       "client_record_exists": false,
@@ -824,8 +815,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": "qafix-client",
-        "label_md5": "df7f8cb8cd9bde7d28f0acf6b1e4192a"
+        "id": "qafix-client"
       },
       "client_id": "qafix-client",
       "client_record_exists": true,
@@ -921,8 +911,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": "qafix-client",
-        "label_md5": "df7f8cb8cd9bde7d28f0acf6b1e4192a"
+        "id": "qafix-client"
       },
       "client_id": "qafix-client",
       "client_record_exists": true,
@@ -1018,8 +1007,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": "qafix-client",
-        "label_md5": "df7f8cb8cd9bde7d28f0acf6b1e4192a"
+        "id": "qafix-client"
       },
       "client_id": "qafix-client",
       "client_record_exists": true,
@@ -1106,8 +1094,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": "qafix-client",
-        "label_md5": "df7f8cb8cd9bde7d28f0acf6b1e4192a"
+        "id": "qafix-client"
       },
       "client_id": "qafix-client",
       "client_record_exists": true,
@@ -1194,8 +1181,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": null,
-        "label_md5": "85253ccbd05f4829ffa8f22d64a437e4"
+        "id": null
       },
       "client_id": null,
       "client_record_exists": false,
@@ -1274,8 +1260,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": null,
-        "label_md5": "e6eec32792c7e0d1c5213f20f9c855ae"
+        "id": null
       },
       "client_id": null,
       "client_record_exists": false,
@@ -1364,8 +1349,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": "3c14dd0540c843fa",
-        "label_md5": "d45cd9d596f083bf27dbe5dc0cb91a41"
+        "id": "3c14dd0540c843fa"
       },
       "client_id": "3c14dd0540c843fa",
       "client_record_exists": true,
@@ -1455,8 +1439,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": "3c14dd0540c843fa",
-        "label_md5": "d45cd9d596f083bf27dbe5dc0cb91a41"
+        "id": "3c14dd0540c843fa"
       },
       "client_id": "3c14dd0540c843fa",
       "client_record_exists": true,
@@ -1546,8 +1529,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": "3c14dd0540c843fa",
-        "label_md5": "d45cd9d596f083bf27dbe5dc0cb91a41"
+        "id": "3c14dd0540c843fa"
       },
       "client_id": "3c14dd0540c843fa",
       "client_record_exists": true,
@@ -1637,8 +1619,7 @@
       "change_request_links": [],
       "classification": "Valid",
       "client": {
-        "id": "3c14dd0540c843fa",
-        "label_md5": "d45cd9d596f083bf27dbe5dc0cb91a41"
+        "id": "3c14dd0540c843fa"
       },
       "client_id": "3c14dd0540c843fa",
       "client_record_exists": true,
@@ -1766,7 +1747,7 @@
         2,
         55
       ],
-      "source_identity_sha256": "08ab70870262480333716cb46f361a3e3778843b8ef4349b34316018e1bba75a"
+      "source_identity_hmac_sha256": "7bb2abd4168c6782bb6bb5a8ff3fea5e7ea741ce84dc5c66f2a798d2a192435d"
     }
   ],
   "multiple_workflow_owner_alerts": [],

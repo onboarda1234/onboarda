@@ -21,6 +21,8 @@ audit = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(audit)
 
+PSEUDONYMIZATION_KEY = b"audit-test-key-that-is-never-committed"
+
 
 def _snapshot(
     *alerts,
@@ -54,7 +56,6 @@ def _alert(alert_id, **changes):
         "application_has_test_like_name": False,
         "client_id": f"client-{alert_id}",
         "client_record_exists": True,
-        "client_label_md5": "0123456789abcdef0123456789abcdef",
         "alert_type": "media",
         "severity": "medium",
         "status": "open",
@@ -118,10 +119,65 @@ def test_provider_source_is_sanitised_and_free_text_is_not_exported():
     assert "free-form AI recommendation text" not in serialised
     assert result["alerts"][0]["resolution_evidence"]["has_officer_notes"] is False
     raw = "person@example.com free-form customer payload"
-    redacted = audit._source_reference(raw)
+    redacted = audit._source_reference(raw, PSEUDONYMIZATION_KEY)
     assert raw not in str(redacted)
     assert redacted["kind"] == "opaque_text"
-    assert len(redacted["sha256"]) == 64
+    assert len(redacted["hmac_sha256"]) == 64
+
+
+@pytest.mark.parametrize("raw", ("12345", "true", "null", '"quoted text"'))
+def test_json_scalar_source_reference_is_keyed_without_crashing(raw):
+    redacted = audit._source_reference(raw, PSEUDONYMIZATION_KEY)
+    assert redacted["kind"] == "opaque_text"
+    assert len(redacted["hmac_sha256"]) == 64
+    assert raw not in str(redacted)
+
+
+def test_execute_snapshot_rejects_fingerprint_drift(monkeypatch):
+    fingerprints = iter(
+        (
+            [{"relation": "monitoring_alerts", "row_count": 1}],
+            [{"relation": "monitoring_alerts", "row_count": 2}],
+        )
+    )
+
+    def fake_fetch(_cursor, sql):
+        if sql == audit.SOURCE_FINGERPRINT_SQL:
+            return next(fingerprints)
+        return []
+
+    class Connection:
+        @staticmethod
+        def cursor():
+            return object()
+
+    monkeypatch.setattr(audit, "_fetch", fake_fetch)
+    with pytest.raises(RuntimeError, match="source changed"):
+        audit._execute_snapshot(Connection())
+
+
+def test_runtime_metadata_records_sha_environment_and_governed_flags(monkeypatch):
+    import environment
+
+    expected_flags = {
+        "ENABLE_DOCUMENT_RENEWAL_AUTOMATION": False,
+        "ENABLE_AGENT1_REFRESH_VERIFICATION": False,
+        "ENABLE_MONITORING_SCREENING_CHANGE": False,
+        "ENABLE_MONITORING_AUTO_RESOLUTION": False,
+    }
+    monkeypatch.setenv("GIT_SHA", "a" * 40)
+    monkeypatch.setattr(environment, "ENV", "staging")
+    monkeypatch.setattr(
+        environment,
+        "get_monitoring_feature_state",
+        lambda: expected_flags,
+    )
+    metadata = audit._runtime_collection_metadata()
+    assert metadata == {
+        "environment": "staging",
+        "deployed_git_sha": "a" * 40,
+        "monitoring_feature_flags": expected_flags,
+    }
 
 
 def test_document_link_assigns_documents_owner_without_making_monitoring_owner():
@@ -154,7 +210,6 @@ def test_missing_application_is_orphaned_and_requires_manual_review():
         application_ref=None,
         client_id=None,
         client_record_exists=False,
-        client_label_md5=None,
         source_reference="Manual entry",
         provider=None,
         case_identifier=None,
@@ -443,6 +498,8 @@ def test_change_management_query_uses_schema_valid_change_alert_bridge():
 def test_inventory_omits_names_and_raw_unstructured_source_text():
     sql = audit.ALERT_INVENTORY_SQL
     assert "a.company_name AS application_name" not in sql
+    assert "client_label_md5" not in sql
+    assert "MD5(" not in sql
     assert "u.full_name" not in sql
     item = audit.analyse_snapshot(
         _snapshot(
@@ -457,7 +514,24 @@ def test_inventory_omits_names_and_raw_unstructured_source_text():
     assert "person@example.com" not in rendered
     assert "Human Person" not in rendered
     assert item["detected_by"]["kind"] == "pseudonymous"
+    assert len(item["detected_by"]["hmac_sha256"]) == 64
+    assert item["client"] == {"id": "client-1"}
     assert "name" not in item["assigned_officer"]
+
+
+def test_status_mapping_aggregate_preserves_manual_review_disposition():
+    result = audit.analyse_snapshot(
+        _snapshot(
+            _alert(
+                1,
+                application_has_test_like_name=True,
+            )
+        )
+    )
+    mapping = audit.render_reports(result)["STATUS_MAPPING_REPORT.md"]
+    open_row = next(line for line in mapping.splitlines() if line.startswith("| open |"))
+    assert "Manual review required" in open_row
+    assert open_row.endswith("| 1 |")
 
 
 def test_report_bundle_contains_all_six_requested_outputs():

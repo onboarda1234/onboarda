@@ -23,10 +23,13 @@ import argparse
 from collections import Counter, defaultdict
 from datetime import date, datetime, timezone
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
 import re
+import secrets
+import subprocess
 import sys
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -106,11 +109,6 @@ SELECT
     ) AS application_has_test_like_name,
     a.client_id,
     (c.id IS NOT NULL) AS client_record_exists,
-    CASE
-        WHEN COALESCE(NULLIF(c.company_name, ''), NULLIF(ma.client_name, '')) IS NULL
-        THEN NULL
-        ELSE MD5(COALESCE(NULLIF(c.company_name, ''), NULLIF(ma.client_name, '')))
-    END AS client_label_md5,
     ma.alert_type,
     ma.severity,
     ma.status,
@@ -464,8 +462,20 @@ def _group(rows: Iterable[Mapping[str, Any]]) -> dict[int, list[dict[str, Any]]]
     return grouped
 
 
-def _source_reference(value: Any) -> dict[str, Any] | None:
-    """Return a structured identifier or a one-way hash, never raw free text."""
+def _keyed_digest(key: bytes, value: Any) -> str:
+    """Return a per-run HMAC without exposing its uncommitted secret key."""
+    return hmac.new(
+        key,
+        str(value).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _source_reference(
+    value: Any,
+    pseudonymization_key: bytes,
+) -> dict[str, Any] | None:
+    """Return a structured identifier or keyed pseudonym, never raw free text."""
     if value in (None, ""):
         return None
     if isinstance(value, Mapping):
@@ -473,8 +483,12 @@ def _source_reference(value: Any) -> dict[str, Any] | None:
     else:
         text = str(value)
         try:
-            payload = json.loads(text)
-        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, Mapping):
+            payload = dict(parsed)
+        else:
             if re.fullmatch(
                 r"(?:document:[A-Za-z0-9_-]+|[A-Z0-9-]+:MONITORING)",
                 text,
@@ -482,7 +496,7 @@ def _source_reference(value: Any) -> dict[str, Any] | None:
                 return {"kind": "identifier", "value": text}
             return {
                 "kind": "opaque_text",
-                "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "hmac_sha256": _keyed_digest(pseudonymization_key, text),
             }
     subject = payload.get("screening_subject")
     subject = subject if isinstance(subject, Mapping) else {}
@@ -509,7 +523,10 @@ def _source_identity(alert: Mapping[str, Any]) -> str:
     return str(source or alert.get("case_identifier") or "").strip().lower()
 
 
-def _detected_by(value: Any) -> dict[str, str] | None:
+def _detected_by(
+    value: Any,
+    pseudonymization_key: bytes,
+) -> dict[str, str] | None:
     """Retain system labels while pseudonymising human/free-form actor text."""
     if value in (None, ""):
         return None
@@ -519,7 +536,7 @@ def _detected_by(value: Any) -> dict[str, str] | None:
         return {"kind": "system", "label": text}
     return {
         "kind": "pseudonymous",
-        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "hmac_sha256": _keyed_digest(pseudonymization_key, text),
     }
 
 
@@ -761,7 +778,10 @@ def _primary_classification(
     return status_validity
 
 
-def _build_duplicate_groups(alerts: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_duplicate_groups(
+    alerts: Sequence[dict[str, Any]],
+    pseudonymization_key: bytes,
+) -> list[dict[str, Any]]:
     buckets: dict[tuple[str, str, str, str], list[int]] = defaultdict(list)
     for alert in alerts:
         if not _is_unresolved(alert):
@@ -779,9 +799,10 @@ def _build_duplicate_groups(alerts: Sequence[dict[str, Any]]) -> list[dict[str, 
             "application_id": fingerprint[0] or None,
             "workflow_owner": fingerprint[1],
             "alert_type": fingerprint[2],
-            "source_identity_sha256": hashlib.sha256(
-                fingerprint[3].encode("utf-8")
-            ).hexdigest(),
+            "source_identity_hmac_sha256": _keyed_digest(
+                pseudonymization_key,
+                fingerprint[3],
+            ),
             "reason": "same unresolved application, owner, type, and source identity",
         }
         for fingerprint, ids in sorted(buckets.items())
@@ -791,6 +812,7 @@ def _build_duplicate_groups(alerts: Sequence[dict[str, Any]]) -> list[dict[str, 
 
 def _build_duplicate_source_groups(
     alerts: Sequence[dict[str, Any]],
+    pseudonymization_key: bytes,
 ) -> list[dict[str, Any]]:
     buckets: dict[str, list[int]] = defaultdict(list)
     for alert in alerts:
@@ -800,9 +822,10 @@ def _build_duplicate_source_groups(
     return [
         {
             "alert_ids": ids,
-            "source_identity_sha256": hashlib.sha256(
-                identity.encode("utf-8")
-            ).hexdigest(),
+            "source_identity_hmac_sha256": _keyed_digest(
+                pseudonymization_key,
+                identity,
+            ),
         }
         for identity, ids in sorted(buckets.items())
         if len(ids) > 1
@@ -852,7 +875,12 @@ def _test_like_non_fixture(alert: Mapping[str, Any]) -> bool:
     )
 
 
-def analyse_snapshot(snapshot: Mapping[str, Sequence[Mapping[str, Any]]]) -> dict[str, Any]:
+def analyse_snapshot(
+    snapshot: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    pseudonymization_key: bytes | None = None,
+) -> dict[str, Any]:
+    run_key = pseudonymization_key or secrets.token_bytes(32)
     grouped = {
         key: _group(snapshot.get(key, []))
         for key in (
@@ -884,7 +912,6 @@ def analyse_snapshot(snapshot: Mapping[str, Sequence[Mapping[str, Any]]]) -> dic
             "client_id": row.get("client_id"),
             "client": {
                 "id": row.get("client_id"),
-                "label_md5": row.get("client_label_md5"),
             },
             "client_record_exists": bool(row.get("client_record_exists")),
             "alert_type": row.get("alert_type"),
@@ -892,8 +919,11 @@ def analyse_snapshot(snapshot: Mapping[str, Sequence[Mapping[str, Any]]]) -> dic
             "status": row.get("status"),
             "created_at": _iso(row.get("created_at")),
             "updated_at": _iso(row.get("effective_updated_at")),
-            "detected_by": _detected_by(row.get("detected_by")),
-            "source_reference": _source_reference(row.get("source_reference")),
+            "detected_by": _detected_by(row.get("detected_by"), run_key),
+            "source_reference": _source_reference(
+                row.get("source_reference"),
+                run_key,
+            ),
             "provider": row.get("provider"),
             "case_identifier": row.get("case_identifier"),
             "discovered_via": row.get("discovered_via"),
@@ -948,7 +978,7 @@ def analyse_snapshot(snapshot: Mapping[str, Sequence[Mapping[str, Any]]]) -> dic
         alert["migration_disposition"] = readiness_label
         alerts.append(alert)
 
-    duplicate_groups = _build_duplicate_groups(alerts)
+    duplicate_groups = _build_duplicate_groups(alerts, run_key)
     duplicate_ids = {
         alert_id
         for group in duplicate_groups
@@ -1025,7 +1055,7 @@ def analyse_snapshot(snapshot: Mapping[str, Sequence[Mapping[str, Any]]]) -> dic
     severity_counts = Counter(
         str(item["severity"] or "<null>").strip().lower() for item in alerts
     )
-    duplicate_source_groups = _build_duplicate_source_groups(alerts)
+    duplicate_source_groups = _build_duplicate_source_groups(alerts, run_key)
     unresolved_similarity_groups = _build_unresolved_similarity_groups(alerts)
     multiple_owner_alerts = [
         item["id"]
@@ -1110,6 +1140,29 @@ def _execute_snapshot(connection: Any) -> tuple[dict[str, Any], list[dict[str, A
     return snapshot, before
 
 
+def _runtime_collection_metadata() -> dict[str, Any]:
+    """Resolve safe runtime provenance without importing application DB helpers."""
+    from environment import ENV, get_monitoring_feature_state
+
+    deployed_git_sha = str(os.environ.get("GIT_SHA") or "").strip()
+    if not deployed_git_sha:
+        try:
+            deployed_git_sha = subprocess.run(
+                ("git", "rev-parse", "HEAD"),
+                cwd=BACKEND_ROOT.parent,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            deployed_git_sha = "not recorded"
+    return {
+        "environment": ENV,
+        "deployed_git_sha": deployed_git_sha,
+        "monitoring_feature_flags": get_monitoring_feature_state(),
+    }
+
+
 def collect_from_database(database_url: str) -> dict[str, Any]:
     """Collect and classify the audit in a rollback-only DB transaction."""
     try:
@@ -1138,6 +1191,7 @@ def collect_from_database(database_url: str) -> dict[str, Any]:
             "completion": "ROLLBACK",
             "sql_statement_policy": "SELECT/WITH/SHOW only",
             "source_fingerprint": fingerprint,
+            **_runtime_collection_metadata(),
         }
         return result
     finally:
@@ -1182,12 +1236,7 @@ def render_reports(result: Mapping[str, Any]) -> dict[str, str]:
         (
             item["id"],
             item["application_ref"],
-            item["client"].get("id")
-            or (
-                "label-md5:" + item["client"]["label_md5"][:12]
-                if item["client"].get("label_md5")
-                else None
-            ),
+            item["client"].get("id"),
             item["alert_type"],
             item["severity"],
             item["status"],
@@ -1228,9 +1277,10 @@ delete, backfill, route, resolve, or otherwise mutate any alert or linked object
 
 The evidence output excludes client email addresses, credentials, free-form
 officer notes, raw provider payloads, and audit-log detail text. Application and
-client names never leave the database query: client labels are one-way hashed,
-staff are represented by pseudonymous ID/role, free-form source references are
-SHA-256 hashed, and provider payloads are reduced to identifier/scope fields.
+client names never leave the database query. Client labels are omitted, staff
+are represented by pseudonymous ID/role, free-form source references and human
+detector labels use HMAC-SHA-256 with a fresh per-run secret that is never
+persisted, and provider payloads are reduced to identifier/scope fields.
 
 ## Statistics
 
@@ -1265,7 +1315,7 @@ SHA-256 hashed, and provider payloads are reduced to identifier/scope fields.
   classification takes precedence in the single primary classification, while
   `status_validity` preserves the legacy finding.
 * Terminal status without `resolved_at`: **{", ".join(terminal_timestamp_ids) or "none"}**.
-* Non-fixture applications with test-like names requiring provenance
+* Alerts on non-fixture applications with test-like names requiring provenance
   confirmation: **{", ".join(provenance_ids) or "none"}**.
 * Exact duplicate alert groups: **{stats["duplicate_groups"]}**.
 * Repeated source-reference groups: **{stats["duplicate_source_reference_groups"]}**.
@@ -1324,7 +1374,11 @@ feature flag was activated by this audit.
         matching = [item for item in alerts if str(item["status"]) == status]
         futures = sorted({item["future_status"] or "Manual review required" for item in matching})
         status_validity = matching[0]["status_validity"]
-        supported = all(item["future_status"] is not None for item in matching)
+        supported = all(
+            item["future_status"] is not None
+            and item["migration_disposition"] != "Manual review required"
+            for item in matching
+        )
         mapping_rows.append(
             (
                 status,
@@ -1401,9 +1455,12 @@ Detected repeated source-reference identities: **{len(duplicate_source_groups)}*
 
 {
     _table(
-        ("Alert IDs", "Source identity SHA-256"),
+        ("Alert IDs", "Source identity HMAC-SHA-256"),
         (
-            (", ".join(map(str, group["alert_ids"])), group["source_identity_sha256"])
+            (
+                ", ".join(map(str, group["alert_ids"])),
+                group["source_identity_hmac_sha256"],
+            )
             for group in duplicate_source_groups
         ),
     )
