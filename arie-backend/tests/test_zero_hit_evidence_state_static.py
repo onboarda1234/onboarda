@@ -126,7 +126,7 @@ def test_zero_hit_renders_an_empty_state_not_a_loading_state():
     empty_at = region.index("data-screening-no-hits-empty")
     loading_at = region.index("Loading ranked screening hits")
     assert empty_at < loading_at, "zero-hit empty state must pre-empt the loading branch"
-    assert "} else if (isTerminalNoHits) {" in region
+    assert "} else if (isTerminalNoHits &&" in region
     assert "No provider matches for this subject" in region
 
 
@@ -247,3 +247,20 @@ def test_canonical_clear_implies_zero_hits_and_zero_evidence():
     # The two facts the client helper relies on.
     assert int(resolved.get("total_hits") or 0) == 0
     assert not ((resolved.get("screening_evidence") or {}).get("items") or [])
+
+
+def test_empty_state_never_pre_empts_stored_legacy_provider_records():
+    """The empty state sits above the legacy stored-report renderer.
+
+    ``legacyResults`` is assembled client-side from a DIFFERENT source than the
+    row (screeningSummary.company_screening.*.results + monitoring media), so
+    nothing at the client boundary pins it to the row's hit count. Without this
+    guard a subject resolving canonical-clear while holding stored provider
+    records would render "No provider matches" and the records would not be
+    shown at all.
+    """
+    region = HTML[HTML.index("var evidenceCards = ''"):]
+    region = _strip_comments(region[: region.index("var stateNoteBits")])
+    assert "} else if (isTerminalNoHits && !((legacyResults || []).length)) {" in region
+    # And the legacy renderer must still exist below it.
+    assert "providerResultHighlights(legacyResults" in region

@@ -16400,7 +16400,7 @@ function screeningQueueEvidenceReadinessPanel(row, legacyResults, legacyContext)
     evidenceCards = screeningTriageRankedHitSections(row) || items.map(screeningQueueEvidenceItemCard).join('');
   } else if (evidenceDetailError) {
     evidenceCards = '<div data-screening-evidence-error="true" style="font-size:12px;color:#991b1b;line-height:1.5;margin-top:8px;padding:10px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2;">Detailed provider evidence could not be loaded. Summary evidence remains available.</div>';
-  } else if (isTerminalNoHits) {
+  } else if (isTerminalNoHits && !((legacyResults || []).length)) {
     // Terminal zero-hit subject: there are no ranked hits and there never will
     // be, so the lazy-fetch loading state below could never resolve — it
     // fetched, got nothing (correctly), and re-entered the same branch,
