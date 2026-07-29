@@ -574,7 +574,7 @@ def test_cli_preserves_committed_error_when_cleanup_rollback_fails(monkeypatch):
             raise RuntimeError("connection already lost")
 
         def close(self):
-            pass
+            raise RuntimeError("connection still lost")
 
     monkeypatch.setattr(backfill_cli, "load_manifest", lambda _path: {})
     monkeypatch.setattr(
@@ -598,6 +598,97 @@ def test_cli_preserves_committed_error_when_cleanup_rollback_fails(monkeypatch):
     assert written[0]["failed_closed"] is False
     assert written[0]["changed_rows"][0]["id"] == 10
     assert written[0]["audit_entries"][0]["entry_hash"] == entry_hash
+
+
+def test_cli_manifest_and_unexpected_setup_failures_are_structured(monkeypatch):
+    written = []
+    monkeypatch.setattr(
+        backfill_cli, "_write", lambda value, _output: written.append(value)
+    )
+    monkeypatch.setattr(
+        backfill_cli,
+        "load_manifest",
+        lambda _path: (_ for _ in ()).throw(
+            backfill.ReconciliationError("manifest rejected")
+        ),
+    )
+    monkeypatch.setattr(
+        backfill_cli,
+        "get_db",
+        lambda: pytest.fail("database must not open after manifest rejection"),
+    )
+    assert backfill_cli.main(["plan"]) == 2
+    assert written[-1]["error"] == "manifest rejected"
+    assert written[-1]["failed_closed"] is True
+    assert written[-1]["committed"] is False
+
+    monkeypatch.setattr(backfill_cli, "load_manifest", lambda _path: {})
+    monkeypatch.setattr(
+        backfill_cli,
+        "get_monitoring_feature_state",
+        lambda: (_ for _ in ()).throw(RuntimeError("setup secret must not leak")),
+    )
+    assert backfill_cli.main(["plan"]) == 2
+    assert written[-1]["error"] == "unexpected operator setup or execution failure"
+    assert "secret" not in json.dumps(written[-1])
+    assert written[-1]["failed_closed"] is True
+
+
+def test_cli_output_file_failure_preserves_successful_apply_on_stdout(
+    monkeypatch, capsys
+):
+    committed = {
+        "migration_id": "PR-MON-M1-STATUS-BACKFILL-1",
+        "changed_rows": [
+            {
+                "id": 10,
+                "previous_status": "in_review",
+                "new_status": "routed_to_edd",
+            }
+        ],
+        "audit_entries": [
+            {
+                "id": 10,
+                "action": backfill.MIGRATION_ACTION,
+                "entry_hash": "a" * 64,
+            }
+        ],
+        "idempotent": False,
+    }
+
+    class Connection:
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(backfill_cli, "load_manifest", lambda _path: {})
+    monkeypatch.setattr(
+        backfill_cli, "get_monitoring_feature_state", lambda: FLAGS_OFF
+    )
+    monkeypatch.setattr(backfill_cli, "get_environment", lambda: "staging")
+    monkeypatch.setattr(backfill_cli, "get_db", Connection)
+    monkeypatch.setattr(
+        backfill_cli, "apply_backfill", lambda *_args, **_kwargs: committed
+    )
+    monkeypatch.setattr(
+        backfill_cli.Path,
+        "write_text",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("secret result sink failure")
+        ),
+    )
+
+    result = backfill_cli.main(["apply", "--output", "/unavailable/result.json"])
+    captured = capsys.readouterr()
+    assert result == 2
+    assert json.loads(captured.out) == committed
+    assert "result output file write failed" in captured.err
+    assert "secret" not in captured.err
+    assert "failed_closed" not in captured.out
+    assert committed["changed_rows"][0]["id"] == 10
+    assert committed["audit_entries"][0]["entry_hash"] in captured.out
 
 
 def test_malformed_audit_hashes_are_redacted_and_block_reconciliation(monkeypatch):
@@ -819,6 +910,18 @@ def test_manifest_rejects_fuzzy_or_unenumerated_mapping():
         backfill.validate_manifest(manifest)
 
 
+def test_manifest_rejects_missing_or_insufficient_baseline_source_count():
+    missing = _manifest()
+    missing["baseline"]["expected_status_counts"].pop("in_review")
+    with pytest.raises(backfill.ReconciliationError, match="baseline status counts"):
+        backfill.validate_manifest(missing)
+
+    insufficient = _manifest()
+    insufficient["baseline"]["expected_status_counts"]["in_review"] = 0
+    with pytest.raises(backfill.ReconciliationError, match="exceeds"):
+        backfill.validate_manifest(insufficient)
+
+
 def test_mutation_manifest_is_digest_pinned_and_target_is_canonical():
     approved = backfill.load_manifest()
     altered = json.loads(json.dumps(approved))
@@ -859,7 +962,7 @@ def postgres_backfill_db():
         pytest.skip("Backfill PostgreSQL test requires a local disposable server")
     import psycopg2
 
-    database_name = f"onboarda_test_status_backfill_{uuid.uuid4().hex[:12]}"
+    database_name = f"test_status_backfill_{uuid.uuid4().hex[:12]}"
     admin = psycopg2.connect(base_dsn)
     admin.autocommit = True
     with admin.cursor() as cursor:

@@ -126,6 +126,10 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
     if not automatic:
         raise ReconciliationError("mapping manifest has no automatic mappings")
 
+    baseline_counts = manifest.get("baseline", {}).get("expected_status_counts")
+    if not isinstance(baseline_counts, Mapping):
+        raise ReconciliationError("mapping manifest has no baseline status counts")
+
     seen_ids: set[int] = set()
     for mapping in automatic:
         source = mapping.get("source_status")
@@ -142,6 +146,23 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
             raise ReconciliationError(
                 f"automatic target status {target!r} is not canonical"
             )
+        if source not in baseline_counts:
+            raise ReconciliationError(
+                "baseline status counts do not include the automatic mapping source"
+            )
+        expected_count = mapping.get("expected_count")
+        baseline_source_count = baseline_counts[source]
+        if (
+            not isinstance(expected_count, int)
+            or isinstance(expected_count, bool)
+            or expected_count < 1
+            or not isinstance(baseline_source_count, int)
+            or isinstance(baseline_source_count, bool)
+            or baseline_source_count < expected_count
+        ):
+            raise ReconciliationError(
+                "automatic mapping count exceeds the approved baseline source count"
+            )
         if mapping.get("rollback_target") != source:
             raise ReconciliationError(
                 "rollback target must equal the exact audited source status"
@@ -152,7 +173,7 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
                 "automatic mapping requires an explicit alert-type allowlist"
             )
         rows = list(mapping.get("rows") or ())
-        if mapping.get("expected_count") != len(rows):
+        if expected_count != len(rows):
             raise ReconciliationError("mapping expected_count does not equal exact row manifest")
         if not rows:
             raise ReconciliationError("automatic mapping must enumerate exact rows")

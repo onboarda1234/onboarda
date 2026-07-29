@@ -20,6 +20,8 @@ on the updated base and passed `1572/1572`.
   `60 passed`.
 - Final operator/feature-governance compatibility delta:
   all `27` backfill tests and all `31` feature-governance tests passed.
+- Final automated-review fixes: `59 passed`, `4` declared PostgreSQL-only
+  skips; independent delta review READY.
 - Exact staging dry run: 19 scanned, 1 eligible, 14 manual review,
   4 already canonical, 0 blockers.
 - Plan fingerprint:

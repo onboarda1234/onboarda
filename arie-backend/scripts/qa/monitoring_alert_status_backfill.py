@@ -32,11 +32,46 @@ from monitoring_status_backfill import (  # noqa: E402
 )
 
 
-def _write(value: dict[str, Any], output: str | None) -> None:
+def _write(value: dict[str, Any], output: str | None) -> bool:
+    """Emit truthful stdout first; report optional artifact failure separately."""
     rendered = json.dumps(value, default=str, indent=2, sort_keys=True) + "\n"
-    if output:
-        Path(output).write_text(rendered, encoding="utf-8")
     print(rendered, end="")
+    if output:
+        try:
+            Path(output).write_text(rendered, encoding="utf-8")
+        except Exception:
+            print(
+                json.dumps(
+                    {
+                        "error": "result output file write failed",
+                        "result_preserved_on_stdout": True,
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            return False
+    return True
+
+
+def _rollback_quietly(db: Any | None) -> None:
+    if db is None:
+        return
+    try:
+        db.rollback()
+    except Exception:
+        # A post-commit verification error may be caused by a lost connection.
+        # Cleanup must never mask the durable-commit evidence.
+        pass
+
+
+def _close_quietly(db: Any | None) -> None:
+    if db is None:
+        return
+    try:
+        db.close()
+    except Exception:
+        pass
 
 
 def parser() -> argparse.ArgumentParser:
@@ -60,10 +95,12 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    manifest = load_manifest(args.manifest)
-    flags = get_monitoring_feature_state()
-    db = get_db()
+    db = None
+    exit_code = 0
     try:
+        manifest = load_manifest(args.manifest)
+        flags = get_monitoring_feature_state()
+        db = get_db()
         if args.command in ("apply", "rollback") and get_environment() != "staging":
             raise ReconciliationError(
                 "controlled mutation commands are restricted to staging"
@@ -94,19 +131,20 @@ def main(argv: list[str] | None = None) -> int:
                 expected_rollback_fingerprint=args.expected_rollback_fingerprint
                 or "",
             )
-        _write(result, args.output)
-        return 0
     except ReconciliationError as exc:
-        try:
-            db.rollback()
-        except Exception:
-            # A post-commit verification error may be caused by a lost
-            # connection. Cleanup must never mask the durable-commit evidence.
-            pass
-        _write(reconciliation_error_payload(exc), args.output)
-        return 2
+        _rollback_quietly(db)
+        result = reconciliation_error_payload(exc)
+        exit_code = 2
+    except Exception:
+        _rollback_quietly(db)
+        error = ReconciliationError("unexpected operator setup or execution failure")
+        result = reconciliation_error_payload(error)
+        exit_code = 2
     finally:
-        db.close()
+        _close_quietly(db)
+    if _write(result, args.output) is False:
+        return 2
+    return exit_code
 
 
 if __name__ == "__main__":
