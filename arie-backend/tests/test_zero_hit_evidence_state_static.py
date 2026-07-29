@@ -60,14 +60,20 @@ def _strip_comments(src):
 # --- the shared, fail-closed detector ----------------------------------------
 
 def test_detector_requires_canonical_terminal_status_and_zero_hits():
-    fn = _fn("screeningQueueIsTerminalNoHits")
-    # Canonical status first — a degraded/pending/errored/stale/conflict state
-    # must never be mistaken for a clean zero-hit result.
-    assert "row.canonical_status_key || row.status_key" in fn
-    assert "'clear'" in fn and "'screened_no_match'" in fn
-    assert "return false" in fn
-    # AND an explicit zero hit count.
-    assert "Number(row.total_hits || 0) === 0" in fn
+    fn = _strip_comments(_fn("screeningQueueIsTerminalNoHits"))
+    # CANONICAL status only. The legacy status_key fallback was a latent
+    # fail-open: server.py emits 'screened_no_match' for NEVER-SCREENED
+    # subjects (no record => total_hits 0), which the canonical resolver
+    # correctly calls screening_in_progress.
+    assert "row.canonical_status_key || ''" in fn
+    assert "row.status_key" not in fn, "legacy status_key fallback is a fail-open"
+    assert "'screened_no_match'" not in fn, "never emitted by the canonical resolver"
+    # An explicit integer zero — Number(x || 0) is satisfied by MISSING data.
+    assert "typeof row.total_hits !== 'number'" in fn
+    assert "Number(row.total_hits || 0)" not in fn
+    # Never assert "no matches" over a truncated evidence set, or over items.
+    assert "summary.evidence_capped" in fn
+    assert "screening_evidence" in fn and "items" in fn
 
 
 def test_detector_admits_no_other_status():
@@ -80,8 +86,34 @@ def test_detector_admits_no_other_status():
         "pending",
         "declared_pep_review",
         "in_progress",
+        # These are the tokens a well-meaning future edit would add. The first
+        # is the dangerous one: a subject cleared BY AN OFFICER has hits by
+        # construction, so admitting it would render "No provider matches"
+        # over real matches.
+        "cleared_by_officer",
+        "completed_clear",
+        "no_match",
+        "reviewed",
+        "escalated",
+        "follow_up_required",
     ):
         assert forbidden not in fn, forbidden
+
+
+def test_detector_body_admits_exactly_one_accepting_condition():
+    """Structural guard: substring assertions alone cannot catch an ADDED
+    accepting branch. Two fail-open mutations previously passed this file —
+    including one admitting 'cleared_by_officer'. Pin the shape: the helper may
+    compare exactly one status literal, and every other return is a rejection.
+    """
+    body = _strip_comments(_fn("screeningQueueIsTerminalNoHits"))
+    body = body[body.index("{") + 1:]
+    # Exactly one status-string comparison.
+    assert body.count("=== 'clear'") + body.count("!== 'clear'") == 1
+    # Every early return is a rejection; the only truthy result is the final
+    # computed expression.
+    assert body.count("return true") == 0, "no unconditional accept may exist"
+    assert body.count("return false") >= 3
 
 
 # --- defect 1: the permanent spinner -----------------------------------------
@@ -145,3 +177,73 @@ def test_unavailable_is_still_used_when_evidence_really_is_missing():
     reason = _fn("screeningQueueEvidenceQualityReason")
     assert "Provider screening failed before detailed evidence was available." in reason
     assert "Detailed provider evidence is unavailable for this screening result." in reason
+
+
+# --- the server-side invariant the client fix RESTS ON -----------------------
+#
+# The whole zero-hit UI change is only safe because a canonically-"clear" row is
+# guaranteed to have zero hits and zero evidence. That guarantee is currently an
+# emergent property of _queue_provider_terminal + _queue_evidence_incomplete +
+# post-enrichment re-resolution — nothing pinned it, so a future perf change
+# could quietly break the client's fail-closed assumption. Pin it here.
+
+import pytest
+
+from screening_state import resolve_screening_queue_state
+
+
+def _resolved(row):
+    return resolve_screening_queue_state(dict(row))
+
+
+@pytest.mark.parametrize(
+    "label,row",
+    [
+        ("simulated", {"provider_availability": "simulated", "terminal": True, "total_hits": 0}),
+        ("sandbox", {"provider_availability": "sandbox", "terminal": True, "total_hits": 0}),
+        ("simulated_fallback mode", {"provider_mode": "simulated_fallback", "terminal": True, "total_hits": 0}),
+        ("sandbox_provider mode", {"provider_mode": "sandbox_provider", "terminal": True, "total_hits": 0}),
+        ("pending", {"provider_availability": "pending", "terminal": True, "total_hits": 0}),
+        ("stale", {"provider_availability": "stale", "terminal": True, "total_hits": 0}),
+        ("failed", {"provider_availability": "failed", "terminal": True, "total_hits": 0}),
+        ("not_configured", {"provider_availability": "not_configured", "terminal": True, "total_hits": 0}),
+        ("not_started state", {"screening_state": "not_started", "terminal": True, "total_hits": 0}),
+        ("declared pep", {"provider_mode": "live_provider", "terminal": True, "total_hits": 0,
+                          "pep_declared_status": "declared"}),
+        ("evidence items present", {"provider_mode": "live_provider", "terminal": True, "total_hits": 0,
+                                    "screening_evidence": {"items": [{"category": "pep"}]}}),
+        ("hits present", {"provider_mode": "live_provider", "terminal": True, "total_hits": 3}),
+    ],
+)
+def test_canonical_clear_is_never_emitted_for_a_non_clean_row(label, row):
+    resolved = _resolved(row)
+    key = str(resolved.get("canonical_status_key") or resolved.get("status_key") or "").lower()
+    assert key != "clear", f"{label!r} resolved to canonical clear: {resolved}"
+
+
+def test_bare_terminal_without_provenance_is_a_known_resolver_gap():
+    """Documented, pre-existing contract weakness — pinned so it stays visible.
+
+    _queue_provider_terminal trusts an explicit ``terminal: True`` when the row
+    carries NO provenance token at all (screening_state.py:1672-1676), so such a
+    row resolves to canonical "clear" without proven live provenance. It is not
+    reachable from _build_screening_queue_payload, which always injects a
+    provider mode before resolving, and it predates this change. Pinned here so
+    that if the builder ever stops injecting mode, this test — not a compliance
+    officer — is what notices.
+    """
+    resolved = _resolved({"terminal": True, "total_hits": 0})
+    key = str(resolved.get("canonical_status_key") or "").lower()
+    assert key == "clear", (
+        "resolver behaviour changed — if this now fails closed, delete this test "
+        "and tighten the note in screeningQueueIsTerminalNoHits"
+    )
+
+
+def test_canonical_clear_implies_zero_hits_and_zero_evidence():
+    resolved = _resolved({"provider_mode": "live_provider", "terminal": True, "total_hits": 0})
+    key = str(resolved.get("canonical_status_key") or resolved.get("status_key") or "").lower()
+    assert key == "clear"
+    # The two facts the client helper relies on.
+    assert int(resolved.get("total_hits") or 0) == 0
+    assert not ((resolved.get("screening_evidence") or {}).get("items") or [])
