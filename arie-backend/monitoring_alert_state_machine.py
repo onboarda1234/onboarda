@@ -787,6 +787,10 @@ def _authoritative_alert_owner(
         object_label="change request",
     )
 
+    # Document refresh reuses one active requirement for an alert. Unlike the
+    # display helper, ownership must not pick the newest row and conceal an
+    # older duplicate or cross-application link: multiple alert-level request
+    # links are corrupt/ambiguous and require reconciliation before transition.
     document_rows = _query_all(
         db,
         "SELECT id, application_id FROM application_enhanced_requirements "
@@ -1275,12 +1279,11 @@ def _validate_linked_evidence(
                 "Only the recorded approving officer may execute this "
                 "review-controlled transition."
             )
+        from monitoring_dismissal_control import (
+            DismissalControlError,
+            assert_evidence_current,
+        )
         try:
-            from monitoring_dismissal_control import (
-                DismissalControlError,
-                assert_evidence_current,
-            )
-
             assert_evidence_current(alert, review_request.get("evidence_ref"))
         except DismissalControlError as exc:
             raise EvidenceLinkMismatch(str(exc)) from exc
@@ -1820,15 +1823,15 @@ __all__ = [
     "ACTIVE_STATUSES",
     "ACTOR_TYPES",
     "ALLOWED_REASON_CODES",
-    "AmbiguousAlertOwner",
-    "AlreadyInTargetState",
     "AlertNotFound",
+    "AlreadyInTargetState",
+    "AmbiguousAlertOwner",
     "AuditInfrastructureError",
     "CANONICAL_AUDIT_ACTION",
     "CANONICAL_STATUSES",
     "CANONICAL_STATUS_SET",
-    "EVIDENCE_TYPES",
     "ENABLED_TRANSITION_RULES",
+    "EVIDENCE_TYPES",
     "EvidenceLinkMismatch",
     "FUTURE_TRANSITION_RULES",
     "FourEyesRequired",
@@ -1848,7 +1851,6 @@ __all__ = [
     "TRANSITION_RULES",
     "TerminalStateError",
     "TransitionRule",
-    "validate_assignment_authority",
     "WrongAlertType",
     "WrongEvidenceType",
     "alert_owner",
@@ -1857,4 +1859,5 @@ __all__ = [
     "is_terminal_status",
     "lock_alert_for_transition",
     "transition_alert_status",
+    "validate_assignment_authority",
 ]

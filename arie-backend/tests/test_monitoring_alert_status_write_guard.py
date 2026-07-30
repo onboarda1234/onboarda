@@ -16,6 +16,24 @@ import textwrap
 
 BACKEND = Path(__file__).resolve().parents[1]
 _DYNAMIC_SQL_FRAGMENT = "__MONITORING_DYNAMIC_SQL_FRAGMENT__"
+_SQL_EXECUTOR_METHODS = {"execute", "executemany", "executescript"}
+_SQL_ARGUMENT_NAMES = {
+    "command",
+    "operation",
+    "query",
+    "script",
+    "sql",
+    "sql_script",
+    "statement",
+}
+_SQL_PARAMETER_NAMES = {
+    "bindings",
+    "parameters",
+    "params",
+    "vars",
+    "vars_list",
+    "values",
+}
 
 _APPROVED_DIRECT_WRITERS = {
     (
@@ -617,6 +635,29 @@ class _SqlWriteVisitor(ast.NodeVisitor):
             position += 1
         return None
 
+    def _call_argument(self, call, position, keyword_names):
+        candidates = []
+        if len(call.args) > position:
+            candidates.append(call.args[position])
+        candidates.extend(
+            keyword.value
+            for keyword in call.keywords
+            if keyword.arg in keyword_names
+        )
+        if len(candidates) != 1:
+            return None
+        return candidates[0]
+
+    def _executor_method(self, callee):
+        callee = self._resolve_expression(callee)
+        method = (
+            getattr(callee, "attr", "")
+            or getattr(callee, "id", "")
+        )
+        if method in _SQL_EXECUTOR_METHODS:
+            return method
+        return None
+
     def _status_parameter_is_fixed_open(self, call, values, status_index):
         token = values[status_index].strip()
         literal = _SQL_STRING_LITERAL.match(token)
@@ -629,9 +670,14 @@ class _SqlWriteVisitor(ast.NodeVisitor):
             bool(_PLACEHOLDER.match(value.strip()))
             for value in values[:status_index]
         )
-        if len(call.args) < 2:
+        parameters = self._call_argument(
+            call,
+            1,
+            _SQL_PARAMETER_NAMES,
+        )
+        if parameters is None:
             return False
-        status_argument = self._tuple_item(call.args[1], placeholder_index)
+        status_argument = self._tuple_item(parameters, placeholder_index)
         return self._literal_string(status_argument) == "open"
 
     def _record_insert(self, call, sql, location):
@@ -733,9 +779,18 @@ class _SqlWriteVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node):
         self._record_helper_insert(node)
-        method = getattr(node.func, "attr", "")
-        if method in {"execute", "executemany", "executescript"} and node.args:
-            shape = self._shape(node.args[0])
+        method = self._executor_method(node.func)
+        if method:
+            sql_argument = self._call_argument(
+                node,
+                0,
+                _SQL_ARGUMENT_NAMES,
+            )
+            if sql_argument is None:
+                self.unresolved_risks.append(self._location(node))
+                self.generic_visit(node)
+                return
+            shape = self._shape(sql_argument)
             if shape is None:
                 self.unresolved_risks.append(self._location(node))
             else:
@@ -1000,6 +1055,62 @@ def test_unresolved_concat_augassign_and_combined_dynamic_sql_fail_closed():
         ("synthetic_guard_probe.py", "concatenated"),
         ("synthetic_guard_probe.py", "augmented"),
         ("synthetic_guard_probe.py", "combined"),
+    }
+
+
+def test_bare_keyword_and_aliased_execute_callees_fail_closed():
+    visitor = _scan_source(
+        """
+        def static_bypass(execute):
+            execute(
+                "UPDATE monitoring_alerts SET status = ? WHERE id = ?",
+                ("resolved", 1),
+            )
+
+        def unresolved_bypass(execute, sql):
+            execute(sql, ("resolved", 2))
+
+        def keyword_bypass(db):
+            db.execute(
+                sql="UPDATE monitoring_alerts SET status = ? WHERE id = ?",
+                params=("resolved", 3),
+            )
+
+        def alias_bypass(db):
+            run_sql = db.execute
+            run_sql(
+                "UPDATE monitoring_alerts SET status = ? WHERE id = ?",
+                ("resolved", 4),
+            )
+
+        def chained_alias_bypass(db):
+            first_alias = db.execute
+            second_alias = first_alias
+            second_alias(
+                sql="UPDATE monitoring_alerts SET status = ? WHERE id = ?",
+                params=("resolved", 5),
+            )
+
+        def unresolved_alias_bypass(db, sql):
+            run_sql = db.execute
+            run_sql(sql=sql, params=("resolved", 6))
+        """
+    )
+    assert {
+        (path, function)
+        for path, function, _line in visitor.writes
+    } == {
+        ("synthetic_guard_probe.py", "alias_bypass"),
+        ("synthetic_guard_probe.py", "chained_alias_bypass"),
+        ("synthetic_guard_probe.py", "keyword_bypass"),
+        ("synthetic_guard_probe.py", "static_bypass"),
+    }
+    assert {
+        (path, function)
+        for path, function, _line in visitor.unresolved_risks
+    } == {
+        ("synthetic_guard_probe.py", "unresolved_alias_bypass"),
+        ("synthetic_guard_probe.py", "unresolved_bypass"),
     }
 
 

@@ -56,6 +56,7 @@ def test_effective_status_tolerates_legacy_overloaded_rows():
 
 
 def test_extended_status_export_is_the_canonical_ten():
+    assert len(ms.CANONICAL_ALERT_STATUSES) == 10
     assert "in_review" in ms.EXTENDED_ALERT_STATUSES
     assert "escalated" in ms.EXTENDED_ALERT_STATUSES
     assert ms.EXTENDED_ALERT_STATUSES == ms.CANONICAL_ALERT_STATUSES

@@ -274,6 +274,18 @@ def test_postgres_refuses_to_drop_unexpected_status_constraint():
 def test_postgres_constraint_match_validates_expression_not_just_literals():
     canonical = _FakePostgres._canonical_definition()
     assert db_module._postgres_monitoring_status_check_is_canonical(canonical)
+    bare_literals = ", ".join(f"'{value}'" for value in EXPECTED_STATUSES)
+    assert db_module._postgres_monitoring_status_check_is_canonical(
+        " CHECK ((((status)::pg_catalog.text = ANY "
+        f"(((ARRAY[{bare_literals}])::text[]))))) NOT VALID "
+    )
+    varchar_literals = ", ".join(
+        f"(('{value}'::character varying))::text"
+        for value in EXPECTED_STATUSES
+    )
+    assert db_module._postgres_monitoring_status_check_is_canonical(
+        f"CHECK ((\"status\" = ANY (ARRAY[{varchar_literals}])))"
+    )
     assert not db_module._postgres_monitoring_status_check_is_canonical(
         canonical.replace(" = ANY ", " <> ALL ")
     )
@@ -281,6 +293,32 @@ def test_postgres_constraint_match_validates_expression_not_just_literals():
         canonical.replace(
             ")))",
             ") OR status IS NULL))",
+        )
+    )
+    assert not db_module._postgres_monitoring_status_check_is_canonical(
+        canonical.replace("status", "other_status", 1)
+    )
+    assert not db_module._postgres_monitoring_status_check_is_canonical(
+        canonical.replace("'open'::text", "lower('open')", 1)
+    )
+    assert not db_module._postgres_monitoring_status_check_is_canonical(
+        canonical.replace("'open'::text", "'open'::character(4)", 1)
+    )
+    assert not db_module._postgres_monitoring_status_check_is_canonical(
+        canonical.replace("'open'::text", "'open'::text COLLATE \"C\"", 1)
+    )
+    assert not db_module._postgres_monitoring_status_check_is_canonical(
+        canonical.replace(
+            "'open'::text, 'triaged'::text",
+            "'triaged'::text, 'open'::text",
+            1,
+        )
+    )
+    assert not db_module._postgres_monitoring_status_check_is_canonical(
+        canonical.replace(
+            "'open'::text",
+            "'open'::text, 'open'::text",
+            1,
         )
     )
 
@@ -389,12 +427,13 @@ def test_live_postgres_constraint_and_not_null_enforcement():
         db.commit()
         assert result["constraint_enforced"] is True
 
-        with pytest.raises(Exception):
+        with pytest.raises(psycopg2.errors.CheckViolation):
             db.execute(
                 "INSERT INTO monitoring_alerts (status) VALUES (?)",
                 ("closed",),
             )
-        with pytest.raises(Exception):
+        db.rollback()
+        with pytest.raises(psycopg2.errors.NotNullViolation):
             db.execute("INSERT INTO monitoring_alerts (status) VALUES (NULL)")
         db.rollback()
 
@@ -403,6 +442,81 @@ def test_live_postgres_constraint_and_not_null_enforcement():
         assert len(constraint) == 1
         assert constraint[0]["convalidated"] is True
         assert metadata["is_nullable"] == "NO"
+    finally:
+        try:
+            db.rollback()
+            db.execute('SET search_path TO public')
+            db.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            db.commit()
+        finally:
+            db.close()
+
+
+@pytest.mark.skipif(not _postgres_dsn(), reason="No disposable PostgreSQL test DSN")
+def test_live_postgres_equivalent_and_not_valid_constraints_are_preserved():
+    dsn = _postgres_dsn()
+    parts = urlsplit(dsn)
+    if parts.hostname not in (None, "localhost", "127.0.0.1", "::1"):
+        pytest.skip("PostgreSQL constraint test requires a local disposable server")
+    if "test" not in (parts.path or "").lower():
+        pytest.skip("PostgreSQL constraint test requires a test-named database")
+
+    import psycopg2
+
+    schema = f"monitoring_status_equiv_{uuid.uuid4().hex[:12]}"
+    raw = psycopg2.connect(dsn)
+    db = db_module.DBConnection(raw, is_postgres=True, database_identity=dsn)
+    literals = ", ".join(
+        f"('{value}'::character varying)::text"
+        for value in EXPECTED_STATUSES
+    )
+    canonical_literals = ", ".join(f"'{value}'" for value in EXPECTED_STATUSES)
+    try:
+        db.execute(f'CREATE SCHEMA "{schema}"')
+        db.execute(f'SET search_path TO "{schema}"')
+        db.execute(
+            "CREATE TABLE monitoring_alerts "
+            "(id SERIAL PRIMARY KEY, status TEXT NOT NULL DEFAULT 'open')"
+        )
+        db.execute(
+            "ALTER TABLE monitoring_alerts "
+            "ADD CONSTRAINT monitoring_alerts_status_check "
+            f"CHECK (status = ANY (ARRAY[{literals}]))"
+        )
+        db.commit()
+
+        equivalent = db_module._postgres_monitoring_alert_status_constraints(db)
+        assert len(equivalent) == 1
+        assert db_module._postgres_monitoring_status_check_is_canonical(
+            equivalent[0]["definition"]
+        )
+        assert db_module._ensure_monitoring_alert_status_constraint(db)["changed"] is False
+
+        db.execute(
+            "ALTER TABLE monitoring_alerts "
+            "DROP CONSTRAINT monitoring_alerts_status_check"
+        )
+        db.execute(
+            "ALTER TABLE monitoring_alerts "
+            "ADD CONSTRAINT monitoring_alerts_status_check "
+            f"CHECK (status IN ({canonical_literals})) NOT VALID"
+        )
+        before = db.execute(
+            "SELECT oid, convalidated FROM pg_constraint "
+            "WHERE conname = 'monitoring_alerts_status_check' "
+            "AND conrelid = 'monitoring_alerts'::regclass"
+        ).fetchone()
+        db.commit()
+
+        result = db_module._ensure_monitoring_alert_status_constraint(db)
+        after = db.execute(
+            "SELECT oid, convalidated FROM pg_constraint "
+            "WHERE conname = 'monitoring_alerts_status_check' "
+            "AND conrelid = 'monitoring_alerts'::regclass"
+        ).fetchone()
+        assert result["changed"] is True
+        assert after["oid"] == before["oid"], "validation must not replace the CHECK"
+        assert after["convalidated"] is True
     finally:
         try:
             db.rollback()

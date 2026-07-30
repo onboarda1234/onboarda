@@ -319,6 +319,7 @@ def triage_alert(db, alert_id, *, user, audit_writer, commit=True):
                 "alert_id": alert_id,
                 "status": STATUS_TRIAGED,
                 "changed": False,
+                "state_machine_version": sm.STATE_MACHINE_VERSION,
             }
         result = sm.transition_alert_status(
             db,
@@ -425,6 +426,7 @@ def assign_alert(db, alert_id, *, user, audit_writer, assignee_id=None,
             "status": new_status,
             "changed": changed,
             "owner_id": assignee,
+            "state_machine_version": sm.STATE_MACHINE_VERSION,
         }
     except sm.AlertNotFound as exc:
         _safe_rollback(db)
@@ -852,6 +854,7 @@ def route_alert_to_periodic_review(db, alert_id, *,
                 "reused": True,
                 "status": new_status,
                 "changed": False,
+                "state_machine_version": sm.STATE_MACHINE_VERSION,
             }
         if prior_status in sm.TERMINAL_STATUSES or prior_status in sm.HANDOFF_STATUSES:
             raise AlertAlreadyTerminal(
@@ -999,6 +1002,7 @@ def route_alert_to_edd(db, alert_id, *,
                 "reused": True,
                 "status": new_status,
                 "changed": False,
+                "state_machine_version": sm.STATE_MACHINE_VERSION,
             }
         if prior_status in sm.TERMINAL_STATUSES or prior_status in sm.HANDOFF_STATUSES:
             raise AlertAlreadyTerminal(

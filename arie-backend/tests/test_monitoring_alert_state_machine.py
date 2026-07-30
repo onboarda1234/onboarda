@@ -1192,6 +1192,72 @@ def test_conflicting_explicit_owners_fail_closed(state_db):
     assert _status(state_db, alert_id) == "in_review"
 
 
+def test_multiple_document_requirement_links_fail_closed(state_db):
+    alert_id = _insert_alert(
+        state_db,
+        status="in_review",
+        alert_type="document_expiring",
+        detected_by="document_health",
+    )
+    state_db.execute(
+        "INSERT INTO application_enhanced_requirements "
+        "(application_id, monitoring_alert_id, status) "
+        "VALUES ('app-1', ?, 'under_review')",
+        (alert_id,),
+    )
+    state_db.execute(
+        "INSERT INTO application_enhanced_requirements "
+        "(application_id, monitoring_alert_id, status) "
+        "VALUES ('app-1', ?, 'accepted')",
+        (alert_id,),
+    )
+    state_db.commit()
+
+    with pytest.raises(sm.AmbiguousAlertOwner, match="multiple linked"):
+        sm.transition_alert_status(
+            state_db,
+            alert_id,
+            expected_status="in_review",
+            target_status="dismissed",
+            actor=OFFICER,
+            source_workflow="monitoring",
+            reason_code="dismiss_no_action_needed",
+            reason="Duplicate document links must fail closed.",
+            evidence={
+                "dismissal_reason": "no_action_needed",
+                "officer_rationale": "Linkage requires reconciliation.",
+            },
+        )
+    assert _status(state_db, alert_id) == "in_review"
+    assert _audit_rows(state_db, alert_id) == []
+
+
+def test_cross_application_document_requirement_link_fails_closed(state_db):
+    alert_id = _insert_alert(
+        state_db,
+        status="in_review",
+        alert_type="document_expiring",
+        detected_by="document_health",
+    )
+    state_db.execute(
+        "INSERT INTO application_enhanced_requirements "
+        "(application_id, monitoring_alert_id, status) "
+        "VALUES ('app-2', ?, 'under_review')",
+        (alert_id,),
+    )
+    state_db.commit()
+
+    alert = dict(
+        state_db.execute(
+            "SELECT * FROM monitoring_alerts WHERE id = ?",
+            (alert_id,),
+        ).fetchone()
+    )
+    with pytest.raises(sm.EvidenceLinkMismatch, match="application linkage"):
+        sm.alert_owner(state_db, alert)
+    assert _status(state_db, alert_id) == "in_review"
+
+
 @pytest.mark.parametrize(
     ("alert_link_column", "table_name", "row_state_column", "row_state"),
     (
@@ -2087,7 +2153,7 @@ def test_postgres_row_lock_serializes_competing_transitions():
             commit=False,
         )
 
-        with pytest.raises(Exception):
+        with pytest.raises(psycopg2.errors.LockNotAvailable):
             sm.transition_alert_status(
                 db2,
                 1,

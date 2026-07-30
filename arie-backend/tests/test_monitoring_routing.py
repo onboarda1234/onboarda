@@ -298,6 +298,7 @@ class TestTriageAlert:
                               user=USER, audit_writer=audit_sink)
 
         assert result["status"] == "triaged"
+        assert result["state_machine_version"] == "monitoring_alert_state_machine_v1"
         row = _alert(routing_db, alert_id)
         assert row["triaged_at"] is not None
         assert row["status"] == "triaged"
@@ -308,6 +309,18 @@ class TestTriageAlert:
             (f"monitoring_alert:{alert_id}",),
         ).fetchone()
         assert canonical["action"] == "monitoring.alert.status_transition"
+
+        repeated = triage_alert(
+            routing_db,
+            alert_id,
+            user=USER,
+            audit_writer=audit_sink,
+        )
+        assert repeated["changed"] is False
+        assert repeated["status"] == "triaged"
+        assert repeated["state_machine_version"] == (
+            "monitoring_alert_state_machine_v1"
+        )
 
     def test_triage_unknown_alert_raises(self, routing_db, audit_sink):
         from monitoring_routing import triage_alert, AlertNotFound
@@ -323,6 +336,7 @@ class TestAssignAlert:
         result = assign_alert(routing_db, alert_id,
                               user=USER, audit_writer=audit_sink)
         assert result["status"] == "assigned"
+        assert result["state_machine_version"] == "monitoring_alert_state_machine_v1"
         row = _alert(routing_db, alert_id)
         assert row["assigned_at"] is not None
         assert row["status"] == "assigned"
@@ -483,6 +497,7 @@ class TestRouteToPeriodicReview:
         assert first["periodic_review_id"] == second["periodic_review_id"]
         assert second["created"] is False
         assert second["reused"] is True
+        assert second["state_machine_version"] == "monitoring_alert_state_machine_v1"
 
         # Exactly ONE NEW periodic_reviews row was inserted by both calls
         # combined. Scope by the alert's reverse pointer so this works
@@ -662,6 +677,7 @@ class TestRouteToEDD:
         assert first["edd_case_id"] == second["edd_case_id"]
         assert second["created"] is False
         assert second["reused"] is True
+        assert second["state_machine_version"] == "monitoring_alert_state_machine_v1"
 
         active_count = routing_db.execute(
             "SELECT COUNT(*) AS c FROM edd_cases "

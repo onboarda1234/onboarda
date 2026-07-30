@@ -312,7 +312,10 @@ def test_closed_late_alert_cannot_be_escalated_even_when_sla_breached(overdue_es
     "status",
     ["dismissed", "waived", "routed_to_edd", "routed_to_review"],
 )
-def test_terminal_alerts_cannot_be_escalated(overdue_escalation_server, status):
+def test_terminal_or_route_locked_alerts_cannot_be_escalated(
+    overdue_escalation_server,
+    status,
+):
     base, dbm = overdue_escalation_server
     aid = _seed_alert(dbm, status=status, resolved_at="2026-01-20 09:00:00")
     r = _post_escalate(base, _tok("admin_oe", "admin", "Admin OE"), aid)

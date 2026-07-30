@@ -32,6 +32,31 @@ query evidence and mutation-path inventory.
 The independent review also passed schema-migration policy, production Python
 compilation, the configured fatal flake8 classes, and `git diff --check`.
 
+## GitHub review remediation
+
+After the draft PR was marked ready, CodeRabbit completed an actual review of
+all 48 changed files. Its four actionable threads were reconciled as follows:
+
+- PostgreSQL status-constraint verification now parses a narrow, fully
+  consumed semantic grammar instead of requiring one exact
+  `pg_get_constraintdef` rendering. Equivalent lossless TEXT/VARCHAR cast
+  placement and `NOT VALID` recovery are accepted; different operators,
+  values, columns, functions, collations, or trailing clauses still fail
+  closed.
+- Monitoring ownership deliberately continues to inspect every linked
+  document requirement. Selecting only the latest row would hide corrupt or
+  cross-application history; duplicate alert-level links remain a controlled
+  reconciliation error and now have an explicit regression test.
+- Public state-machine exports are deterministically sorted.
+- Triage, assignment, Periodic Review reuse, and EDD reuse responses now
+  return the same `state_machine_version` field as their changed paths.
+
+Additional safety-oriented review findings hardened bare-name, keyword, and
+aliased SQL executor detection (including chained aliases), narrowed
+PostgreSQL exception assertions, and corrected the four-eyes import boundary.
+The focused remediation matrix passed **196 tests** with a disposable local
+PostgreSQL DSN.
+
 ## Protected and full regression
 
 - Protected-module regression: **1,589 passed**, zero skips/xfails.

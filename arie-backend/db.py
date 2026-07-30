@@ -6216,7 +6216,7 @@ def _postgres_monitoring_alert_status_constraints(
     rows = db.execute(
         """
         SELECT c.conname,
-               pg_get_constraintdef(c.oid) AS definition,
+               pg_get_constraintdef(c.oid, false) AS definition,
                c.convalidated
           FROM pg_constraint c
           JOIN pg_class t ON t.oid = c.conrelid
@@ -6239,21 +6239,177 @@ def _postgres_monitoring_alert_status_constraints(
 
 
 def _postgres_monitoring_status_check_is_canonical(definition: str) -> bool:
-    """Match PostgreSQL's normalized form of the exact approved CHECK.
+    """Semantically match the exact approved PostgreSQL status CHECK.
 
-    Comparing only the string-literal set is insufficient: a ``NOT IN`` or an
-    expression with an extra ``OR`` could mention the same values while
-    enforcing different semantics. ``pg_get_constraintdef`` normalizes an
-    ``IN`` check on a TEXT column to ``= ANY (ARRAY[...])`` and adds ``::text``
-    casts, so compare that complete structure and the approved value order.
+    ``pg_get_constraintdef`` decompiles an expression tree; redundant
+    parentheses and lossless TEXT/VARCHAR cast placement can differ across
+    PostgreSQL versions or equivalent DDL.  Parse only the narrow grammar
+    PostgreSQL emits for ``status = ANY (ARRAY[...])`` and consume every token.
+    Extra operators, functions, clauses, unsafe casts, or values fail closed.
     """
-    compact = re.sub(r"\s+", "", definition or "")
-    expected_literals = ",".join(
-        "'" + value.replace("'", "''") + "'::text"
-        for value in MONITORING_ALERT_STATUS_VALUES
+
+    tokens: List[Tuple[str, str]] = []
+    text = str(definition or "")
+    index = 0
+    depth = 0
+    while index < len(text):
+        char = text[index]
+        if char.isspace():
+            index += 1
+            continue
+        if text.startswith("::", index):
+            tokens.append(("symbol", "::"))
+            index += 2
+            continue
+        if char in "(),=[]":
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth < 0:
+                    return False
+            else:
+                tokens.append(("symbol", char))
+            index += 1
+            continue
+        if char == "'":
+            index += 1
+            value = []
+            while index < len(text):
+                if text[index] != "'":
+                    value.append(text[index])
+                    index += 1
+                    continue
+                if index + 1 < len(text) and text[index + 1] == "'":
+                    value.append("'")
+                    index += 2
+                    continue
+                index += 1
+                tokens.append(("string", "".join(value)))
+                break
+            else:
+                return False
+            continue
+        if char == '"':
+            index += 1
+            value = []
+            while index < len(text):
+                if text[index] != '"':
+                    value.append(text[index])
+                    index += 1
+                    continue
+                if index + 1 < len(text) and text[index + 1] == '"':
+                    value.append('"')
+                    index += 2
+                    continue
+                index += 1
+                tokens.append(("quoted", "".join(value)))
+                break
+            else:
+                return False
+            continue
+        if char.isalpha() or char == "_":
+            end = index + 1
+            while end < len(text) and (
+                text[end].isalnum() or text[end] in {"_", "$"}
+            ):
+                end += 1
+            tokens.append(("word", text[index:end].lower()))
+            index = end
+            continue
+        if char == ".":
+            tokens.append(("symbol", "."))
+            index += 1
+            continue
+        return False
+    if depth != 0:
+        return False
+
+    position = 0
+
+    def _take(kind: str, value: str) -> bool:
+        nonlocal position
+        if position >= len(tokens) or tokens[position] != (kind, value):
+            return False
+        position += 1
+        return True
+
+    def _take_word(value: str) -> bool:
+        return _take("word", value)
+
+    def _take_status_column() -> bool:
+        nonlocal position
+        if position >= len(tokens):
+            return False
+        token = tokens[position]
+        if token not in {("word", "status"), ("quoted", "status")}:
+            return False
+        position += 1
+        return True
+
+    def _take_type(*, array: bool, allow_varchar: bool) -> bool:
+        nonlocal position
+        start = position
+        if (
+            position + 1 < len(tokens)
+            and tokens[position] == ("word", "pg_catalog")
+            and tokens[position + 1] == ("symbol", ".")
+        ):
+            position += 2
+        if _take_word("text"):
+            pass
+        elif allow_varchar and _take_word("varchar"):
+            pass
+        elif allow_varchar and _take_word("character"):
+            if not _take_word("varying"):
+                position = start
+                return False
+        else:
+            position = start
+            return False
+        if array and not (
+            _take("symbol", "[") and _take("symbol", "]")
+        ):
+            position = start
+            return False
+        return True
+
+    if not _take_word("check") or not _take_status_column():
+        return False
+    while _take("symbol", "::"):
+        if not _take_type(array=False, allow_varchar=False):
+            return False
+    if not (
+        _take("symbol", "=")
+        and _take_word("any")
+        and _take_word("array")
+        and _take("symbol", "[")
+    ):
+        return False
+
+    values: List[str] = []
+    while True:
+        if position >= len(tokens) or tokens[position][0] != "string":
+            return False
+        values.append(tokens[position][1])
+        position += 1
+        while _take("symbol", "::"):
+            if not _take_type(array=False, allow_varchar=True):
+                return False
+        if _take("symbol", ","):
+            continue
+        break
+    if not _take("symbol", "]"):
+        return False
+    while _take("symbol", "::"):
+        if not _take_type(array=True, allow_varchar=False):
+            return False
+    if _take_word("not") and not _take_word("valid"):
+        return False
+    return (
+        position == len(tokens)
+        and tuple(values) == tuple(MONITORING_ALERT_STATUS_VALUES)
     )
-    expected = f"CHECK((status=ANY(ARRAY[{expected_literals}])))"
-    return compact == expected
 
 
 def _postgres_constraint_is_validated(value: Any) -> bool:
