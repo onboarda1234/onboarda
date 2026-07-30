@@ -97,7 +97,12 @@ def test_release_evidence_collector_writes_core_files(monkeypatch, tmp_path):
     for filename in ("health.json", "liveness.json", "version.json", "runtime_baseline.json", "summary.json"):
         assert (tmp_path / filename).exists()
     version = json.loads((tmp_path / "version.json").read_text())
+    persisted_summary = json.loads((tmp_path / "summary.json").read_text())
     assert version["git_sha"] == EXPECTED_SHA
+    assert persisted_summary == summary
+    assert persisted_summary["files"]["summary"] == str(
+        tmp_path / "summary.json"
+    )
     assert summary["version"]["git_sha_matches_expected"] is True
     assert summary["version"]["image_tag_matches_expected"] is True
     assert summary["version"]["environment_matches_expected"] is True

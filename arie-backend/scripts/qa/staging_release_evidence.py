@@ -224,7 +224,10 @@ def collect_release_evidence(args: argparse.Namespace) -> dict[str, Any]:
                 {"ok": False, "error": str(exc)},
             )
 
-    summary["files"]["summary"] = _write_json(evidence_dir, "summary.json", summary)
+    # Record the summary path before serializing so the persisted evidence and
+    # the returned/logged summary have the same complete file manifest.
+    summary["files"]["summary"] = str(evidence_dir / "summary.json")
+    _write_json(evidence_dir, "summary.json", summary)
     return summary
 
 
