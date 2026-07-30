@@ -21,6 +21,13 @@ def _view_region(html: str, view_id: str, next_view_id: str) -> str:
     return html[start:end]
 
 
+def _sidebar_item_region(html: str, view: str) -> str:
+    marker = html.index(f'data-view="{view}"')
+    start = html.rfind('<div class="snav-item', 0, marker)
+    end = html.index('</div>', marker) + len('</div>')
+    return html[start:end]
+
+
 def test_sidebar_lists_periodic_review_signals_above_monitoring_alerts():
     html = BACKOFFICE_HTML.read_text()
 
@@ -34,6 +41,41 @@ def test_sidebar_lists_periodic_review_signals_above_monitoring_alerts():
     assert periodic_index < monitoring_index
     assert '> Periodic Reviews</div>' in html
     assert '> Monitoring</div>' in html
+
+
+def test_phase1_primary_navigation_hides_scoped_items_without_removing_modules():
+    html = BACKOFFICE_HTML.read_text()
+
+    hidden_views = {
+        "kpis": "view-kpis",
+        "lifecycle": "view-lifecycle",
+        "reg-intel": "view-reg-intel",
+        "supervisor-audit": "view-supervisor-audit",
+    }
+    for view, view_id in hidden_views.items():
+        item = _sidebar_item_region(html, view)
+        assert 'data-pilot-hidden="phase1-primary-navigation"' in item
+        assert f"showView('{view}',this)" in item
+        assert f'id="{view_id}"' in html
+
+    for visible_view in (
+        "dashboard",
+        "applications",
+        "cases",
+        "screening-queue",
+        "periodic-review-signals",
+        "monitoring",
+        "change-mgmt",
+        "reports",
+        "supervisor",
+    ):
+        assert 'data-pilot-hidden=' not in _sidebar_item_region(html, visible_view)
+
+    supervisor_item = _sidebar_item_region(html, "supervisor")
+    assert "Supervisor Dashboard" in supervisor_item
+    assert ">Enterprise</span>" in supervisor_item
+    assert '<div class="snav-section role-admin-only">Administration</div>' in html
+    assert "[data-pilot-hidden], body .sidebar .sidebar-nav .snav-item[data-pilot-hidden] { display:none !important; }" in html
 
 
 def test_periodic_review_signals_is_a_standalone_view():
@@ -117,7 +159,7 @@ def test_agent_health_hidden_until_real_telemetry_is_active():
     html = BACKOFFICE_HTML.read_text()
 
     assert 'data-pilot-hidden="agent-health"' in html
-    assert "[data-pilot-hidden], body.role-admin .snav-item[data-pilot-hidden] { display:none !important; }" in html
+    assert "[data-pilot-hidden], body .sidebar .sidebar-nav .snav-item[data-pilot-hidden] { display:none !important; }" in html
     assert "var AGENT_HEALTH_ACTIVE = false;" in html
     assert "Agent Health Monitoring Unavailable" in html
     assert "hidden from paid-pilot navigation" in html
