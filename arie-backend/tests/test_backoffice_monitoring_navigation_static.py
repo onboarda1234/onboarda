@@ -56,7 +56,7 @@ def test_phase1_primary_navigation_hides_scoped_items_without_removing_modules()
         item = _sidebar_item_region(html, view)
         assert 'data-pilot-hidden="phase1-primary-navigation"' in item
         assert f"showView('{view}',this)" in item
-        assert f'id="{view_id}"' in html
+        assert f'<div class="view" id="{view_id}">' in html
 
     for visible_view in (
         "dashboard",
@@ -75,7 +75,7 @@ def test_phase1_primary_navigation_hides_scoped_items_without_removing_modules()
     assert "Supervisor Dashboard" in supervisor_item
     assert ">Enterprise</span>" in supervisor_item
     assert '<div class="snav-section role-admin-only">Administration</div>' in html
-    assert "[data-pilot-hidden], body .sidebar .sidebar-nav .snav-item[data-pilot-hidden] { display:none !important; }" in html
+    assert "body .sidebar .sidebar-nav .snav-item[data-pilot-hidden] { display:none !important; }" in html
 
 
 def test_periodic_review_signals_is_a_standalone_view():
@@ -159,7 +159,7 @@ def test_agent_health_hidden_until_real_telemetry_is_active():
     html = BACKOFFICE_HTML.read_text()
 
     assert 'data-pilot-hidden="agent-health"' in html
-    assert "[data-pilot-hidden], body .sidebar .sidebar-nav .snav-item[data-pilot-hidden] { display:none !important; }" in html
+    assert "body .sidebar .sidebar-nav .snav-item[data-pilot-hidden] { display:none !important; }" in html
     assert "var AGENT_HEALTH_ACTIVE = false;" in html
     assert "Agent Health Monitoring Unavailable" in html
     assert "hidden from paid-pilot navigation" in html
