@@ -104,12 +104,19 @@ version mismatch is a hard deployment failure.
 currently used by both live services, plus their immutable image digest. Do not
 guess from the latest registered family revision:
 ```bash
-aws ecs describe-services --cluster regmind-staging \
-  --services regmind-backend regmind-verification-worker \
+cd arie-backend
+mkdir -p release-evidence
+python3 scripts/qa/staging_deployment_control.py capture-predeploy \
   --region af-south-1 \
-  --query 'services[].{service:serviceName,taskDefinition:taskDefinition}' \
-  --output json
+  --cluster regmind-staging \
+  --output release-evidence/predeploy.json
+jq '{services, task_definitions, rollback}' \
+  release-evidence/predeploy.json
 ```
+The captured evidence must contain both live service/task-definition pairs,
+each task definition's exact image reference and provenance, the shared
+immutable image tag and digest, and the paired rollback commands. A missing or
+inconsistent value is a hard stop.
 
 ---
 
@@ -312,11 +319,26 @@ Run these after every Phase hardening deployment before declaring the environmen
 Capture command output in the release evidence pack:
 
 ```bash
+set -euo pipefail
+[[ "$GIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+
 aws ecr describe-repositories --repository-names regmind-backend \
   --region af-south-1 --query 'repositories[0].imageTagMutability'
 
+mkdir -p release-evidence
+IMAGE_DIGEST="$(aws ecr describe-images \
+  --repository-name regmind-backend \
+  --image-ids "imageTag=$GIT_SHA" \
+  --region af-south-1 \
+  --query 'imageDetails[0].imageDigest' \
+  --output text)"
+[[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+printf '%s\n' "$IMAGE_DIGEST" \
+  > "release-evidence/ecr-image-digest-$GIT_SHA.txt"
 aws ecr describe-image-scan-findings --repository-name regmind-backend \
-  --image-id imageTag=$GIT_SHA --region af-south-1
+  --image-id "imageDigest=$IMAGE_DIGEST" \
+  --region af-south-1 \
+  | tee "release-evidence/ecr-scan-$GIT_SHA.json"
 
 aws rds describe-db-instances --db-instance-identifier regmind-staging-db \
   --region af-south-1 --query 'DBInstances[0].{BackupRetentionPeriod:BackupRetentionPeriod,DeletionProtection:DeletionProtection}'

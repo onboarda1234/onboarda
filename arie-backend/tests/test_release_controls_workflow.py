@@ -178,3 +178,27 @@ def test_runbook_documents_mandatory_ephemeral_machine_auth():
     assert "15-minute token" in text
     assert "`STAGING_VERSION_BEARER_TOKEN` is required or stored" in text
     assert text.count("--expected-environment staging") >= 2
+
+
+def test_runbook_rollback_and_manual_scan_evidence_are_digest_pinned():
+    text = RUNBOOK.read_text(encoding="utf-8")
+    rollback = text.split("**Rollback awareness:**", 1)[1].split("---", 1)[0]
+    assert "staging_deployment_control.py capture-predeploy" in rollback
+    assert "release-evidence/predeploy.json" in rollback
+    assert "{services, task_definitions, rollback}" in rollback
+    assert "exact image reference and provenance" in rollback
+    assert "shared\nimmutable image tag and digest" in rollback
+
+    scan = text.split("### Phase 5 infrastructure gates", 1)[1].split(
+        "## 6. Rollback Procedure",
+        1,
+    )[0]
+    assert "set -euo pipefail" in scan
+    assert '[[ "$GIT_SHA" =~ ^[0-9a-f]{40}$ ]]' in scan
+    assert '--image-ids "imageTag=$GIT_SHA"' in scan
+    assert "--query 'imageDetails[0].imageDigest'" in scan
+    assert '[[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]' in scan
+    assert '--image-id "imageDigest=$IMAGE_DIGEST"' in scan
+    assert "ecr-image-digest-$GIT_SHA.txt" in scan
+    assert "ecr-scan-$GIT_SHA.json" in scan
+    assert "--image-id imageTag=$GIT_SHA" not in scan
