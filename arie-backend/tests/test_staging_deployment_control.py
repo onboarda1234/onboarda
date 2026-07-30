@@ -293,6 +293,8 @@ def test_cloudwatch_collection_is_mandatory_and_fail_closed():
     assert result["ok"] is True
     assert result["unexpected_event_count"] == 0
     assert len(calls) == len(control.LOG_PATTERNS)
+    assert all("--no-paginate" not in arguments for arguments in calls)
+    assert all("--max-items" not in arguments for arguments in calls)
 
     def error_event(arguments):
         return {"events": [{"message": "sensitive message is not persisted"}]}
@@ -302,6 +304,26 @@ def test_cloudwatch_collection_is_mandatory_and_fail_closed():
             start_time_ms=100,
             now_ms=lambda: 200,
             aws_json=error_event,
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"events": None},
+        {"events": ""},
+        {"events": {}},
+        {"events": 0},
+        {"events": False},
+    ],
+)
+def test_cloudwatch_collection_rejects_missing_or_malformed_events(payload):
+    with pytest.raises(control.StagingControlError, match="malformed events"):
+        control.collect_cloudwatch(
+            start_time_ms=100,
+            now_ms=lambda: 200,
+            aws_json=lambda arguments: payload,
         )
 
 

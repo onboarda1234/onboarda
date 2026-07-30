@@ -18,12 +18,43 @@ def _names():
     return _steps()
 
 
+def _run_bodies(text):
+    lines = text.splitlines()
+    declarations = [
+        line.strip() for line in lines if line.lstrip().startswith("run:")
+    ]
+    assert declarations.count("run:") == 1
+    assert all(declaration in {"run:", "run: |"} for declaration in declarations)
+    bodies = []
+    for index, line in enumerate(lines):
+        if line.lstrip() != "run: |":
+            continue
+        parent_indent = len(line) - len(line.lstrip())
+        body = []
+        for candidate in lines[index + 1 :]:
+            candidate_indent = len(candidate) - len(candidate.lstrip())
+            if candidate and candidate_indent <= parent_indent:
+                break
+            body.append(candidate)
+        bodies.append("\n".join(body))
+    assert len(bodies) == declarations.count("run: |")
+    return bodies
+
+
+def _checkout_block(text):
+    marker = "      - uses: actions/checkout@"
+    assert text.count(marker) == 1
+    return text.split(marker, 1)[1].split("\n      - ", 1)[0]
+
+
 def test_workflow_is_main_full_sha_and_least_privilege_scoped():
     text = _text()
     assert "\npermissions:\n  contents: read\n" in text
     assert 'ref != "refs/heads/main"' in text
     assert r"[0-9a-f]{40}" in text
     assert "git rev-parse HEAD" in text
+    assert "with:\n          persist-credentials: false" in _checkout_block(text)
+    assert all("${{" not in body for body in _run_bodies(text))
 
 
 def test_immutable_reuse_and_scan_gate_precede_every_ecs_mutation():
@@ -66,7 +97,8 @@ def test_task_definitions_come_from_live_services_and_rollback_is_paired():
 def test_runtime_gate_covers_digest_counts_alb_and_cloudwatch():
     text = _text()
     assert "verify-runtime" in text
-    assert '--digest "${{ steps.image.outputs.image_digest }}"' in text
+    assert "RELEASE_DIGEST: ${{ steps.image.outputs.image_digest }}" in text
+    assert '--digest "$RELEASE_DIGEST"' in text
     assert "collect-cloudwatch" in text
     assert "runtime.json" in text
     assert "cloudwatch.json" in text
@@ -109,6 +141,9 @@ def test_sanitized_evidence_is_uploaded_and_completion_is_explicit():
 
 def test_no_remote_convenience_tag_or_mutability_downgrade_path():
     text = _text()
+    convenience_tag = re.compile(
+        r"regmind-backend:(latest|main|staging)(?:\s|['\"]|$)"
+    )
     forbidden = (
         "image-tag-mutability MUTABLE",
         "batch-delete-image",
@@ -117,10 +152,8 @@ def test_no_remote_convenience_tag_or_mutability_downgrade_path():
     )
     for value in forbidden:
         assert value not in text
-    assert not re.search(
-        r"regmind-backend:(latest|main|staging)(?:\\s|['\"]|$)",
-        text,
-    )
+    assert not convenience_tag.search(text)
+    assert convenience_tag.search("docker pull regmind-backend:latest --quiet")
 
 
 def test_runbook_has_no_convenience_tag_or_ungated_manual_release_path():

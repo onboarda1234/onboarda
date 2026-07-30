@@ -59,7 +59,7 @@
 |---|---|
 | Working branch is `main` | `git branch --show-current` → `main` |
 | No uncommitted changes to tracked files | `git status --short` shows only untracked files |
-| All tests pass locally | `python3.11 -m pytest tests/ -x -q --tb=short --ignore=tests/test_pdf_generator.py` → 365 passed |
+| All tests pass locally | `python3.11 -m pytest tests/ -x -q --tb=short --ignore=tests/test_pdf_generator.py`; every collected non-PDF test passes under the current CI manifest |
 | HTML files are up to date | Root `arie-portal.html` and `arie-backoffice.html` contain the latest changes |
 
 ### Infrastructure readiness
@@ -328,7 +328,7 @@ aws logs describe-log-groups --log-group-name-prefix /ecs/regmind-staging \
   --region af-south-1 --query 'logGroups[].{name:logGroupName,retention:retentionInDays}'
 ```
 
-Expected Phase 5 baseline: ECR tags immutable; no unaccepted HIGH image findings; RDS backup retention at least 7 days and deletion protection enabled; ALB access logs enabled; CloudWatch log retention set; alarms exist for ALB 5xx, ECS running task count, RDS CPU/storage, failed-login spike, memo/EDD failure, and `Invalid encryption token`.
+Expected Phase 5 baseline: ECR tags immutable; zero CRITICAL image findings and no unaccepted HIGH image findings; RDS backup retention at least 7 days and deletion protection enabled; ALB access logs enabled; CloudWatch log retention set; alarms exist for ALB 5xx, ECS running task count, RDS CPU/storage, failed-login spike, memo/EDD failure, and `Invalid encryption token`.
 
 ### Log review
 ```bash
@@ -347,11 +347,11 @@ Attach this ledger to every Day 6 staging deployment note before the deployment 
 |---|---|---|
 | Deployed commit | `staging_release_evidence.py` authenticated `version.json` | `git_sha` equals the reviewed `main` commit; `image_tag` contains the same SHA |
 | Build provenance | GitHub Actions `deploy-staging.yml` run | Run URL, run number, and actor recorded |
-| ECS service | `aws ecs describe-services --cluster regmind-staging --services regmind-backend --region af-south-1` | `deployments[0].rolloutState` is `COMPLETED`; task definition revision recorded |
+| ECS services | `aws ecs describe-services --cluster regmind-staging --services regmind-backend regmind-verification-worker --region af-south-1` | Both services have one completed rollout at expected counts; both task-definition ARNs recorded |
 | Runtime logs | CloudWatch log group `/ecs/regmind-staging` | No new `ERROR`, `connection pool exhausted`, or `falling back to mock mode` entries after deploy |
 | Reporting smoke | `arie-backend/scripts/qa/day5_closing_smoke.py` | `ok: true`, reconciliation passes, CSV/report `canonical_view: applications_report_v1`, dashboard `canonical_view: dashboard_metrics_v2`, and live dashboard/report/application counts agree |
 | Authenticated browser smoke | `arie-backend/scripts/qa/staging_browser_smoke.js` | Real QA login succeeds; required back-office pages/tabs load; screenshots and `report.json` attached; no token injection or auth bypass |
-| Rollback handle | Previous ECS task definition | Previous `regmind-staging:<REVISION>` recorded before deployment |
+| Rollback handles | Sanitized pre-deployment evidence | Previous backend and worker task-definition ARNs plus their shared immutable image tag and digest recorded before deployment |
 
 The automated evidence artifact must additionally contain the immutable image
 digest, exact-digest scan summary, previous and new task definitions for both
@@ -392,7 +392,7 @@ Use `--token-env BACKOFFICE_TOKEN` if the token is stored under a different envi
 
 ## 6. Rollback Procedure
 
-> **Rollback is now reliable:** With SHA-tagged images (introduced in CI/CD improvements), each deployment creates a uniquely-tagged image in ECR that is not overwritten. Rolling back to a previous task definition revision will use the correct image.
+> **Rollback is now reliable:** Every reviewed SHA resolves to one immutable ECR tag; a rerun verifies and reuses the matching image rather than overwriting it. Rollback restores the exact captured backend and worker task-definition ARN pair after verifying their shared immutable image digest.
 >
 > **Note:** Database migrations are NOT rolled back. If a migration was applied during the failed deploy, the old code may encounter schema mismatches. Assess backward compatibility before rolling back.
 
@@ -506,8 +506,8 @@ aws rds reboot-db-instance --db-instance-identifier regmind-staging-db --region 
 ```
 PRE-DEPLOY
 [ ] On branch main, no uncommitted tracked changes
-[ ] 365 tests pass locally
-[ ] Note current task definition revision: regmind-staging:___
+[ ] Every collected test in the current CI manifest passes locally
+[ ] Record both live service task-definition ARNs and their shared immutable image tag/digest
 [ ] Docker Desktop running
 [ ] AWS CLI configured (af-south-1)
 [ ] ECR repository is immutable

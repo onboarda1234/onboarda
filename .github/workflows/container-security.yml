@@ -22,9 +22,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Derive exact reviewed checkout SHA
         id: context
+        env:
+          EXPECTED_GITHUB_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -33,7 +37,7 @@ jobs:
             echo "FAIL: checkout SHA is not full 40-character lowercase hexadecimal"
             exit 1
           fi
-          if [ "$RELEASE_SHA" != "${{ github.sha }}" ]; then
+          if [ "$RELEASE_SHA" != "$EXPECTED_GITHUB_SHA" ]; then
             echo "FAIL: checkout SHA does not match github.sha"
             exit 1
           fi
@@ -50,6 +54,7 @@ jobs:
       - name: Build exact SHA linux-amd64 image
         env:
           RELEASE_SHA: ${{ steps.context.outputs.release_sha }}
+          RELEASE_REF: ${{ github.ref }}
         shell: bash
         run: |
           set -euo pipefail
@@ -59,7 +64,7 @@ jobs:
             --build-arg "BUILD_TIME=$BUILD_TIME" \
             --build-arg "IMAGE_TAG=$RELEASE_SHA" \
             --label "git.sha=$RELEASE_SHA" \
-            --label "git.ref=${{ github.ref }}" \
+            --label "git.ref=$RELEASE_REF" \
             --label "build.time=$BUILD_TIME" \
             -t "regmind-backend:$RELEASE_SHA" \
             arie-backend

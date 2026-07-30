@@ -37,6 +37,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Validate reviewed main release context
         env:
@@ -169,13 +171,18 @@ jobs:
             --output "$RELEASE_EVIDENCE_DIR/exact-image-trivy-scan.json"
 
       - name: Render backend task definition from live service revision
+        env:
+          SOURCE_TASK_DEFINITION: ${{ steps.predeploy.outputs.backend_source_task_definition }}
+          RELEASE_IMAGE: ${{ steps.image.outputs.image }}
+          RELEASE_SHA: ${{ github.sha }}
+          BUILD_TIME: ${{ steps.image.outputs.build_time }}
         run: |
           set -euo pipefail
           python3 scripts/qa/staging_deployment_control.py render-task-definition \
-            --source-task-definition "${{ steps.predeploy.outputs.backend_source_task_definition }}" \
-            --image "${{ steps.image.outputs.image }}" \
-            --sha "${{ github.sha }}" \
-            --build-time "${{ steps.image.outputs.build_time }}" \
+            --source-task-definition "$SOURCE_TASK_DEFINITION" \
+            --image "$RELEASE_IMAGE" \
+            --sha "$RELEASE_SHA" \
+            --build-time "$BUILD_TIME" \
             --service-name "$ECS_SERVICE" \
             --region "$AWS_REGION" \
             --output "$RUNNER_TEMP/new-backend-task-definition.json"
@@ -196,13 +203,18 @@ jobs:
           echo "task-definition-arn=$NEW_ARN" >> "$GITHUB_OUTPUT"
 
       - name: Render worker task definition from live service revision
+        env:
+          SOURCE_TASK_DEFINITION: ${{ steps.predeploy.outputs.worker_source_task_definition }}
+          RELEASE_IMAGE: ${{ steps.image.outputs.image }}
+          RELEASE_SHA: ${{ github.sha }}
+          BUILD_TIME: ${{ steps.image.outputs.build_time }}
         run: |
           set -euo pipefail
           python3 scripts/qa/staging_deployment_control.py render-task-definition \
-            --source-task-definition "${{ steps.predeploy.outputs.worker_source_task_definition }}" \
-            --image "${{ steps.image.outputs.image }}" \
-            --sha "${{ github.sha }}" \
-            --build-time "${{ steps.image.outputs.build_time }}" \
+            --source-task-definition "$SOURCE_TASK_DEFINITION" \
+            --image "$RELEASE_IMAGE" \
+            --sha "$RELEASE_SHA" \
+            --build-time "$BUILD_TIME" \
             --service-name "$ECS_WORKER_SERVICE" \
             --region "$AWS_REGION" \
             --output "$RUNNER_TEMP/new-worker-task-definition.json"
@@ -277,13 +289,18 @@ jobs:
       # definitions, provenance env, every running task's imageDigest, desired /
       # running / pending counts, rollout state, and all ALB targets.
       - name: Enforce staging SHA alignment
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_DIGEST: ${{ steps.image.outputs.image_digest }}
+          BACKEND_TASK_DEFINITION: ${{ steps.register-task-def.outputs.task-definition-arn }}
+          WORKER_TASK_DEFINITION: ${{ steps.register-worker-task-def.outputs.task-definition-arn }}
         run: |
           set -euo pipefail
           python3 scripts/qa/staging_deployment_control.py verify-runtime \
-            --sha "${{ github.sha }}" \
-            --digest "${{ steps.image.outputs.image_digest }}" \
-            --backend-task-definition "${{ steps.register-task-def.outputs.task-definition-arn }}" \
-            --worker-task-definition "${{ steps.register-worker-task-def.outputs.task-definition-arn }}" \
+            --sha "$RELEASE_SHA" \
+            --digest "$RELEASE_DIGEST" \
+            --backend-task-definition "$BACKEND_TASK_DEFINITION" \
+            --worker-task-definition "$WORKER_TASK_DEFINITION" \
             --region "$AWS_REGION" \
             --cluster "$ECS_CLUSTER" \
             --output "$RELEASE_EVIDENCE_DIR/runtime.json"
@@ -371,10 +388,16 @@ jobs:
             --output "$RELEASE_EVIDENCE_DIR/cloudwatch.json"
 
       - name: Finalize mandatory release evidence
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          WORKFLOW_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
           python3 scripts/qa/staging_deployment_control.py finalize \
-            --sha "${{ github.sha }}" \
+            --sha "$RELEASE_SHA" \
             --image-evidence "$RELEASE_EVIDENCE_DIR/image.json" \
             --scan-evidence "$RELEASE_EVIDENCE_DIR/image-scan.json" \
             --trivy-scan-evidence "$RELEASE_EVIDENCE_DIR/exact-image-trivy-scan.json" \
@@ -382,10 +405,10 @@ jobs:
             --runtime-evidence "$RELEASE_EVIDENCE_DIR/runtime.json" \
             --authenticated-evidence "$RELEASE_EVIDENCE_DIR/authenticated/summary.json" \
             --cloudwatch-evidence "$RELEASE_EVIDENCE_DIR/cloudwatch.json" \
-            --workflow-run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --workflow-run-id "${{ github.run_id }}" \
-            --workflow-run-attempt "${{ github.run_attempt }}" \
-            --actor "${{ github.actor }}" \
+            --workflow-run-url "https://github.com/$WORKFLOW_REPOSITORY/actions/runs/$WORKFLOW_RUN_ID" \
+            --workflow-run-id "$WORKFLOW_RUN_ID" \
+            --workflow-run-attempt "$WORKFLOW_RUN_ATTEMPT" \
+            --actor "$WORKFLOW_ACTOR" \
             --output "$RELEASE_EVIDENCE_DIR/release-evidence.json"
           printf '%s\n' '{"schema_version":"staging_release_evidence_v1","ok":true,"status":"complete"}' \
             > "$RELEASE_EVIDENCE_DIR/workflow-status.json"
@@ -404,16 +427,24 @@ jobs:
         if: always()
         env:
           EVIDENCE_UPLOAD_OUTCOME: ${{ steps.upload-release-evidence.outcome }}
+          RELEASE_SHA: ${{ github.sha }}
+          WORKFLOW_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          RELEASE_IMAGE: ${{ steps.image.outputs.image }}
+          RELEASE_DIGEST: ${{ steps.image.outputs.image_digest }}
+          IMAGE_ACTION: ${{ steps.image.outputs.image_action }}
+          BACKEND_TASK_DEFINITION: ${{ steps.register-task-def.outputs.task-definition-arn }}
+          WORKER_TASK_DEFINITION: ${{ steps.register-worker-task-def.outputs.task-definition-arn }}
         run: |
           {
             echo "## Staging deployment"
-            echo "- **Commit:** ${{ github.sha }}"
-            echo "- **Workflow:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            echo "- **Image:** ${{ steps.image.outputs.image }}"
-            echo "- **Image digest:** ${{ steps.image.outputs.image_digest }}"
-            echo "- **Image action:** ${{ steps.image.outputs.image_action }}"
-            echo "- **Backend task definition:** ${{ steps.register-task-def.outputs.task-definition-arn }}"
-            echo "- **Worker task definition:** ${{ steps.register-worker-task-def.outputs.task-definition-arn }}"
+            echo "- **Commit:** $RELEASE_SHA"
+            echo "- **Workflow:** https://github.com/$WORKFLOW_REPOSITORY/actions/runs/$WORKFLOW_RUN_ID"
+            echo "- **Image:** $RELEASE_IMAGE"
+            echo "- **Image digest:** $RELEASE_DIGEST"
+            echo "- **Image action:** $IMAGE_ACTION"
+            echo "- **Backend task definition:** $BACKEND_TASK_DEFINITION"
+            echo "- **Worker task definition:** $WORKER_TASK_DEFINITION"
             if [ -f "$RELEASE_EVIDENCE_DIR/release-evidence.json" ] \
               && [ "$EVIDENCE_UPLOAD_OUTCOME" = "success" ]; then
               echo "- **Mandatory release evidence:** complete"

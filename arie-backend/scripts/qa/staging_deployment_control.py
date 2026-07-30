@@ -713,23 +713,29 @@ def collect_cloudwatch(
     results: list[dict[str, Any]] = []
     unexpected_total = 0
     for pattern in LOG_PATTERNS:
-        payload = aws_json(
-            [
-                "logs",
-                "filter-log-events",
-                "--log-group-name",
-                log_group,
-                "--start-time",
-                str(start_time_ms),
-                "--end-time",
-                str(end_time_ms),
-                "--filter-pattern",
-                f'"{pattern}"',
-                "--region",
-                region,
-            ]
-        )
-        events = payload.get("events") or []
+        # Keep the AWS CLI paginator enabled. CloudWatch can return an empty
+        # service page with a continuation token; the CLI follows and aggregates
+        # those pages unless --no-paginate is supplied.
+        arguments = [
+            "logs",
+            "filter-log-events",
+            "--log-group-name",
+            log_group,
+            "--start-time",
+            str(start_time_ms),
+            "--end-time",
+            str(end_time_ms),
+            "--filter-pattern",
+            f'"{pattern}"',
+            "--region",
+            region,
+        ]
+        payload = aws_json(arguments)
+        events = payload.get("events")
+        if not isinstance(events, list):
+            raise StagingControlError(
+                "CloudWatch filter response contains malformed events"
+            )
         count = len(events)
         unexpected_total += count
         results.append({"pattern": pattern, "count": count})

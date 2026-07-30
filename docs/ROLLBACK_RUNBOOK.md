@@ -26,7 +26,8 @@ The image-rollback substrate mostly exists, but these gaps must be closed or the
    the same SHA and every running task's `imageDigest` must equal the ECR digest
    recorded for that immutable tag.
 4. **Confirm RDS backup retention ≥ 7 days + deletion protection + PITR** on
-   `regmind-staging-db` (checklist `DEPLOYMENT_RUNBOOK.md:452`). This is the only
+   `regmind-staging-db` (see the infrastructure-readiness and operator-checklist
+   sections of `DEPLOYMENT_RUNBOOK.md`). This is the only
    substrate for the destructive-migration branch (B2).
 
 ---
@@ -34,8 +35,9 @@ The image-rollback substrate mostly exists, but these gaps must be closed or the
 ## Section 1 — Detect & Decide
 
 **Rollback trigger:** failed post-deploy health (`/api/liveness`, `/api/health`,
-`/portal`, `/backoffice` not 200 — same probes the deploy workflow runs at
-`deploy-staging.yml:255-290`) **or** a functional regression caught in smoke.
+`/portal`, `/backoffice` not 200 — the same probes used by the deploy workflow's
+authenticated-release-evidence and portal/backoffice verification steps) **or**
+a functional regression caught in smoke.
 
 Capture:
 - the **bad** `GIT_SHA` — authenticated `GET /api/version` returns
@@ -62,7 +64,7 @@ aws ecs update-service --cluster regmind-staging --service regmind-verification-
   --task-definition <PREVIOUS_WORKER_TASK_DEFINITION_ARN> \
   --force-new-deployment --region af-south-1
 
-# 3. Wait for steady state
+# 2. Wait for steady state
 aws ecs wait services-stable --cluster regmind-staging \
   --services regmind-backend regmind-verification-worker --region af-south-1
 ```
