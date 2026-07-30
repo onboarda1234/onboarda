@@ -1,26 +1,28 @@
 name: Deploy to Staging
 
 on:
-  workflow_dispatch:  # Manual trigger from GitHub UI
+  workflow_dispatch:
   push:
     branches: [main]
 
-# Prevent concurrent deployments
 concurrency:
   group: deploy-staging
   cancel-in-progress: false
+
+permissions:
+  contents: read
 
 env:
   AWS_REGION: af-south-1
   ECR_REPOSITORY: regmind-backend
   ECS_CLUSTER: regmind-staging
   ECS_SERVICE: regmind-backend
-  ECS_TASK_FAMILY: regmind-staging
   ECS_WORKER_SERVICE: regmind-verification-worker
-  ECS_WORKER_TASK_FAMILY: regmind-verification-worker
+  RELEASE_EVIDENCE_DIR: ${{ github.workspace }}/release-evidence
+  TRIVY_IMAGE: >-
+    aquasec/trivy:0.72.0@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
 
 jobs:
-  # Run CI first
   ci:
     uses: ./.github/workflows/ci.yml
 
@@ -31,9 +33,41 @@ jobs:
     defaults:
       run:
         working-directory: arie-backend
+        shell: bash
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Validate reviewed main release context
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          python3 - "$RELEASE_SHA" "$RELEASE_REF" <<'PY'
+          import re
+          import sys
+
+          sha, ref = sys.argv[1:3]
+          if not re.fullmatch(r"[0-9a-f]{40}", sha):
+              raise SystemExit("FAIL: release SHA must be full 40-character lowercase hexadecimal")
+          if ref != "refs/heads/main":
+              raise SystemExit(f"FAIL: staging deployment is main-only, observed {ref!r}")
+          PY
+          if [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]; then
+            echo "FAIL: checked-out commit does not match github.sha"
+            exit 1
+          fi
+
+      - name: Initialize sanitized release evidence
+        run: |
+          set -euo pipefail
+          rm -rf "$RELEASE_EVIDENCE_DIR"
+          mkdir -p "$RELEASE_EVIDENCE_DIR"
+          printf '%s\n' '{"schema_version":"staging_release_evidence_v1","ok":false,"status":"incomplete"}' \
+            > "$RELEASE_EVIDENCE_DIR/workflow-status.json"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
@@ -46,196 +80,182 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2.1.6
 
+      # Capture the exact task definitions currently used by the live services,
+      # not the most recently registered family revisions. These are both the
+      # source for the next definitions and the paired rollback handles.
+      - name: Capture live pre-deployment and rollback state
+        id: predeploy
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_deployment_control.py capture-predeploy \
+            --region "$AWS_REGION" \
+            --cluster "$ECS_CLUSTER" \
+            --output "$RELEASE_EVIDENCE_DIR/predeploy.json" \
+            --github-output "$GITHUB_OUTPUT"
+
       - name: Copy HTML files into backend dir
         run: |
+          set -euo pipefail
           cp ../arie-portal.html ./arie-portal.html
           cp ../arie-backoffice.html ./arie-backoffice.html
-          echo "HTML files copied"
 
-      - name: Build and push Docker image
-        id: build-image
+      # Fail closed unless ECR is exactly IMMUTABLE with scan-on-push enabled.
+      # Missing SHA tags are built/pushed once. Existing SHA tags are pulled by
+      # digest and their labels/env are verified; no tag is deleted or replaced.
+      - name: Prepare or safely reuse exact SHA image
+        id: image
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_REF: ${{ github.ref }}
         run: |
-          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          docker build --platform linux/amd64 \
-            --build-arg "GIT_SHA=${{ github.sha }}" \
-            --build-arg "BUILD_TIME=$BUILD_TIME" \
-            --build-arg "IMAGE_TAG=$IMAGE_TAG" \
-            --label "git.sha=${{ github.sha }}" \
-            --label "git.ref=${{ github.ref }}" \
-            --label "build.time=$BUILD_TIME" \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
-          echo "git_sha=${{ github.sha }}" >> $GITHUB_OUTPUT
-          echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
-          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-          echo "Pushed $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          set -euo pipefail
+          python3 scripts/qa/release_image_control.py prepare \
+            --sha "$RELEASE_SHA" \
+            --ref "$RELEASE_REF" \
+            --region "$AWS_REGION" \
+            --repository "$ECR_REPOSITORY" \
+            --source-dir "$PWD" \
+            --output "$RELEASE_EVIDENCE_DIR/image.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      # The exact manifest digest must have a COMPLETE scan and pass the
+      # versioned acceptance policy before any task definition or ECS mutation.
+      - name: Gate exact image vulnerability findings
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/release_image_control.py scan \
+            --image-evidence "$RELEASE_EVIDENCE_DIR/image.json" \
+            --region "$AWS_REGION" \
+            --repository "$ECR_REPOSITORY" \
+            --output "$RELEASE_EVIDENCE_DIR/image-scan.json"
+
+      # ECR BASIC is retained as registry evidence, but it does not provide
+      # complete Python dependency coverage. This second mandatory gate scans
+      # the exact pulled ECR manifest digest and requires both OS and Python
+      # targets before applying the same versioned acceptance policy.
+      - name: Gate exact image OS and Python findings
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_DIGEST: ${{ steps.image.outputs.image_digest }}
+          RELEASE_DIGEST_URI: ${{ steps.image.outputs.digest_uri }}
+        run: |
+          set -euo pipefail
+          RAW_SCAN_DIR="$RUNNER_TEMP/deploy-trivy"
+          mkdir -p "$RAW_SCAN_DIR" "$RUNNER_TEMP/trivy-cache"
+          trap 'rm -f "$RAW_SCAN_DIR/trivy-raw.json"' EXIT
+          if ! docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache/" \
+            -v "$RAW_SCAN_DIR:/scan" \
+            "$TRIVY_IMAGE" image \
+              --scanners vuln \
+              --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+              --format json \
+              --output /scan/trivy-raw.json \
+              "$RELEASE_DIGEST_URI"; then
+            printf '%s\n' \
+              '{"schema_version":"container_scan_failure_v1","ok":false,"error":"Trivy scanner or vulnerability database unavailable"}' \
+              > "$RELEASE_EVIDENCE_DIR/exact-image-trivy-scan.json"
+            exit 1
+          fi
+          if [ ! -s "$RAW_SCAN_DIR/trivy-raw.json" ]; then
+            printf '%s\n' \
+              '{"schema_version":"container_scan_failure_v1","ok":false,"error":"Trivy scan output is missing"}' \
+              > "$RELEASE_EVIDENCE_DIR/exact-image-trivy-scan.json"
+            exit 1
+          fi
+          python3 scripts/qa/release_image_control.py trivy \
+            --input "$RAW_SCAN_DIR/trivy-raw.json" \
+            --sha "$RELEASE_SHA" \
+            --digest "$RELEASE_DIGEST" \
+            --output "$RELEASE_EVIDENCE_DIR/exact-image-trivy-scan.json"
+
+      - name: Render backend task definition from live service revision
+        env:
+          SOURCE_TASK_DEFINITION: ${{ steps.predeploy.outputs.backend_source_task_definition }}
+          RELEASE_IMAGE: ${{ steps.image.outputs.image }}
+          RELEASE_SHA: ${{ github.sha }}
+          BUILD_TIME: ${{ steps.image.outputs.build_time }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_deployment_control.py render-task-definition \
+            --source-task-definition "$SOURCE_TASK_DEFINITION" \
+            --image "$RELEASE_IMAGE" \
+            --sha "$RELEASE_SHA" \
+            --build-time "$BUILD_TIME" \
+            --service-name "$ECS_SERVICE" \
+            --region "$AWS_REGION" \
+            --output "$RUNNER_TEMP/new-backend-task-definition.json"
 
       - name: Register new task definition with SHA-pinned image
         id: register-task-def
-        env:
-          NEW_IMAGE: ${{ steps.build-image.outputs.image }}
-          GIT_SHA: ${{ steps.build-image.outputs.git_sha }}
-          BUILD_TIME: ${{ steps.build-image.outputs.build_time }}
-          IMAGE_TAG: ${{ steps.build-image.outputs.image_tag }}
         run: |
-          echo "Fetching current task definition for family: $ECS_TASK_FAMILY"
-          TASK_DEF=$(aws ecs describe-task-definition \
-            --task-definition $ECS_TASK_FAMILY \
-            --region $AWS_REGION \
-            --query 'taskDefinition' \
-            --output json)
-
-          # Update the container image to the new SHA-tagged image
-          NEW_TASK_DEF=$(echo "$TASK_DEF" | python3 -c "
-          import json, sys
-          td = json.load(sys.stdin)
-          # Update the first container's image
-          container = td['containerDefinitions'][0]
-          container['image'] = '$NEW_IMAGE'
-          env = container.setdefault('environment', [])
-
-          def upsert_env(name, value):
-              for item in env:
-                  if item.get('name') == name:
-                      item['value'] = value
-                      return
-              env.append({'name': name, 'value': value})
-
-          # Phase 7 staging quick win: reject over-10MB document uploads in the browser
-          # before the request body is sent. Defaults remain off in code; staging opts in.
-          upsert_env('FF_SIZE_CAP_CLIENT_REJECT', 'true')
-          # Build provenance must track the image being deployed. ECS task
-          # env values override Dockerfile ENV values, so stale task
-          # definitions can otherwise make /api/version report an old SHA.
-          upsert_env('ENVIRONMENT', 'staging')
-          upsert_env('SERVICE_NAME', 'regmind-backend')
-          upsert_env('GIT_SHA', '$GIT_SHA')
-          upsert_env('BUILD_TIME', '$BUILD_TIME')
-          upsert_env('IMAGE_TAG', '$IMAGE_TAG')
-          # Remove fields that can't be passed to register-task-definition
-          for key in ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes',
-                      'compatibilities', 'registeredAt', 'registeredBy']:
-              td.pop(key, None)
-          json.dump(td, sys.stdout)
-          ")
-
-          echo "$NEW_TASK_DEF" > /tmp/new-task-def.json
-          NEW_ARN=$(aws ecs register-task-definition \
-            --cli-input-json file:///tmp/new-task-def.json \
-            --region $AWS_REGION \
+          set -euo pipefail
+          NEW_ARN="$(aws ecs register-task-definition \
+            --cli-input-json "file://$RUNNER_TEMP/new-backend-task-definition.json" \
+            --region "$AWS_REGION" \
             --query 'taskDefinition.taskDefinitionArn' \
-            --output text)
+            --output text)"
+          if [[ ! "$NEW_ARN" =~ ^arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-staging:[1-9][0-9]*$ ]]; then
+            echo "FAIL: backend task-definition ARN is invalid"
+            exit 1
+          fi
+          echo "task-definition-arn=$NEW_ARN" >> "$GITHUB_OUTPUT"
 
-          echo "task-definition-arn=$NEW_ARN" >> $GITHUB_OUTPUT
-          echo "Registered new task definition: $NEW_ARN"
+      - name: Render worker task definition from live service revision
+        env:
+          SOURCE_TASK_DEFINITION: ${{ steps.predeploy.outputs.worker_source_task_definition }}
+          RELEASE_IMAGE: ${{ steps.image.outputs.image }}
+          RELEASE_SHA: ${{ github.sha }}
+          BUILD_TIME: ${{ steps.image.outputs.build_time }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_deployment_control.py render-task-definition \
+            --source-task-definition "$SOURCE_TASK_DEFINITION" \
+            --image "$RELEASE_IMAGE" \
+            --sha "$RELEASE_SHA" \
+            --build-time "$BUILD_TIME" \
+            --service-name "$ECS_WORKER_SERVICE" \
+            --region "$AWS_REGION" \
+            --output "$RUNNER_TEMP/new-worker-task-definition.json"
 
       - name: Register verification worker task definition with SHA-pinned image
         id: register-worker-task-def
-        env:
-          NEW_IMAGE: ${{ steps.build-image.outputs.image }}
-          GIT_SHA: ${{ steps.build-image.outputs.git_sha }}
-          BUILD_TIME: ${{ steps.build-image.outputs.build_time }}
-          IMAGE_TAG: ${{ steps.build-image.outputs.image_tag }}
         run: |
-          echo "Fetching current worker task definition for family: $ECS_WORKER_TASK_FAMILY"
-          TASK_DEF=$(aws ecs describe-task-definition \
-            --task-definition $ECS_WORKER_TASK_FAMILY \
-            --region $AWS_REGION \
-            --query 'taskDefinition' \
-            --output json)
-          export TASK_DEF
-
-          NEW_TASK_DEF=$(python3 - <<'PY'
-          import json
-          import os
-          import sys
-
-          td = json.loads(os.environ["TASK_DEF"])
-          container = td["containerDefinitions"][0]
-          container["image"] = os.environ["NEW_IMAGE"]
-          container["command"] = container.get("command") or [
-              "python",
-              "verification_worker.py",
-              "--poll-interval",
-              "1",
-          ]
-          env = container.setdefault("environment", [])
-
-          def upsert_env(name, value):
-              for item in env:
-                  if item.get("name") == name:
-                      item["value"] = value
-                      return
-              env.append({"name": name, "value": value})
-
-          # Keep worker provenance aligned with the API image. ECS task
-          # env values override Dockerfile ENV values, so stale task
-          # definitions can otherwise keep reporting and running old SHAs.
-          upsert_env("ENVIRONMENT", "staging")
-          upsert_env("SERVICE_NAME", "regmind-verification-worker")
-          upsert_env("GIT_SHA", os.environ["GIT_SHA"])
-          upsert_env("BUILD_TIME", os.environ["BUILD_TIME"])
-          upsert_env("IMAGE_TAG", os.environ["IMAGE_TAG"])
-          for key in [
-              "taskDefinitionArn",
-              "revision",
-              "status",
-              "requiresAttributes",
-              "compatibilities",
-              "registeredAt",
-              "registeredBy",
-          ]:
-              td.pop(key, None)
-          json.dump(td, sys.stdout)
-          PY
-          )
-
-          echo "$NEW_TASK_DEF" > /tmp/new-worker-task-def.json
-          NEW_WORKER_ARN=$(aws ecs register-task-definition \
-            --cli-input-json file:///tmp/new-worker-task-def.json \
-            --region $AWS_REGION \
+          set -euo pipefail
+          NEW_WORKER_ARN="$(aws ecs register-task-definition \
+            --cli-input-json "file://$RUNNER_TEMP/new-worker-task-definition.json" \
+            --region "$AWS_REGION" \
             --query 'taskDefinition.taskDefinitionArn' \
-            --output text)
-
-          echo "task-definition-arn=$NEW_WORKER_ARN" >> $GITHUB_OUTPUT
-          echo "Registered new worker task definition: $NEW_WORKER_ARN"
+            --output text)"
+          if [[ ! "$NEW_WORKER_ARN" =~ ^arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-verification-worker:[1-9][0-9]*$ ]]; then
+            echo "FAIL: worker task-definition ARN is invalid"
+            exit 1
+          fi
+          echo "task-definition-arn=$NEW_WORKER_ARN" >> "$GITHUB_OUTPUT"
 
       - name: Deploy to ECS (rolling update)
         env:
           TASK_DEF_ARN: ${{ steps.register-task-def.outputs.task-definition-arn }}
         run: |
+          set -euo pipefail
           echo "Deploying task definition: $TASK_DEF_ARN"
           aws ecs update-service \
-            --cluster $ECS_CLUSTER \
-            --service $ECS_SERVICE \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
             --task-definition "$TASK_DEF_ARN" \
             --force-new-deployment \
-            --region $AWS_REGION > /dev/null
+            --region "$AWS_REGION" > /dev/null
 
-          # P12-10 / DCI-025 (fail-closed): a services-stable timeout FAILS the
-          # deploy instead of proceeding on a warning. Two wait attempts give
-          # the backend up to ~20 min to stabilize (rolling drain can exceed a
-          # single 10-min waiter window); after that the deployment state is
-          # dumped and the workflow exits non-zero.
           echo "Waiting for service to stabilize (attempt 1/2, up to 10 min)..."
           if ! aws ecs wait services-stable \
-            --cluster $ECS_CLUSTER \
-            --services $ECS_SERVICE \
-            --region $AWS_REGION; then
+            --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION"; then
             echo "Service not stable yet; waiting (attempt 2/2, up to 10 min)..."
             if ! aws ecs wait services-stable \
-              --cluster $ECS_CLUSTER \
-              --services $ECS_SERVICE \
-              --region $AWS_REGION; then
-              echo "FAIL: ECS service did not stabilize within timeout (P12-10 fail-closed)"
+              --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION"; then
+              echo "FAIL: ECS service did not stabilize; use captured paired rollback evidence"
               aws ecs describe-services \
-                --cluster $ECS_CLUSTER \
-                --services $ECS_SERVICE \
-                --region $AWS_REGION \
+                --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_REGION" \
                 --query 'services[0].{deployments:deployments,events:events[0:10]}' \
                 --output json || true
               exit 1
@@ -246,164 +266,189 @@ jobs:
         env:
           WORKER_TASK_DEF_ARN: ${{ steps.register-worker-task-def.outputs.task-definition-arn }}
         run: |
-          echo "Deploying verification worker task definition: $WORKER_TASK_DEF_ARN"
+          set -euo pipefail
+          echo "Worker task definition: $WORKER_TASK_DEF_ARN"
           aws ecs update-service \
-            --cluster $ECS_CLUSTER \
-            --service $ECS_WORKER_SERVICE \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_WORKER_SERVICE" \
             --task-definition "$WORKER_TASK_DEF_ARN" \
             --force-new-deployment \
-            --region $AWS_REGION > /dev/null
+            --region "$AWS_REGION" > /dev/null
 
-          echo "Waiting for verification worker service to stabilize (up to 10 min)..."
           if ! aws ecs wait services-stable \
-            --cluster $ECS_CLUSTER \
-            --services $ECS_WORKER_SERVICE \
-            --region $AWS_REGION; then
-            echo "FAIL: verification worker service did not stabilize within timeout"
+            --cluster "$ECS_CLUSTER" --services "$ECS_WORKER_SERVICE" --region "$AWS_REGION"; then
+            echo "FAIL: verification worker did not stabilize; use captured paired rollback evidence"
             aws ecs describe-services \
-              --cluster $ECS_CLUSTER \
-              --services $ECS_WORKER_SERVICE \
-              --region $AWS_REGION \
-              --query 'services[0].deployments' \
+              --cluster "$ECS_CLUSTER" --services "$ECS_WORKER_SERVICE" --region "$AWS_REGION" \
+              --query 'services[0].{deployments:deployments,events:events[0:10]}' \
               --output json || true
             exit 1
           fi
 
-      # ops-enforce-staging-sha-alignment-gate (code half): before any validation
-      # counts, PROVE staging is actually running the SHA we just built. Each
-      # service must now point at the exact task definition we registered for
-      # this commit, and that task definition's image tag + GIT_SHA/IMAGE_TAG env
-      # (the values /api/version reports) must equal github.sha. Fails the deploy
-      # run on any drift, so a stale-SHA staging can never be signed off as valid.
+      # ops-enforce-staging-sha-alignment-gate: the helper checks both task
+      # definitions, provenance env, every running task's imageDigest, desired /
+      # running / pending counts, rollout state, and all ALB targets.
       - name: Enforce staging SHA alignment
         env:
-          EXPECTED_SHA: ${{ github.sha }}
-          EXPECTED_BACKEND_TD_ARN: ${{ steps.register-task-def.outputs.task-definition-arn }}
-          EXPECTED_WORKER_TD_ARN: ${{ steps.register-worker-task-def.outputs.task-definition-arn }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_DIGEST: ${{ steps.image.outputs.image_digest }}
+          BACKEND_TASK_DEFINITION: ${{ steps.register-task-def.outputs.task-definition-arn }}
+          WORKER_TASK_DEFINITION: ${{ steps.register-worker-task-def.outputs.task-definition-arn }}
         run: |
           set -euo pipefail
-          fail=0
+          python3 scripts/qa/staging_deployment_control.py verify-runtime \
+            --sha "$RELEASE_SHA" \
+            --digest "$RELEASE_DIGEST" \
+            --backend-task-definition "$BACKEND_TASK_DEFINITION" \
+            --worker-task-definition "$WORKER_TASK_DEFINITION" \
+            --region "$AWS_REGION" \
+            --cluster "$ECS_CLUSTER" \
+            --output "$RELEASE_EVIDENCE_DIR/runtime.json"
 
-          assert_service_sha() {
-            local svc="$1" expected_td_arn="$2"
-            echo "── Checking $svc ──"
-            local live_td_arn
-            live_td_arn=$(aws ecs describe-services \
-              --cluster "$ECS_CLUSTER" --services "$svc" --region "$AWS_REGION" \
-              --query 'services[0].taskDefinition' --output text)
-            if [ "$live_td_arn" != "$expected_td_arn" ]; then
-              echo "FAIL: $svc is running task def '$live_td_arn', expected '$expected_td_arn'"
-              fail=1
-              return
-            fi
-            local container_json
-            container_json=$(aws ecs describe-task-definition \
-              --task-definition "$live_td_arn" --region "$AWS_REGION" \
-              --query 'taskDefinition.containerDefinitions[0]' --output json)
-            EXPECTED_SHA="$EXPECTED_SHA" SVC="$svc" python3 - "$container_json" <<'PY'
-          import json, os, sys
-          expected = os.environ["EXPECTED_SHA"]
-          svc = os.environ["SVC"]
-          c = json.loads(sys.argv[1])
-          env = {e["name"]: e.get("value") for e in c.get("environment", [])}
-          image = c.get("image", "")
-          image_tag = image.rsplit(":", 1)[-1] if ":" in image else ""
-          problems = []
-          if image_tag != expected:
-              problems.append(f"image tag '{image_tag}' != '{expected}'")
-          if env.get("GIT_SHA") != expected:
-              problems.append(f"GIT_SHA env '{env.get('GIT_SHA')}' != '{expected}'")
-          if env.get("IMAGE_TAG") != expected:
-              problems.append(f"IMAGE_TAG env '{env.get('IMAGE_TAG')}' != '{expected}'")
-          if problems:
-              print(f"FAIL: {svc}: " + "; ".join(problems))
-              sys.exit(1)
-          print(f"OK: {svc} aligned to {expected} (image tag + GIT_SHA + IMAGE_TAG)")
-          PY
-            if [ "$?" -ne 0 ]; then fail=1; fi
-          }
-
-          assert_service_sha "$ECS_SERVICE" "$EXPECTED_BACKEND_TD_ARN"
-          assert_service_sha "$ECS_WORKER_SERVICE" "$EXPECTED_WORKER_TD_ARN"
-
-          if [ "$fail" -ne 0 ]; then
-            echo "Staging SHA alignment gate FAILED — staging is not running $EXPECTED_SHA."
-            exit 1
-          fi
-          echo "Staging SHA alignment gate PASSED — backend + worker both running $EXPECTED_SHA."
-
-      # Optional runtime confirmation: if a staging bearer token is configured,
-      # also assert the LIVE /api/version reports the SHA (runtime truth, not just
-      # the registered task def). Skips cleanly when the secret is absent so this
-      # code half can ship before ops provisions STAGING_VERSION_BEARER_TOKEN.
-      - name: Confirm runtime /api/version SHA (optional)
+      # Mint and consume one short-lived token in this single step. The JWT
+      # signing secret is fetched through the existing staging AWS credentials,
+      # the token is masked, is never a CLI argument or cross-step value, and is
+      # absent from every uploaded artifact.
+      - name: Collect mandatory authenticated staging release evidence
         env:
-          EXPECTED_SHA: ${{ github.sha }}
-          STAGING_VERSION_BEARER_TOKEN: ${{ secrets.STAGING_VERSION_BEARER_TOKEN }}
+          SECRET_ID: regmind/staging
+          RELEASE_SHA: ${{ github.sha }}
         run: |
-          set -uo pipefail
-          if [ -z "${STAGING_VERSION_BEARER_TOKEN:-}" ]; then
-            echo "STAGING_VERSION_BEARER_TOKEN not configured — skipping runtime /api/version check."
-            echo "(Task-definition SHA gate above already enforced the deployed artifact.)"
-            exit 0
-          fi
-          for i in $(seq 1 12); do
-            BODY=$(curl -sf -H "Authorization: Bearer $STAGING_VERSION_BEARER_TOKEN" \
-              https://staging.regmind.co/api/version 2>/dev/null || true)
-            RUNTIME_SHA=$(printf '%s' "$BODY" | python3 -c "import json,sys; print(json.load(sys.stdin).get('git_sha',''))" 2>/dev/null || true)
-            if [ "$RUNTIME_SHA" = "$EXPECTED_SHA" ]; then
-              echo "Runtime /api/version git_sha == $EXPECTED_SHA — confirmed."
-              exit 0
-            fi
-            echo "Attempt $i: runtime git_sha='$RUNTIME_SHA' (want '$EXPECTED_SHA') — retrying in 10s..."
-            sleep 10
-          done
-          echo "FAIL: runtime /api/version never reported $EXPECTED_SHA."
-          exit 1
+          set -euo pipefail
+          SECRET_JSON="$(aws secretsmanager get-secret-value \
+            --secret-id "$SECRET_ID" \
+            --region "$AWS_REGION" \
+            --query SecretString \
+            --output text)"
+          SMOKE_TOKEN="$(
+            SECRET_JSON="$SECRET_JSON" python3 - <<'PY'
+          import base64
+          import hashlib
+          import hmac
+          import json
+          import os
+          import time
+          import uuid
 
-      - name: Verify deployment health
-        run: |
-          echo "Waiting for public liveness check..."
-          for i in $(seq 1 30); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://staging.regmind.co/api/liveness 2>/dev/null)
-            if [ "$STATUS" = "200" ]; then
-              echo "Liveness check PASSED after ${i}0s"
-              LIVENESS=$(curl -sf https://staging.regmind.co/api/liveness)
-              echo "Response: $LIVENESS"
-              break
-            fi
-            echo "Attempt $i: HTTP $STATUS — retrying in 10s..."
-            sleep 10
-            if [ "$i" -eq 30 ]; then
-              echo "FAIL: Liveness check did not pass within 5 minutes"
-              # Show health endpoint for diagnostics
-              curl -sf https://staging.regmind.co/api/health 2>/dev/null || true
-              exit 1
-            fi
-          done
+          def b64url(value):
+              return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
-          # Also check liveness
-          HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://staging.regmind.co/api/health 2>/dev/null)
-          echo "Health endpoint: HTTP $HEALTH_STATUS"
+          secret = json.loads(os.environ["SECRET_JSON"])["JWT_SECRET"].encode("utf-8")
+          now = int(time.time())
+          header = {"alg": "HS256", "typ": "JWT"}
+          payload = {
+              "sub": "github-actions:day6-staging-smoke",
+              "role": "sco",
+              "name": "GitHub Staging Release Evidence",
+              "type": "officer",
+              "jti": uuid.uuid4().hex,
+              "iss": "arie-finance",
+              "iat": now,
+              "nbf": now,
+              "exp": now + 900,
+          }
+          signing_input = (
+              f"{b64url(json.dumps(header, separators=(',', ':')).encode())}."
+              f"{b64url(json.dumps(payload, separators=(',', ':')).encode())}"
+          )
+          signature = hmac.new(
+              secret, signing_input.encode("ascii"), hashlib.sha256
+          ).digest()
+          print(f"{signing_input}.{b64url(signature)}")
+          PY
+          )"
+          echo "::add-mask::$SMOKE_TOKEN"
+          BACKOFFICE_TOKEN="$SMOKE_TOKEN" \
+            python3 scripts/qa/staging_release_evidence.py \
+              --api-base https://staging.regmind.co/api \
+              --token-env BACKOFFICE_TOKEN \
+              --expected-sha "$RELEASE_SHA" \
+              --expected-environment staging \
+              --evidence-dir "$RELEASE_EVIDENCE_DIR/authenticated" \
+              --strict
+          unset SMOKE_TOKEN SECRET_JSON
 
       - name: Verify portal and backoffice
         run: |
-          PORTAL=$(curl -sf -o /dev/null -w "%{http_code}" https://staging.regmind.co/portal)
-          BACKOFFICE=$(curl -sf -o /dev/null -w "%{http_code}" https://staging.regmind.co/backoffice)
-          echo "Portal: HTTP $PORTAL"
-          echo "Backoffice: HTTP $BACKOFFICE"
+          set -euo pipefail
+          PORTAL="$(curl -sf -o /dev/null -w "%{http_code}" https://staging.regmind.co/portal)"
+          BACKOFFICE="$(curl -sf -o /dev/null -w "%{http_code}" https://staging.regmind.co/backoffice)"
           if [ "$PORTAL" != "200" ] || [ "$BACKOFFICE" != "200" ]; then
-            echo "FAIL: Portal or backoffice not returning 200"
+            echo "FAIL: portal or backoffice did not return HTTP 200"
             exit 1
           fi
-          echo "All endpoints verified"
+
+      - name: Collect mandatory CloudWatch error review
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_deployment_control.py collect-cloudwatch \
+            --predeploy-evidence "$RELEASE_EVIDENCE_DIR/predeploy.json" \
+            --log-group /ecs/regmind-staging \
+            --region "$AWS_REGION" \
+            --output "$RELEASE_EVIDENCE_DIR/cloudwatch.json"
+
+      - name: Finalize mandatory release evidence
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          WORKFLOW_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_deployment_control.py finalize \
+            --sha "$RELEASE_SHA" \
+            --image-evidence "$RELEASE_EVIDENCE_DIR/image.json" \
+            --scan-evidence "$RELEASE_EVIDENCE_DIR/image-scan.json" \
+            --trivy-scan-evidence "$RELEASE_EVIDENCE_DIR/exact-image-trivy-scan.json" \
+            --predeploy-evidence "$RELEASE_EVIDENCE_DIR/predeploy.json" \
+            --runtime-evidence "$RELEASE_EVIDENCE_DIR/runtime.json" \
+            --authenticated-evidence "$RELEASE_EVIDENCE_DIR/authenticated/summary.json" \
+            --cloudwatch-evidence "$RELEASE_EVIDENCE_DIR/cloudwatch.json" \
+            --workflow-run-url "https://github.com/$WORKFLOW_REPOSITORY/actions/runs/$WORKFLOW_RUN_ID" \
+            --workflow-run-id "$WORKFLOW_RUN_ID" \
+            --workflow-run-attempt "$WORKFLOW_RUN_ATTEMPT" \
+            --actor "$WORKFLOW_ACTOR" \
+            --output "$RELEASE_EVIDENCE_DIR/release-evidence.json"
+          printf '%s\n' '{"schema_version":"staging_release_evidence_v1","ok":true,"status":"complete"}' \
+            > "$RELEASE_EVIDENCE_DIR/workflow-status.json"
+
+      - name: Upload sanitized release evidence
+        id: upload-release-evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: staging-release-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-evidence/
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Deployment summary
         if: always()
+        env:
+          EVIDENCE_UPLOAD_OUTCOME: ${{ steps.upload-release-evidence.outcome }}
+          RELEASE_SHA: ${{ github.sha }}
+          WORKFLOW_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          RELEASE_IMAGE: ${{ steps.image.outputs.image }}
+          RELEASE_DIGEST: ${{ steps.image.outputs.image_digest }}
+          IMAGE_ACTION: ${{ steps.image.outputs.image_action }}
+          BACKEND_TASK_DEFINITION: ${{ steps.register-task-def.outputs.task-definition-arn }}
+          WORKER_TASK_DEFINITION: ${{ steps.register-worker-task-def.outputs.task-definition-arn }}
         run: |
-          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image:** ${{ steps.build-image.outputs.image }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Task Definition:** ${{ steps.register-task-def.outputs.task-definition-arn }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Worker Task Definition:** ${{ steps.register-worker-task-def.outputs.task-definition-arn }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Staging deployment"
+            echo "- **Commit:** $RELEASE_SHA"
+            echo "- **Workflow:** https://github.com/$WORKFLOW_REPOSITORY/actions/runs/$WORKFLOW_RUN_ID"
+            echo "- **Image:** $RELEASE_IMAGE"
+            echo "- **Image digest:** $RELEASE_DIGEST"
+            echo "- **Image action:** $IMAGE_ACTION"
+            echo "- **Backend task definition:** $BACKEND_TASK_DEFINITION"
+            echo "- **Worker task definition:** $WORKER_TASK_DEFINITION"
+            if [ -f "$RELEASE_EVIDENCE_DIR/release-evidence.json" ] \
+              && [ "$EVIDENCE_UPLOAD_OUTCOME" = "success" ]; then
+              echo "- **Mandatory release evidence:** complete"
+            else
+              echo "- **Mandatory release evidence:** incomplete — deployment is not releasable"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

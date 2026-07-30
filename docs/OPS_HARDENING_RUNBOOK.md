@@ -13,37 +13,53 @@ Logs admin), and the RDS master-user DSN for `regmind-staging-db`.
 
 ## 1. P9-12 — ECR immutable image tags
 
-The deploy workflow already pushes one unique tag per commit
-(`$ECR_REGISTRY/regmind-backend:<github.sha>`, no `:latest`), so immutability
-is compatible with normal deploys as-is.
+The staging release path uses one full Git SHA tag per commit and never uses a
+mutable convenience tag as release evidence. The workflow now refuses to build,
+push, register a task definition, or update ECS unless the repository reports
+exactly `IMMUTABLE` with scan-on-push enabled.
 
-**Flip (staging ECR):**
-
-```bash
-aws ecr put-image-tag-mutability \
-  --repository-name regmind-backend \
-  --image-tag-mutability IMMUTABLE \
-  --region af-south-1
-
-# verify
-aws ecr describe-repositories --repository-names regmind-backend \
-  --region af-south-1 --query 'repositories[0].imageTagMutability'
-# expect: "IMMUTABLE"
-```
-
-**Known operational caveat — workflow RE-RUNS:** Docker builds are not
-byte-reproducible, so re-running the deploy workflow for the *same commit*
-produces a different manifest under the same `<sha>` tag and the push will be
-rejected (`ImageTagAlreadyExistsException`). Two sanctioned outs:
+Use the pinned, dry-run-first operator control. It verifies the AWS account,
+region, repository identity, and current state before proposing a change:
 
 ```bash
-# preferred: delete the stale tag, then re-run the workflow
-aws ecr batch-delete-image --repository-name regmind-backend \
-  --image-ids imageTag=<sha> --region af-south-1
-# or: land an empty commit so the re-deploy gets a fresh sha
+cd arie-backend
+python3 scripts/ops/enforce_ecr_immutability.py
+
+# After reviewing the exact dry-run:
+python3 scripts/ops/enforce_ecr_immutability.py \
+  --apply \
+  --confirm SET-regmind-backend-IMMUTABLE
 ```
 
-Rollback of the setting itself: rerun with `--image-tag-mutability MUTABLE`.
+Re-running the tool after activation is a verified no-op. It deliberately has
+no `MUTABLE` or rollback option: weakening this control is a security incident,
+not a normal deployment recovery action.
+Internally, the only mutating AWS operation is the exact scoped
+`aws ecr put-image-tag-mutability --image-tag-mutability IMMUTABLE` call,
+followed by a fresh postcondition read.
+
+**Workflow reruns:** an immutable repository returns
+`ImageTagAlreadyExistsException` for any attempt to push an existing SHA tag.
+The workflow therefore checks first:
+
+1. If the full-SHA tag is absent, build and push it once.
+2. If it exists, resolve its digest, pull by digest, and require its `git.sha`,
+   `git.ref`, `GIT_SHA`, `IMAGE_TAG`, OS, and architecture provenance to match.
+3. If provenance differs, stop. Never delete, overwrite, or retag the SHA.
+
+The historical `latest` alias is not release evidence and must never be moved.
+Removing a historical alias is a separately reviewed registry-cleanup action;
+it is not part of a deploy or rerun.
+
+Every release also gates both the ECR registry scan and a pinned Trivy scan of
+the exact digest before ECS mutation. Trivy must report OS-package coverage and
+Python-package coverage (`python-pkg` in the pinned 0.72.0 schema; legacy
+supported reports may use `pip`). This deployment-local gate is mandatory even
+when the separate pull-request scan succeeded. CRITICAL findings are never
+accepted. A HIGH finding requires an exact package/version match in the
+versioned acceptance manifest, a named owner, technical and reachability
+analysis, compensating controls, explicit approval, and a future expiry date.
+The current manifest is intentionally empty.
 
 ---
 
