@@ -391,15 +391,16 @@ class TestDeployWorkflowDeterminism:
         with open(workflow_path, encoding="utf-8") as f:
             content = f.read()
         assert "github.sha" in content, "Workflow must use github.sha for deterministic tagging"
-        assert "IMAGE_TAG" in content
-        assert '--build-arg "GIT_SHA=${{ github.sha }}"' in content
-        assert '--build-arg "BUILD_TIME=$BUILD_TIME"' in content
-        assert '--build-arg "IMAGE_TAG=$IMAGE_TAG"' in content
+        assert "release_image_control.py prepare" in content
+        assert '--sha "$RELEASE_SHA"' in content
+        assert '--ref "$RELEASE_REF"' in content
+        assert content.count("staging_deployment_control.py render-task-definition") == 2
+        assert content.count('--image "${{ steps.image.outputs.image }}"') == 2
+        assert content.count('--build-time "${{ steps.image.outputs.build_time }}"') == 2
         assert ":latest" not in content
-        assert "/api/liveness" in content
-        assert "/api/readiness" not in content
-        assert "upsert_env('FF_SIZE_CAP_CLIENT_REJECT', 'true')" in content
-        assert "Phase 7 staging quick win" in content
+        assert "staging_deployment_control.py verify-runtime" in content
+        assert "staging_release_evidence.py" in content
+        assert "--expected-environment staging" in content
 
     def test_ci_docker_build_verifies_build_metadata_env(self):
         """ci.yml must prove build provenance env vars are baked into the image."""

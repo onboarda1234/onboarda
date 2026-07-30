@@ -57,15 +57,12 @@ def test_deploy_staging_pins_runtime_version_environment():
     text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
     for expected in (
-        "upsert_env('ENVIRONMENT', 'staging')",
-        "upsert_env('SERVICE_NAME', 'regmind-backend')",
-        "upsert_env('GIT_SHA', '$GIT_SHA')",
-        "upsert_env('BUILD_TIME', '$BUILD_TIME')",
-        "upsert_env('IMAGE_TAG', '$IMAGE_TAG')",
-        'upsert_env("ENVIRONMENT", "staging")',
-        'upsert_env("SERVICE_NAME", "regmind-verification-worker")',
-        'upsert_env("GIT_SHA", os.environ["GIT_SHA"])',
-        'upsert_env("BUILD_TIME", os.environ["BUILD_TIME"])',
-        'upsert_env("IMAGE_TAG", os.environ["IMAGE_TAG"])',
+        "--source-task-definition",
+        "--image",
+        "--sha",
+        "--build-time",
+        "--service-name \"$ECS_SERVICE\"",
+        "--service-name \"$ECS_WORKER_SERVICE\"",
+        "staging_deployment_control.py render-task-definition",
     ):
         assert expected in text

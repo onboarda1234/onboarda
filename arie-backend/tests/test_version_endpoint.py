@@ -30,12 +30,21 @@ def test_deploy_staging_refreshes_runtime_version_environment():
     workflow = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "deploy-staging.yml"
     text = workflow.read_text()
 
-    assert "echo \"git_sha=${{ github.sha }}\"" in text
-    assert "echo \"build_time=$BUILD_TIME\"" in text
-    assert "echo \"image_tag=$IMAGE_TAG\"" in text
-    assert "upsert_env('GIT_SHA', '$GIT_SHA')" in text
-    assert "upsert_env('BUILD_TIME', '$BUILD_TIME')" in text
-    assert "upsert_env('IMAGE_TAG', '$IMAGE_TAG')" in text
+    # Both live task definitions are rendered by the one reviewed helper. The
+    # helper's focused tests verify its authoritative ENVIRONMENT, SERVICE_NAME,
+    # GIT_SHA, BUILD_TIME, and IMAGE_TAG upserts.
+    render_helper = "python3 scripts/qa/staging_deployment_control.py render-task-definition \\"
+    render_calls = [
+        section.split("--output", 1)[0]
+        for section in text.split(render_helper)[1:]
+    ]
+    assert len(render_calls) == 2
+    for render_call in render_calls:
+        assert '--image "${{ steps.image.outputs.image }}"' in render_call
+        assert '--sha "${{ github.sha }}"' in render_call
+        assert '--build-time "${{ steps.image.outputs.build_time }}"' in render_call
+    assert '--service-name "$ECS_SERVICE"' in render_calls[0]
+    assert '--service-name "$ECS_WORKER_SERVICE"' in render_calls[1]
 
 
 def _find_free_port():
@@ -145,6 +154,25 @@ class TestVersionEndpoint:
         assert body["git_sha_short"] == sha[:7]
         assert body["build_time"] == "2026-05-03T00:00:00Z"
         assert body["image_tag"] == sha
+
+    def test_version_missing_image_tag_does_not_fallback_to_git_sha(self, api_server, monkeypatch):
+        """A missing IMAGE_TAG must stay unknown so release verification fails closed."""
+        sha = "abc1234deadbeef5678"
+        monkeypatch.setenv("GIT_SHA", sha)
+        monkeypatch.delenv("IMAGE_TAG", raising=False)
+
+        from auth import create_token
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/version",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["git_sha"] == sha
+        assert body["image_tag"] == "unknown"
 
     def test_version_service_name(self, api_server):
         """service field must always be 'regmind-backend'."""

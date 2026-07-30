@@ -108,12 +108,14 @@ def test_deploy_workflow_updates_verification_worker_with_same_sha_pinned_image(
     source = workflow.read_text(encoding="utf-8")
 
     assert "ECS_WORKER_SERVICE: regmind-verification-worker" in source
-    assert "ECS_WORKER_TASK_FAMILY: regmind-verification-worker" in source
+    assert "worker_source_task_definition" in source
     assert "Register verification worker task definition with SHA-pinned image" in source
     assert "Deploy verification worker to ECS (rolling update)" in source
-    assert 'upsert_env("GIT_SHA", os.environ["GIT_SHA"])' in source
-    assert 'upsert_env("IMAGE_TAG", os.environ["IMAGE_TAG"])' in source
-    assert "--service $ECS_WORKER_SERVICE" in source
+    assert "staging_deployment_control.py render-task-definition" in source
+    assert '--service-name "$ECS_WORKER_SERVICE"' in source
+    assert '--image "${{ steps.image.outputs.image }}"' in source
+    assert '--sha "${{ github.sha }}"' in source
+    assert '--service "$ECS_WORKER_SERVICE"' in source
     assert "steps.register-worker-task-def.outputs.task-definition-arn" in source
 
 

@@ -16092,7 +16092,7 @@ def get_provider_status_summary():
 
 def get_build_metadata():
     git_sha = _runtime_env_value("GIT_SHA")
-    image_tag = _runtime_env_value("IMAGE_TAG", fallback=git_sha if git_sha != _UNKNOWN_RUNTIME_VALUE else _UNKNOWN_RUNTIME_VALUE)
+    image_tag = _runtime_env_value("IMAGE_TAG")
     return {
         "git_sha": git_sha,
         "git_sha_short": _git_sha_short(git_sha),

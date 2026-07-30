@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -35,6 +36,17 @@ import day5_closing_smoke  # noqa: E402
 
 class EvidenceFailure(AssertionError):
     """Raised when required release evidence cannot be collected."""
+
+
+VERSION_EVIDENCE_FIELDS = (
+    "git_sha",
+    "git_sha_short",
+    "image_tag",
+    "build_time",
+    "environment",
+    "service",
+)
+_FULL_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 
 def _api_url(api_base: str, path: str) -> str:
@@ -59,8 +71,10 @@ def _request_json(api_base: str, path: str, *, token: str | None = None) -> dict
             status = resp.status
             body = resp.read()
     except urllib.error.HTTPError as exc:
-        body = exc.read()
-        raise EvidenceFailure(f"{path} returned HTTP {exc.code}: {body[:300]!r}") from exc
+        # Do not copy authenticated response bodies into CI output. A proxy or
+        # future endpoint regression must not be able to reflect credentials or
+        # other sensitive material into release logs.
+        raise EvidenceFailure(f"{path} returned HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
         raise EvidenceFailure(f"{path} failed: {exc}") from exc
 
@@ -87,7 +101,22 @@ def _sha_matches(value: Any, expected_sha: str) -> bool:
     if not expected_sha:
         return True
     value_text = str(value or "").strip()
-    return value_text == expected_sha or value_text.startswith(expected_sha)
+    return value_text == expected_sha
+
+
+def _validate_strict_expectations(args: argparse.Namespace) -> None:
+    if not args.strict:
+        return
+    expected_sha = str(args.expected_sha or "").strip()
+    if not _FULL_GIT_SHA_RE.fullmatch(expected_sha):
+        raise EvidenceFailure("--expected-sha must be a full 40-character lowercase hexadecimal Git SHA in strict mode")
+    if not str(args.expected_environment or "").strip():
+        raise EvidenceFailure("--expected-environment is required in strict mode")
+
+
+def _safe_version_evidence(version: dict[str, Any]) -> dict[str, Any]:
+    """Return only the release metadata approved for persisted CI evidence."""
+    return {key: version.get(key) for key in VERSION_EVIDENCE_FIELDS}
 
 
 def _token_from_env(token_env: str) -> str:
@@ -114,13 +143,16 @@ def _run_api_smoke(args: argparse.Namespace, token: str) -> dict[str, Any]:
 
 
 def collect_release_evidence(args: argparse.Namespace) -> dict[str, Any]:
+    _validate_strict_expectations(args)
     evidence_dir = Path(args.evidence_dir).expanduser().resolve()
     token = _token_from_env(args.token_env)
+    expected_environment = str(args.expected_environment or "").strip()
     summary: dict[str, Any] = {
         "ok": True,
         "api_base": args.api_base,
         "evidence_dir": str(evidence_dir),
         "expected_sha": args.expected_sha,
+        "expected_environment": expected_environment,
         "files": {},
     }
 
@@ -131,16 +163,28 @@ def collect_release_evidence(args: argparse.Namespace) -> dict[str, Any]:
     summary["files"]["liveness"] = _write_json(evidence_dir, "liveness.json", liveness)
 
     version = _request_json(args.api_base, "/version", token=token)
-    summary["files"]["version"] = _write_json(evidence_dir, "version.json", version)
+    safe_version = _safe_version_evidence(version)
+    summary["files"]["version"] = _write_json(evidence_dir, "version.json", safe_version)
     summary["version"] = {
-        "git_sha": version.get("git_sha"),
-        "image_tag": version.get("image_tag"),
-        "git_sha_matches_expected": _sha_matches(version.get("git_sha"), args.expected_sha),
-        "image_tag_matches_expected": _sha_matches(version.get("image_tag"), args.expected_sha),
+        "git_sha": safe_version.get("git_sha"),
+        "image_tag": safe_version.get("image_tag"),
+        "environment": safe_version.get("environment"),
+        "git_sha_matches_expected": _sha_matches(safe_version.get("git_sha"), args.expected_sha),
+        "image_tag_matches_expected": _sha_matches(safe_version.get("image_tag"), args.expected_sha),
+        "environment_matches_expected": (
+            not expected_environment
+            or str(safe_version.get("environment") or "").strip() == expected_environment
+        ),
     }
-    if args.expected_sha and not (
-        summary["version"]["git_sha_matches_expected"]
-        and summary["version"]["image_tag_matches_expected"]
+    if (
+        (
+            args.expected_sha
+            and not (
+                summary["version"]["git_sha_matches_expected"]
+                and summary["version"]["image_tag_matches_expected"]
+            )
+        )
+        or not summary["version"]["environment_matches_expected"]
     ):
         summary["ok"] = False
 
@@ -190,6 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--token-env", default="BACKOFFICE_TOKEN")
     parser.add_argument("--evidence-dir", required=True)
     parser.add_argument("--expected-sha", default="")
+    parser.add_argument("--expected-environment", default="")
     parser.add_argument("--region", default="af-south-1")
     parser.add_argument("--cluster", default="regmind-staging")
     parser.add_argument("--backend-service", default="regmind-backend")
