@@ -139,12 +139,12 @@ class TestPartB_AdvisoryLabeling:
         assert 'AI Agent Pipeline Results' not in supervisor_region, \
             "AI Agent Pipeline Results should not appear operational in pilot"
 
-    def test_supervisor_tab_renamed_to_ai_compliance_supervisor(self, backoffice_html):
+    def test_supervisor_tab_renamed_to_ai_supervisor(self, backoffice_html):
         detail_nav_start = backoffice_html.index('id="tab-overview"')
         detail_nav_end = backoffice_html.index('id="detail-tab-overview"', detail_nav_start)
         detail_nav = backoffice_html[detail_nav_start:detail_nav_end]
 
-        assert 'AI Compliance Supervisor' in detail_nav
+        assert 'AI Supervisor' in detail_nav
 
     def test_ai_governance_evidence_trail_is_collapsible(self, backoffice_html):
         supervisor_region = _extract_detail_tab_region(backoffice_html, 'supervisor', 'lifecycle')
