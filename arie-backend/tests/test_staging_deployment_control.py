@@ -188,6 +188,15 @@ def _aws_runtime(
                     {"TargetHealth": {"State": state}} for state in states
                 ]
             }
+        if operation == ["elbv2", "describe-target-group-attributes"]:
+            return {
+                "Attributes": [
+                    {
+                        "Key": "deregistration_delay.timeout_seconds",
+                        "Value": "300",
+                    }
+                ]
+            }
         raise AssertionError(arguments)
 
     return aws_json
@@ -253,6 +262,219 @@ def test_verify_runtime_proves_digest_counts_and_alb_health():
         assert all(task["image_digest"] == DIGEST for task in service["tasks"])
 
 
+def test_verify_runtime_retries_only_transient_ecs_convergence():
+    stable_aws = _aws_runtime(deployed=True)
+    describe_service_calls = 0
+    sleeps = []
+
+    def eventual_runtime(arguments):
+        nonlocal describe_service_calls
+        payload = stable_aws(arguments)
+        if arguments[:2] == ["ecs", "describe-services"]:
+            describe_service_calls += 1
+            if describe_service_calls == 1:
+                payload["services"][1]["deployments"][0][
+                    "rolloutState"
+                ] = "IN_PROGRESS"
+                payload["services"][1]["deployments"].append(
+                    {
+                        "status": "ACTIVE",
+                        "rolloutState": "COMPLETED",
+                        "taskDefinition": WORKER_TD,
+                    }
+                )
+        return payload
+
+    result = control.verify_runtime(
+        sha=SHA,
+        digest=DIGEST,
+        backend_task_definition=NEW_BACKEND_TD,
+        worker_task_definition=NEW_WORKER_TD,
+        aws_json=eventual_runtime,
+        attempts=2,
+        interval_seconds=3,
+        sleeper=sleeps.append,
+    )
+
+    assert result["ok"] is True
+    assert describe_service_calls == 3
+    assert sleeps == [3]
+
+
+def test_verify_runtime_retries_transient_alb_convergence():
+    stable_aws = _aws_runtime(deployed=True)
+    target_health_calls = 0
+    sleeps = []
+
+    def eventual_target_health(arguments):
+        nonlocal target_health_calls
+        payload = stable_aws(arguments)
+        if arguments[:2] == ["elbv2", "describe-target-health"]:
+            target_health_calls += 1
+            if target_health_calls == 1:
+                payload["TargetHealthDescriptions"].append(
+                    {"TargetHealth": {"State": "draining"}}
+                )
+        return payload
+
+    result = control.verify_runtime(
+        sha=SHA,
+        digest=DIGEST,
+        backend_task_definition=NEW_BACKEND_TD,
+        worker_task_definition=NEW_WORKER_TD,
+        aws_json=eventual_target_health,
+        attempts=2,
+        interval_seconds=3,
+        sleeper=sleeps.append,
+    )
+
+    assert result["ok"] is True
+    assert target_health_calls == 3
+    assert sleeps == [3]
+
+
+def test_verify_runtime_default_alb_budget_outlasts_300_second_drain():
+    stable_aws = _aws_runtime(deployed=True)
+    target_health_calls = 0
+    sleeps = []
+
+    def boundary_target_health(arguments):
+        nonlocal target_health_calls
+        payload = stable_aws(arguments)
+        if arguments[:2] == ["elbv2", "describe-target-health"]:
+            target_health_calls += 1
+            if target_health_calls <= 31:
+                payload["TargetHealthDescriptions"].append(
+                    {"TargetHealth": {"State": "draining"}}
+                )
+        return payload
+
+    result = control.verify_runtime(
+        sha=SHA,
+        digest=DIGEST,
+        backend_task_definition=NEW_BACKEND_TD,
+        worker_task_definition=NEW_WORKER_TD,
+        aws_json=boundary_target_health,
+        interval_seconds=10,
+        sleeper=sleeps.append,
+    )
+
+    assert result["ok"] is True
+    assert result["alb"]["deregistration_delay_seconds"] == 300
+    assert result["alb"]["verification_attempt_budget"] == 37
+    assert target_health_calls == 33
+    assert sleeps == [10] * 31
+
+
+def test_verify_runtime_fails_immediately_on_failed_rollout():
+    stable_aws = _aws_runtime(deployed=True)
+    sleeps = []
+
+    def failed_runtime(arguments):
+        payload = stable_aws(arguments)
+        if arguments[:2] == ["ecs", "describe-services"]:
+            payload["services"][1]["deployments"][0]["rolloutState"] = "FAILED"
+        return payload
+
+    with pytest.raises(control.StagingControlError, match="rollout FAILED"):
+        control.verify_runtime(
+            sha=SHA,
+            digest=DIGEST,
+            backend_task_definition=NEW_BACKEND_TD,
+            worker_task_definition=NEW_WORKER_TD,
+            aws_json=failed_runtime,
+            attempts=2,
+            interval_seconds=3,
+            sleeper=sleeps.append,
+        )
+
+    assert sleeps == []
+
+
+def test_verify_runtime_fails_after_persistent_ecs_nonconvergence():
+    stable_aws = _aws_runtime(deployed=True)
+    sleeps = []
+
+    def pending_runtime(arguments):
+        payload = stable_aws(arguments)
+        if arguments[:2] == ["ecs", "describe-services"]:
+            payload["services"][1]["deployments"][0][
+                "rolloutState"
+            ] = "IN_PROGRESS"
+        return payload
+
+    with pytest.raises(control.StagingControlError, match="did not converge"):
+        control.verify_runtime(
+            sha=SHA,
+            digest=DIGEST,
+            backend_task_definition=NEW_BACKEND_TD,
+            worker_task_definition=NEW_WORKER_TD,
+            aws_json=pending_runtime,
+            attempts=2,
+            interval_seconds=3,
+            sleeper=sleeps.append,
+        )
+
+    assert sleeps == [3]
+
+
+def test_verify_runtime_fails_after_persistent_alb_nonconvergence():
+    stable_aws = _aws_runtime(deployed=True)
+    sleeps = []
+
+    def draining_target(arguments):
+        payload = stable_aws(arguments)
+        if arguments[:2] == ["elbv2", "describe-target-health"]:
+            payload["TargetHealthDescriptions"].append(
+                {"TargetHealth": {"State": "draining"}}
+            )
+        return payload
+
+    with pytest.raises(control.StagingControlError, match="target health"):
+        control.verify_runtime(
+            sha=SHA,
+            digest=DIGEST,
+            backend_task_definition=NEW_BACKEND_TD,
+            worker_task_definition=NEW_WORKER_TD,
+            aws_json=draining_target,
+            attempts=2,
+            interval_seconds=3,
+            sleeper=sleeps.append,
+        )
+
+    assert sleeps == [3]
+
+
+def test_verify_runtime_rejects_service_drift_after_alb_convergence():
+    stable_aws = _aws_runtime(deployed=True)
+    describe_service_calls = 0
+
+    def drifting_runtime(arguments):
+        nonlocal describe_service_calls
+        payload = stable_aws(arguments)
+        if arguments[:2] == ["ecs", "describe-services"]:
+            describe_service_calls += 1
+            if describe_service_calls == 2:
+                worker = payload["services"][1]
+                worker["taskDefinition"] = WORKER_TD
+                worker["deployments"][0]["taskDefinition"] = WORKER_TD
+        return payload
+
+    with pytest.raises(control.StagingControlError, match="expected task definition"):
+        control.verify_runtime(
+            sha=SHA,
+            digest=DIGEST,
+            backend_task_definition=NEW_BACKEND_TD,
+            worker_task_definition=NEW_WORKER_TD,
+            aws_json=drifting_runtime,
+            attempts=2,
+            interval_seconds=3,
+            sleeper=lambda seconds: None,
+        )
+
+    assert describe_service_calls == 2
+
+
 def test_verify_runtime_fails_on_unhealthy_target():
     with pytest.raises(control.StagingControlError, match="target health"):
         control.verify_runtime(
@@ -261,6 +483,7 @@ def test_verify_runtime_fails_on_unhealthy_target():
             backend_task_definition=NEW_BACKEND_TD,
             worker_task_definition=NEW_WORKER_TD,
             aws_json=_aws_runtime(deployed=True, unhealthy_target=True),
+            attempts=1,
         )
 
 
