@@ -32,8 +32,8 @@ def test_sidebar_lists_periodic_review_signals_above_monitoring_alerts():
     periodic_index = html.index('data-view="periodic-review-signals"')
     monitoring_index = html.index('data-view="monitoring"')
     assert periodic_index < monitoring_index
-    assert '> RegMind Periodic Reviews</div>' in html
-    assert '> RegMind Monitoring</div>' in html
+    assert '> Periodic Reviews</div>' in html
+    assert '> Monitoring</div>' in html
 
 
 def test_periodic_review_signals_is_a_standalone_view():
