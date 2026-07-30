@@ -3,32 +3,36 @@
 # Sprint 3: Containerized deployment with WeasyPrint support
 # ══════════════════════════════════════════════════════════
 #
-# Build:   docker build -t arie-backend .
-# Run:     docker run -p 10000:10000 --env-file .env arie-backend
+# Build:   docker build -t arie-backend:<full-git-sha> .
+# Run:     docker run -p 10000:10000 --env-file .env arie-backend:<full-git-sha>
 # Compose: docker compose up -d
 #
-# BSA-019: base image pinned by digest — a mutable tag can silently change
-# between builds. This digest is the python:3.11-slim multi-arch manifest list
-# (verified 2026-07-08). To update: pick the new tag's digest via
-#   docker buildx imagetools inspect python:3.11-slim
+# BSA-019 / PR-RELEASE-CONTROLS-1: base image pinned by digest — a mutable tag
+# can silently change between builds. Debian trixie carried release-blocking,
+# unfixed glibc/perl findings in the prior runtime. The Alpine image removes
+# those unused Debian packages while retaining the same Python 3.11 runtime.
+# This digest is the python:3.11-alpine multi-arch manifest list (verified
+# 2026-07-30). To update: pick the new tag's digest via
+#   docker buildx imagetools inspect python:3.11-alpine
 # and replace BOTH the comment date and the digest below in one reviewed change.
-FROM python:3.11-slim@sha256:e031123e3d85762b141ad1cbc56452ba69c6e722ebf2f042cc0dc86c47c0d8b3 AS base
+FROM python:3.11-alpine@sha256:25976e9d34a0fab1f278cae931f34c8303d97bf0c0d7f85b6b4dcf641d7702a4 AS base
 
 ARG GIT_SHA=unknown
 ARG BUILD_TIME=unknown
 ARG IMAGE_TAG=${GIT_SHA}
 
-# WeasyPrint system dependencies (Cairo, Pango, GDK-PixBuf)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libcairo2 \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
-    libgdk-pixbuf-2.0-0 \
-    libffi-dev \
+# Apply the current Alpine security repository before installing the minimal
+# WeasyPrint runtime set. Build-only compilers and Debian's Perl toolchain are
+# intentionally absent from the final image.
+RUN apk upgrade --no-cache \
+    && apk add --no-cache \
+    cairo \
+    pango \
+    gdk-pixbuf \
+    libffi \
     shared-mime-info \
-    fonts-liberation \
-    fonts-dejavu-core \
-    && rm -rf /var/lib/apt/lists/*
+    font-liberation \
+    font-dejavu
 
 # ── Application Setup ──
 WORKDIR /app
@@ -40,13 +44,17 @@ WORKDIR /app
 # different bytes. requirements.lock is generated from requirements.txt via
 # pip-compile --generate-hashes (see requirements.txt header).
 COPY requirements.txt requirements.lock .
-RUN pip install --no-cache-dir --require-hashes -r requirements.lock
+# The runtime never installs packages. Removing the packaging toolchain also
+# removes setuptools' vulnerable vendored jaraco.context/wheel copies.
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock \
+    && python -m pip uninstall --yes setuptools pip
 
 # Copy application code
 COPY . .
 
-# Create non-root user for security
-RUN groupadd -r arie && useradd -r -g arie -d /app -s /sbin/nologin arie \
+# Create a locked non-root user with Alpine's native account tools.
+RUN addgroup -S arie \
+    && adduser -S -D -H -h /app -s /sbin/nologin -G arie arie \
     && mkdir -p /app/uploads /app/data /app/logs \
     && chown -R arie:arie /app
 

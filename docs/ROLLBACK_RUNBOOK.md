@@ -15,22 +15,19 @@ reversible.
 The image-rollback substrate mostly exists, but these gaps must be closed or the
 5-minute path silently fails:
 
-1. **The rollback tag does not exist.** `CLAUDE.md` says "To rollback:
-   `git checkout v4.1-stable`", but `git ls-remote --tags origin` shows only
-   `v4.0-stable` and `v5.0-pre-screening-abstraction` — **`v4.1-stable` is not on
-   origin.** Action: cut a real stable tag on the current known-good `main`
-   (`v4.1-stable` or a fresh `vX-stable`) and push it, then **tag every deploy's
-   known-good SHA** going forward. *(Requires a human to pick the canonical good
-   SHA; not done in this PR.)*
+1. **Use the automated release artifact as the rollback ledger.** It captures
+   the exact live backend and worker task-definition ARNs, image tag, and digest
+   before ECS mutation. Never infer the target from `latest - 1`.
 2. **Confirm ECR retains prior SHA images** (immutable tags + no lifecycle rule
    expiring the last N), and that **prior task-def revisions exist for BOTH
    services** — `regmind-backend` and `regmind-verification-worker`. If a
    lifecycle rule expired the prior image, the 5-minute path is gone → Section 5.
-3. **Record, at every deploy, the current-good task-def revision for BOTH
-   services and the current-good `GIT_SHA`.** `DEPLOYMENT_RUNBOOK.md:92` already
-   prompts this for the API service — **add the worker.**
+3. **Verify the captured rollback digest.** Both pre-deploy services must be on
+   the same SHA and every running task's `imageDigest` must equal the ECR digest
+   recorded for that immutable tag.
 4. **Confirm RDS backup retention ≥ 7 days + deletion protection + PITR** on
-   `regmind-staging-db` (checklist `DEPLOYMENT_RUNBOOK.md:452`). This is the only
+   `regmind-staging-db` (see the infrastructure-readiness and operator-checklist
+   sections of `DEPLOYMENT_RUNBOOK.md`). This is the only
    substrate for the destructive-migration branch (B2).
 
 ---
@@ -38,8 +35,9 @@ The image-rollback substrate mostly exists, but these gaps must be closed or the
 ## Section 1 — Detect & Decide
 
 **Rollback trigger:** failed post-deploy health (`/api/liveness`, `/api/health`,
-`/portal`, `/backoffice` not 200 — same probes the deploy workflow runs at
-`deploy-staging.yml:255-290`) **or** a functional regression caught in smoke.
+`/portal`, `/backoffice` not 200 — the same probes used by the deploy workflow's
+authenticated-release-evidence and portal/backoffice verification steps) **or**
+a functional regression caught in smoke.
 
 Capture:
 - the **bad** `GIT_SHA` — authenticated `GET /api/version` returns
@@ -57,17 +55,16 @@ migrations (an older image has a strict *subset* of migration files) and
 releases the boot advisory lock. So this is purely an ECS task-def swap.
 
 ```bash
-# 1. Find the previous good revisions for BOTH families
-aws ecs list-task-definitions --family-prefix regmind-staging --sort DESC --region af-south-1
-aws ecs list-task-definitions --family-prefix regmind-verification-worker --sort DESC --region af-south-1
-
-# 2. Point BOTH services back (⚠️ the worker is easy to forget — see Edge cases)
+# 1. Read the exact PREVIOUS_* ARNs from the failed run's sanitized
+#    release-evidence artifact. Point BOTH services back.
 aws ecs update-service --cluster regmind-staging --service regmind-backend \
-  --task-definition regmind-staging:<PREV_API_REV> --force-new-deployment --region af-south-1
+  --task-definition <PREVIOUS_BACKEND_TASK_DEFINITION_ARN> \
+  --force-new-deployment --region af-south-1
 aws ecs update-service --cluster regmind-staging --service regmind-verification-worker \
-  --task-definition regmind-verification-worker:<PREV_WORKER_REV> --force-new-deployment --region af-south-1
+  --task-definition <PREVIOUS_WORKER_TASK_DEFINITION_ARN> \
+  --force-new-deployment --region af-south-1
 
-# 3. Wait for steady state
+# 2. Wait for steady state
 aws ecs wait services-stable --cluster regmind-staging \
   --services regmind-backend regmind-verification-worker --region af-south-1
 ```
@@ -123,13 +120,17 @@ schema. Image rollback alone is unsafe. Choose:
 - Authenticated `GET /api/readiness` (admin/sco) → 200 `ready: true`.
 - CloudWatch: no `MigrationFailure`, no "connection pool exhausted", no "mock mode".
 - Both ECS services: PRIMARY deployment at steady state / desired count.
+- Every running task's `imageDigest` equals the captured rollback digest and
+  every ALB target is healthy.
 
 ---
 
 ## Section 5 — If the prior SHA image is missing (release incident)
 
-The ~5-min path is gone. Rebuild from the last-good **tag** (now that Section 0.1
-guarantees one exists), push that SHA, register task-defs, redeploy. Slower.
+The ~5-min path is gone. Do not recreate the deleted historical SHA tag and
+claim the rebuilt digest is the original artifact. Prepare a separately
+reviewed recovery release, build and scan its new immutable digest, register
+new task definitions for both services, and record the provenance break.
 
 ---
 
@@ -176,13 +177,11 @@ add prod `/api/version`+health URLs. Until then this runbook is **staging-only**
 
 ## Open items for the human (cannot be closed from code)
 
-1. Create the missing `v4.1-stable` (or fresh `vX-stable`) tag on the canonical
-   good SHA and adopt tag-per-known-good-deploy.
-2. Confirm (live AWS) ECR retention keeps the last N SHA images immutable and
+1. Confirm (live AWS) ECR retention keeps the last N SHA images immutable and
    that prior task-def revisions for **both** services are retained.
-3. Confirm RDS PITR window + snapshot cadence + deletion protection on
+2. Confirm RDS PITR window + snapshot cadence + deletion protection on
    `regmind-staging-db`.
-4. Adopt the expand/contract migration policy as a hard rule and decide who
+3. Adopt the expand/contract migration policy as a hard rule and decide who
    signs off destructive "contract" migrations.
-5. Decide B1 (roll-forward) vs B2 (restore) as the first-choice for the
+4. Decide B1 (roll-forward) vs B2 (restore) as the first-choice for the
    destructive branch, and the SCO/compliance authorization path for B2.
