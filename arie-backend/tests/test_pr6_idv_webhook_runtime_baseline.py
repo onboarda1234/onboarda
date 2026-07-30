@@ -111,10 +111,16 @@ def test_deploy_workflow_updates_verification_worker_with_same_sha_pinned_image(
     assert "worker_source_task_definition" in source
     assert "Register verification worker task definition with SHA-pinned image" in source
     assert "Deploy verification worker to ECS (rolling update)" in source
-    assert "staging_deployment_control.py render-task-definition" in source
-    assert '--service-name "$ECS_WORKER_SERVICE"' in source
-    assert '--image "${{ steps.image.outputs.image }}"' in source
-    assert '--sha "${{ github.sha }}"' in source
+    worker_render = source.split(
+        "Render worker task definition from live service revision",
+        1,
+    )[1].split("\n      - name:", 1)[0]
+    assert "staging_deployment_control.py render-task-definition" in worker_render
+    assert '--service-name "$ECS_WORKER_SERVICE"' in worker_render
+    assert "RELEASE_IMAGE: ${{ steps.image.outputs.image }}" in worker_render
+    assert "RELEASE_SHA: ${{ github.sha }}" in worker_render
+    assert '--image "$RELEASE_IMAGE"' in worker_render
+    assert '--sha "$RELEASE_SHA"' in worker_render
     assert '--service "$ECS_WORKER_SERVICE"' in source
     assert "steps.register-worker-task-def.outputs.task-definition-arn" in source
 

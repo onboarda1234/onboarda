@@ -40,7 +40,16 @@ def test_gate_checks_both_services_exact_digest_counts_and_alb():
     )[0]
     assert "--backend-task-definition" in gate
     assert "--worker-task-definition" in gate
-    assert '--digest "${{ steps.image.outputs.image_digest }}"' in gate
+    assert "RELEASE_DIGEST: ${{ steps.image.outputs.image_digest }}" in gate
+    assert '--digest "$RELEASE_DIGEST"' in gate
+    assert (
+        "BACKEND_TASK_DEFINITION: "
+        "${{ steps.register-task-def.outputs.task-definition-arn }}"
+    ) in gate
+    assert (
+        "WORKER_TASK_DEFINITION: "
+        "${{ steps.register-worker-task-def.outputs.task-definition-arn }}"
+    ) in gate
     assert "imageDigest" in helper
     assert "desired_count" in helper
     assert "pending_count" in helper

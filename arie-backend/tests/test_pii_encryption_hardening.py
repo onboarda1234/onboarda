@@ -395,8 +395,21 @@ class TestDeployWorkflowDeterminism:
         assert '--sha "$RELEASE_SHA"' in content
         assert '--ref "$RELEASE_REF"' in content
         assert content.count("staging_deployment_control.py render-task-definition") == 2
-        assert content.count('--image "${{ steps.image.outputs.image }}"') == 2
-        assert content.count('--build-time "${{ steps.image.outputs.build_time }}"') == 2
+        render_steps = [
+            content.split(step_name, 1)[1].split("\n      - name:", 1)[0]
+            for step_name in (
+                "Render backend task definition from live service revision",
+                "Render worker task definition from live service revision",
+            )
+        ]
+        for render_step in render_steps:
+            assert "RELEASE_IMAGE: ${{ steps.image.outputs.image }}" in render_step
+            assert "RELEASE_SHA: ${{ github.sha }}" in render_step
+            assert (
+                "BUILD_TIME: ${{ steps.image.outputs.build_time }}" in render_step
+            )
+        assert content.count('--image "$RELEASE_IMAGE"') == 2
+        assert content.count('--build-time "$BUILD_TIME"') == 2
         assert ":latest" not in content
         assert "staging_deployment_control.py verify-runtime" in content
         assert "staging_release_evidence.py" in content

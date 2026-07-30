@@ -40,9 +40,20 @@ def test_deploy_staging_refreshes_runtime_version_environment():
     ]
     assert len(render_calls) == 2
     for render_call in render_calls:
-        assert '--image "${{ steps.image.outputs.image }}"' in render_call
-        assert '--sha "${{ github.sha }}"' in render_call
-        assert '--build-time "${{ steps.image.outputs.build_time }}"' in render_call
+        assert '--image "$RELEASE_IMAGE"' in render_call
+        assert '--sha "$RELEASE_SHA"' in render_call
+        assert '--build-time "$BUILD_TIME"' in render_call
+    render_steps = [
+        text.split(step_name, 1)[1].split("\n      - name:", 1)[0]
+        for step_name in (
+            "Render backend task definition from live service revision",
+            "Render worker task definition from live service revision",
+        )
+    ]
+    for render_step in render_steps:
+        assert "RELEASE_IMAGE: ${{ steps.image.outputs.image }}" in render_step
+        assert "RELEASE_SHA: ${{ github.sha }}" in render_step
+        assert "BUILD_TIME: ${{ steps.image.outputs.build_time }}" in render_step
     assert '--service-name "$ECS_SERVICE"' in render_calls[0]
     assert '--service-name "$ECS_WORKER_SERVICE"' in render_calls[1]
 
