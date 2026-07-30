@@ -221,13 +221,13 @@ def test_missing_application_is_orphaned_and_requires_manual_review():
     assert "missing_application_link" in item["linkage_findings"]
 
 
-def test_extended_status_is_legacy_and_mapping_requires_link_evidence():
+def test_escalated_and_in_review_are_canonical_and_owner_drift_is_manual():
     without_link = audit.analyse_snapshot(
         _snapshot(_alert(1, status="escalated"))
     )["alerts"][0]
-    assert without_link["status_validity"] == "Legacy"
-    assert without_link["future_status"] is None
-    assert without_link["migration_disposition"] == "Manual review required"
+    assert without_link["status_validity"] == "Valid"
+    assert without_link["future_status"] == "escalated"
+    assert without_link["migration_ready"] is True
 
     with_link = audit.analyse_snapshot(
         _snapshot(
@@ -245,8 +245,14 @@ def test_extended_status_is_legacy_and_mapping_requires_link_evidence():
             ],
         )
     )["alerts"][0]
+    assert with_link["status_validity"] == "Valid"
     assert with_link["workflow_owner"] == "EDD"
     assert with_link["future_status"] == "routed_to_edd"
+    assert with_link["migration_ready"] is False
+    assert with_link["migration_disposition"] == "Manual review required"
+    assert "active_status_conflicts_with_edd_owner_link" in with_link[
+        "migration_findings"
+    ]
 
 
 def test_duplicate_requires_same_source_identity_not_merely_same_type():
@@ -398,7 +404,9 @@ def test_application_level_screening_context_is_non_causal():
     )["alerts"][0]
     assert item["screening_review_context"]
     assert item["workflow_owner"] == "Manual"
-    assert item["future_status"] is None
+    assert item["status_validity"] == "Valid"
+    assert item["future_status"] == "in_review"
+    assert item["migration_ready"] is True
 
 
 def test_cross_application_evidence_and_broken_request_targets_are_reported():
@@ -460,7 +468,7 @@ def test_edd_owner_link_drift_blocks_migration_readiness():
 
 
 @pytest.mark.parametrize("status", ("open", "in_review"))
-def test_periodic_review_link_maps_route_and_blocks_canonical_owner_drift(status):
+def test_periodic_review_link_maps_route_and_blocks_active_owner_drift(status):
     item = audit.analyse_snapshot(
         _snapshot(
             _alert(1, status=status),
@@ -479,13 +487,12 @@ def test_periodic_review_link_maps_route_and_blocks_canonical_owner_drift(status
     )["alerts"][0]
     assert item["workflow_owner"] == "Periodic Review"
     assert item["future_status"] == "routed_to_review"
-    if status == "open":
-        assert item["migration_ready"] is False
-        assert "active_status_conflicts_with_periodic_review_owner_link" in item[
-            "migration_findings"
-        ]
-    else:
-        assert item["migration_disposition"] == "Candidate for future migration"
+    assert item["status_validity"] == "Valid"
+    assert item["migration_ready"] is False
+    assert item["migration_disposition"] == "Manual review required"
+    assert "active_status_conflicts_with_periodic_review_owner_link" in item[
+        "migration_findings"
+    ]
 
 
 def test_change_management_query_uses_schema_valid_change_alert_bridge():

@@ -11,6 +11,7 @@ from enhanced_requirements import (
     serialize_application_requirement,
     update_application_enhanced_requirement,
 )
+import monitoring_alert_state_machine as monitoring_state_machine
 
 logger = logging.getLogger("arie.monitoring_document_refresh")
 
@@ -27,7 +28,10 @@ DOCUMENT_ALERT_TYPES = {
     "missing_document_refresh",
 }
 ACTIVE_REQUEST_STATUSES = {"requested", "uploaded", "under_review", "rejected"}
-TERMINAL_ALERT_STATUSES = {"resolved", "waived", "dismissed", "routed_to_edd", "routed_to_review"}
+ACTION_LOCKED_ALERT_STATUSES = (
+    monitoring_state_machine.TERMINAL_STATUSES
+    | monitoring_state_machine.HANDOFF_STATUSES
+)
 
 
 class MonitoringDocumentRefreshError(ValueError):
@@ -122,6 +126,7 @@ def _fetch_alert(db, alert_id):
     row = db.execute(
         """
         SELECT ma.*,
+               app.id AS linked_application_id,
                app.ref AS application_ref,
                app.company_name AS application_company_name,
                app.client_id AS application_client_id,
@@ -135,6 +140,41 @@ def _fetch_alert(db, alert_id):
         (alert_id,),
     ).fetchone()
     return _row_dict(row)
+
+
+def _lock_and_hydrate_alert_for_document_request(db, alert_id):
+    """Return the authoritative request-time alert under the canonical lock.
+
+    The Monitoring Alert row is always the first row locked by this write
+    path.  Hydration happens only after that lock, so a terminal/handoff
+    transition cannot commit between the status check and creation of the
+    document request or its client notification.
+    """
+    try:
+        locked = monitoring_state_machine.lock_alert_for_transition(db, alert_id)
+    except monitoring_state_machine.AlertNotFound as exc:
+        raise MonitoringDocumentRefreshError("Alert not found", 404) from exc
+
+    hydrated = _fetch_alert(db, alert_id)
+    if not hydrated:
+        raise MonitoringDocumentRefreshError("Alert not found", 404)
+
+    locked_application_id = _row_get(locked, "application_id")
+    if str(_row_get(hydrated, "application_id") or "") != str(
+        locked_application_id or ""
+    ):
+        raise MonitoringDocumentRefreshError(
+            "The Monitoring Alert application linkage changed; refresh and retry",
+            409,
+        )
+
+    linked_application_id = _row_get(hydrated, "linked_application_id")
+    alert = dict(hydrated)
+    # The locked base-table values are authoritative. Joined display/contact
+    # fields remain available from the post-lock hydration query.
+    alert.update(dict(locked))
+    alert["linked_application_id"] = linked_application_id
+    return alert
 
 
 def _fetch_document(db, document_id, application_id):
@@ -445,15 +485,28 @@ def request_updated_document(
     notify_client=True,
     audience="client",
 ):
-    alert = _fetch_alert(db, alert_id)
-    if not alert:
-        raise MonitoringDocumentRefreshError("Alert not found", 404)
+    alert = _lock_and_hydrate_alert_for_document_request(db, alert_id)
     if not is_document_refresh_alert(alert):
         raise MonitoringDocumentRefreshError("Request Updated Document is only available for document expiry alerts", 400)
-    if str(alert.get("status") or "").lower() in TERMINAL_ALERT_STATUSES:
-        raise MonitoringDocumentRefreshError("Cannot request a document for a resolved or waived alert", 409)
-    if not alert.get("application_id"):
+    current_status = str(alert.get("status") or "").strip()
+    if not monitoring_state_machine.is_canonical_status(current_status):
+        raise MonitoringDocumentRefreshError(
+            "The stored Monitoring Alert status is not canonical",
+            409,
+        )
+    if current_status in ACTION_LOCKED_ALERT_STATUSES:
+        raise MonitoringDocumentRefreshError(
+            "Cannot request a document for a terminal or downstream-owned alert",
+            409,
+        )
+    application_id = alert.get("application_id")
+    if application_id in (None, ""):
         raise MonitoringDocumentRefreshError("Alert is not linked to an application", 400)
+    if str(alert.get("linked_application_id") or "") != str(application_id):
+        raise MonitoringDocumentRefreshError(
+            "The Monitoring Alert's linked application no longer exists",
+            409,
+        )
 
     existing = _active_request_for_alert(db, alert.get("id"))
     if existing:
@@ -804,6 +857,57 @@ def _restore_old_document_after_rejection(db, app_id, old_document_id, rejected_
     )
 
 
+def _rollback_quietly(db):
+    try:
+        db.rollback()
+    except Exception:
+        logger.exception("monitoring document refresh rollback failed")
+
+
+def _document_transition_evidence(*, outcome, request_id, document_id, note):
+    evidence = {"document_request_id": request_id}
+    if outcome == "accept":
+        evidence["document_id"] = document_id
+        if note:
+            evidence["officer_rationale"] = note
+    elif outcome == "waive":
+        evidence["waiver_reason"] = note
+    return evidence
+
+
+def _transition_document_alert(
+    db,
+    *,
+    alert,
+    expected_status,
+    outcome,
+    request_id,
+    document_id,
+    note,
+    user,
+):
+    target_status = "resolved" if outcome == "accept" else "waived"
+    reason_code = "document_accepted" if outcome == "accept" else "document_waived"
+    return monitoring_state_machine.transition_alert_status(
+        db,
+        alert.get("id"),
+        expected_status=expected_status,
+        target_status=target_status,
+        actor=user,
+        actor_type="officer",
+        source_workflow="kyc_documents",
+        reason_code=reason_code,
+        reason=note or reason_code.replace("_", " "),
+        evidence=_document_transition_evidence(
+            outcome=outcome,
+            request_id=request_id,
+            document_id=document_id,
+            note=note,
+        ),
+        commit=False,
+    )
+
+
 def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
     alert = _fetch_alert(db, alert_id)
     if not alert:
@@ -841,69 +945,98 @@ def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
     else:
         raise MonitoringDocumentRefreshError("Invalid document refresh outcome", 400)
 
-    update_payload = {"status": target_status}
-    if note:
-        update_payload["review_notes"] = note
-    if outcome == "waive":
-        update_payload["waiver_reason"] = note
-    result, error, status_code = update_application_enhanced_requirement(
-        db,
-        app_id,
-        req_id,
-        update_payload,
-        actor=user,
-    )
-    if error:
-        raise MonitoringDocumentRefreshError(error, status_code)
-    after_req = (result or {}).get("requirement") or request
-    linked_document_id = after_req.get("linked_document_id") or request.get("linked_document_id")
-    doc_status = "accepted" if outcome == "accept" else "rejected" if outcome == "reject" else None
-    if linked_document_id and doc_status:
-        db.execute(
-            """
-            UPDATE documents
-               SET review_status = ?,
-                   review_comment = ?,
-                   reviewed_by = ?,
-                   reviewer_role = ?,
-                   reviewed_at = datetime('now')
-             WHERE id = ? AND application_id = ?
-            """,
-            (
-                doc_status,
-                note,
-                (user or {}).get("sub", ""),
-                (user or {}).get("role", ""),
-                linked_document_id,
-                app_id,
-            ),
+    try:
+        # Lock before changing the requirement, document, alert metadata or
+        # lifecycle so one caller-owned transaction governs the whole outcome.
+        locked_alert = monitoring_state_machine.lock_alert_for_transition(
+            db, alert.get("id")
         )
-    if outcome == "reject":
-        _restore_old_document_after_rejection(
+        expected_status = str(locked_alert.get("status") or "").strip()
+        if (
+            monitoring_state_machine.is_terminal_status(expected_status)
+            or monitoring_state_machine.is_handoff_status(expected_status)
+        ):
+            raise MonitoringDocumentRefreshError(
+                "Cannot review a document refresh for a terminal or downstream-owned alert",
+                409,
+            )
+        alert.update(locked_alert)
+
+        update_payload = {"status": target_status}
+        if note:
+            update_payload["review_notes"] = note
+        if outcome == "waive":
+            update_payload["waiver_reason"] = note
+        result, error, status_code = update_application_enhanced_requirement(
             db,
             app_id,
-            request.get("monitoring_document_id"),
-            linked_document_id,
+            req_id,
+            update_payload,
+            actor=user,
         )
+        if error:
+            raise MonitoringDocumentRefreshError(error, status_code)
+        after_req = (result or {}).get("requirement") or request
+        linked_document_id = (
+            after_req.get("linked_document_id")
+            or request.get("linked_document_id")
+        )
+        doc_status = (
+            "accepted"
+            if outcome == "accept"
+            else "rejected"
+            if outcome == "reject"
+            else None
+        )
+        if linked_document_id and doc_status:
+            db.execute(
+                """
+                UPDATE documents
+                   SET review_status = ?,
+                       review_comment = ?,
+                       reviewed_by = ?,
+                       reviewer_role = ?,
+                       reviewed_at = datetime('now')
+                 WHERE id = ? AND application_id = ?
+                """,
+                (
+                    doc_status,
+                    note,
+                    (user or {}).get("sub", ""),
+                    (user or {}).get("role", ""),
+                    linked_document_id,
+                    app_id,
+                ),
+            )
+        if outcome == "reject":
+            _restore_old_document_after_rejection(
+                db,
+                app_id,
+                request.get("monitoring_document_id"),
+                linked_document_id,
+            )
 
-    before_state = {"status": alert.get("status"), "officer_action": alert.get("officer_action")}
-    payload = {
-        "event": audit_action,
-        "alert_id": alert.get("id"),
-        "application_id": app_id,
-        "client_id": alert.get("application_client_id"),
-        "application_ref": alert.get("application_ref"),
-        "document_request_id": req_id,
-        "old_document_id": request.get("monitoring_document_id") or "",
-        "document_id": linked_document_id,
-        "outcome": outcome,
-        "note": note,
-        "actor": (user or {}).get("sub", ""),
-        "timestamp": _now_iso(),
-    }
-    if alert_status is None:
-        # Reject: officer bookkeeping only — alert.status AND resolved_at stay
-        # untouched (the alert lifecycle neither advances nor re-opens here).
+        before_state = {
+            "status": expected_status,
+            "officer_action": alert.get("officer_action"),
+        }
+        payload = {
+            "event": audit_action,
+            "alert_id": alert.get("id"),
+            "application_id": app_id,
+            "client_id": alert.get("application_client_id"),
+            "application_ref": alert.get("application_ref"),
+            "document_request_id": req_id,
+            "old_document_id": request.get("monitoring_document_id") or "",
+            "document_id": linked_document_id,
+            "outcome": outcome,
+            "note": note,
+            "actor": (user or {}).get("sub", ""),
+            "timestamp": _now_iso(),
+        }
+        # Officer-facing metadata is coupled to the outcome but is not a
+        # lifecycle authority. The exact-state predicate protects the rejected
+        # path, which intentionally leaves alert.status unchanged.
         db.execute(
             """
             UPDATE monitoring_alerts
@@ -911,68 +1044,88 @@ def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
                    officer_notes = ?,
                    reviewed_at = CURRENT_TIMESTAMP,
                    reviewed_by = ?
-             WHERE id = ?
+             WHERE id = ? AND status = ?
             """,
             (
                 officer_action,
                 json.dumps(payload, sort_keys=True),
                 (user or {}).get("sub", ""),
                 alert.get("id"),
+                expected_status,
             ),
         )
-    else:
-        # Accept/waive: terminal outcome — status and resolved_at always set.
-        db.execute(
-            """
-            UPDATE monitoring_alerts
-               SET status = ?,
-                   officer_action = ?,
-                   officer_notes = ?,
-                   reviewed_at = CURRENT_TIMESTAMP,
-                   reviewed_by = ?,
-                   resolved_at = CURRENT_TIMESTAMP
-             WHERE id = ?
-            """,
-            (
-                alert_status,
-                officer_action,
-                json.dumps(payload, sort_keys=True),
-                (user or {}).get("sub", ""),
-                alert.get("id"),
-            ),
-        )
-    after_state = {"document_request_status": target_status}
-    if alert_status is not None:
-        after_state["status"] = alert_status
-    _audit(
-        audit_writer,
-        user,
-        audit_action,
-        alert.get("id"),
-        payload,
-        db=db,
-        before_state=before_state,
-        after_state=after_state,
-    )
-    if outcome == "accept":
+
+        transition = None
+        if alert_status is not None:
+            transition = _transition_document_alert(
+                db,
+                alert=alert,
+                expected_status=expected_status,
+                outcome=outcome,
+                request_id=req_id,
+                document_id=linked_document_id,
+                note=note,
+                user=user,
+            )
+            authoritative_alert = transition["alert"]
+        else:
+            authoritative_alert = _fetch_alert(db, alert.get("id"))
+            if str((authoritative_alert or {}).get("status") or "") != expected_status:
+                raise MonitoringDocumentRefreshError(
+                    "The Monitoring Alert changed during document review",
+                    409,
+                )
+
+        after_state = {"document_request_status": target_status}
+        if alert_status is not None:
+            after_state["status"] = alert_status
         _audit(
             audit_writer,
             user,
-            "monitoring_alert_resolved",
+            audit_action,
             alert.get("id"),
             payload,
             db=db,
             before_state=before_state,
-            after_state={"status": "resolved"},
+            after_state=after_state,
         )
-    return {
-        "alert_id": alert.get("id"),
-        # Effective flow status for API/UI consumers: rejection re-opens the
-        # document request even though the alert row stays canonical.
-        "status": alert_status if alert_status is not None else "document_requested",
-        "document_request": after_req,
-        "document_refresh": document_refresh_context(db, alert.get("id")),
-    }
+        if outcome == "accept":
+            _audit(
+                audit_writer,
+                user,
+                "monitoring_alert_resolved",
+                alert.get("id"),
+                payload,
+                db=db,
+                before_state=before_state,
+                after_state={"status": "resolved"},
+            )
+        return {
+            "alert_id": alert.get("id"),
+            # Effective flow status for API/UI consumers: rejection re-opens
+            # the request while the authoritative alert lifecycle is unchanged.
+            "status": (
+                authoritative_alert.get("status")
+                if alert_status is not None
+                else "document_requested"
+            ),
+            "alert": authoritative_alert,
+            "transition": transition,
+            "document_request": after_req,
+            "document_refresh": document_refresh_context(db, alert.get("id")),
+        }
+    except monitoring_state_machine.MonitoringTransitionError as exc:
+        _rollback_quietly(db)
+        raise MonitoringDocumentRefreshError(str(exc), exc.status_code) from exc
+    except monitoring_state_machine.AuditInfrastructureError as exc:
+        _rollback_quietly(db)
+        raise MonitoringDocumentRefreshError(
+            "The document outcome could not be recorded safely",
+            500,
+        ) from exc
+    except Exception:
+        _rollback_quietly(db)
+        raise
 
 
 def sync_requirement_review_to_monitoring_alert(db, requirement, *, user, audit_writer):
@@ -1007,54 +1160,76 @@ def sync_requirement_review_to_monitoring_alert(db, requirement, *, user, audit_
         outcome = "waive"
         note = requirement.get("waiver_reason") or requirement.get("review_notes") or ""
 
-    linked_document_id = requirement.get("linked_document_id")
-    doc_status = "accepted" if outcome == "accept" else "rejected" if outcome == "reject" else None
-    if linked_document_id and doc_status:
-        db.execute(
-            """
-            UPDATE documents
-               SET review_status = ?,
-                   review_comment = ?,
-                   reviewed_by = ?,
-                   reviewer_role = ?,
-                   reviewed_at = datetime('now')
-             WHERE id = ? AND application_id = ?
-            """,
-            (
-                doc_status,
-                note,
-                (user or {}).get("sub", ""),
-                (user or {}).get("role", ""),
-                linked_document_id,
-                requirement.get("application_id"),
-            ),
+    try:
+        locked_alert = monitoring_state_machine.lock_alert_for_transition(
+            db, alert_id
         )
-    if outcome == "reject":
-        _restore_old_document_after_rejection(
-            db,
-            requirement.get("application_id"),
-            requirement.get("monitoring_document_id"),
-            linked_document_id,
-        )
+        expected_status = str(locked_alert.get("status") or "").strip()
+        if (
+            monitoring_state_machine.is_terminal_status(expected_status)
+            or monitoring_state_machine.is_handoff_status(expected_status)
+        ):
+            raise MonitoringDocumentRefreshError(
+                "Cannot synchronize a document outcome to a terminal or downstream-owned alert",
+                409,
+            )
+        alert.update(locked_alert)
 
-    before_state = {"status": alert.get("status"), "officer_action": alert.get("officer_action")}
-    payload = {
-        "event": audit_action,
-        "alert_id": alert_id,
-        "application_id": requirement.get("application_id"),
-        "client_id": alert.get("application_client_id"),
-        "application_ref": alert.get("application_ref"),
-        "document_request_id": requirement.get("id"),
-        "old_document_id": requirement.get("monitoring_document_id") or "",
-        "document_id": linked_document_id,
-        "outcome": outcome,
-        "note": note,
-        "actor": (user or {}).get("sub", ""),
-        "timestamp": _now_iso(),
-        "source_surface": "application_enhanced_requirement_review",
-    }
-    if alert_status is None:
-        # Rejected: bookkeeping only — status and resolved_at untouched.
+        linked_document_id = requirement.get("linked_document_id")
+        doc_status = (
+            "accepted"
+            if outcome == "accept"
+            else "rejected"
+            if outcome == "reject"
+            else None
+        )
+        if linked_document_id and doc_status:
+            db.execute(
+                """
+                UPDATE documents
+                   SET review_status = ?,
+                       review_comment = ?,
+                       reviewed_by = ?,
+                       reviewer_role = ?,
+                       reviewed_at = datetime('now')
+                 WHERE id = ? AND application_id = ?
+                """,
+                (
+                    doc_status,
+                    note,
+                    (user or {}).get("sub", ""),
+                    (user or {}).get("role", ""),
+                    linked_document_id,
+                    requirement.get("application_id"),
+                ),
+            )
+        if outcome == "reject":
+            _restore_old_document_after_rejection(
+                db,
+                requirement.get("application_id"),
+                requirement.get("monitoring_document_id"),
+                linked_document_id,
+            )
+
+        before_state = {
+            "status": expected_status,
+            "officer_action": alert.get("officer_action"),
+        }
+        payload = {
+            "event": audit_action,
+            "alert_id": alert_id,
+            "application_id": requirement.get("application_id"),
+            "client_id": alert.get("application_client_id"),
+            "application_ref": alert.get("application_ref"),
+            "document_request_id": requirement.get("id"),
+            "old_document_id": requirement.get("monitoring_document_id") or "",
+            "document_id": linked_document_id,
+            "outcome": outcome,
+            "note": note,
+            "actor": (user or {}).get("sub", ""),
+            "timestamp": _now_iso(),
+            "source_surface": "application_enhanced_requirement_review",
+        }
         db.execute(
             """
             UPDATE monitoring_alerts
@@ -1062,58 +1237,70 @@ def sync_requirement_review_to_monitoring_alert(db, requirement, *, user, audit_
                    officer_notes = ?,
                    reviewed_at = CURRENT_TIMESTAMP,
                    reviewed_by = ?
-             WHERE id = ?
+             WHERE id = ? AND status = ?
             """,
             (
                 officer_action,
                 json.dumps(payload, sort_keys=True),
                 (user or {}).get("sub", ""),
                 alert_id,
+                expected_status,
             ),
         )
-    else:
-        # Accepted/waived: terminal outcome — status and resolved_at always set.
-        db.execute(
-            """
-            UPDATE monitoring_alerts
-               SET status = ?,
-                   officer_action = ?,
-                   officer_notes = ?,
-                   reviewed_at = CURRENT_TIMESTAMP,
-                   reviewed_by = ?,
-                   resolved_at = CURRENT_TIMESTAMP
-             WHERE id = ?
-            """,
-            (
-                alert_status,
-                officer_action,
-                json.dumps(payload, sort_keys=True),
-                (user or {}).get("sub", ""),
-                alert_id,
-            ),
-        )
-    sync_after_state = {"document_request_status": status}
-    if alert_status is not None:
-        sync_after_state["status"] = alert_status
-    _audit(
-        audit_writer,
-        user,
-        audit_action,
-        alert_id,
-        payload,
-        db=db,
-        before_state=before_state,
-        after_state=sync_after_state,
-    )
-    if outcome == "accept":
+
+        if alert_status is not None:
+            _transition_document_alert(
+                db,
+                alert=alert,
+                expected_status=expected_status,
+                outcome=outcome,
+                request_id=requirement.get("id"),
+                document_id=linked_document_id,
+                note=note,
+                user=user,
+            )
+        else:
+            authoritative_alert = _fetch_alert(db, alert_id)
+            if str((authoritative_alert or {}).get("status") or "") != expected_status:
+                raise MonitoringDocumentRefreshError(
+                    "The Monitoring Alert changed during document review",
+                    409,
+                )
+
+        sync_after_state = {"document_request_status": status}
+        if alert_status is not None:
+            sync_after_state["status"] = alert_status
         _audit(
             audit_writer,
             user,
-            "monitoring_alert_resolved",
+            audit_action,
             alert_id,
             payload,
             db=db,
             before_state=before_state,
-            after_state={"status": "resolved"},
+            after_state=sync_after_state,
         )
-    return True
+        if outcome == "accept":
+            _audit(
+                audit_writer,
+                user,
+                "monitoring_alert_resolved",
+                alert_id,
+                payload,
+                db=db,
+                before_state=before_state,
+                after_state={"status": "resolved"},
+            )
+        return True
+    except monitoring_state_machine.MonitoringTransitionError as exc:
+        _rollback_quietly(db)
+        raise MonitoringDocumentRefreshError(str(exc), exc.status_code) from exc
+    except monitoring_state_machine.AuditInfrastructureError as exc:
+        _rollback_quietly(db)
+        raise MonitoringDocumentRefreshError(
+            "The document outcome could not be recorded safely",
+            500,
+        ) from exc
+    except Exception:
+        _rollback_quietly(db)
+        raise

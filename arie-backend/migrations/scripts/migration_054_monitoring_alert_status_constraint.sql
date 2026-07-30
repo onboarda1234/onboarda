@@ -1,0 +1,38 @@
+-- Migration 054 / PR-MON-M1-STATE-MACHINE-1:
+-- canonical Monitoring Alert status-value hardening.
+--
+-- The cross-dialect installation is intentionally owned by
+-- db._ensure_monitoring_alert_status_constraint and runs after the complete
+-- schema DDL but BEFORE this migration is marked as covered by init_db.
+--
+-- Exact persisted vocabulary:
+--   open, triaged, assigned, in_review, escalated,
+--   routed_to_review, routed_to_edd, dismissed, resolved, waived
+--
+-- Long-lived PostgreSQL installation is fail-closed and performs no data
+-- rewrite:
+--   1. Reject NULL, blank, and off-canon rows.
+--   2. ADD the named monitoring_alerts_status_check CHECK as NOT VALID.
+--   3. VALIDATE the constraint against the existing dataset.
+--   4. SET monitoring_alerts.status NOT NULL.
+-- All DDL runs in one transaction and startup propagates any failure.
+--
+-- Fresh PostgreSQL and SQLite schemas carry the identical named CHECK,
+-- NOT NULL, and DEFAULT 'open' inline. Long-lived SQLite databases receive a
+-- read-only compatibility scan; SQLite cannot add a CHECK constraint in place
+-- without rebuilding the regulated table.
+--
+-- Narrow PostgreSQL rollback (operator-run only, after impact approval):
+--
+--   BEGIN;
+--   ALTER TABLE monitoring_alerts
+--     DROP CONSTRAINT IF EXISTS monitoring_alerts_status_check;
+--   ALTER TABLE monitoring_alerts
+--     ALTER COLUMN status DROP NOT NULL;
+--   COMMIT;
+--
+-- Rollback changes schema protection only. It must never rewrite statuses,
+-- resolved_at, workflow evidence, or alert history. SQLite rollback requires
+-- restoring the prior schema from a verified backup; no broad table rebuild is
+-- embedded here.
+SELECT 1;

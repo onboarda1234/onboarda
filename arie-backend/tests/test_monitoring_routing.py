@@ -85,6 +85,36 @@ def routing_db(tmp_path, monkeypatch):
             "INSERT OR IGNORE INTO applications (id) VALUES (?)",
             ("test-app-100",),
         )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO users
+            (id, email, password_hash, full_name, role, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "officer-1",
+            "officer-1@example.test",
+            "not-a-login-secret",
+            "Test Officer",
+            "co",
+            "active",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO users
+            (id, email, password_hash, full_name, role, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "sco-9",
+            "sco-9@example.test",
+            "not-a-login-secret",
+            "Senior Officer",
+            "sco",
+            "active",
+        ),
+    )
     conn.commit()
 
     from migrations.runner import run_all_migrations_with_connection
@@ -120,7 +150,7 @@ def audit_sink():
 
 def _insert_alert(conn, *, application_id="test-app-100",
                   client_name="Client A", status="open",
-                  severity="medium"):
+                  severity="medium", alert_type="manual"):
     # Ensure the referenced application row exists. Some test suites
     # share a DB session, so we cannot assume the fixture's seed app
     # is the only one in play.
@@ -134,10 +164,17 @@ def _insert_alert(conn, *, application_id="test-app-100",
         pass
     conn.execute(
         "INSERT INTO monitoring_alerts "
-        "(application_id, client_name, alert_type, severity, status, summary) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (application_id, client_name, "adverse_media", severity, status,
-         "test alert summary"),
+        "(application_id, client_name, alert_type, severity, status, summary, "
+        " source_reference) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            application_id,
+            client_name,
+            alert_type,
+            severity,
+            status,
+            "test alert summary",
+            f"test-alert:{uuid.uuid4().hex}",
+        ),
     )
     conn.commit()
     return conn.execute(
@@ -146,6 +183,50 @@ def _insert_alert(conn, *, application_id="test-app-100",
         "ORDER BY id DESC LIMIT 1",
         (client_name, application_id),
     ).fetchone()["id"]
+
+
+def _link_screening_owner(conn, alert_id, application_id):
+    case_identifier = f"screening-case-{alert_id}"
+    conn.execute(
+        "UPDATE monitoring_alerts "
+        "SET provider = 'complyadvantage', case_identifier = ? WHERE id = ?",
+        (case_identifier, alert_id),
+    )
+    conn.execute(
+        """
+        INSERT INTO monitoring_alert_evidence
+            (monitoring_alert_id, application_id, provider, case_identifier,
+             evidence_type, evidence_hash)
+        VALUES (?, ?, 'complyadvantage', ?, 'screening_case', ?)
+        """,
+        (
+            alert_id,
+            application_id,
+            case_identifier,
+            f"route-screening-owner-{alert_id}",
+        ),
+    )
+    conn.commit()
+
+
+def _link_document_owner(conn, alert_id, application_id):
+    suffix = uuid.uuid4().hex
+    conn.execute(
+        """
+        INSERT INTO application_enhanced_requirements
+            (application_id, trigger_key, trigger_label, requirement_key,
+             requirement_label, monitoring_alert_id, status)
+        VALUES (?, ?, 'Monitoring document signal', ?,
+                'Refresh regulated document', ?, 'under_review')
+        """,
+        (
+            application_id,
+            f"route-trigger-{suffix}",
+            f"route-requirement-{suffix}",
+            alert_id,
+        ),
+    )
+    conn.commit()
 
 
 USER = {"sub": "officer-1", "name": "Test Officer", "role": "co"}
@@ -169,6 +250,43 @@ def _edd(conn, edd_id):
     ).fetchone()
 
 
+def _approved_review_request(
+    conn,
+    alert_id,
+    *,
+    approver="sco-9",
+    rationale="Independent senior review.",
+):
+    source_status = _alert(conn, alert_id)["status"]
+    conn.execute(
+        """
+        INSERT INTO monitoring_alert_review_requests
+            (alert_id, tier, requested_outcome, dismissal_reason, rationale,
+             evidence_ref, transition_evidence, source_alert_status, state,
+             initiated_by, approved_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            alert_id,
+            2,
+            "dismiss",
+            "false_positive",
+            rationale,
+            "registry extract",
+            "{}",
+            source_status,
+            "approved",
+            "officer-1",
+            approver,
+        ),
+    )
+    return conn.execute(
+        "SELECT id FROM monitoring_alert_review_requests "
+        "WHERE alert_id = ? ORDER BY id DESC LIMIT 1",
+        (alert_id,),
+    ).fetchone()["id"]
+
+
 # ===================================================================
 # triage / assign
 # ===================================================================
@@ -185,9 +303,11 @@ class TestTriageAlert:
         assert row["status"] == "triaged"
         assert any(e["action"] == "monitoring.alert.triaged"
                    for e in audit_sink.events)
-        # PR-01 lifecycle event also recorded
-        assert any(e["action"] == "lifecycle.alert.triaged"
-                   for e in audit_sink.events)
+        canonical = routing_db.execute(
+            "SELECT action FROM audit_log WHERE target = ? ORDER BY id DESC LIMIT 1",
+            (f"monitoring_alert:{alert_id}",),
+        ).fetchone()
+        assert canonical["action"] == "monitoring.alert.status_transition"
 
     def test_triage_unknown_alert_raises(self, routing_db, audit_sink):
         from monitoring_routing import triage_alert, AlertNotFound
@@ -208,6 +328,43 @@ class TestAssignAlert:
         assert row["status"] == "assigned"
         assert any(e["action"] == "monitoring.alert.assigned"
                    for e in audit_sink.events)
+
+    def test_co_cannot_assign_another_officer_through_routing_helper(
+        self, routing_db, audit_sink
+    ):
+        import monitoring_alert_state_machine as sm
+        from monitoring_routing import assign_alert
+
+        alert_id = _insert_alert(routing_db)
+        with pytest.raises(sm.InsufficientRole, match="only self-assign"):
+            assign_alert(
+                routing_db,
+                alert_id,
+                user=USER,
+                assignee_id="sco-9",
+                audit_writer=audit_sink,
+            )
+
+        assert _alert(routing_db, alert_id)["status"] == "open"
+        assert audit_sink.events == []
+
+    def test_senior_can_assign_another_active_officer_through_routing_helper(
+        self, routing_db, audit_sink
+    ):
+        from monitoring_routing import assign_alert
+
+        alert_id = _insert_alert(routing_db)
+        result = assign_alert(
+            routing_db,
+            alert_id,
+            user={"sub": "sco-9", "name": "Senior Officer", "role": "sco"},
+            assignee_id="officer-1",
+            audit_writer=audit_sink,
+        )
+
+        assert result["status"] == "assigned"
+        assert result["owner_id"] == "officer-1"
+        assert _alert(routing_db, alert_id)["reviewed_by"] == "officer-1"
 
     def test_cannot_assign_dismissed_alert(self, routing_db, audit_sink):
         from monitoring_routing import (
@@ -357,6 +514,39 @@ class TestRouteToPeriodicReview:
                 user=USER, audit_writer=audit_sink,
             )
 
+    def test_document_owned_alert_transfers_to_periodic_review_owner(
+        self,
+        routing_db,
+        audit_sink,
+    ):
+        import monitoring_alert_state_machine as sm
+        from monitoring_routing import route_alert_to_periodic_review
+
+        application_id = f"test-app-doc-review-{uuid.uuid4().hex[:8]}"
+        alert_id = _insert_alert(
+            routing_db,
+            application_id=application_id,
+            alert_type="document_expired",
+        )
+        _link_document_owner(routing_db, alert_id, application_id)
+
+        result = route_alert_to_periodic_review(
+            routing_db,
+            alert_id,
+            review_reason="Document signal requires downstream review.",
+            user=USER,
+            audit_writer=audit_sink,
+        )
+        alert = dict(_alert(routing_db, alert_id))
+
+        assert result["status"] == "routed_to_review"
+        assert sm.alert_owner(routing_db, alert) == "periodic_review"
+        assert routing_db.execute(
+            "SELECT COUNT(*) AS count FROM application_enhanced_requirements "
+            "WHERE monitoring_alert_id = ?",
+            (alert_id,),
+        ).fetchone()["count"] == 1
+
 
 # ===================================================================
 # route to EDD
@@ -392,6 +582,74 @@ class TestRouteToEDD:
         assert "lifecycle.link.alert_to_edd.created" in actions
         assert "lifecycle.edd.origin_set" in actions
 
+    def test_screening_owned_alert_transfers_to_edd_owner(
+        self,
+        routing_db,
+        audit_sink,
+    ):
+        import monitoring_alert_state_machine as sm
+        from monitoring_routing import route_alert_to_edd
+
+        application_id = f"test-app-screen-edd-{uuid.uuid4().hex[:8]}"
+        alert_id = _insert_alert(
+            routing_db,
+            application_id=application_id,
+            alert_type="sanctions_change",
+        )
+        _link_screening_owner(routing_db, alert_id, application_id)
+
+        result = route_alert_to_edd(
+            routing_db,
+            alert_id,
+            trigger_notes="Screening signal requires EDD ownership.",
+            user=USER,
+            audit_writer=audit_sink,
+        )
+        alert = dict(_alert(routing_db, alert_id))
+
+        assert result["status"] == "routed_to_edd"
+        assert sm.alert_owner(routing_db, alert) == "edd"
+        assert routing_db.execute(
+            "SELECT COUNT(*) AS count FROM monitoring_alert_evidence "
+            "WHERE monitoring_alert_id = ?",
+            (alert_id,),
+        ).fetchone()["count"] == 1
+
+    def test_route_with_two_source_owners_fails_and_rolls_back(
+        self,
+        routing_db,
+        audit_sink,
+    ):
+        import monitoring_alert_state_machine as sm
+        from monitoring_routing import route_alert_to_edd
+
+        application_id = f"test-app-ambiguous-edd-{uuid.uuid4().hex[:8]}"
+        alert_id = _insert_alert(
+            routing_db,
+            application_id=application_id,
+            alert_type="sanctions_change",
+        )
+        _link_screening_owner(routing_db, alert_id, application_id)
+        _link_document_owner(routing_db, alert_id, application_id)
+        before_edd = routing_db.execute(
+            "SELECT COUNT(*) AS count FROM edd_cases"
+        ).fetchone()["count"]
+
+        with pytest.raises(sm.AmbiguousAlertOwner):
+            route_alert_to_edd(
+                routing_db,
+                alert_id,
+                user=USER,
+                audit_writer=audit_sink,
+            )
+
+        alert = _alert(routing_db, alert_id)
+        assert alert["status"] == "open"
+        assert alert["linked_edd_case_id"] is None
+        assert routing_db.execute(
+            "SELECT COUNT(*) AS count FROM edd_cases"
+        ).fetchone()["count"] == before_edd
+
     def test_repeat_route_reuses_linked_edd(self, routing_db, audit_sink):
         from monitoring_routing import route_alert_to_edd
         app = "test-app-edd-repeat"
@@ -413,10 +671,10 @@ class TestRouteToEDD:
         ).fetchone()["c"]
         assert active_count == 1
 
-    def test_route_reuses_existing_active_edd_for_same_application(
+    def test_route_does_not_overwrite_active_edd_owned_by_another_alert(
         self, routing_db, audit_sink,
     ):
-        """Two distinct alerts on same app => only one active EDD."""
+        """Two alerts may not share a one-to-one EDD reverse pointer."""
         from monitoring_routing import route_alert_to_edd
         app = "test-app-edd-shared"
         alert_a = _insert_alert(routing_db, application_id=app,
@@ -429,9 +687,9 @@ class TestRouteToEDD:
         rb = route_alert_to_edd(routing_db, alert_b,
                                 user=USER, audit_writer=audit_sink)
 
-        assert ra["edd_case_id"] == rb["edd_case_id"]
-        assert rb["reused"] is True
-        assert rb["created"] is False
+        assert ra["edd_case_id"] != rb["edd_case_id"]
+        assert rb["reused"] is False
+        assert rb["created"] is True
 
         active_count = routing_db.execute(
             "SELECT COUNT(*) AS c FROM edd_cases "
@@ -439,14 +697,75 @@ class TestRouteToEDD:
             "('edd_approved','edd_rejected')",
             (app,),
         ).fetchone()["c"]
-        assert active_count == 1
+        assert active_count == 2
+        assert _edd(
+            routing_db,
+            ra["edd_case_id"],
+        )["linked_monitoring_alert_id"] == alert_a
+        assert _edd(
+            routing_db,
+            rb["edd_case_id"],
+        )["linked_monitoring_alert_id"] == alert_b
 
-        # The reused link still set linked_monitoring_alert_id on the
-        # EDD via set_edd_origin to point at the most-recently-routing
-        # alert (the deterministic outcome documented in the routing
-        # contract; PR-01 link helpers handle the displacement).
-        edd = _edd(routing_db, ra["edd_case_id"])
-        assert edd["linked_monitoring_alert_id"] == alert_b
+    @pytest.mark.parametrize(
+        ("route_name", "table_name", "alert_link_column"),
+        (
+            (
+                "review",
+                "periodic_reviews",
+                "linked_periodic_review_id",
+            ),
+            ("edd", "edd_cases", "linked_edd_case_id"),
+        ),
+    )
+    def test_repeat_route_fails_closed_when_reverse_link_is_corrupted(
+        self,
+        routing_db,
+        audit_sink,
+        route_name,
+        table_name,
+        alert_link_column,
+    ):
+        from monitoring_routing import (
+            route_alert_to_edd,
+            route_alert_to_periodic_review,
+        )
+        import monitoring_alert_state_machine as sm
+
+        alert_id = _insert_alert(
+            routing_db,
+            application_id=f"test-app-corrupt-{route_name}",
+        )
+        route = (
+            route_alert_to_periodic_review
+            if route_name == "review"
+            else route_alert_to_edd
+        )
+        first = route(
+            routing_db,
+            alert_id,
+            user=USER,
+            audit_writer=audit_sink,
+        )
+        linked_id = _alert(routing_db, alert_id)[alert_link_column]
+        assert linked_id in {
+            first.get("periodic_review_id"),
+            first.get("edd_case_id"),
+        }
+        routing_db.execute(
+            f"UPDATE {table_name} SET linked_monitoring_alert_id = 999999 "
+            "WHERE id = ?",
+            (linked_id,),
+        )
+        routing_db.commit()
+
+        with pytest.raises(sm.EvidenceLinkMismatch, match="point back"):
+            route(
+                routing_db,
+                alert_id,
+                user=USER,
+                audit_writer=audit_sink,
+            )
 
     def test_route_creates_new_edd_when_previous_terminal(
         self, routing_db, audit_sink,
@@ -688,12 +1007,18 @@ class TestRdi008CriticalDismissalGate:
     def test_critical_dismissed_with_valid_clearance(self, routing_db, audit_sink):
         from monitoring_routing import dismiss_alert
         alert_id = _insert_alert(routing_db, severity="critical")
+        review_request_id = _approved_review_request(
+            routing_db,
+            alert_id,
+            rationale="senior-reviewed false positive",
+        )
         result = dismiss_alert(
             routing_db, alert_id,
             dismissal_reason="false_positive",
             dismissal_notes="senior-reviewed false positive",
             user=_SENIOR, audit_writer=audit_sink,
             critical_clearance=_VALID_CLEARANCE,
+            review_request_id=review_request_id,
         )
         assert result["status"] == "dismissed"
         row = _alert(routing_db, alert_id)
@@ -709,6 +1034,11 @@ class TestRdi008CriticalDismissalGate:
         # approval-time recheck) — the marker alone is no longer sufficient.
         from monitoring_routing import dismiss_alert
         alert_id = _insert_alert(routing_db, severity="critical")
+        review_request_id = _approved_review_request(
+            routing_db,
+            alert_id,
+            rationale="approved after second review",
+        )
         result = dismiss_alert(
             routing_db, alert_id,
             dismissal_reason="false_positive",
@@ -716,6 +1046,7 @@ class TestRdi008CriticalDismissalGate:
             user=_SENIOR, audit_writer=audit_sink,
             critical_clearance={"approver": _SENIOR, "via": "approved_review",
                                 "evidence_ref": "registry extract"},
+            review_request_id=review_request_id,
         )
         assert result["status"] == "dismissed"
 
@@ -778,16 +1109,12 @@ def monitoring_postgres_schema(monkeypatch):
         )
 
     from contextlib import suppress
-    from urllib.parse import urlsplit, urlunsplit
-
     import psycopg2
     from psycopg2 import sql
+    from psycopg2.extensions import make_dsn
 
     database_name = f"monitoring_owner_{uuid.uuid4().hex[:12]}"
-    parts = urlsplit(base_dsn)
-    database_dsn = urlunsplit(
-        (parts.scheme, parts.netloc, f"/{database_name}", parts.query, parts.fragment)
-    )
+    database_dsn = make_dsn(base_dsn, dbname=database_name)
     admin = psycopg2.connect(base_dsn)
     admin.autocommit = True
     db_module = None
@@ -877,7 +1204,7 @@ class TestProtectedDomainOwnershipBoundary:
             "dismissal_reason", "rationale", "evidence_ref", "state",
             "initiated_by", "initiated_at", "approved_by", "approved_at",
             "approval_note", "rejection_reason", "second_review_bypassed",
-            "sampled_for_qa",
+            "sampled_for_qa", "transition_evidence", "source_alert_status",
         },
         "monitoring_alerts": {
             "id", "application_id", "provider", "case_identifier",

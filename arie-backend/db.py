@@ -16,6 +16,10 @@ import secrets
 import subprocess
 from pathlib import Path
 
+from monitoring_alert_state_machine import (
+    CANONICAL_STATUSES as MONITORING_ALERT_STATUS_VALUES,
+)
+
 logger = logging.getLogger(__name__)
 
 MONITORING_ALERT_DISCOVERED_VIA_VALUES = (
@@ -26,6 +30,17 @@ MONITORING_ALERT_DISCOVERED_VIA_VALUES = (
     "officer_created",
     "document_health",
 )
+
+# PR-MON-M1-STATE-MACHINE-1: exact persisted Monitoring Alert vocabulary.
+#
+# This tuple is intentionally limited to values already supported by current
+# runtime contracts and the post-PR #902 staging dataset.  Future workflow
+# states must not be added speculatively: changing this tuple requires an
+# explicit compatibility audit, migration analysis, and state-machine version
+# update.  ``in_review`` remains canonical because it is the controlled
+# backfill's recorded rollback target. The state-machine module is the single
+# source; this database alias drives preflight and constraint installation.
+MONITORING_ALERT_STATUS_CONSTRAINT = "monitoring_alerts_status_check"
 
 RMI_REQUEST_STATUS_VALUES = (
     "open",
@@ -1314,7 +1329,9 @@ def _get_postgres_schema() -> str:
         summary TEXT,
         source_reference TEXT,
         ai_recommendation TEXT,
-        status TEXT DEFAULT 'open',
+        status TEXT NOT NULL DEFAULT 'open'
+            CONSTRAINT monitoring_alerts_status_check
+            CHECK(status IN ('open','triaged','assigned','in_review','escalated','routed_to_review','routed_to_edd','dismissed','resolved','waived')),
         officer_action TEXT,
         officer_notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1533,6 +1550,8 @@ def _get_postgres_schema() -> str:
         dismissal_reason TEXT,
         rationale TEXT,
         evidence_ref TEXT,
+        transition_evidence TEXT,
+        source_alert_status TEXT,
         state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','rejected','senior_cleared')),
         initiated_by TEXT,
         initiated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -2779,7 +2798,9 @@ def _get_sqlite_schema() -> str:
         summary TEXT,
         source_reference TEXT,
         ai_recommendation TEXT,
-        status TEXT DEFAULT 'open',
+        status TEXT NOT NULL DEFAULT 'open'
+            CONSTRAINT monitoring_alerts_status_check
+            CHECK(status IN ('open','triaged','assigned','in_review','escalated','routed_to_review','routed_to_edd','dismissed','resolved','waived')),
         officer_action TEXT,
         officer_notes TEXT,
         created_at TEXT DEFAULT (datetime('now')),
@@ -2943,6 +2964,8 @@ def _get_sqlite_schema() -> str:
         dismissal_reason TEXT,
         rationale TEXT,
         evidence_ref TEXT,
+        transition_evidence TEXT,
+        source_alert_status TEXT,
         state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','rejected','senior_cleared')),
         initiated_by TEXT,
         initiated_at TEXT DEFAULT (datetime('now')),
@@ -3679,6 +3702,36 @@ def init_db():
         db.commit()
         logger.info("startup: schema DDL committed — Database schema initialized")
 
+        # Migration 054 / PR-MON-M1-STATE-MACHINE-1.  This must run before
+        # migration files are marked as covered by init_db: long-lived
+        # PostgreSQL databases receive a strict, no-rewrite compatibility
+        # preflight and the validated named CHECK/NOT NULL hardening here.
+        # Any incompatible row aborts startup and leaves migration 054
+        # unapplied so an operator cannot mistake a failed guard for success.
+        logger.info("startup: entering Monitoring Alert status constraint preflight (v2.54)")
+        _ensure_monitoring_alert_status_constraint(db)
+        db.commit()
+        logger.info("startup: completed Monitoring Alert status constraint preflight (v2.54)")
+
+        # Migration 055 / PR-MON-M1-STATE-MACHINE-1. Existing review-request
+        # ledgers receive one nullable JSON-text field for the typed evidence
+        # identifiers validated by the transition service. This additive step
+        # has no default and never rewrites evidence_ref or any existing row.
+        logger.info("startup: entering Monitoring review transition-evidence schema (v2.55)")
+        _ensure_monitoring_review_transition_evidence_schema(db)
+        db.commit()
+        logger.info("startup: completed Monitoring review transition-evidence schema (v2.55)")
+
+        # Migration 056 / PR-MON-M1-STATE-MACHINE-1. Bind each newly created
+        # review request to the exact canonical alert status protected by the
+        # creation-time row lock. The nullable additive column preserves
+        # historical rows; approval treats a missing binding as stale and
+        # requires reject/recreate rather than guessing.
+        logger.info("startup: entering Monitoring review source-status schema (v2.56)")
+        _ensure_monitoring_review_source_status_schema(db)
+        db.commit()
+        logger.info("startup: completed Monitoring review source-status schema (v2.56)")
+
         # Fresh installs are already on the current schema because init_db()
         # creates it in one shot. Mark every known file migration as covered
         # before the file-based runner can replay legacy ALTER TABLE steps
@@ -4213,6 +4266,290 @@ def _safe_table_exists(db: DBConnection, table: str) -> bool:
             return True
         except Exception:
             return False
+
+
+def _monitoring_review_transition_evidence_column_metadata(
+    db: DBConnection,
+) -> Optional[Dict[str, Any]]:
+    """Return current-schema metadata for the migration-055 column."""
+    if db.is_postgres:
+        row = db.execute(
+            "SELECT data_type, is_nullable, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_schema = current_schema() "
+            "AND table_name = ? AND column_name = ?",
+            ("monitoring_alert_review_requests", "transition_evidence"),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    rows = db.execute(
+        "PRAGMA table_info(monitoring_alert_review_requests)"
+    ).fetchall()
+    for row in rows:
+        item = dict(row)
+        if item.get("name") == "transition_evidence":
+            return {
+                "data_type": str(item.get("type") or "").lower(),
+                "is_nullable": "NO" if item.get("notnull") else "YES",
+                "column_default": item.get("dflt_value"),
+            }
+    return None
+
+
+MONITORING_PENDING_REVIEW_UNIQUE_INDEX = (
+    "uq_monitoring_review_requests_one_pending"
+)
+
+
+def _monitoring_pending_review_duplicates(
+    db: DBConnection,
+) -> List[Dict[str, Any]]:
+    rows = db.execute(
+        "SELECT alert_id, COUNT(*) AS pending_count "
+        "FROM monitoring_alert_review_requests "
+        "WHERE state = 'pending' "
+        "GROUP BY alert_id HAVING COUNT(*) > 1 "
+        "ORDER BY alert_id LIMIT 20"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _monitoring_pending_review_index_definition(
+    db: DBConnection,
+) -> Optional[str]:
+    if db.is_postgres:
+        row = db.execute(
+            "SELECT pg_get_indexdef(i.indexrelid) AS indexdef, "
+            "i.indisunique, i.indisvalid, i.indisready "
+            "FROM pg_index i "
+            "JOIN pg_class idx ON idx.oid = i.indexrelid "
+            "JOIN pg_class tbl ON tbl.oid = i.indrelid "
+            "JOIN pg_namespace ns ON ns.oid = tbl.relnamespace "
+            "WHERE ns.nspname = current_schema() AND tbl.relname = ? "
+            "AND idx.relname = ?",
+            (
+                "monitoring_alert_review_requests",
+                MONITORING_PENDING_REVIEW_UNIQUE_INDEX,
+            ),
+        ).fetchone()
+        if row is None:
+            return None
+        if not (
+            bool(row.get("indisunique"))
+            and bool(row.get("indisvalid"))
+            and bool(row.get("indisready"))
+        ):
+            # Preserve "present but invalid" as distinct from missing so the
+            # installer refuses it instead of attempting a same-name CREATE.
+            return ""
+        return str(row.get("indexdef") or "")
+    row = db.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type = 'index' AND tbl_name = ? AND name = ?",
+        (
+            "monitoring_alert_review_requests",
+            MONITORING_PENDING_REVIEW_UNIQUE_INDEX,
+        ),
+    ).fetchone()
+    return str(row.get("sql") or "") if row else None
+
+
+def _is_valid_monitoring_pending_review_index(definition: Optional[str]) -> bool:
+    normalized = " ".join(
+        str(definition or "")
+        .strip()
+        .rstrip(";")
+        .lower()
+        .replace('"', "")
+        .replace("`", "")
+        .replace("[", "")
+        .replace("]", "")
+        .split()
+    )
+    match = re.fullmatch(
+        r"create unique index "
+        + re.escape(MONITORING_PENDING_REVIEW_UNIQUE_INDEX)
+        + r" on (?:(?:[a-z_][a-z0-9_$]*)\.)?"
+        + r"monitoring_alert_review_requests"
+        + r"(?: using btree)?\s*\(([^()]*)\)\s*where\s+(.+)",
+        normalized,
+    )
+    if not match:
+        return False
+    key_columns = [
+        column.strip()
+        for column in match.group(1).split(",")
+        if column.strip()
+    ]
+    if key_columns != ["alert_id"]:
+        return False
+    predicate = (
+        match.group(2)
+        .replace("::text", "")
+        .replace("(", "")
+        .replace(")", "")
+        .replace(" ", "")
+    )
+    return predicate == "state='pending'"
+
+
+def _ensure_monitoring_review_transition_evidence_schema(
+    db: DBConnection,
+) -> Dict[str, Any]:
+    """Install the additive typed-evidence persistence column idempotently.
+
+    ``transition_evidence`` is nullable TEXT with no default. The controlled
+    transition layer owns JSON validation and permits only its supported typed
+    evidence identifiers. This schema step deliberately performs no UPDATE,
+    does not inspect or reinterpret ``evidence_ref``, and preserves every
+    existing review-request row byte-for-byte.
+    """
+    if not _safe_table_exists(db, "monitoring_alert_review_requests"):
+        raise RuntimeError(
+            "Migration 055 blocked: monitoring_alert_review_requests is missing"
+        )
+
+    duplicates = _monitoring_pending_review_duplicates(db)
+    if duplicates:
+        summary = ", ".join(
+            f"alert_id={row.get('alert_id')} count={row.get('pending_count')}"
+            for row in duplicates
+        )
+        raise RuntimeError(
+            "Migration 055 blocked: multiple pending Monitoring review "
+            f"requests exist ({summary}); manual reconciliation is required"
+        )
+
+    metadata = _monitoring_review_transition_evidence_column_metadata(db)
+    changed = metadata is None
+    if changed:
+        db.execute(
+            "ALTER TABLE monitoring_alert_review_requests "
+            "ADD COLUMN transition_evidence TEXT"
+        )
+        metadata = _monitoring_review_transition_evidence_column_metadata(db)
+
+    if metadata is None:
+        raise RuntimeError(
+            "Migration 055 failed: transition_evidence was not installed"
+        )
+
+    data_type = str(metadata.get("data_type") or "").strip().lower()
+    if data_type != "text":
+        raise RuntimeError(
+            "Migration 055 blocked: transition_evidence must be TEXT"
+        )
+    if metadata.get("is_nullable") != "YES":
+        raise RuntimeError(
+            "Migration 055 blocked: transition_evidence must remain nullable"
+        )
+    if metadata.get("column_default") is not None:
+        raise RuntimeError(
+            "Migration 055 blocked: transition_evidence must not have a default"
+        )
+
+    index_definition = _monitoring_pending_review_index_definition(db)
+    index_changed = index_definition is None
+    if index_changed:
+        db.execute(
+            "CREATE UNIQUE INDEX "
+            f"{MONITORING_PENDING_REVIEW_UNIQUE_INDEX} "
+            "ON monitoring_alert_review_requests(alert_id) "
+            "WHERE state = 'pending'"
+        )
+        index_definition = _monitoring_pending_review_index_definition(db)
+    if not _is_valid_monitoring_pending_review_index(index_definition):
+        raise RuntimeError(
+            "Migration 055 blocked: pending-review uniqueness index has an "
+            "unexpected definition"
+        )
+
+    return {
+        "engine": "postgresql" if db.is_postgres else "sqlite",
+        "changed": changed,
+        "index_changed": index_changed,
+        "nullable": True,
+        "default": None,
+    }
+
+
+def _monitoring_review_source_status_column_metadata(
+    db: DBConnection,
+) -> Optional[Dict[str, Any]]:
+    """Return current-schema metadata for the migration-056 binding column."""
+    if db.is_postgres:
+        row = db.execute(
+            "SELECT data_type, is_nullable, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_schema = current_schema() "
+            "AND table_name = ? AND column_name = ?",
+            ("monitoring_alert_review_requests", "source_alert_status"),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    rows = db.execute(
+        "PRAGMA table_info(monitoring_alert_review_requests)"
+    ).fetchall()
+    for row in rows:
+        item = dict(row)
+        if item.get("name") == "source_alert_status":
+            return {
+                "data_type": str(item.get("type") or "").lower(),
+                "is_nullable": "NO" if item.get("notnull") else "YES",
+                "column_default": item.get("dflt_value"),
+            }
+    return None
+
+
+def _ensure_monitoring_review_source_status_schema(
+    db: DBConnection,
+) -> Dict[str, Any]:
+    """Install the additive creation-time alert-status binding idempotently.
+
+    Existing rows remain NULL because no historical source state can be
+    reconstructed safely. Approval treats NULL, noncanonical, or changed
+    source status as stale and fails closed; rejection remains available so
+    operators can retire and recreate such requests deliberately.
+    """
+    if not _safe_table_exists(db, "monitoring_alert_review_requests"):
+        raise RuntimeError(
+            "Migration 056 blocked: monitoring_alert_review_requests is missing"
+        )
+
+    metadata = _monitoring_review_source_status_column_metadata(db)
+    changed = metadata is None
+    if changed:
+        db.execute(
+            "ALTER TABLE monitoring_alert_review_requests "
+            "ADD COLUMN source_alert_status TEXT"
+        )
+        metadata = _monitoring_review_source_status_column_metadata(db)
+
+    if metadata is None:
+        raise RuntimeError(
+            "Migration 056 failed: source_alert_status was not installed"
+        )
+
+    data_type = str(metadata.get("data_type") or "").strip().lower()
+    if data_type != "text":
+        raise RuntimeError(
+            "Migration 056 blocked: source_alert_status must be TEXT"
+        )
+    if metadata.get("is_nullable") != "YES":
+        raise RuntimeError(
+            "Migration 056 blocked: source_alert_status must remain nullable"
+        )
+    if metadata.get("column_default") is not None:
+        raise RuntimeError(
+            "Migration 056 blocked: source_alert_status must not have a default"
+        )
+
+    return {
+        "engine": "postgresql" if db.is_postgres else "sqlite",
+        "changed": changed,
+        "nullable": True,
+        "default": None,
+    }
 
 
 def _supervisor_column_metadata(db: DBConnection, table: str, column: str):
@@ -5816,6 +6153,289 @@ def _pg_quote_identifier(identifier: str) -> str:
 def _sql_literal_list(values) -> str:
     """Return a single-quoted SQL literal list for static enum values."""
     return ", ".join("'" + str(value).replace("'", "''") + "'" for value in values)
+
+
+def _monitoring_alert_status_column_metadata(db: DBConnection):
+    """Return status-column metadata without probing a missing PG column.
+
+    The PostgreSQL lookup is scoped to ``current_schema()`` so a same-named
+    table elsewhere on the search path cannot satisfy the migration preflight.
+    """
+    if db.is_postgres:
+        row = db.execute(
+            """
+            SELECT is_nullable, column_default
+              FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = ?
+               AND column_name = ?
+            """,
+            ("monitoring_alerts", "status"),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    rows = db.execute("PRAGMA table_info(monitoring_alerts)").fetchall()
+    for row in rows:
+        item = dict(row)
+        if item.get("name") == "status":
+            return {
+                "is_nullable": "NO" if item.get("notnull") else "YES",
+                "column_default": item.get("dflt_value"),
+            }
+    return None
+
+
+def _monitoring_alert_status_offenders(db: DBConnection) -> List[Dict[str, Any]]:
+    """Return grouped non-canonical status values without changing any row."""
+    placeholders = ", ".join("?" for _ in MONITORING_ALERT_STATUS_VALUES)
+    rows = db.execute(
+        "SELECT status AS status_value, COUNT(*) AS row_count "
+        "FROM monitoring_alerts "
+        "WHERE status IS NULL "
+        "   OR TRIM(status) = '' "
+        f"   OR status NOT IN ({placeholders}) "
+        "GROUP BY status "
+        "ORDER BY CASE WHEN status IS NULL THEN 0 ELSE 1 END, status",
+        tuple(MONITORING_ALERT_STATUS_VALUES),
+    ).fetchall()
+    return [
+        {
+            "status": row["status_value"],
+            "count": int(row["row_count"]),
+        }
+        for row in rows
+    ]
+
+
+def _postgres_monitoring_alert_status_constraints(
+    db: DBConnection,
+) -> List[Dict[str, Any]]:
+    """Return CHECK constraints that directly constrain the status column."""
+    if not db.is_postgres:
+        return []
+    rows = db.execute(
+        """
+        SELECT c.conname,
+               pg_get_constraintdef(c.oid) AS definition,
+               c.convalidated
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+         WHERE n.nspname = current_schema()
+           AND t.relname = ?
+           AND c.contype = 'c'
+           AND EXISTS (
+                SELECT 1
+                  FROM pg_attribute a
+                 WHERE a.attrelid = c.conrelid
+                   AND a.attnum = ANY(c.conkey)
+                   AND a.attname = ?
+           )
+         ORDER BY c.conname
+        """,
+        ("monitoring_alerts", "status"),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _postgres_monitoring_status_check_is_canonical(definition: str) -> bool:
+    """Match PostgreSQL's normalized form of the exact approved CHECK.
+
+    Comparing only the string-literal set is insufficient: a ``NOT IN`` or an
+    expression with an extra ``OR`` could mention the same values while
+    enforcing different semantics. ``pg_get_constraintdef`` normalizes an
+    ``IN`` check on a TEXT column to ``= ANY (ARRAY[...])`` and adds ``::text``
+    casts, so compare that complete structure and the approved value order.
+    """
+    compact = re.sub(r"\s+", "", definition or "")
+    expected_literals = ",".join(
+        "'" + value.replace("'", "''") + "'::text"
+        for value in MONITORING_ALERT_STATUS_VALUES
+    )
+    expected = f"CHECK((status=ANY(ARRAY[{expected_literals}])))"
+    return compact == expected
+
+
+def _postgres_constraint_is_validated(value: Any) -> bool:
+    return value is True or str(value).strip().lower() in {"1", "t", "true", "yes"}
+
+
+def _sqlite_monitoring_status_check_is_canonical(definition: str) -> bool:
+    """Return whether SQLite table DDL contains the exact named status CHECK."""
+    compact = re.sub(r"\s+", "", definition or "")
+    expected_literals = ",".join(
+        "'" + value.replace("'", "''") + "'"
+        for value in MONITORING_ALERT_STATUS_VALUES
+    )
+    expected = (
+        "CONSTRAINTmonitoring_alerts_status_check"
+        f"CHECK(statusIN({expected_literals}))"
+    )
+    return expected in compact
+
+
+def _ensure_monitoring_alert_status_constraint(db: DBConnection) -> Dict[str, Any]:
+    """Fail-closed Monitoring Alert status hardening (migration 054).
+
+    No row is ever rewritten by this helper.  Existing NULL, blank, or
+    non-canonical values abort startup before any constraint DDL is attempted.
+    PostgreSQL receives the named CHECK via ``NOT VALID`` followed by explicit
+    validation and ``SET NOT NULL`` in the caller's transaction.  SQLite fresh
+    schemas enforce the same contract inline; long-lived SQLite databases are
+    scanned safely because SQLite cannot add a CHECK constraint in place.
+    """
+    metadata = _monitoring_alert_status_column_metadata(db)
+    if metadata is None:
+        raise RuntimeError(
+            "Migration 054 blocked: monitoring_alerts.status is missing; "
+            "no schema or data changes were made"
+        )
+
+    offenders = _monitoring_alert_status_offenders(db)
+    if offenders:
+        summary = {
+            "<NULL>" if item["status"] is None else repr(str(item["status"])): item["count"]
+            for item in offenders
+        }
+        raise RuntimeError(
+            "Migration 054 blocked: monitoring_alerts.status contains "
+            f"non-canonical rows {summary}; rows were preserved and no "
+            "constraint DDL was attempted"
+        )
+
+    if not db.is_postgres:
+        ddl_row = db.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'monitoring_alerts'"
+        ).fetchone()
+        ddl = str(ddl_row["sql"] or "") if ddl_row is not None else ""
+        constrained = (
+            _sqlite_monitoring_status_check_is_canonical(ddl)
+            and metadata.get("is_nullable") == "NO"
+        )
+        if not constrained:
+            logger.warning(
+                "Migration 054: monitoring_alerts.status data is compatible, "
+                "but this long-lived SQLite table cannot be hardened in place; "
+                "fresh SQLite schemas enforce the named CHECK and NOT NULL"
+            )
+        return {
+            "engine": "sqlite",
+            "compatible_rows": True,
+            "constraint_enforced": constrained,
+            "changed": False,
+        }
+
+    constraints = _postgres_monitoring_alert_status_constraints(db)
+    unexpected = [
+        item.get("conname")
+        for item in constraints
+        if item.get("conname") != MONITORING_ALERT_STATUS_CONSTRAINT
+    ]
+    if unexpected:
+        raise RuntimeError(
+            "Migration 054 blocked: unexpected PostgreSQL CHECK constraint(s) "
+            f"also govern monitoring_alerts.status: {unexpected}; no constraints "
+            "were removed"
+        )
+
+    named = next(
+        (
+            item
+            for item in constraints
+            if item.get("conname") == MONITORING_ALERT_STATUS_CONSTRAINT
+        ),
+        None,
+    )
+    named_is_canonical = bool(
+        named
+        and _postgres_monitoring_status_check_is_canonical(
+            named.get("definition") or ""
+        )
+    )
+    named_is_validated = bool(
+        named and _postgres_constraint_is_validated(named.get("convalidated"))
+    )
+    not_null = metadata.get("is_nullable") == "NO"
+
+    if named_is_canonical and named_is_validated and not_null:
+        return {
+            "engine": "postgresql",
+            "compatible_rows": True,
+            "constraint_enforced": True,
+            "changed": False,
+        }
+
+    quoted_table = _pg_quote_identifier("monitoring_alerts")
+    quoted_column = _pg_quote_identifier("status")
+    quoted_constraint = _pg_quote_identifier(MONITORING_ALERT_STATUS_CONSTRAINT)
+
+    if named is not None and not named_is_canonical:
+        db.execute(
+            f"ALTER TABLE {quoted_table} "
+            f"DROP CONSTRAINT {quoted_constraint}"
+        )
+        named = None
+        named_is_validated = False
+
+    if named is None:
+        db.execute(
+            f"ALTER TABLE {quoted_table} "
+            f"ADD CONSTRAINT {quoted_constraint} "
+            f"CHECK ({quoted_column} IN "
+            f"({_sql_literal_list(MONITORING_ALERT_STATUS_VALUES)})) NOT VALID"
+        )
+        named_is_validated = False
+
+    if not named_is_validated:
+        db.execute(
+            f"ALTER TABLE {quoted_table} "
+            f"VALIDATE CONSTRAINT {quoted_constraint}"
+        )
+
+    if not not_null:
+        db.execute(
+            f"ALTER TABLE {quoted_table} "
+            f"ALTER COLUMN {quoted_column} SET NOT NULL"
+        )
+
+    verified_metadata = _monitoring_alert_status_column_metadata(db)
+    verified_constraints = _postgres_monitoring_alert_status_constraints(db)
+    verified_named = next(
+        (
+            item
+            for item in verified_constraints
+            if item.get("conname") == MONITORING_ALERT_STATUS_CONSTRAINT
+        ),
+        None,
+    )
+    if (
+        verified_metadata is None
+        or verified_metadata.get("is_nullable") != "NO"
+        or not _postgres_monitoring_status_check_is_canonical(
+            (verified_named or {}).get("definition") or ""
+        )
+        or not _postgres_constraint_is_validated(
+            (verified_named or {}).get("convalidated")
+        )
+    ):
+        raise RuntimeError(
+            "Migration 054 failed verification: PostgreSQL did not retain the "
+            "exact validated Monitoring Alert status CHECK and NOT NULL contract"
+        )
+
+    logger.info(
+        "Migration 054: installed validated PostgreSQL constraint %s with %d "
+        "canonical values; no Monitoring Alert rows were rewritten",
+        MONITORING_ALERT_STATUS_CONSTRAINT,
+        len(MONITORING_ALERT_STATUS_VALUES),
+    )
+    return {
+        "engine": "postgresql",
+        "compatible_rows": True,
+        "constraint_enforced": True,
+        "changed": True,
+    }
 
 
 def _postgres_check_constraints_for_column(db: DBConnection, table: str, column: str):

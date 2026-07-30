@@ -456,7 +456,7 @@ def _upsert_monitoring_alert_with_provenance(db, row, *, discovered_via, backfil
         INSERT INTO monitoring_alerts
             (provider, case_identifier, application_id, client_name, alert_type, severity,
              detected_by, summary, source_reference, status, discovered_via, discovered_at, backfill_run_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, CURRENT_TIMESTAMP, ?)
         ON CONFLICT(provider, case_identifier)
         WHERE provider IS NOT NULL AND case_identifier IS NOT NULL
         DO UPDATE SET
@@ -467,7 +467,8 @@ def _upsert_monitoring_alert_with_provenance(db, row, *, discovered_via, backfil
             detected_by = EXCLUDED.detected_by,
             summary = EXCLUDED.summary,
             source_reference = EXCLUDED.source_reference,
-            status = EXCLUDED.status,
+            -- Historical evidence refresh must preserve the authoritative
+            -- lifecycle decision already stored on an existing alert.
             -- Preserve stronger provenance: live webhook discovery must not
             -- be reclassified as backfilled, and an operator-triggered manual
             -- backfill must not be downgraded by an automatic seed backfill.
@@ -491,7 +492,6 @@ def _upsert_monitoring_alert_with_provenance(db, row, *, discovered_via, backfil
             row["detected_by"],
             row["summary"],
             row["source_reference"],
-            row["status"],
             discovered_via,
             backfill_run_id,
         ),

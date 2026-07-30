@@ -1,0 +1,94 @@
+# PR-MON-M1-STATE-MACHINE-1 — Phase 1 status-mutation inventory
+
+Status: complete before implementation
+Base: `9fa083c1ac185ea65bfa8515dff315eb254701a5`
+Inventory date: 2026-07-30
+
+## Reconciled runtime baseline
+
+A fresh database-enforced read-only plan was run inside the staging backend
+task. It scanned all 19 Monitoring Alerts and changed nothing.
+
+| Stored status | Count |
+|---|---:|
+| `open` | 13 |
+| `dismissed` | 3 |
+| `resolved` | 1 |
+| `escalated` | 1 |
+| `routed_to_edd` | 1 |
+
+Alert `583` is already canonical at `routed_to_edd` with the PR #902
+hash-chained audit entry. The four governed Monitoring flags evaluated OFF.
+
+The live PostgreSQL schema has:
+
+- `monitoring_alerts.status` nullable, defaulting to `open`;
+- no status-value `CHECK`;
+- no status/`resolved_at` consistency constraint.
+
+The constraint design therefore targets the reconciled post-PR #902 data. It
+does not rely on the merged pre-approval PR #902 report as current runtime
+proof.
+
+## Mutation paths
+
+| Mutation path | Current source → target | Actor / evidence | Risk and required treatment |
+|---|---|---|---|
+| Manual alert creation (`server.py`) | creation → `open` | admin/SCO/CO; source fields | Initial-state exception only; creation is not a transition. Keep fixed `open` and audit creation. |
+| Document-health detection (`document_health_monitor.py`) | creation → `open` | existing document issue | Initial-state exception only. |
+| ComplyAdvantage webhook upsert (`webhook_storage.py`) | any existing status → `open` on conflict | webhook provider/case | Critical silent reopening. Conflict updates must preserve status. |
+| ComplyAdvantage historical backfill (`historical_backfill.py`) | any existing status → `open` on conflict | operator/backfill | Critical silent reopening. Conflict updates must preserve status. |
+| Start review (`server.py`) | broad state → `in_review` | officer; optional note | Route through the service with exact source, role, and detection evidence. |
+| Triage (`monitoring_routing.py`) | `open` → `triaged` | officer | Route through the service. Remove duplicate transition logic. |
+| Assign (`server.py`, `monitoring_routing.py`) | broad state → `assigned` | officer/assignee | Assignment may advance only `open`/`triaged`; later reassignment is metadata-only. |
+| Generic decision (`server.py`) | broad state → several statuses | officer; outcome-dependent note | Replace the open-ended map with explicit transition rules and typed evidence. |
+| Dismiss (`monitoring_routing.py`) | broad state → `dismissed` | officer/senior; reason/control evidence | Route through the service and keep four-eyes evidence atomic. |
+| Route to Periodic Review (`monitoring_routing.py`) | broad state → `routed_to_review` | officer; created/reused review | Lock first; require an exact same-application review link; route is nonterminal. |
+| Route to EDD (`monitoring_routing.py`) | broad state → `routed_to_edd` | officer; created/reused EDD case | Lock first; require an exact same-application EDD link; route is nonterminal. |
+| Overdue escalation (`server.py`) | active → `escalated` | officer; SLA and reason | Route through the service; escalation remains active. |
+| Four-eyes clear (`monitoring_dismissal_control.py`, `server.py`) | active → terminal outcome | different senior approver or recorded senior override | Remove intermediate commits. Request/approval, transition, and audits must commit once. |
+| Document refresh acceptance/waiver (`monitoring_document_refresh.py`) | active → `resolved`/`waived` | KYC & Documents; request/document/reason | Route through the service with exact linked evidence. |
+| Enhanced-requirement review sync (`monitoring_document_refresh.py`) | active → `resolved`/`waived` | KYC & Documents | Same controlled transition contract; no duplicated direct writer. |
+| Document-health issue disappearance (`document_health_monitor.py`) | active → `resolved` | scheduler inference | Automatic closure is not activated in this PR. Preserve status and report a resolution candidate. |
+| PR #902 backfill/rollback (`monitoring_status_backfill.py`) | exact manifest row only | approved operator and fingerprint | Narrow, versioned, audited direct-write exception retained for its rollback window. |
+| Fixture/demo seeders | fixture snapshot writes | guarded fixture operator | Narrow non-regulated exception; never a runtime mutation path. |
+
+## Cross-cutting findings
+
+1. Ordinary runtime writers do not lock the alert row or use an exact
+   source-status predicate. Concurrent decisions can both report success.
+2. Four-eyes request, approval, transition, and audit writes currently cross
+   multiple commits.
+3. Document-health audit failures are swallowed even when the alert mutation
+   later commits.
+4. `routed_to_edd` and `routed_to_review` are incorrectly classified as
+   resolved/terminal in multiple modules.
+5. `escalated` is incorrectly folded into `routed_to_edd`.
+6. `resolved_at` is sometimes treated as an independent state machine. The
+   stored canonical status must be authoritative; existing timestamp
+   inconsistencies are evidence for a separate migration.
+7. Assignment is both ownership metadata and a status. V1 preserves
+   `assigned` only as the pre-review phase; later reassignments do not regress
+   lifecycle state.
+8. The document-request states (`requested`, `uploaded`, `under_review`, and
+   related display aliases) belong to `application_enhanced_requirements`, not
+   `monitoring_alerts`.
+9. Screening Review, KYC & Documents, EDD, Periodic Review, and Change
+   Management own their business decisions. Monitoring owns the signal,
+   triage/assignment visibility, escalation visibility, and linkage.
+10. PR #900 established explicit ownership through both alert-side and reverse
+    EDD/Periodic Review links, linked enhanced requirements, and the exact
+    Change Management source-reference bridge. Alert-row-only inference is
+    insufficient; conflicting or broken explicit links must fail closed.
+
+## Direct-write exceptions
+
+The static guard may allow only:
+
+1. insertion at the fixed initial state `open`;
+2. the exact PR #902 versioned migration/rollback tool;
+3. database schema/constraint installation;
+4. strictly guarded fixture/demo snapshot seeders.
+
+All runtime status changes must use
+`monitoring_alert_state_machine.transition_alert_status`.

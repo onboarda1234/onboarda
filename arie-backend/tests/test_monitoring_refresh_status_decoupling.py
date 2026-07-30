@@ -45,7 +45,8 @@ def test_effective_status_derives_from_refresh_request():
 def test_effective_status_terminal_alert_ignores_refresh_state():
     assert ms.effective_status("resolved", "requested") == "resolved"
     assert ms.effective_status("waived", "uploaded") == "waived"
-    assert ms.effective_status("open", "requested", resolved_at="2026-07-01") == "open"
+    # Timestamp drift cannot override the authoritative active status.
+    assert ms.effective_status("open", "requested", resolved_at="2026-07-01") == "document_requested"
 
 
 def test_effective_status_tolerates_legacy_overloaded_rows():
@@ -54,10 +55,10 @@ def test_effective_status_tolerates_legacy_overloaded_rows():
     assert ms.effective_status("document_requested", None) == "document_requested"
 
 
-def test_extended_statuses_reserve_in_review_and_escalated():
+def test_extended_status_export_is_the_canonical_ten():
     assert "in_review" in ms.EXTENDED_ALERT_STATUSES
     assert "escalated" in ms.EXTENDED_ALERT_STATUSES
-    assert set(ms.CANONICAL_ALERT_STATUSES).issubset(set(ms.EXTENDED_ALERT_STATUSES))
+    assert ms.EXTENDED_ALERT_STATUSES == ms.CANONICAL_ALERT_STATUSES
 
 
 # ── 1b. Unit: high-risk classification ──────────────────────────────────────
@@ -166,25 +167,68 @@ def _seed(conn):
 
 
 def _reset_alerts(conn):
-    conn.execute("DELETE FROM monitoring_alerts WHERE id BETWEEN 9501 AND 9506")
+    from regulated_deletion import sanctioned_delete_context
+
+    with sanctioned_delete_context(
+        "fixture_cleanup_nonprod",
+        actor_id="pytest:monitoring-refresh-decoupling",
+        role="system",
+        reason="Reset isolated synthetic Monitoring status-control alerts.",
+        allowed_tables=("monitoring_alerts",),
+        environment="testing",
+        is_fixture=True,
+        confirmed=True,
+    ):
+        conn.execute("DELETE FROM monitoring_alerts WHERE id BETWEEN 9501 AND 9507")
+    conn.execute("DELETE FROM documents WHERE id = 'guard-doc-9503'")
+    conn.execute(
+        """
+        INSERT INTO documents
+            (id, application_id, doc_type, doc_name, file_path)
+        VALUES (
+            'guard-doc-9503', 'app_guard', 'passport',
+            'Synthetic passport fixture', '/tmp/synthetic-passport-fixture.pdf'
+        )
+        """
+    )
     rows = [
-        (9501, "Sanctions Match", "critical", "New sanctions listing for director"),
-        (9502, "pep_change", "medium", "PEP status change detected"),
-        (9503, "document_expired", "medium", "Passport expired"),
-        (9504, "media", "medium", "New adverse media coverage"),
-        (9505, "Sanctions Match", "critical", "Second sanctions alert"),
-        (9506, "pep", "medium", "Declared PEP re-screen"),
-        (9507, "Sanctions Match", "critical", "Dedicated audit-contents sanctions alert"),
+        (9501, "Sanctions Match", "critical", "New sanctions listing for director", "complyadvantage", "case-9501", "screening:test:9501"),
+        (9502, "pep_change", "medium", "PEP status change detected", "complyadvantage", "case-9502", "screening:test:9502"),
+        (9503, "document_expired", "medium", "Passport expired", None, None, "document:guard-doc-9503"),
+        (9504, "media", "medium", "New adverse media coverage", "complyadvantage", "case-9504", "screening:test:9504"),
+        (9505, "Sanctions Match", "critical", "Second sanctions alert", "complyadvantage", "case-9505", "screening:test:9505"),
+        (9506, "pep", "medium", "Declared PEP re-screen", "complyadvantage", "case-9506", "screening:test:9506"),
+        (9507, "Sanctions Match", "critical", "Dedicated audit-contents sanctions alert", "complyadvantage", "case-9507", "screening:test:9507"),
     ]
-    for alert_id, alert_type, severity, summary in rows:
+    for (
+        alert_id,
+        alert_type,
+        severity,
+        summary,
+        provider,
+        case_identifier,
+        source_reference,
+    ) in rows:
         conn.execute(
             """
             INSERT INTO monitoring_alerts
                 (id, application_id, client_name, alert_type, severity, status,
-                 detected_by, summary, discovered_via, source_reference)
-            VALUES (?, 'app_guard', 'Guard Client Ltd', ?, ?, 'open', 'test', ?, 'manual', ?)
+                 detected_by, summary, discovered_via, provider,
+                 case_identifier, source_reference)
+            VALUES (
+                ?, 'app_guard', 'Guard Client Ltd', ?, ?, 'open', 'test', ?,
+                'manual', ?, ?, ?
+            )
             """,
-            (alert_id, alert_type, severity, summary, json.dumps({"seed": alert_id})),
+            (
+                alert_id,
+                alert_type,
+                severity,
+                summary,
+                provider,
+                case_identifier,
+                source_reference,
+            ),
         )
     conn.commit()
 

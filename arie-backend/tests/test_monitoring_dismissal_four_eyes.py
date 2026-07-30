@@ -28,7 +28,7 @@ import monitoring_dismissal_control as mdc
 
 CANONICAL_STATUSES = {
     "open", "triaged", "assigned", "in_review", "escalated",
-    "routed_to_review", "routed_to_edd", "dismissed", "resolved", "closed", "waived",
+    "routed_to_review", "routed_to_edd", "dismissed", "resolved", "waived",
 }
 
 
@@ -257,6 +257,87 @@ def _seed_alert(db_module, alert_type, severity, summary):
     return aid
 
 
+def _seed_screening_case(db_module, aid):
+    case_identifier = f"provider-case-fe-{aid}"
+    provider = "complyadvantage"
+    conn = db_module.get_db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO screening_reviews
+                (application_id, subject_type, subject_name, disposition,
+                 disposition_code, rationale, reviewer_id, reviewer_name)
+            VALUES ('app-fe', 'company', ?, 'cleared', 'false_positive',
+                    'Controlled state-machine fixture', 'sco_fe', 'SCO FE')
+            """,
+            (f"Alert {aid}",),
+        )
+        conn.execute(
+            "UPDATE monitoring_alerts "
+            "SET provider = ?, case_identifier = ?, source_reference = ? "
+            "WHERE id = ?",
+            (
+                provider,
+                case_identifier,
+                json.dumps(
+                    {
+                        "provider": provider,
+                        "case_identifier": case_identifier,
+                    },
+                    sort_keys=True,
+                ),
+                aid,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO monitoring_alert_evidence
+                (monitoring_alert_id, application_id, provider,
+                 case_identifier, evidence_type, evidence_json, evidence_hash)
+            VALUES (?, 'app-fe', ?, ?, 'screening_case', ?, ?)
+            """,
+            (
+                aid,
+                provider,
+                case_identifier,
+                json.dumps(
+                    {
+                        "provider": provider,
+                        "case_identifier": case_identifier,
+                    },
+                    sort_keys=True,
+                ),
+                f"fixture-screening-evidence-{aid}",
+            ),
+        )
+        conn.commit()
+        return case_identifier
+    finally:
+        conn.close()
+
+
+def _seed_document(db_module, aid):
+    document_id = f"doc-fe-{aid}"
+    conn = db_module.get_db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO documents
+                (id, application_id, doc_type, doc_name, file_path)
+            VALUES (?, 'app-fe', 'passport', ?, ?)
+            """,
+            (document_id, f"Passport {aid}", f"/fixtures/{document_id}.pdf"),
+        )
+        conn.execute(
+            "UPDATE monitoring_alerts SET source_reference = ? WHERE id = ?",
+            (f"document:{document_id}", aid),
+        )
+        conn.commit()
+        return document_id
+    finally:
+        conn.close()
+
+
 def _tok(uid, role, name):
     from auth import create_token
     return create_token(uid, role, name, "officer")
@@ -284,8 +365,67 @@ def _audit_actions(db_module, aid):
         conn.close()
 
 
+def _review_requests(db_module, aid):
+    conn = db_module.get_db()
+    try:
+        return [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM monitoring_alert_review_requests "
+                "WHERE alert_id = ? ORDER BY id",
+                (aid,),
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+
 def _patch(base, tok, aid, body):
     return requests.patch(f"{base}/api/monitoring/alerts/{aid}", headers=_hdr(tok), json=body, timeout=10)
+
+
+def test_pending_request_requires_authoritative_nonblank_maker(
+    four_eyes_server,
+):
+    _base, db_module = four_eyes_server
+    alert_id = _seed_alert(
+        db_module,
+        "manual",
+        "medium",
+        "Direct helper maker validation.",
+    )
+    conn = db_module.get_db()
+    try:
+        alert = dict(
+            conn.execute(
+                "SELECT * FROM monitoring_alerts WHERE id = ?",
+                (alert_id,),
+            ).fetchone()
+        )
+        with pytest.raises(
+            mdc.DismissalControlError,
+            match="active Compliance Officer",
+        ):
+            mdc.create_pending_request(
+                conn,
+                alert=alert,
+                tier=3,
+                requested_outcome="dismiss",
+                dismissal_reason="other",
+                rationale="This request has no authenticated maker.",
+                evidence_ref="",
+                transition_evidence={},
+                user={},
+                audit_writer=lambda *_args, **_kwargs: None,
+            )
+        assert conn.execute(
+            "SELECT COUNT(*) AS count FROM monitoring_alert_review_requests "
+            "WHERE alert_id = ?",
+            (alert_id,),
+        ).fetchone()["count"] == 0
+    finally:
+        conn.rollback()
+        conn.close()
 
 
 # ── CO → pending request ─────────────────────────────────────────────────────
@@ -293,9 +433,11 @@ def _patch(base, tok, aid, body):
 def test_co_tier1_clear_creates_request_and_does_not_dismiss(four_eyes_server):
     base, dbm = four_eyes_server
     aid = _seed_alert(dbm, "sanctions_change", "critical", "New sanctions hit")
+    _seed_screening_case(dbm, aid)
     co = _tok("co_fe", "co", "CO FE")
     r = _patch(base, co, aid, {"action": "save_decision", "outcome": "false_positive",
-                               "note": "Looks like a name-only match", "evidence_ref": "DOB mismatch"})
+                               "note": "Looks like a name-only match",
+                               "evidence_ref": "DOB mismatch"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "review_requested"
@@ -307,8 +449,10 @@ def test_co_tier1_clear_creates_request_and_does_not_dismiss(four_eyes_server):
 def test_co_tier1_request_requires_evidence(four_eyes_server):
     base, dbm = four_eyes_server
     aid = _seed_alert(dbm, "sanctions_change", "critical", "New sanctions hit")
+    _seed_screening_case(dbm, aid)
     co = _tok("co_fe", "co", "CO FE")
-    r = _patch(base, co, aid, {"action": "dismiss", "dismissal_reason": "false_positive", "reason": "no evidence given"})
+    r = _patch(base, co, aid, {"action": "dismiss", "dismissal_reason": "false_positive",
+                               "reason": "no evidence given"})
     assert r.status_code == 400
     assert "evidence" in r.json()["error"].lower()
 
@@ -318,13 +462,16 @@ def test_co_tier1_request_requires_evidence(four_eyes_server):
 def test_sco_direct_clear_dismisses_and_audits_senior_cleared(four_eyes_server):
     base, dbm = four_eyes_server
     aid = _seed_alert(dbm, "sanctions_change", "critical", "New sanctions hit")
+    _seed_screening_case(dbm, aid)
     sco = _tok("sco_fe", "sco", "SCO FE")
     r = _patch(base, sco, aid, {"action": "save_decision", "outcome": "false_positive",
-                                "note": "DOB and nationality mismatch confirmed", "evidence_ref": "passport p.2"})
+                                "note": "DOB and nationality mismatch confirmed",
+                                "evidence_ref": "passport p.2"})
     assert r.status_code == 200, r.text
     assert _status(dbm, aid) == "dismissed"
     actions = _audit_actions(dbm, aid)
     assert "monitoring.alert.dismissal_senior_cleared" in actions
+    assert "monitoring.alert.status_transition" in actions
     # verify the bypass flag is recorded
     conn = dbm.get_db()
     try:
@@ -339,10 +486,50 @@ def test_sco_direct_clear_dismisses_and_audits_senior_cleared(four_eyes_server):
 def test_sco_direct_clear_requires_evidence_on_tier1(four_eyes_server):
     base, dbm = four_eyes_server
     aid = _seed_alert(dbm, "sanctions_change", "critical", "New sanctions hit")
+    _seed_screening_case(dbm, aid)
     sco = _tok("sco_fe", "sco", "SCO FE")
-    r = _patch(base, sco, aid, {"action": "save_decision", "outcome": "false_positive", "note": "mismatch"})
+    r = _patch(base, sco, aid, {"action": "save_decision", "outcome": "false_positive",
+                                "note": "mismatch"})
     assert r.status_code == 400
     assert "evidence" in r.json()["error"].lower()
+    assert _status(dbm, aid) == "open"
+
+
+def test_direct_senior_clear_helper_rejects_forged_co_role(four_eyes_server):
+    """Reusable service callers cannot bypass endpoint RBAC with a forged role."""
+    _base, dbm = four_eyes_server
+    aid = _seed_alert(
+        dbm,
+        "misc_flag",
+        "critical",
+        "Direct helper role-integrity probe",
+    )
+    audit_calls = []
+    conn = dbm.get_db()
+    try:
+        with pytest.raises(mdc.DismissalControlError) as excinfo:
+            mdc.record_senior_clear(
+                conn,
+                alert={"id": aid},
+                tier=3,
+                requested_outcome="dismiss",
+                dismissal_reason="false_positive",
+                rationale="Forged senior direct-clear attempt.",
+                evidence_ref="Officer evidence note.",
+                transition_evidence={},
+                user={"sub": "co_fe", "role": "sco"},
+                audit_writer=lambda *args, **kwargs: audit_calls.append(
+                    (args, kwargs)
+                ),
+                commit=False,
+            )
+        assert excinfo.value.status_code == 403
+        conn.rollback()
+    finally:
+        conn.close()
+
+    assert audit_calls == []
+    assert _review_requests(dbm, aid) == []
     assert _status(dbm, aid) == "open"
 
 
@@ -351,21 +538,207 @@ def test_sco_direct_clear_requires_evidence_on_tier1(four_eyes_server):
 def test_different_sco_can_approve_and_execute(four_eyes_server):
     base, dbm = four_eyes_server
     aid = _seed_alert(dbm, "pep_change", "high", "PEP hit")
+    case_identifier = _seed_screening_case(dbm, aid)
     co = _tok("co_fe", "co", "CO FE")
     sco = _tok("sco_fe", "sco", "SCO FE")
     r = _patch(base, co, aid, {"action": "save_decision", "outcome": "false_positive",
-                               "note": "different person", "evidence_ref": "registry extract"})
+                               "note": "different person",
+                               "evidence_ref": "registry extract"})
     req_id = r.json()["result"]["review_request_id"]
     ap = requests.post(f"{base}/api/monitoring/review-requests/{req_id}/approve",
                        headers=_hdr(sco), json={"approval_note": "concur"}, timeout=10)
     assert ap.status_code == 200, ap.text
     assert _status(dbm, aid) == "dismissed"
     assert "monitoring.alert.dismissal_approved" in _audit_actions(dbm, aid)
+    conn = dbm.get_db()
+    try:
+        transition_detail = json.loads(
+            conn.execute(
+                "SELECT detail FROM audit_log WHERE target = ? "
+                "AND action = 'monitoring.alert.status_transition' "
+                "ORDER BY id DESC LIMIT 1",
+                (f"monitoring_alert:{aid}",),
+            ).fetchone()["detail"]
+        )
+    finally:
+        conn.close()
+    assert transition_detail["evidence"]["review_request_id"] == req_id
+    assert transition_detail["evidence"]["case_identifier"] == case_identifier
+    assert "screening_case_id" not in transition_detail["evidence"]
+
+
+def test_approval_rejects_request_after_alert_source_status_changes(
+    four_eyes_server,
+):
+    """An open-state request cannot approve after a separate escalation.
+
+    Approval locks the alert first and then the request, revalidates the exact
+    creation-time source status, and returns 409 without changing either row.
+    """
+    base, dbm = four_eyes_server
+    aid = _seed_alert(
+        dbm,
+        "misc_flag",
+        "critical",
+        "Manual material concern",
+    )
+    co = _tok("co_fe", "co", "CO FE")
+    sco = _tok("sco_fe", "sco", "SCO FE")
+
+    requested = _patch(
+        base,
+        co,
+        aid,
+        {
+            "action": "save_decision",
+            "outcome": "false_positive",
+            "note": "Potential false positive after manual review.",
+            "evidence_ref": "Registry extract",
+        },
+    )
+    assert requested.status_code == 200, requested.text
+    request_id = requested.json()["result"]["review_request_id"]
+    assert _review_requests(dbm, aid)[0]["source_alert_status"] == "open"
+
+    escalated = _patch(
+        base,
+        co,
+        aid,
+        {
+            "action": "save_decision",
+            "outcome": "escalate_to_sco",
+            "note": "Material concern requires senior review.",
+        },
+    )
+    assert escalated.status_code == 200, escalated.text
+    assert _status(dbm, aid) == "escalated"
+
+    conn = dbm.get_db()
+    try:
+        alert_before = dict(
+            conn.execute(
+                "SELECT status, officer_action, officer_notes, reviewed_at, "
+                "reviewed_by, resolved_at FROM monitoring_alerts WHERE id = ?",
+                (aid,),
+            ).fetchone()
+        )
+        request_before = dict(
+            conn.execute(
+                "SELECT state, source_alert_status, approved_by, approved_at, "
+                "approval_note, rejection_reason "
+                "FROM monitoring_alert_review_requests WHERE id = ?",
+                (request_id,),
+            ).fetchone()
+        )
+    finally:
+        conn.close()
+
+    approved = requests.post(
+        f"{base}/api/monitoring/review-requests/{request_id}/approve",
+        headers=_hdr(sco),
+        json={"approval_note": "Concur"},
+        timeout=10,
+    )
+    assert approved.status_code == 409, approved.text
+    assert "status changed" in approved.text.lower()
+
+    conn = dbm.get_db()
+    try:
+        alert_after = dict(
+            conn.execute(
+                "SELECT status, officer_action, officer_notes, reviewed_at, "
+                "reviewed_by, resolved_at FROM monitoring_alerts WHERE id = ?",
+                (aid,),
+            ).fetchone()
+        )
+        request_after = dict(
+            conn.execute(
+                "SELECT state, source_alert_status, approved_by, approved_at, "
+                "approval_note, rejection_reason "
+                "FROM monitoring_alert_review_requests WHERE id = ?",
+                (request_id,),
+            ).fetchone()
+        )
+    finally:
+        conn.close()
+    assert alert_after == alert_before
+    assert request_after == request_before == {
+        "state": "pending",
+        "source_alert_status": "open",
+        "approved_by": None,
+        "approved_at": None,
+        "approval_note": None,
+        "rejection_reason": None,
+    }
+    assert "monitoring.alert.dismissal_approved" not in _audit_actions(dbm, aid)
+
+
+def test_senior_clear_rolls_back_control_record_when_linked_evidence_is_missing(
+    four_eyes_server,
+):
+    base, dbm = four_eyes_server
+    aid = _seed_alert(dbm, "sanctions_change", "critical", "New sanctions hit")
+    _seed_screening_case(dbm, aid)
+    sco = _tok("sco_fe", "sco", "SCO FE")
+    response = _patch(
+        base,
+        sco,
+        aid,
+        {
+            "action": "save_decision",
+            "outcome": "false_positive",
+            "note": "False-positive rationale",
+            "evidence_ref": "Officer evidence note",
+            "screening_case_id": 999999999,
+        },
+    )
+    assert response.status_code == 404, response.text
+    assert _status(dbm, aid) == "open"
+    assert _review_requests(dbm, aid) == []
+    assert "monitoring.alert.dismissal_senior_cleared" not in _audit_actions(
+        dbm, aid
+    )
+
+
+def test_approval_failure_rolls_back_approved_marker_and_transition(
+    four_eyes_server,
+):
+    base, dbm = four_eyes_server
+    aid = _seed_alert(dbm, "pep_change", "high", "PEP hit")
+    _seed_screening_case(dbm, aid)
+    co = _tok("co_fe", "co", "CO FE")
+    sco = _tok("sco_fe", "sco", "SCO FE")
+    requested = _patch(
+        base,
+        co,
+        aid,
+        {
+            "action": "save_decision",
+            "outcome": "false_positive",
+            "note": "Potential false positive",
+            "evidence_ref": "Registry note",
+            "screening_case_id": 999999998,
+        },
+    )
+    assert requested.status_code == 200, requested.text
+    request_id = requested.json()["result"]["review_request_id"]
+
+    approved = requests.post(
+        f"{base}/api/monitoring/review-requests/{request_id}/approve",
+        headers=_hdr(sco),
+        json={"approval_note": "Concur"},
+        timeout=10,
+    )
+    assert approved.status_code == 404, approved.text
+    assert _status(dbm, aid) == "open"
+    assert _review_requests(dbm, aid)[0]["state"] == "pending"
+    assert "monitoring.alert.dismissal_approved" not in _audit_actions(dbm, aid)
 
 
 def test_same_user_cannot_approve_own_request(four_eyes_server):
     base, dbm = four_eyes_server
     aid = _seed_alert(dbm, "sanctions_change", "critical", "sanctions hit")
+    _seed_screening_case(dbm, aid)
     sco = _tok("sco_fe", "sco", "SCO FE")
     # SCO elects second review on their own clear → creates a pending request
     r = _patch(base, sco, aid, {"action": "save_decision", "outcome": "false_positive",
@@ -383,6 +756,7 @@ def test_same_user_cannot_approve_own_request(four_eyes_server):
 def test_rejection_keeps_alert_actionable(four_eyes_server):
     base, dbm = four_eyes_server
     aid = _seed_alert(dbm, "pep_change", "high", "PEP hit")
+    _seed_screening_case(dbm, aid)
     co = _tok("co_fe", "co", "CO FE")
     admin = _tok("admin_fe", "admin", "Admin FE")
     r = _patch(base, co, aid, {"action": "save_decision", "outcome": "false_positive",
@@ -400,8 +774,10 @@ def test_rejection_keeps_alert_actionable(four_eyes_server):
 def test_tier3_low_risk_dismissal_is_single_officer(four_eyes_server):
     base, dbm = four_eyes_server
     aid = _seed_alert(dbm, "document_expiring_soon", "low", "passport expires soon")
+    document_id = _seed_document(dbm, aid)
     co = _tok("co_fe", "co", "CO FE")
-    r = _patch(base, co, aid, {"action": "dismiss", "dismissal_reason": "no_action_needed", "reason": "renewed offline"})
+    r = _patch(base, co, aid, {"action": "dismiss", "dismissal_reason": "no_action_needed",
+                               "reason": "renewed offline", "document_id": document_id})
     assert r.status_code == 200, r.text
     assert _status(dbm, aid) == "dismissed"
     assert "monitoring.alert.dismissal_requested" not in _audit_actions(dbm, aid)
@@ -439,13 +815,15 @@ def test_severity_escalation_between_request_and_approval_blocks_evidence_less_c
     base, dbm = four_eyes_server
     # Tier-2 shape, non-critical at request time.
     aid = _seed_alert(dbm, "document_expired", "high", "passport has expired")
+    document_id = _seed_document(dbm, aid)
     co = _tok("co_fe", "co", "CO FE")
     sco = _tok("sco_fe", "sco", "SCO FE")
 
     # CO requests a controlled clear with rationale but NO evidence — accepted
     # because the alert is non-critical tier 2 at creation.
     r = _patch(base, co, aid, {"action": "dismiss", "dismissal_reason": "false_positive",
-                               "reason": "expired doc superseded"})
+                               "reason": "expired doc superseded",
+                               "document_id": document_id})
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "review_requested"
     req_id = r.json()["result"]["review_request_id"]
@@ -477,12 +855,14 @@ def test_approval_with_evidence_still_executes_after_escalation(four_eyes_server
     the alert escalated to CRITICAL before approval."""
     base, dbm = four_eyes_server
     aid = _seed_alert(dbm, "document_expired", "high", "passport has expired")
+    document_id = _seed_document(dbm, aid)
     co = _tok("co_fe", "co", "CO FE")
     sco = _tok("sco_fe", "sco", "SCO FE")
 
     r = _patch(base, co, aid, {"action": "dismiss", "dismissal_reason": "false_positive",
                                "reason": "expired doc superseded",
-                               "evidence_ref": "replacement passport on file"})
+                               "evidence_ref": "replacement passport on file",
+                               "document_id": document_id})
     assert r.status_code == 200, r.text
     req_id = r.json()["result"]["review_request_id"]
 
@@ -511,3 +891,24 @@ def test_assert_evidence_current_unit():
         mdc.assert_evidence_current(crit, "   ")
     mdc.assert_evidence_current(crit, "SAR ref 42")  # must not raise
     mdc.assert_evidence_current(noncrit, "")  # non-critical tier-2 → no evidence needed
+
+
+def test_request_source_status_binding_unit():
+    request = {"source_alert_status": "open"}
+    mdc.assert_request_source_status_current(request, {"status": "open"})
+
+    with pytest.raises(mdc.DismissalControlError) as changed:
+        mdc.assert_request_source_status_current(
+            request,
+            {"status": "in_review"},
+        )
+    assert changed.value.status_code == 409
+    assert "status changed" in str(changed.value).lower()
+
+    with pytest.raises(mdc.DismissalControlError) as legacy:
+        mdc.assert_request_source_status_current(
+            {"source_alert_status": None},
+            {"status": "open"},
+        )
+    assert legacy.value.status_code == 409
+    assert "not bound" in str(legacy.value).lower()

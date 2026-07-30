@@ -809,8 +809,10 @@
    "requested_outcome",
    "sampled_for_qa",
    "second_review_bypassed",
+   "source_alert_status",
    "state",
-   "tier"
+   "tier",
+   "transition_evidence"
   ],
   "monitoring_alerts": [
    "ai_recommendation",

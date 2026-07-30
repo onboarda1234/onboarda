@@ -242,6 +242,19 @@ def _ledger_rows(db_module, aid):
         conn.close()
 
 
+def _canonical_transition_details(db_module, aid):
+    conn = db_module.get_db()
+    try:
+        rows = conn.execute(
+            "SELECT detail FROM audit_log WHERE target = ? "
+            "AND action = 'monitoring.alert.status_transition' ORDER BY id ASC",
+            (f"monitoring_alert:{aid}",),
+        ).fetchall()
+        return [json.loads(row["detail"]) for row in rows]
+    finally:
+        conn.close()
+
+
 @pytest.mark.parametrize("uid,role,name", [
     ("admin_oe", "admin", "Admin OE"),
     ("sco_oe", "sco", "SCO OE"),
@@ -295,7 +308,10 @@ def test_closed_late_alert_cannot_be_escalated_even_when_sla_breached(overdue_es
     assert _db_alert(dbm, aid)["status"] == "resolved"
 
 
-@pytest.mark.parametrize("status", ["dismissed", "waived", "routed_to_edd", "routed_to_review", "closed"])
+@pytest.mark.parametrize(
+    "status",
+    ["dismissed", "waived", "routed_to_edd", "routed_to_review"],
+)
 def test_terminal_alerts_cannot_be_escalated(overdue_escalation_server, status):
     base, dbm = overdue_escalation_server
     aid = _seed_alert(dbm, status=status, resolved_at="2026-01-20 09:00:00")
@@ -351,6 +367,42 @@ def test_success_uses_canonical_escalation_transition_and_audits(overdue_escalat
     assert ledger[0]["sla_due_at"] == before["sla"]["sla_due_at"]
     assert ledger[0]["sla_days"] == before["sla"]["sla_days"]
     assert after["overdue_escalations"][0]["id"] == ledger[0]["id"]
+    canonical = _canonical_transition_details(dbm, aid)
+    assert len(canonical) == 1
+    assert canonical[0]["evidence"]["escalation_id"] == ledger[0]["id"]
+
+
+def test_failed_canonical_transition_rolls_back_reserved_escalation_evidence(
+    overdue_escalation_server,
+    monkeypatch,
+):
+    import monitoring_alert_state_machine as state_machine
+    import server as server_module
+
+    base, dbm = overdue_escalation_server
+    aid = _seed_alert(dbm)
+
+    def fail_transition(*_args, **_kwargs):
+        raise state_machine.InvalidTransition(
+            "Injected transition rejection for atomicity coverage."
+        )
+
+    monkeypatch.setattr(
+        server_module._monitoring_state_machine,
+        "transition_alert_status",
+        fail_transition,
+    )
+    response = _post_escalate(
+        base,
+        _tok("sco_oe", "sco", "SCO OE"),
+        aid,
+        reason="This attempt must roll back its reserved evidence.",
+    )
+
+    assert response.status_code == 409, response.text
+    assert _db_alert(dbm, aid)["status"] == "open"
+    assert _ledger_rows(dbm, aid) == []
+    assert _canonical_transition_details(dbm, aid) == []
 
 
 def test_overdue_escalation_does_not_change_followup_due_date(overdue_escalation_server):

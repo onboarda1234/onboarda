@@ -224,6 +224,7 @@ from document_scope_policy import (
 )
 import monitoring_status as _monitoring_status
 import monitoring_dismissal_control as _mdc
+import monitoring_alert_state_machine as _monitoring_state_machine
 import monitoring_sla as _monitoring_sla
 import monitoring_followups as _monitoring_followups
 from monitoring_enrollment import (
@@ -16584,12 +16585,89 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
         data = self.get_json() or {}
         db = get_db()
         try:
-            # Capture the prior requirement status for the waiver audit event (below).
+            # Capture the prior requirement state before deciding whether this
+            # PATCH participates in the Monitoring Alert lifecycle. Metadata-
+            # only edits and repeated identical outcomes must not attempt a
+            # second terminal transition.
             _req_before = db.execute(
-                "SELECT status FROM application_enhanced_requirements WHERE id = ?",
+                "SELECT status, monitoring_alert_id "
+                "FROM application_enhanced_requirements WHERE id = ?",
                 (requirement_id,),
             ).fetchone()
-            _req_prev_status = (dict(_req_before).get("status") if _req_before else None)
+            _req_before_dict = dict(_req_before) if _req_before else {}
+            _req_prev_status = _req_before_dict.get("status")
+            _linked_monitoring_alert_id = (
+                _req_before_dict.get("monitoring_alert_id")
+            )
+            _requested_status = (
+                str(data.get("status") or "").strip().lower()
+                if data.get("status") not in (None, "")
+                else ""
+            )
+            _actual_status_change_requested = bool(
+                _requested_status
+                and _requested_status
+                != str(_req_prev_status or "").strip().lower()
+            )
+            _locked_monitoring_alert = None
+            if (
+                _actual_status_change_requested
+                and _linked_monitoring_alert_id not in (None, "")
+            ):
+                # Canonical lock order is Monitoring Alert first, then linked
+                # requirement. Re-read the requirement under lock so a stale
+                # browser PATCH cannot interleave with another review outcome.
+                _locked_monitoring_alert = (
+                    _monitoring_state_machine.lock_alert_for_transition(
+                        db, _linked_monitoring_alert_id
+                    )
+                )
+                _locked_req_sql = (
+                    "SELECT status, monitoring_alert_id "
+                    "FROM application_enhanced_requirements WHERE id = ?"
+                )
+                if getattr(db, "is_postgres", False):
+                    _locked_req_sql += " FOR UPDATE"
+                _locked_req = db.execute(
+                    _locked_req_sql,
+                    (requirement_id,),
+                ).fetchone()
+                _locked_req_dict = dict(_locked_req) if _locked_req else {}
+                if (
+                    str(_locked_req_dict.get("status") or "").strip().lower()
+                    != str(_req_prev_status or "").strip().lower()
+                    or str(_locked_req_dict.get("monitoring_alert_id") or "")
+                    != str(_linked_monitoring_alert_id)
+                ):
+                    raise _monitoring_state_machine.StaleCurrentState(
+                        "The enhanced requirement changed since it was read; "
+                        "refresh and retry."
+                    )
+
+                # This state-machine version deliberately has no terminal
+                # reopening edge. A document outcome reversal must therefore
+                # fail atomically instead of reopening only the requirement
+                # while leaving its linked alert terminal.
+                _alert_status = str(
+                    _locked_monitoring_alert.get("status") or ""
+                ).strip()
+                _terminal_outcome_reversal = (
+                    (
+                        str(_req_prev_status or "").strip().lower()
+                        == "accepted"
+                        and _alert_status == "resolved"
+                    )
+                    or (
+                        str(_req_prev_status or "").strip().lower()
+                        == "waived"
+                        and _alert_status == "waived"
+                    )
+                )
+                if _terminal_outcome_reversal:
+                    raise _monitoring_state_machine.TerminalStateError(
+                        "A linked terminal Monitoring Alert cannot be reopened "
+                        "through an enhanced requirement update."
+                    )
             result, error, status_code = update_application_enhanced_requirement(
                 db,
                 app_id,
@@ -16618,12 +16696,13 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
                     ip_address=self.get_client_ip(),
                     after_state=result,
                 )
-            _sync_monitoring_requirement_review(
-                db,
-                result.get("requirement") or {},
-                user=user,
-                audit_writer=self.log_audit,
-            )
+            if "status" in (result.get("changes") or {}):
+                _sync_monitoring_requirement_review(
+                    db,
+                    result.get("requirement") or {},
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
             # ── PR-AUTHORITY-AUDIT-HARDENING-1: first-class waiver event ──
             # An enhanced/EDD requirement waiver is a senior control action that
             # previously wrote no dedicated audit row. Emit a filterable "Waiver Used"
@@ -16649,11 +16728,19 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
                 )
             db.commit()
             self.success(result)
+        except _monitoring_state_machine.MonitoringTransitionError as exc:
+            _rollback_monitoring_transaction(db)
+            self.error(str(exc), exc.status_code)
+        except _monitoring_state_machine.AuditInfrastructureError:
+            _rollback_monitoring_transaction(db)
+            logger.exception(
+                "Monitoring Alert transition audit failed during enhanced "
+                "requirement update: requirement_id=%s",
+                requirement_id,
+            )
+            self.error("Monitoring Alert transition could not be completed.", 500)
         except Exception as exc:
-            try:
-                db.rollback()
-            except Exception:
-                pass
+            _rollback_monitoring_transaction(db)
             logger.error(
                 "application enhanced requirement update failed: app_id=%s requirement_id=%s error=%s",
                 app_id,
@@ -36662,15 +36749,7 @@ _MONITORING_LIST_ACTIVE_STATUSES = {
     "notification_failed",
 }
 
-_MONITORING_LIST_TERMINAL_STATUSES = {
-    "resolved",
-    "closed",
-    "dismissed",
-    "waived",
-    "cancelled",
-    "routed_to_edd",
-    "routed_to_review",
-}
+_MONITORING_LIST_TERMINAL_STATUSES = set(_monitoring_status.TERMINAL_STATUSES)
 
 _MONITORING_LIST_SUPPORTED_TYPES = {
     "document_expiry",
@@ -36790,9 +36869,11 @@ def _monitoring_list_client_display(row):
 
 
 def _monitoring_list_is_terminal(row, status_key):
-    if row.get("resolved_at") not in (None, ""):
-        return True
-    return status_key in _MONITORING_LIST_TERMINAL_STATUSES
+    # The canonical status is authoritative. A historical resolved_at drift
+    # cannot close an active/handoff alert, and routed states remain visible
+    # nonterminal handoffs.
+    del row
+    return _monitoring_status.is_terminal(status_key)
 
 
 def _monitoring_list_refresh_status_map(db, rows):
@@ -36878,6 +36959,7 @@ def _monitoring_list_project_row(row, refresh_status_map=None, pending_review_id
     type_key = _monitoring_list_canonical_type(item)
     client_display, mapping_status = _monitoring_list_client_display(item)
     is_terminal = _monitoring_list_is_terminal(item, status_key)
+    is_action_locked = _monitoring_status.is_action_locked(item.get("status"))
     is_supported_type = type_key in _MONITORING_LIST_SUPPORTED_TYPES
     is_internal_type = type_key in _MONITORING_LIST_INTERNAL_TYPES
     item.update({
@@ -36898,6 +36980,7 @@ def _monitoring_list_project_row(row, refresh_status_map=None, pending_review_id
         "client_display_name": client_display or None,
         "mapping_status": mapping_status,
         "is_terminal": is_terminal,
+        "is_action_locked": is_action_locked,
         "is_supported_pilot_type": is_supported_type,
         "is_internal_type": is_internal_type,
         # M2.2 four-eyes: derived pending-second-review flag (no stored status).
@@ -37008,7 +37091,7 @@ MONITORING_DECISION_OUTCOMES = {
         "status": "resolved",
         "officer_action": "no_material_impact",
         "audit_action": "monitoring.alert.no_material_impact",
-        "note_required": False,
+        "note_required": True,
     },
     "route_to_edd": {
         "status": "routed_to_edd",
@@ -37062,6 +37145,40 @@ MONITORING_DECISION_OUTCOMES = {
         "note_required": True,
     },
 }
+
+_MONITORING_DECISION_REASON_CODES = {
+    "no_material_impact": "no_material_impact",
+    "escalate_to_sco": "escalated_to_sco",
+    "update_risk_profile": "risk_profile_update_required",
+    "request_further_information": "further_information_requested",
+}
+
+
+def _monitoring_alert_identity_evidence(alert):
+    source_reference = str((alert or {}).get("source_reference") or "").strip()
+    if source_reference:
+        return {"source_reference": source_reference}
+    case_identifier = str((alert or {}).get("case_identifier") or "").strip()
+    if case_identifier:
+        return {"case_identifier": case_identifier}
+    return {}
+
+
+def _monitoring_control_transition_evidence(data):
+    """Return only typed linked-object evidence accepted by four-eyes control."""
+    payload = data if isinstance(data, dict) else {}
+    return {
+        key: payload[key]
+        for key in _mdc.TRANSITION_EVIDENCE_KEYS
+        if payload.get(key) not in (None, "")
+    }
+
+
+def _rollback_monitoring_transaction(db):
+    try:
+        db.rollback()
+    except Exception:
+        logger.exception("Monitoring Alert transaction rollback failed")
 
 
 def _monitoring_alert_get(db, alert_id):
@@ -37160,7 +37277,10 @@ def _monitoring_alert_action_note_required(alert, outcome):
 
 
 def _execute_monitoring_decision_outcome(db, user, alert_id, alert_before, *,
-                                         outcome, note, audit_writer, commit=True):
+                                         outcome, note, audit_writer,
+                                         transition_evidence=None,
+                                         reason_code=None,
+                                         commit=True):
     """Execute a configured Monitoring decision outcome.
 
     This is the existing ``save_decision`` transition shape factored into a
@@ -37176,9 +37296,56 @@ def _execute_monitoring_decision_outcome(db, user, alert_id, alert_before, *,
         "decided_by": user.get("sub", ""),
         "decided_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
-    if cfg["status"] is None:
-        # M1.1: outcome records officer bookkeeping only; alert.status stays
-        # canonical.
+    prior_status = str(alert_before.get("status") or "").strip()
+    status_value = cfg["status"]
+    evidence = dict(transition_evidence or {})
+    if note:
+        evidence.setdefault("officer_rationale", note)
+    try:
+        # Metadata-only outcomes and repeated in-review bookkeeping preserve the
+        # authoritative lifecycle state. Every actual status change goes through
+        # the canonical locked service below.
+        if status_value is None or status_value == prior_status:
+            locked = _monitoring_state_machine.lock_alert_for_transition(db, alert_id)
+            locked_status = str(locked.get("status") or "").strip()
+            if locked_status != prior_status:
+                raise _monitoring_state_machine.StaleCurrentState(
+                    "The Monitoring Alert changed since it was read; refresh and retry."
+                )
+            if locked_status not in _monitoring_state_machine.CANONICAL_STATUS_SET:
+                raise _monitoring_state_machine.InvalidStatus(
+                    "The stored Monitoring Alert status is not canonical."
+                )
+            if (
+                locked_status in _monitoring_state_machine.TERMINAL_STATUSES
+                or locked_status in _monitoring_state_machine.HANDOFF_STATUSES
+            ):
+                raise _monitoring_state_machine.TerminalStateError(
+                    "Closed or downstream-routed Monitoring Alerts cannot accept a new decision."
+                )
+            authoritative_status = locked_status
+            changed = False
+        else:
+            transition = _monitoring_state_machine.transition_alert_status(
+                db,
+                alert_id,
+                expected_status=prior_status,
+                target_status=status_value,
+                actor=user,
+                source_workflow="monitoring",
+                reason_code=(
+                    reason_code
+                    or _MONITORING_DECISION_REASON_CODES.get(outcome)
+                    or outcome
+                ),
+                reason=note,
+                evidence=evidence,
+                request_id=(_obs_get_request_id() or ""),
+                commit=False,
+            )
+            authoritative_status = transition["status"]
+            changed = bool(transition.get("changed"))
+
         db.execute(
             """
             UPDATE monitoring_alerts
@@ -37186,63 +37353,59 @@ def _execute_monitoring_decision_outcome(db, user, alert_id, alert_before, *,
                    officer_notes = ?,
                    reviewed_at = CURRENT_TIMESTAMP,
                    reviewed_by = COALESCE(reviewed_by, ?)
-             WHERE id = ?
+             WHERE id = ? AND status = ?
             """,
             (
                 cfg["officer_action"],
                 json.dumps(decision_payload, sort_keys=True),
                 user.get("sub", ""),
                 alert_id,
+                authoritative_status,
             ),
         )
-    else:
-        db.execute(
-            """
-            UPDATE monitoring_alerts
-               SET status = ?,
-                   officer_action = ?,
-                   officer_notes = ?,
-                   reviewed_at = CURRENT_TIMESTAMP,
-                   reviewed_by = COALESCE(reviewed_by, ?),
-                   resolved_at = CASE WHEN ? IN ('resolved','waived') THEN CURRENT_TIMESTAMP ELSE resolved_at END
-             WHERE id = ?
-            """,
-            (
-                cfg["status"],
-                cfg["officer_action"],
-                json.dumps(decision_payload, sort_keys=True),
-                user.get("sub", ""),
-                cfg["status"],
-                alert_id,
-            ),
+        decision_after_state = {
+            "status": authoritative_status,
+            "officer_action": cfg["officer_action"],
+            "outcome": outcome,
+        }
+        audit_writer(
+            user,
+            cfg["audit_action"],
+            f"monitoring_alert:{alert_id}",
+            json.dumps(decision_payload, default=str, sort_keys=True),
+            db=db,
+            before_state={
+                "status": alert_before.get("status"),
+                "officer_action": alert_before.get("officer_action"),
+            },
+            after_state=decision_after_state,
+            commit=False,
         )
-    decision_after_state = {"officer_action": cfg["officer_action"], "outcome": outcome}
-    if cfg["status"] is not None:
-        decision_after_state["status"] = cfg["status"]
-    audit_writer(
-        user,
-        cfg["audit_action"],
-        f"monitoring_alert:{alert_id}",
-        json.dumps(decision_payload, default=str, sort_keys=True),
-        db=db,
-        before_state={
-            "status": alert_before.get("status"),
-            "officer_action": alert_before.get("officer_action"),
-        },
-        after_state=decision_after_state,
-        commit=False,
-    )
-    if commit:
-        db.commit()
-    return {
-        "alert_id": alert_id,
-        "status": cfg["status"] if cfg["status"] is not None else alert_before.get("status"),
-        "outcome": outcome,
-    }
+        if commit:
+            db.commit()
+        refreshed = dict(_monitoring_alert_get(db, alert_id) or {})
+        return {
+            "alert_id": alert_id,
+            "status": refreshed.get("status") or authoritative_status,
+            "outcome": outcome,
+            "changed": changed,
+            "alert": refreshed,
+        }
+    except Exception:
+        _rollback_monitoring_transaction(db)
+        raise
 
 
-def _record_monitoring_overdue_escalation(db, alert_id, user, *,
-                                          reason, alert_before, alert_after, sla):
+def _record_monitoring_overdue_escalation(
+    db,
+    alert_id,
+    user,
+    *,
+    reason,
+    alert_before,
+    new_status,
+    sla,
+):
     escalated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     payload = {
         "alert_id": alert_id,
@@ -37251,21 +37414,24 @@ def _record_monitoring_overdue_escalation(db, alert_id, user, *,
         "escalated_by_role": user.get("role", ""),
         "escalated_at": escalated_at,
         "prior_status": alert_before.get("status"),
-        "new_status": alert_after.get("status"),
+        "new_status": new_status,
         "severity": alert_before.get("severity"),
         "sla_state": sla.get("sla_state"),
         "days_overdue": sla.get("days_overdue"),
         "sla_due_at": sla.get("sla_due_at"),
         "sla_days": sla.get("sla_days"),
     }
-    db.execute(
-        """
+    insert_sql = """
         INSERT INTO monitoring_alert_escalations
             (alert_id, reason, escalated_by, escalated_by_role, escalated_at,
              prior_status, new_status, sla_state, days_overdue, sla_due_at,
              sla_days, alert_severity_at_escalation)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
+    """
+    if getattr(db, "is_postgres", False):
+        insert_sql += " RETURNING id"
+    inserted = db.execute(
+        insert_sql,
         (
             alert_id,
             reason,
@@ -37281,6 +37447,12 @@ def _record_monitoring_overdue_escalation(db, alert_id, user, *,
             payload["severity"],
         ),
     )
+    if getattr(db, "is_postgres", False):
+        escalation_id = inserted.fetchone()["id"]
+    else:
+        escalation_id = db.execute(
+            "SELECT last_insert_rowid() AS id"
+        ).fetchone()["id"]
     row = db.execute(
         """
         SELECT id, alert_id, reason, escalated_by, escalated_by_role,
@@ -37288,11 +37460,9 @@ def _record_monitoring_overdue_escalation(db, alert_id, user, *,
                days_overdue, sla_due_at, sla_days,
                alert_severity_at_escalation
           FROM monitoring_alert_escalations
-         WHERE alert_id = ?
-         ORDER BY id DESC
-         LIMIT 1
+         WHERE id = ?
         """,
-        (alert_id,),
+        (escalation_id,),
     ).fetchone()
     return dict(row) if row else payload
 
@@ -37398,15 +37568,23 @@ class MonitoringAlertDetailHandler(BaseHandler):
 
     def _apply_dismissal_control(self, db, user, alert_id, alert_before, *,
                                  action, outcome, dismissal_reason, note,
-                                 evidence_ref, send_for_second_review):
+                                 evidence_ref, transition_evidence,
+                                 send_for_second_review):
         """M2.2 senior-override control for material alert clears.
 
         Returns a tuple ``(disposition, payload)``:
-          - ("execute", None): caller runs the terminal clear now (Tier-3, or a
-            senior direct-clear which is recorded here first).
+          - ("execute", request-or-None): caller runs the terminal clear now.
+            A senior direct-clear returns its approved review-control record.
           - ("pending", request): a review request was created; caller responds.
           - ("blocked", None): an error response was already written.
         """
+        locked_alert = _monitoring_state_machine.lock_alert_for_transition(
+            db, alert_id
+        )
+        # Reconcile all policy decisions against the row protected by the
+        # canonical Alert-first lock, not the earlier unlocked handler read.
+        alert_before.clear()
+        alert_before.update(locked_alert)
         if not _mdc.requires_control(
             alert_before, action=action, outcome=outcome, dismissal_reason=dismissal_reason
         ):
@@ -37414,26 +37592,80 @@ class MonitoringAlertDetailHandler(BaseHandler):
 
         tier = _mdc.classify_alert_tier(alert_before)
         requested_outcome = "dismiss" if action == "dismiss" else outcome
+        if not isinstance(transition_evidence, dict):
+            transition_evidence = {}
+        owner = _monitoring_state_machine.alert_owner(db, alert_before)
+        target_status = (
+            "dismissed"
+            if action == "dismiss" or outcome == "false_positive"
+            else (MONITORING_DECISION_OUTCOMES.get(outcome) or {}).get("status")
+        )
+        if target_status == "dismissed" and owner == "screening_review":
+            stored_case_identifier = str(
+                alert_before.get("case_identifier") or ""
+            ).strip()
+            if not stored_case_identifier:
+                raise _monitoring_state_machine.MissingEvidence(
+                    "Screening-owned dismissal evidence requires the alert's "
+                    "exact stored provider case_identifier."
+                )
+            # Bind the maker-checker record to the exact provider case. Any
+            # caller-supplied value is replaced with the authoritative alert
+            # linkage before the request is persisted.
+            transition_evidence["case_identifier"] = stored_case_identifier
+        if target_status == "dismissed" and owner == "documents":
+            source_reference = str(
+                alert_before.get("source_reference") or ""
+            ).strip()
+            if not (
+                transition_evidence.get("document_id")
+                or transition_evidence.get("document_request_id")
+                or (
+                    source_reference.startswith("document:")
+                    and source_reference.split(":", 1)[1].strip()
+                )
+            ):
+                raise _monitoring_state_machine.MissingEvidence(
+                    "Document-owned dismissal evidence requires document_id or "
+                    "document_request_id."
+                )
+            if (
+                not transition_evidence.get("document_id")
+                and not transition_evidence.get("document_request_id")
+                and source_reference.startswith("document:")
+            ):
+                transition_evidence["document_id"] = (
+                    source_reference.split(":", 1)[1].strip()
+                )
+        if target_status == "resolved" and owner != "manual":
+            raise _monitoring_state_machine.WrongAlertType(
+                "This alert is resolved only by its owning downstream workflow."
+            )
         try:
             if _mdc.is_senior(user) and not send_for_second_review:
                 # SCO/admin direct clear — record senior-clear ledger + audit,
                 # then let the caller run the existing terminal machinery.
-                _mdc.record_senior_clear(
+                request = _mdc.record_senior_clear(
                     db, alert=alert_before, tier=tier,
                     requested_outcome=requested_outcome, dismissal_reason=dismissal_reason,
                     rationale=note, evidence_ref=evidence_ref,
+                    transition_evidence=transition_evidence,
                     user=user, audit_writer=self.log_audit,
+                    commit=False,
                 )
-                return ("execute", None)
+                return ("execute", request)
             # CO/officer (or a senior electing second review) → pending request.
             request = _mdc.create_pending_request(
                 db, alert=alert_before, tier=tier,
                 requested_outcome=requested_outcome, dismissal_reason=dismissal_reason,
                 rationale=note, evidence_ref=evidence_ref,
+                transition_evidence=transition_evidence,
                 user=user, audit_writer=self.log_audit,
+                commit=False,
             )
             return ("pending", request)
         except _mdc.DismissalControlError as exc:
+            _rollback_monitoring_transaction(db)
             self.error(str(exc), exc.status_code)
             return ("blocked", None)
 
@@ -37540,9 +37772,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
                     db.commit()
                     canonical_action = document_action
                 elif canonical_action == "start_review":
-                    prior_status = alert_before.get("status") or "open"
-                    if str(prior_status).lower() in ("dismissed", "resolved", "waived", "routed_to_edd", "routed_to_review"):
-                        return self.error("Cannot start review for an alert that is already terminal.", 409)
+                    prior_status = str(alert_before.get("status") or "").strip()
                     # M1.1 decoupling: the refresh sub-state ('under_review')
                     # lives on the requirement row; starting a review always
                     # moves the alert itself to 'in_review'.
@@ -37553,23 +37783,34 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                         "note": note,
                     }
+                    transition = _monitoring_state_machine.transition_alert_status(
+                        db,
+                        alert_id,
+                        expected_status=prior_status,
+                        target_status=next_status,
+                        actor=user,
+                        source_workflow="monitoring",
+                        reason_code="review_started",
+                        reason=note or "Monitoring Alert review started.",
+                        evidence=_monitoring_alert_identity_evidence(alert_before),
+                        request_id=(_obs_get_request_id() or ""),
+                        commit=False,
+                    )
                     db.execute(
                         """
                         UPDATE monitoring_alerts
-                           SET status = ?,
-                               officer_action = ?,
+                           SET officer_action = ?,
                                officer_notes = ?,
-                               triaged_at = COALESCE(triaged_at, CURRENT_TIMESTAMP),
                                reviewed_at = CURRENT_TIMESTAMP,
                                reviewed_by = COALESCE(reviewed_by, ?)
-                         WHERE id = ?
+                         WHERE id = ? AND status = ?
                         """,
                         (
-                            next_status,
                             "start_review",
                             json.dumps(payload, sort_keys=True),
                             user.get("sub", ""),
                             alert_id,
+                            next_status,
                         ),
                     )
                     self.log_audit(
@@ -37582,15 +37823,17 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         after_state={"status": next_status},
                         commit=False,
                     )
-                    db.commit()
-                    result = {"alert_id": alert_id, "status": next_status}
+                    result = {
+                        "alert_id": alert_id,
+                        "status": transition["status"],
+                        "changed": transition["changed"],
+                    }
                 elif canonical_action == "triage":
                     result = mr.triage_alert(
                         db, alert_id, user=user, audit_writer=self.log_audit,
+                        commit=False,
                     )
                 elif canonical_action == "assign":
-                    if str(alert_before.get("status") or "").lower() in ("dismissed", "resolved", "waived", "routed_to_edd", "routed_to_review"):
-                        return self.error("Cannot assign an alert that is already terminal.", 409)
                     requested_assignee = (
                         data.get("assignee_id")
                         or data.get("assigned_to")
@@ -37636,23 +37879,60 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         "assigned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                         "note": assignment_note,
                     }
+                    prior_status = str(alert_before.get("status") or "").strip()
+                    if (
+                        prior_status in _monitoring_state_machine.TERMINAL_STATUSES
+                        or prior_status in _monitoring_state_machine.HANDOFF_STATUSES
+                    ):
+                        raise _monitoring_state_machine.TerminalStateError(
+                            "Closed or downstream-routed Monitoring Alerts cannot be assigned."
+                        )
+                    if prior_status in {"open", "triaged"}:
+                        transition = _monitoring_state_machine.transition_alert_status(
+                            db,
+                            alert_id,
+                            expected_status=prior_status,
+                            target_status="assigned",
+                            actor=user,
+                            source_workflow="monitoring",
+                            reason_code="assign",
+                            reason=assignment_note or "Monitoring Alert assigned.",
+                            evidence={"officer_id": new_owner},
+                            request_id=(_obs_get_request_id() or ""),
+                            commit=False,
+                        )
+                        new_status = transition["status"]
+                        status_changed = bool(transition["changed"])
+                    elif prior_status in {"assigned", "in_review", "escalated"}:
+                        locked = _monitoring_state_machine.lock_alert_for_transition(
+                            db, alert_id
+                        )
+                        if str(locked.get("status") or "").strip() != prior_status:
+                            raise _monitoring_state_machine.StaleCurrentState(
+                                "The Monitoring Alert changed since it was read; refresh and retry."
+                            )
+                        new_status = prior_status
+                        status_changed = False
+                    else:
+                        raise _monitoring_state_machine.InvalidStatus(
+                            "The stored Monitoring Alert status is not canonical."
+                        )
                     db.execute(
                         """
                         UPDATE monitoring_alerts
-                           SET status = ?,
-                               officer_action = ?,
+                           SET officer_action = ?,
                                officer_notes = ?,
                                reviewed_by = ?,
                                reviewed_at = CURRENT_TIMESTAMP,
                                assigned_at = CURRENT_TIMESTAMP
-                         WHERE id = ?
+                         WHERE id = ? AND status = ?
                         """,
                         (
-                            "assigned",
                             "assign",
                             json.dumps(assignment_payload, sort_keys=True),
                             new_owner,
                             alert_id,
+                            new_status,
                         ),
                     )
                     self.log_audit(
@@ -37662,14 +37942,16 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         json.dumps(assignment_payload, default=str, sort_keys=True),
                         db=db,
                         before_state={"status": alert_before.get("status"), "owner": previous_owner},
-                        after_state={"status": "assigned", "owner": new_owner},
+                        after_state={"status": new_status, "owner": new_owner},
                         commit=False,
                     )
-                    db.commit()
-                    result = {"alert_id": alert_id, "status": "assigned", "owner_id": new_owner}
+                    result = {
+                        "alert_id": alert_id,
+                        "status": new_status,
+                        "owner_id": new_owner,
+                        "changed": status_changed,
+                    }
                 elif canonical_action == "save_decision":
-                    if str(alert_before.get("status") or "").lower() in ("dismissed", "resolved", "waived", "routed_to_edd", "routed_to_review"):
-                        return self.error("Cannot save a new decision for an alert that is already terminal.", 409)
                     outcome = str(data.get("outcome") or "").strip()
                     note = str(data.get("note") or data.get("reason") or "").strip()
                     if outcome not in MONITORING_DECISION_OUTCOMES:
@@ -37684,12 +37966,14 @@ class MonitoringAlertDetailHandler(BaseHandler):
                     # M2.2 four-eyes senior-override control (replaces the M1.1
                     # interim guard) for material clearing outcomes.
                     evidence_ref = str(data.get("evidence_ref") or data.get("evidence_note") or "").strip()
+                    typed_evidence = _monitoring_control_transition_evidence(data)
                     disposition, review_request = self._apply_dismissal_control(
                         db, user, alert_id, alert_before,
                         action="save_decision", outcome=outcome,
                         dismissal_reason=cfg.get("dismissal_reason"),
                         note=note,
                         evidence_ref=evidence_ref,
+                        transition_evidence=typed_evidence,
                         send_for_second_review=bool(data.get("send_for_second_review")),
                     )
                     if disposition == "blocked":
@@ -37711,6 +37995,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             trigger_notes=note,
                             priority=data.get("priority"),
                             user=user, audit_writer=self.log_audit,
+                            commit=False,
                         )
                     elif cfg.get("dismissal_reason"):
                         # RDI-008 defense-in-depth: with the M2.2 reconciliation a
@@ -37724,12 +38009,22 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             dismissal_notes=note,
                             user=user, audit_writer=self.log_audit,
                             critical_clearance=self._critical_clearance(user, evidence_ref),
+                            review_request_id=(review_request or {}).get("id"),
+                            screening_case_id=typed_evidence.get("screening_case_id"),
+                            document_id=typed_evidence.get("document_id"),
+                            document_request_id=typed_evidence.get("document_request_id"),
+                            commit=False,
                         )
                     else:
+                        transition_evidence = dict(typed_evidence)
+                        if (review_request or {}).get("id") not in (None, ""):
+                            transition_evidence["review_request_id"] = review_request["id"]
                         result = _execute_monitoring_decision_outcome(
                             db, user, alert_id, alert_before,
                             outcome=outcome, note=note,
                             audit_writer=self.log_audit,
+                            transition_evidence=transition_evidence,
+                            commit=False,
                         )
                 elif canonical_action == "dismiss":
                     dismissal_reason = data.get("dismissal_reason")
@@ -37740,13 +38035,20 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             400,
                         )
                     dismiss_note = str(reason or data.get("dismissal_notes") or "").strip()
+                    if not dismiss_note:
+                        return self.error(
+                            "A dismissal rationale is required.",
+                            400,
+                        )
                     evidence_ref = str(data.get("evidence_ref") or data.get("evidence_note") or "").strip()
+                    typed_evidence = _monitoring_control_transition_evidence(data)
                     disposition, review_request = self._apply_dismissal_control(
                         db, user, alert_id, alert_before,
                         action="dismiss", outcome=None,
                         dismissal_reason=str(dismissal_reason).strip().lower(),
                         note=dismiss_note,
                         evidence_ref=evidence_ref,
+                        transition_evidence=typed_evidence,
                         send_for_second_review=bool(data.get("send_for_second_review")),
                     )
                     if disposition == "blocked":
@@ -37773,6 +38075,11 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         dismissal_notes=reason or data.get("dismissal_notes"),
                         user=user, audit_writer=self.log_audit,
                         critical_clearance=self._critical_clearance(user, evidence_ref),
+                        review_request_id=(review_request or {}).get("id"),
+                        screening_case_id=typed_evidence.get("screening_case_id"),
+                        document_id=typed_evidence.get("document_id"),
+                        document_request_id=typed_evidence.get("document_request_id"),
+                        commit=False,
                     )
                 elif canonical_action == "route_to_periodic_review":
                     result = mr.route_alert_to_periodic_review(
@@ -37780,6 +38087,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         review_reason=reason or data.get("review_reason"),
                         priority=data.get("priority"),
                         user=user, audit_writer=self.log_audit,
+                        commit=False,
                     )
                 elif canonical_action == "route_to_edd":
                     result = mr.route_alert_to_edd(
@@ -37787,6 +38095,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         trigger_notes=reason or data.get("trigger_notes"),
                         priority=data.get("priority"),
                         user=user, audit_writer=self.log_audit,
+                        commit=False,
                     )
             except mr.AlertNotFound:
                 return self.error("Alert not found", 404)
@@ -37797,8 +38106,31 @@ class MonitoringAlertDetailHandler(BaseHandler):
             except mr.MonitoringRoutingError as e:
                 return self.error(str(e), 400)
             except _MonitoringDocumentRefreshError as e:
+                _rollback_monitoring_transaction(db)
                 return self.error(str(e), e.status_code)
+            except _monitoring_state_machine.MonitoringTransitionError as exc:
+                _rollback_monitoring_transaction(db)
+                return self.error(str(exc), exc.status_code)
+            except _monitoring_state_machine.AuditInfrastructureError:
+                _rollback_monitoring_transaction(db)
+                logger.exception(
+                    "Monitoring Alert transition audit failed: alert_id=%s",
+                    alert_id,
+                )
+                return self.error(
+                    "Monitoring Alert transition could not be completed.",
+                    500,
+                )
+            except Exception:
+                _rollback_monitoring_transaction(db)
+                logger.exception(
+                    "Monitoring Alert update failed: alert_id=%s action=%s",
+                    alert_id,
+                    canonical_action,
+                )
+                return self.error("Failed to update Monitoring Alert.", 500)
 
+            db.commit()
             self.success({
                 "status": "alert_updated",
                 "action": canonical_action,
@@ -37840,20 +38172,25 @@ class MonitoringAlertOverdueEscalationHandler(BaseHandler):
             if sla.get("sla_state") != "overdue":
                 return self.error("Only actively overdue alerts can be escalated.", 409)
 
-            result = _execute_monitoring_decision_outcome(
-                db, user, alert_id, alert_before,
-                outcome="escalate_to_sco", note=reason,
-                audit_writer=self.log_audit,
-                commit=False,
-            )
-            alert_after = dict(_monitoring_alert_get(db, alert_id) or {})
+            # Reserve the exact escalation evidence in this transaction before
+            # the canonical transition audit is appended. If transition or
+            # audit validation fails, the outer rollback removes this row too.
             escalation = _record_monitoring_overdue_escalation(
                 db, alert_id, user,
                 reason=reason,
                 alert_before=alert_before,
-                alert_after=alert_after,
+                new_status="escalated",
                 sla=sla,
             )
+            result = _execute_monitoring_decision_outcome(
+                db, user, alert_id, alert_before,
+                outcome="escalate_to_sco", note=reason,
+                audit_writer=self.log_audit,
+                reason_code="overdue_escalation",
+                transition_evidence={"escalation_id": escalation.get("id")},
+                commit=False,
+            )
+            alert_after = dict(_monitoring_alert_get(db, alert_id) or {})
             overdue_payload = {
                 "alert_id": alert_id,
                 "actor_id": user.get("sub", ""),
@@ -37899,11 +38236,18 @@ class MonitoringAlertOverdueEscalationHandler(BaseHandler):
                 "alert": refreshed,
                 "audit_history": _monitoring_alert_audit_history(db, alert_id),
             })
+        except _monitoring_state_machine.MonitoringTransitionError as exc:
+            _rollback_monitoring_transaction(db)
+            self.error(str(exc), exc.status_code)
+        except _monitoring_state_machine.AuditInfrastructureError:
+            _rollback_monitoring_transaction(db)
+            logger.exception(
+                "Monitoring overdue escalation audit failed: alert_id=%s",
+                alert_id,
+            )
+            self.error("Monitoring Alert transition could not be completed.", 500)
         except Exception:
-            try:
-                db.rollback()
-            except Exception:
-                pass
+            _rollback_monitoring_transaction(db)
             logger.exception("monitoring overdue escalation failed: alert_id=%s", alert_id)
             self.error("Failed to escalate overdue alert.", 500)
         finally:
@@ -37912,18 +38256,21 @@ class MonitoringAlertOverdueEscalationHandler(BaseHandler):
 
 def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
                                  requested_outcome, dismissal_reason, note, log_audit,
-                                 request_evidence_ref=None):
+                                 request_evidence_ref=None,
+                                 review_request_id=None,
+                                 transition_evidence=None):
     """Run the terminal clear for an approved/senior-cleared request, reusing the
     existing dismissal/decision machinery. Used by the approver endpoint (and
     mirrors the inline execution in MonitoringAlertDetailHandler.patch)."""
     import monitoring_routing as mr
 
-    # Re-verify the alert is not already terminal before clearing — mirrors the
-    # inline save_decision/dismiss guards, so a stale/duplicate approval is a
-    # handled no-op rather than a double-clear or 500.
+    # A review request must never silently approve after another actor has
+    # already closed the alert. Treat that as stale state and leave the request
+    # pending after the caller rolls the transaction back.
     if mr.is_alert_terminal(alert_before):
-        return {"alert_id": alert_id, "status": alert_before.get("status"),
-                "outcome": requested_outcome, "already_terminal": True}
+        raise _monitoring_state_machine.StaleCurrentState(
+            "The Monitoring Alert changed after this review request was created."
+        )
 
     # RDI-008 approval-time revalidation (Codex round-2 TOCTOU): the request's
     # evidence was validated against the alert AS IT WAS at creation. Re-check
@@ -37939,6 +38286,12 @@ def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
     # service-layer severity gate via the approved-review marker.
     approved_clearance = {"approver": dict(user or {}), "via": "approved_review",
                           "evidence_ref": str(request_evidence_ref or "").strip()}
+    evidence = dict(transition_evidence or {})
+    if review_request_id in (None, ""):
+        raise _monitoring_state_machine.MissingEvidence(
+            "An approved review_request_id is required for this clearance."
+        )
+    evidence["review_request_id"] = review_request_id
     if requested_outcome == "dismiss" or (dismissal_reason and requested_outcome not in MONITORING_DECISION_OUTCOMES):
         return mr.dismiss_alert(
             db, alert_id,
@@ -37946,8 +38299,17 @@ def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
             dismissal_notes=note,
             user=user, audit_writer=log_audit,
             critical_clearance=approved_clearance,
+            review_request_id=review_request_id,
+            screening_case_id=evidence.get("screening_case_id"),
+            document_id=evidence.get("document_id"),
+            document_request_id=evidence.get("document_request_id"),
+            commit=False,
         )
     cfg = MONITORING_DECISION_OUTCOMES.get(requested_outcome) or {}
+    if not cfg:
+        raise _monitoring_state_machine.InvalidTransition(
+            "The requested clearance outcome is not supported."
+        )
     if cfg.get("dismissal_reason"):
         return mr.dismiss_alert(
             db, alert_id,
@@ -37955,42 +38317,23 @@ def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
             dismissal_notes=note,
             user=user, audit_writer=log_audit,
             critical_clearance=approved_clearance,
+            review_request_id=review_request_id,
+            screening_case_id=evidence.get("screening_case_id"),
+            document_id=evidence.get("document_id"),
+            document_request_id=evidence.get("document_request_id"),
+            commit=False,
         )
-    decision_payload = {
-        "alert_id": alert_id,
-        "application_id": alert_before.get("application_id"),
-        "outcome": requested_outcome,
-        "note": note,
-        "decided_by": user.get("sub", ""),
-        "decided_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-    status_value = cfg.get("status") or "resolved"
-    db.execute(
-        """
-        UPDATE monitoring_alerts
-           SET status = ?,
-               officer_action = ?,
-               officer_notes = ?,
-               reviewed_at = CURRENT_TIMESTAMP,
-               reviewed_by = COALESCE(reviewed_by, ?),
-               resolved_at = CASE WHEN ? IN ('resolved','waived') THEN CURRENT_TIMESTAMP ELSE resolved_at END
-         WHERE id = ?
-        """,
-        (status_value, cfg.get("officer_action") or requested_outcome,
-         json.dumps(decision_payload, sort_keys=True), user.get("sub", ""),
-         status_value, alert_id),
-    )
-    log_audit(
+    return _execute_monitoring_decision_outcome(
+        db,
         user,
-        cfg.get("audit_action") or "monitoring.alert.cleared",
-        f"monitoring_alert:{alert_id}",
-        json.dumps(decision_payload, default=str, sort_keys=True),
-        db=db,
-        after_state={"status": status_value, "outcome": requested_outcome},
+        alert_id,
+        alert_before,
+        outcome=requested_outcome,
+        note=note,
+        audit_writer=log_audit,
+        transition_evidence=evidence,
         commit=False,
     )
-    db.commit()
-    return {"alert_id": alert_id, "status": status_value, "outcome": requested_outcome}
 
 
 class MonitoringReviewRequestQueueHandler(BaseHandler):
@@ -38027,28 +38370,59 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
             request = _mdc.fetch_request(db, request_id)
             if not request:
                 return self.error("Review request not found", 404)
-            if str(request.get("state")) != "pending":
-                return self.error("Review request is no longer pending.", 409)
             alert_id = request.get("alert_id")
-            alert_before = dict(_monitoring_alert_get(db, alert_id) or {})
             try:
+                # Learn alert_id without locking the request, then establish the
+                # canonical Alert-first order before locking/revalidating the
+                # review row. This avoids request↔alert deadlocks with request
+                # creation and senior-clear paths.
+                alert_before = _monitoring_state_machine.lock_alert_for_transition(
+                    db, alert_id
+                )
+                request = _mdc.fetch_request(
+                    db, request_id, for_update=True
+                )
+                if not request:
+                    return self.error("Review request not found", 404)
+                if str(request.get("alert_id")) != str(alert_id):
+                    raise _monitoring_state_machine.StaleCurrentState(
+                        "The review request linkage changed; refresh and retry."
+                    )
+                if str(request.get("state")) != "pending":
+                    return self.error("Review request is no longer pending.", 409)
                 if verb == "reject":
                     _mdc.reject_request(
                         db, request=request, approver=user,
                         rejection_reason=str(data.get("rejection_reason") or data.get("note") or "").strip(),
                         audit_writer=self.log_audit,
+                        commit=False,
                     )
+                    db.commit()
                     return self.success({
                         "status": "review_rejected",
                         "result": {"review_request_id": request_id, "alert_id": alert_id},
                         "alert": dict(_monitoring_alert_get(db, alert_id) or {}),
                         "audit_history": _monitoring_alert_audit_history(db, alert_id),
                     })
-                # approve → validate eligibility (self-approval/role) BEFORE any
-                # mutation, run the terminal clear, then record the approval last so
-                # the two steps are sequenced atomically (no approved-but-uncleared row).
-                _mdc.assert_can_review(request, user)
+                # approve → validate eligibility, mark the request approved in
+                # this still-open transaction (so typed evidence validation can
+                # see the approved disposition), run the canonical transition,
+                # then commit both audit records and both state changes together.
+                # The source-state binding is checked only after both rows are
+                # locked in canonical Alert-first order. A request created for
+                # ``open`` can therefore never approve a later ``in_review`` or
+                # ``escalated`` alert, while rejection remains available so an
+                # operator can retire stale/legacy requests safely.
+                _mdc.assert_request_source_status_current(
+                    request, alert_before
+                )
+                _mdc.assert_can_review(db, request, user)
                 approval_note = str(data.get("approval_note") or data.get("note") or "approved").strip()
+                _mdc.mark_request_approved(
+                    db, request=request, approver=user,
+                    approval_note=approval_note, audit_writer=self.log_audit,
+                    commit=False,
+                )
                 result = _execute_monitoring_clearing(
                     db, user, alert_id, alert_before,
                     requested_outcome=request.get("requested_outcome"),
@@ -38056,11 +38430,10 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
                     note=request.get("rationale"),
                     log_audit=self.log_audit,
                     request_evidence_ref=request.get("evidence_ref"),
+                    review_request_id=request.get("id"),
+                    transition_evidence=_mdc.transition_evidence_for_request(request),
                 )
-                _mdc.mark_request_approved(
-                    db, request=request, approver=user,
-                    approval_note=approval_note, audit_writer=self.log_audit,
-                )
+                db.commit()
                 return self.success({
                     "status": "review_approved",
                     "result": {"review_request_id": request_id, **(result or {})},
@@ -38069,6 +38442,7 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
                     "audit_history": _monitoring_alert_audit_history(db, alert_id),
                 })
             except _mdc.DismissalControlError as exc:
+                _rollback_monitoring_transaction(db)
                 # Self-approval / wrong role (403) and approval-time evidence
                 # refusal (409, Codex round-2) → audited blocked signal + error.
                 if exc.status_code in (403, 409):
@@ -38079,8 +38453,37 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
                                 "actor_role": (user or {}).get("role", ""),
                                 "initiated_by": request.get("initiated_by")},
                         audit_writer=self.log_audit,
+                        commit=False,
                     )
+                    db.commit()
                 return self.error(str(exc), exc.status_code)
+            except _monitoring_state_machine.MonitoringTransitionError as exc:
+                _rollback_monitoring_transaction(db)
+                _mdc.audit_blocked(
+                    db, alert_id=alert_id, user=user,
+                    reason=str(exc),
+                    detail={
+                        "request_id": request_id,
+                        "verb": verb,
+                        "error_code": exc.error_code,
+                        "actor_role": (user or {}).get("role", ""),
+                        "initiated_by": request.get("initiated_by"),
+                    },
+                    audit_writer=self.log_audit,
+                    commit=False,
+                )
+                db.commit()
+                return self.error(str(exc), exc.status_code)
+            except _monitoring_state_machine.AuditInfrastructureError:
+                _rollback_monitoring_transaction(db)
+                logger.exception(
+                    "Monitoring review request audit failed: request_id=%s",
+                    request_id,
+                )
+                return self.error(
+                    "Monitoring Alert transition could not be completed.",
+                    500,
+                )
         except Exception:
             try:
                 db.rollback()
@@ -38208,8 +38611,12 @@ class MonitoringAlertDocumentReplacementUploadHandler(BaseHandler):
             alert = dict(alert)
             if not _is_document_refresh_alert(alert):
                 return self.error("Upload Replacement is only available for document expiry alerts", 400)
-            if str(alert.get("status") or "").lower() in ("resolved", "waived", "dismissed", "routed_to_edd", "routed_to_review"):
-                return self.error("Cannot upload a replacement for a terminal alert", 409)
+            if _monitoring_status.is_action_locked(alert.get("status")):
+                return self.error(
+                    "Cannot upload a replacement for a terminal or "
+                    "downstream-owned alert",
+                    409,
+                )
             app = db.execute(
                 "SELECT id, ref, client_id FROM applications WHERE id = ?",
                 (alert.get("application_id"),),

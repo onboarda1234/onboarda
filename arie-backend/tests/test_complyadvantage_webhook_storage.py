@@ -7,6 +7,7 @@ import pytest
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from screening_complyadvantage.models.webhooks import CACaseAlertListUpdatedWebhook
 from screening_complyadvantage.webhook_storage import (
+    _upsert_monitoring_alert,
     process_complyadvantage_webhook,
     reconcile_complyadvantage_webhook_deliveries,
     record_complyadvantage_webhook_receipt,
@@ -230,6 +231,80 @@ def _normalized_with_media_evidence(hash_value="hash-media-evidence"):
             }
         },
     }
+
+
+def _alert_row(*, status="open"):
+    return {
+        "provider": COMPLYADVANTAGE_PROVIDER_NAME,
+        "case_identifier": "case-1",
+        "application_id": "app-1",
+        "client_name": "Synthetic Client",
+        "alert_type": "pep",
+        "severity": "high",
+        "detected_by": "complyadvantage",
+        "summary": "Provider evidence refreshed",
+        "source_reference": "{}",
+        "status": status,
+    }
+
+
+def test_webhook_upsert_creates_only_open_alerts():
+    conn = _db()
+
+    alert_id, created = _upsert_monitoring_alert(
+        NoCloseDB(conn),
+        _alert_row(status="resolved"),
+    )
+    conn.commit()
+
+    assert created is True
+    assert alert_id is not None
+    assert conn.execute(
+        "SELECT status FROM monitoring_alerts WHERE id = ?",
+        (alert_id,),
+    ).fetchone()["status"] == "open"
+
+
+@pytest.mark.parametrize(
+    "existing_status",
+    ["dismissed", "resolved", "waived", "routed_to_edd", "escalated"],
+)
+def test_webhook_upsert_preserves_existing_lifecycle_status(existing_status):
+    conn = _db()
+    row = _alert_row()
+    conn.execute(
+        """
+        INSERT INTO monitoring_alerts
+            (provider, case_identifier, application_id, client_name, alert_type,
+             severity, detected_by, summary, source_reference, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            row["provider"],
+            row["case_identifier"],
+            "old-application",
+            "Old Client",
+            row["alert_type"],
+            "low",
+            row["detected_by"],
+            "Old evidence",
+            '{"old": true}',
+            existing_status,
+        ),
+    )
+    conn.commit()
+
+    alert_id, created = _upsert_monitoring_alert(NoCloseDB(conn), row)
+    conn.commit()
+    stored = conn.execute(
+        "SELECT status, application_id, summary FROM monitoring_alerts WHERE id = ?",
+        (alert_id,),
+    ).fetchone()
+
+    assert created is False
+    assert stored["status"] == existing_status
+    assert stored["application_id"] == "app-1"
+    assert stored["summary"] == "Provider evidence refreshed"
 
 
 @pytest.mark.asyncio

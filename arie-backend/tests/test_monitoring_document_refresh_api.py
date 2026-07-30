@@ -85,15 +85,31 @@ def reset_monitoring_doc_refresh_case(monitoring_doc_refresh_server):
 
 
 def _reset_document_refresh_case(conn):
-    conn.execute("DELETE FROM application_enhanced_requirements WHERE application_id = ? OR monitoring_alert_id = ?", ("app_m3", 9301))
-    conn.execute("DELETE FROM client_notifications WHERE application_id = ?", ("app_m3",))
-    conn.execute("DELETE FROM notifications WHERE message LIKE ?", ("%9301%",))
-    conn.execute("DELETE FROM audit_log WHERE target = ? OR target = ?", ("monitoring_alert:9301", "ARF-M3"))
-    conn.execute("DELETE FROM monitoring_alerts WHERE id = 9301")
-    conn.execute("DELETE FROM documents WHERE application_id = ?", ("app_m3",))
-    conn.execute("DELETE FROM directors WHERE application_id = ?", ("app_m3",))
-    conn.execute("DELETE FROM applications WHERE id = ?", ("app_m3",))
-    conn.execute("DELETE FROM clients WHERE id = ?", ("client_m3",))
+    from regulated_deletion import sanctioned_delete_context
+
+    with sanctioned_delete_context(
+        "fixture_cleanup_nonprod",
+        actor_id="pytest:monitoring-document-refresh",
+        role="system",
+        reason="Reset the isolated synthetic Monitoring document-refresh fixture.",
+        allowed_tables=(
+            "application_enhanced_requirements",
+            "audit_log",
+            "monitoring_alerts",
+        ),
+        environment="testing",
+        is_fixture=True,
+        confirmed=True,
+    ):
+        conn.execute("DELETE FROM application_enhanced_requirements WHERE application_id = ? OR monitoring_alert_id = ?", ("app_m3", 9301))
+        conn.execute("DELETE FROM client_notifications WHERE application_id = ?", ("app_m3",))
+        conn.execute("DELETE FROM notifications WHERE message LIKE ?", ("%9301%",))
+        conn.execute("DELETE FROM audit_log WHERE target = ? OR target = ?", ("monitoring_alert:9301", "ARF-M3"))
+        conn.execute("DELETE FROM monitoring_alerts WHERE id = 9301")
+        conn.execute("DELETE FROM documents WHERE application_id = ?", ("app_m3",))
+        conn.execute("DELETE FROM directors WHERE application_id = ?", ("app_m3",))
+        conn.execute("DELETE FROM applications WHERE id = ?", ("app_m3",))
+        conn.execute("DELETE FROM clients WHERE id = ?", ("client_m3",))
 
     users = [
         ("admin_m3", "admin-m3@example.test", "Admin M3", "admin"),
@@ -146,7 +162,6 @@ def _reset_document_refresh_case(conn):
             "2026-01-01",
         ),
     )
-    conn.execute("DELETE FROM monitoring_alerts WHERE id = 9301")
     conn.execute(
         """
         INSERT INTO monitoring_alerts
@@ -253,6 +268,36 @@ def _upload_backoffice_replacement(base_url, officer_token, *, source_note="Rece
         files={"file": ("backoffice-renewed-passport.pdf", b"%PDF-1.4\n% backoffice renewed\n%%EOF", "application/pdf")},
         timeout=5,
     )
+
+
+def _prepare_accepted_document_refresh(base_url):
+    officer_token = _token("admin_m3", "admin", "Admin M3")
+    client_token = _token(
+        "client_m3",
+        "client",
+        "Monitoring Three Client Ltd",
+        "client",
+    )
+    assert _request_updated_document(base_url, officer_token).status_code == 200
+    task = requests.get(
+        f"{base_url}/api/portal/applications/app_m3/enhanced-requirements",
+        headers=_auth_headers(client_token),
+        timeout=5,
+    ).json()["requirements"][0]
+    assert _upload_client_document(
+        base_url, client_token, task["id"]
+    ).status_code == 201
+    accepted = requests.patch(
+        f"{base_url}/api/applications/app_m3/enhanced-requirements/{task['id']}",
+        headers=_json_headers(officer_token),
+        json={
+            "status": "accepted",
+            "review_notes": "Accepted from the application requirement review.",
+        },
+        timeout=5,
+    )
+    assert accepted.status_code == 200, accepted.text
+    return officer_token, task
 
 
 def test_request_updated_document_creates_linked_portal_task_notification_and_audit(monitoring_doc_refresh_server):
@@ -443,7 +488,7 @@ def test_backoffice_upload_replacement_requires_note_and_links_application_docum
 
 
 def test_officer_accepts_uploaded_document_and_resolves_alert(monitoring_doc_refresh_server):
-    base_url, _db_module = monitoring_doc_refresh_server
+    base_url, db_module = monitoring_doc_refresh_server
     officer_token = _token("admin_m3", "admin", "Admin M3")
     client_token = _token("client_m3", "client", "Monitoring Three Client Ltd", "client")
 
@@ -475,6 +520,33 @@ def test_officer_accepts_uploaded_document_and_resolves_alert(monitoring_doc_ref
     assert any(item["action"] == "updated_document_accepted" for item in detail["audit_history"])
     assert any(item["action"] == "monitoring_alert_resolved" for item in detail["audit_history"])
 
+    conn = db_module.get_db()
+    try:
+        canonical_rows = conn.execute(
+            """
+            SELECT detail, before_state, after_state, entry_hash
+              FROM audit_log
+             WHERE target = ?
+               AND action = 'monitoring.alert.status_transition'
+            """,
+            ("monitoring_alert:9301",),
+        ).fetchall()
+        assert len(canonical_rows) == 1
+        canonical = dict(canonical_rows[0])
+        evidence = json.loads(canonical["detail"])
+        assert evidence["previous_status"] == "open"
+        assert evidence["new_status"] == "resolved"
+        assert evidence["source_workflow"] == "kyc_documents"
+        assert evidence["reason_code"] == "document_accepted"
+        assert evidence["transition_matrix_version"] == "monitoring_alert_state_machine_v1"
+        assert evidence["evidence"]["document_request_id"] == tasks[0]["id"]
+        assert evidence["evidence"]["document_id"] == upload.json()["document"]["id"]
+        assert json.loads(canonical["before_state"]) == {"status": "open"}
+        assert json.loads(canonical["after_state"]) == {"status": "resolved"}
+        assert canonical["entry_hash"]
+    finally:
+        conn.close()
+
 
 def test_accept_requires_uploaded_replacement_document(monitoring_doc_refresh_server):
     base_url, _db_module = monitoring_doc_refresh_server
@@ -492,7 +564,7 @@ def test_accept_requires_uploaded_replacement_document(monitoring_doc_refresh_se
 
 
 def test_reject_requires_reason_and_reopens_request(monitoring_doc_refresh_server):
-    base_url, _db_module = monitoring_doc_refresh_server
+    base_url, db_module = monitoring_doc_refresh_server
     officer_token = _token("admin_m3", "admin", "Admin M3")
     client_token = _token("client_m3", "client", "Monitoring Three Client Ltd", "client")
 
@@ -527,6 +599,7 @@ def test_reject_requires_reason_and_reopens_request(monitoring_doc_refresh_serve
         headers=_auth_headers(officer_token),
         timeout=5,
     ).json()
+    assert detail["status"] == "open"
     assert detail["document_refresh"]["request"]["status"] == "rejected"
     assert any(item["action"] == "updated_document_rejected" for item in detail["audit_history"])
 
@@ -542,9 +615,23 @@ def test_reject_requires_reason_and_reopens_request(monitoring_doc_refresh_serve
     assert rejected_doc["is_current"] in (0, False)
     assert old_doc["is_current"] in (1, True)
 
+    conn = db_module.get_db()
+    try:
+        assert conn.execute(
+            """
+            SELECT COUNT(*) AS c
+              FROM audit_log
+             WHERE target = ?
+               AND action = 'monitoring.alert.status_transition'
+            """,
+            ("monitoring_alert:9301",),
+        ).fetchone()["c"] == 0
+    finally:
+        conn.close()
+
 
 def test_waive_requires_reason_and_authorized_role(monitoring_doc_refresh_server):
-    base_url, _db_module = monitoring_doc_refresh_server
+    base_url, db_module = monitoring_doc_refresh_server
     admin_token = _token("admin_m3", "admin", "Admin M3")
     co_token = _token("co_m3", "co", "CO M3")
 
@@ -574,3 +661,264 @@ def test_waive_requires_reason_and_authorized_role(monitoring_doc_refresh_server
     )
     assert waived.status_code == 200, waived.text
     assert waived.json()["new_status"] == "waived"
+
+    conn = db_module.get_db()
+    try:
+        row = conn.execute(
+            """
+            SELECT detail
+              FROM audit_log
+             WHERE target = ?
+               AND action = 'monitoring.alert.status_transition'
+            """,
+            ("monitoring_alert:9301",),
+        ).fetchone()
+        assert row is not None
+        detail = json.loads(row["detail"])
+        assert detail["previous_status"] == "open"
+        assert detail["new_status"] == "waived"
+        assert detail["actor_role"] == "admin"
+        assert detail["reason_code"] == "document_waived"
+        assert detail["evidence"]["document_request_id"]
+        assert detail["evidence"]["waiver_reason"] == (
+            "Passport renewal not required for dormant client."
+        )
+    finally:
+        conn.close()
+
+
+def test_metadata_audit_failure_rolls_back_requirement_document_status_and_canonical_transition(
+    monitoring_doc_refresh_server,
+):
+    from monitoring_document_refresh import review_document_refresh
+
+    base_url, db_module = monitoring_doc_refresh_server
+    officer_token = _token("admin_m3", "admin", "Admin M3")
+    client_token = _token(
+        "client_m3",
+        "client",
+        "Monitoring Three Client Ltd",
+        "client",
+    )
+
+    assert _request_updated_document(base_url, officer_token).status_code == 200
+    task = requests.get(
+        f"{base_url}/api/portal/applications/app_m3/enhanced-requirements",
+        headers=_auth_headers(client_token),
+        timeout=5,
+    ).json()["requirements"][0]
+    upload = _upload_client_document(base_url, client_token, task["id"])
+    assert upload.status_code == 201, upload.text
+    replacement_id = upload.json()["document"]["id"]
+
+    def fail_metadata_audit(*_args, **_kwargs):
+        raise RuntimeError("injected metadata audit failure")
+
+    conn = db_module.get_db()
+    try:
+        with pytest.raises(RuntimeError, match="injected metadata audit failure"):
+            review_document_refresh(
+                conn,
+                9301,
+                outcome="accept",
+                note="This outcome must roll back.",
+                user={
+                    "sub": "admin_m3",
+                    "name": "Admin M3",
+                    "role": "admin",
+                },
+                audit_writer=fail_metadata_audit,
+            )
+
+        alert = conn.execute(
+            "SELECT status, officer_action, resolved_at FROM monitoring_alerts WHERE id = ?",
+            (9301,),
+        ).fetchone()
+        requirement = conn.execute(
+            "SELECT status FROM application_enhanced_requirements WHERE id = ?",
+            (task["id"],),
+        ).fetchone()
+        document = conn.execute(
+            "SELECT review_status FROM documents WHERE id = ?",
+            (replacement_id,),
+        ).fetchone()
+        canonical_count = conn.execute(
+            """
+            SELECT COUNT(*) AS c
+              FROM audit_log
+             WHERE target = ?
+               AND action = 'monitoring.alert.status_transition'
+            """,
+            ("monitoring_alert:9301",),
+        ).fetchone()["c"]
+
+        assert alert["status"] == "open"
+        assert alert["officer_action"] == "client_document_uploaded"
+        assert alert["resolved_at"] is None
+        assert requirement["status"] == "uploaded"
+        assert document["review_status"] == "pending"
+        assert canonical_count == 0
+    finally:
+        conn.close()
+
+
+def test_application_requirement_acceptance_sync_uses_canonical_transition(
+    monitoring_doc_refresh_server,
+):
+    base_url, db_module = monitoring_doc_refresh_server
+    officer_token = _token("admin_m3", "admin", "Admin M3")
+    client_token = _token(
+        "client_m3",
+        "client",
+        "Monitoring Three Client Ltd",
+        "client",
+    )
+
+    assert _request_updated_document(base_url, officer_token).status_code == 200
+    task = requests.get(
+        f"{base_url}/api/portal/applications/app_m3/enhanced-requirements",
+        headers=_auth_headers(client_token),
+        timeout=5,
+    ).json()["requirements"][0]
+    assert _upload_client_document(
+        base_url, client_token, task["id"]
+    ).status_code == 201
+
+    accepted = requests.patch(
+        f"{base_url}/api/applications/app_m3/enhanced-requirements/{task['id']}",
+        headers=_json_headers(officer_token),
+        json={
+            "status": "accepted",
+            "review_notes": "Accepted from the application requirement review.",
+        },
+        timeout=5,
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    conn = db_module.get_db()
+    try:
+        alert = conn.execute(
+            "SELECT status, resolved_at FROM monitoring_alerts WHERE id = ?",
+            (9301,),
+        ).fetchone()
+        transition = conn.execute(
+            """
+            SELECT detail
+              FROM audit_log
+             WHERE target = ?
+               AND action = 'monitoring.alert.status_transition'
+            """,
+            ("monitoring_alert:9301",),
+        ).fetchone()
+        assert alert["status"] == "resolved"
+        assert alert["resolved_at"]
+        assert transition is not None
+        detail = json.loads(transition["detail"])
+        assert detail["reason_code"] == "document_accepted"
+        assert detail["evidence"]["document_request_id"] == task["id"]
+        assert detail["evidence"]["document_id"]
+    finally:
+        conn.close()
+
+
+def test_terminal_requirement_note_edits_and_repeat_outcome_are_idempotent(
+    monitoring_doc_refresh_server,
+):
+    base_url, db_module = monitoring_doc_refresh_server
+    officer_token, task = _prepare_accepted_document_refresh(base_url)
+    endpoint = (
+        f"{base_url}/api/applications/app_m3/"
+        f"enhanced-requirements/{task['id']}"
+    )
+
+    repeated = requests.patch(
+        endpoint,
+        headers=_json_headers(officer_token),
+        json={
+            "status": "accepted",
+            "review_notes": "Acceptance note clarified without changing outcome.",
+        },
+        timeout=5,
+    )
+    assert repeated.status_code == 200, repeated.text
+
+    note_only = requests.patch(
+        endpoint,
+        headers=_json_headers(officer_token),
+        json={"review_notes": "Final metadata-only clarification."},
+        timeout=5,
+    )
+    assert note_only.status_code == 200, note_only.text
+
+    conn = db_module.get_db()
+    try:
+        requirement = conn.execute(
+            "SELECT status, review_notes FROM application_enhanced_requirements "
+            "WHERE id = ?",
+            (task["id"],),
+        ).fetchone()
+        alert = conn.execute(
+            "SELECT status FROM monitoring_alerts WHERE id = ?",
+            (9301,),
+        ).fetchone()
+        canonical_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log WHERE target = ? "
+            "AND action = 'monitoring.alert.status_transition'",
+            ("monitoring_alert:9301",),
+        ).fetchone()["c"]
+        outcome_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log WHERE target = ? "
+            "AND action = 'updated_document_accepted'",
+            ("monitoring_alert:9301",),
+        ).fetchone()["c"]
+
+        assert requirement["status"] == "accepted"
+        assert requirement["review_notes"] == "Final metadata-only clarification."
+        assert alert["status"] == "resolved"
+        assert canonical_count == 1
+        assert outcome_count == 1
+    finally:
+        conn.close()
+
+
+def test_terminal_linked_requirement_reopen_fails_and_rolls_back(
+    monitoring_doc_refresh_server,
+):
+    base_url, db_module = monitoring_doc_refresh_server
+    officer_token, task = _prepare_accepted_document_refresh(base_url)
+
+    reopened = requests.patch(
+        (
+            f"{base_url}/api/applications/app_m3/"
+            f"enhanced-requirements/{task['id']}"
+        ),
+        headers=_json_headers(officer_token),
+        json={
+            "status": "under_review",
+            "reopen_reason": "A later concern requires a new controlled alert.",
+        },
+        timeout=5,
+    )
+    assert reopened.status_code == 409, reopened.text
+
+    conn = db_module.get_db()
+    try:
+        requirement = conn.execute(
+            "SELECT status FROM application_enhanced_requirements WHERE id = ?",
+            (task["id"],),
+        ).fetchone()
+        alert = conn.execute(
+            "SELECT status FROM monitoring_alerts WHERE id = ?",
+            (9301,),
+        ).fetchone()
+        canonical_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log WHERE target = ? "
+            "AND action = 'monitoring.alert.status_transition'",
+            ("monitoring_alert:9301",),
+        ).fetchone()["c"]
+
+        assert requirement["status"] == "accepted"
+        assert alert["status"] == "resolved"
+        assert canonical_count == 1
+    finally:
+        conn.close()

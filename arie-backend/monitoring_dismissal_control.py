@@ -40,6 +40,14 @@ except Exception:  # pragma: no cover - defensive
 TIER1_APPROVER_ROLES = {"sco", "admin"}
 TIER2_APPROVER_ROLES = {"sco", "admin"}
 SENIOR_ROLES = {"sco", "admin"}
+INITIATOR_ROLES = {"co", "sco", "admin"}
+PENDING_REVIEW_UNIQUE_INDEX = "uq_monitoring_review_requests_one_pending"
+TRANSITION_EVIDENCE_KEYS = {
+    "case_identifier",
+    "screening_case_id",
+    "document_id",
+    "document_request_id",
+}
 
 # Clearing outcomes subject to tier control (save_decision outcomes + the
 # dismiss action). Escalation / routing / info-request are intentionally absent.
@@ -85,6 +93,23 @@ def _get(alert: Any, key: str, default=None):
         return default if v is None else v
     except (KeyError, IndexError, TypeError):
         return default
+
+
+def _write_audit(audit_writer, *args, **kwargs) -> None:
+    if not callable(audit_writer):
+        from monitoring_alert_state_machine import AuditInfrastructureError
+        raise AuditInfrastructureError(
+            "Monitoring review-control audit infrastructure is unavailable."
+        )
+    try:
+        audit_writer(*args, **kwargs)
+    except Exception as exc:
+        from monitoring_alert_state_machine import AuditInfrastructureError
+        if isinstance(exc, AuditInfrastructureError):
+            raise
+        raise AuditInfrastructureError(
+            "Monitoring review-control audit write failed."
+        ) from exc
 
 
 # ── Tier classification ──────────────────────────────────────────────────────
@@ -190,7 +215,130 @@ def is_senior(user: Any) -> bool:
     return str((user or {}).get("role") or "").strip().lower() in SENIOR_ROLES
 
 
+def assert_authoritative_senior(db, user: Any) -> None:
+    """Require an active authoritative SCO/admin record for direct clearance.
+
+    ``record_senior_clear`` is a reusable service helper, so HTTP RBAC alone is
+    insufficient. A caller-supplied role must match the current users row and
+    that authoritative role must be senior before a ``senior_cleared`` ledger
+    record can be minted.
+    """
+    user_id = str((user or {}).get("sub") or "").strip()
+    claimed_role = _token((user or {}).get("role"))
+    if not user_id:
+        raise DismissalControlError(
+            "Only an active Senior Compliance Officer or Administrator can "
+            "clear this alert directly.",
+            403,
+        )
+    row = db.execute(
+        "SELECT id, role, status FROM users WHERE id = ?",
+        (user_id,),
+    ).fetchone()
+    authoritative_role = _token(_get(row, "role"))
+    authoritative_status = _token(_get(row, "status", "active"))
+    if (
+        row is None
+        or authoritative_status != "active"
+        or authoritative_role not in SENIOR_ROLES
+        or claimed_role != authoritative_role
+    ):
+        raise DismissalControlError(
+            "Only an active Senior Compliance Officer or Administrator can "
+            "clear this alert directly.",
+            403,
+        )
+
+
+def _authoritative_active_officer(
+    db,
+    user: Any,
+    *,
+    allowed_roles: set,
+    error_message: str,
+) -> Dict[str, Any]:
+    """Resolve an asserted actor against the active authoritative users row."""
+
+    user_id = str((user or {}).get("sub") or "").strip()
+    claimed_role = _token((user or {}).get("role"))
+    if not user_id or claimed_role not in allowed_roles:
+        raise DismissalControlError(error_message, 403)
+    row = db.execute(
+        "SELECT id, role, status FROM users WHERE id = ?",
+        (user_id,),
+    ).fetchone()
+    authoritative = dict(row) if row else {}
+    if (
+        not authoritative
+        or _token(authoritative.get("status") or "active") != "active"
+        or _token(authoritative.get("role")) not in allowed_roles
+        or _token(authoritative.get("role")) != claimed_role
+    ):
+        raise DismissalControlError(error_message, 403)
+    return authoritative
+
+
+def assert_authoritative_initiator(db, user: Any) -> Dict[str, Any]:
+    """Require a named active officer before minting four-eyes intent."""
+
+    return _authoritative_active_officer(
+        db,
+        user,
+        allowed_roles=INITIATOR_ROLES,
+        error_message=(
+            "Only an active Compliance Officer, Senior Compliance Officer, "
+            "or Administrator can request alert clearance."
+        ),
+    )
+
+
 # ── Request table CRUD ───────────────────────────────────────────────────────
+def _transition_evidence_json(evidence: Optional[Dict[str, Any]]) -> str:
+    if evidence is None:
+        return "{}"
+    if not isinstance(evidence, dict):
+        raise DismissalControlError("Transition evidence must be a keyed object.", 400)
+    normalized = {}
+    for raw_key, raw_value in evidence.items():
+        key = str(raw_key or "").strip()
+        if key not in TRANSITION_EVIDENCE_KEYS:
+            raise DismissalControlError(
+                f"Unsupported clearance evidence type: {key or '<blank>'}.",
+                400,
+            )
+        if (
+            raw_value is None
+            or isinstance(raw_value, bool)
+            or isinstance(raw_value, (dict, list, tuple, set))
+            or not str(raw_value).strip()
+        ):
+            raise DismissalControlError(
+                f"Clearance evidence {key} must be a non-blank identifier.",
+                400,
+            )
+        normalized[key] = raw_value
+    return json.dumps(normalized, default=str, sort_keys=True)
+
+
+def transition_evidence_for_request(request: Any) -> Dict[str, Any]:
+    raw = _get(request, "transition_evidence", "{}")
+    try:
+        parsed = json.loads(raw or "{}")
+    except (TypeError, ValueError) as exc:
+        raise DismissalControlError(
+            "The clearance request has invalid typed transition evidence.",
+            409,
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise DismissalControlError(
+            "The clearance request has invalid typed transition evidence.",
+            409,
+        )
+    # Re-run the exact-key/type allowlist on replay so a malformed or
+    # historically hand-edited row can never broaden transition authority.
+    return json.loads(_transition_evidence_json(parsed))
+
+
 def open_request_for_alert(db, alert_id) -> Optional[Dict[str, Any]]:
     row = db.execute(
         "SELECT * FROM monitoring_alert_review_requests "
@@ -204,50 +352,131 @@ def has_pending_request(db, alert_id) -> bool:
     return open_request_for_alert(db, alert_id) is not None
 
 
+def _lock_and_revalidate_alert(db, alert: Any) -> Dict[str, Any]:
+    """Acquire the canonical Alert-first lock and revalidate current state.
+
+    Review-control writers always take the Monitoring Alert row lock before
+    reading or changing a review-request row. This serializes pending/pending
+    and pending/senior-clear races and establishes one lock order shared with
+    approval/rejection handlers.
+    """
+    from monitoring_alert_state_machine import (
+        CANONICAL_STATUS_SET,
+        HANDOFF_STATUSES,
+        TERMINAL_STATUSES,
+        AlertNotFound,
+        lock_alert_for_transition,
+    )
+
+    alert_id = _get(alert, "id")
+    if alert_id in (None, ""):
+        raise DismissalControlError("Monitoring Alert not found.", 404)
+    try:
+        locked = lock_alert_for_transition(db, alert_id)
+    except AlertNotFound as exc:
+        raise DismissalControlError("Monitoring Alert not found.", 404) from exc
+
+    status = str(_get(locked, "status") or "").strip()
+    if status not in CANONICAL_STATUS_SET:
+        raise DismissalControlError(
+            "The stored Monitoring Alert status is not canonical.",
+            409,
+        )
+    if status in TERMINAL_STATUSES or status in HANDOFF_STATUSES:
+        raise DismissalControlError(
+            "Closed or downstream-routed Monitoring Alerts cannot receive a "
+            "clearance request.",
+            409,
+        )
+    return locked
+
+
+def _is_pending_unique_conflict(exc: Exception) -> bool:
+    """Recognize only the narrow pending-review uniqueness violation."""
+    diag = getattr(exc, "diag", None)
+    constraint = str(getattr(diag, "constraint_name", "") or "")
+    if constraint == PENDING_REVIEW_UNIQUE_INDEX:
+        return True
+    text = str(exc or "").lower()
+    return (
+        PENDING_REVIEW_UNIQUE_INDEX.lower() in text
+        or (
+            "unique constraint failed" in text
+            and "monitoring_alert_review_requests.alert_id" in text
+        )
+    )
+
+
 def _insert_request(db, *, alert_id, tier, requested_outcome, dismissal_reason,
-                    rationale, evidence_ref, initiated_by, state,
+                    rationale, evidence_ref, transition_evidence,
+                    source_alert_status, initiated_by, state,
                     second_review_bypassed=0,
                     approved_by=None, approval_note=None):
-    db.execute(
-        """
+    insert_sql = """
         INSERT INTO monitoring_alert_review_requests
             (alert_id, tier, requested_outcome, dismissal_reason, rationale,
-             evidence_ref, state, initiated_by, second_review_bypassed,
-             approved_by, approval_note, approved_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?, CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)
-        """,
-        (
-            alert_id, tier, requested_outcome, dismissal_reason, rationale,
-            evidence_ref, state, initiated_by, 1 if second_review_bypassed else 0,
-            approved_by, approval_note, approved_by,
-        ),
+             evidence_ref, transition_evidence, source_alert_status, state,
+             initiated_by, second_review_bypassed, approved_by, approval_note,
+             approved_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)
+    """
+    params = (
+        alert_id, tier, requested_outcome, dismissal_reason, rationale,
+        evidence_ref, transition_evidence, source_alert_status, state, initiated_by,
+        1 if second_review_bypassed else 0,
+        approved_by, approval_note, approved_by,
     )
-    db.commit()
-    row = db.execute(
-        "SELECT * FROM monitoring_alert_review_requests WHERE alert_id = ? ORDER BY id DESC LIMIT 1",
-        (alert_id,),
-    ).fetchone()
+    if getattr(db, "is_postgres", False):
+        row = db.execute(insert_sql + " RETURNING *", params).fetchone()
+    else:
+        db.execute(insert_sql, params)
+        row = db.execute(
+            "SELECT * FROM monitoring_alert_review_requests "
+            "WHERE id = last_insert_rowid()"
+        ).fetchone()
+    if row is None or str(_get(row, "alert_id")) != str(alert_id):
+        raise RuntimeError("Monitoring review-control insert could not be recovered.")
     return dict(row) if row else None
 
 
 def create_pending_request(db, *, alert, tier, requested_outcome, dismissal_reason,
-                           rationale, evidence_ref, user, audit_writer) -> Dict[str, Any]:
+                           rationale, evidence_ref, user, audit_writer,
+                           transition_evidence=None,
+                           commit: bool = False) -> Dict[str, Any]:
     """CO/officer (or a senior electing second review) initiates a pending request.
-    Validates mandatory rationale (+ evidence for Tier 1). Does NOT clear the alert."""
+    Validates mandatory rationale (+ evidence for Tier 1). Does NOT clear the
+    alert. The caller owns the transaction; this helper never commits."""
+    alert = _lock_and_revalidate_alert(db, alert)
     alert_id = _get(alert, "id")
+    initiator = assert_authoritative_initiator(db, user)
+    initiator_id = str(initiator.get("id") or "").strip()
+    tier = classify_alert_tier(alert)
     if not (rationale or "").strip():
         raise DismissalControlError("A rationale is required to request clearance of this alert.", 400)
     if requires_evidence(tier, alert) and not (evidence_ref or "").strip():
         raise DismissalControlError("An evidence note is required to request clearance of a sanctions/PEP/watchlist/adverse-media or CRITICAL-severity alert.", 400)
     if has_pending_request(db, alert_id):
         raise DismissalControlError("A review request is already pending for this alert.", 409)
+    evidence_json = _transition_evidence_json(transition_evidence)
+    source_alert_status = str(_get(alert, "status") or "").strip()
 
-    request = _insert_request(
-        db, alert_id=alert_id, tier=tier, requested_outcome=requested_outcome,
-        dismissal_reason=dismissal_reason, rationale=rationale, evidence_ref=evidence_ref,
-        initiated_by=(user or {}).get("sub", ""), state="pending",
-    )
-    audit_writer(
+    try:
+        request = _insert_request(
+            db, alert_id=alert_id, tier=tier, requested_outcome=requested_outcome,
+            dismissal_reason=dismissal_reason, rationale=rationale, evidence_ref=evidence_ref,
+            transition_evidence=evidence_json,
+            source_alert_status=source_alert_status,
+            initiated_by=initiator_id, state="pending",
+        )
+    except Exception as exc:
+        if _is_pending_unique_conflict(exc):
+            raise DismissalControlError(
+                "A review request is already pending for this alert.",
+                409,
+            ) from exc
+        raise
+    _write_audit(
+        audit_writer,
         dict(user or {}),
         "monitoring.alert.dismissal_requested",
         f"monitoring_alert:{alert_id}",
@@ -258,22 +487,29 @@ def create_pending_request(db, *, alert, tier, requested_outcome, dismissal_reas
             "requested_outcome": requested_outcome,
             "dismissal_reason": dismissal_reason,
             "has_evidence": bool((evidence_ref or "").strip()),
-            "initiated_by": (user or {}).get("sub", ""),
+            "transition_evidence_types": sorted(json.loads(evidence_json)),
+            "source_alert_status": source_alert_status,
+            "initiated_by": initiator_id,
             "actor_role": (user or {}).get("role", ""),
         }, sort_keys=True),
         db=db,
         after_state={"review_request_state": "pending"},
+        commit=False,
     )
-    db.commit()
     return request
 
 
 def record_senior_clear(db, *, alert, tier, requested_outcome, dismissal_reason,
-                        rationale, evidence_ref, user, audit_writer) -> Dict[str, Any]:
+                        rationale, evidence_ref, user, audit_writer,
+                        transition_evidence=None,
+                        commit: bool = False) -> Dict[str, Any]:
     """SCO/admin direct clear: validate enhanced rationale, record a
     `senior_cleared` ledger row + `dismissal_senior_cleared` audit with the
-    bypass flag. Caller then runs the terminal action."""
+    bypass flag. Caller then runs the terminal action in the same transaction."""
+    alert = _lock_and_revalidate_alert(db, alert)
+    assert_authoritative_senior(db, user)
     alert_id = _get(alert, "id")
+    tier = classify_alert_tier(alert)
     if not (rationale or "").strip():
         raise DismissalControlError("Senior direct clearance requires an enhanced rationale.", 400)
     if requires_evidence(tier, alert) and not (evidence_ref or "").strip():
@@ -283,15 +519,20 @@ def record_senior_clear(db, *, alert, tier, requested_outcome, dismissal_reason,
             "A review request is already pending for this alert; approve or reject it instead of clearing directly.",
             409,
         )
+    evidence_json = _transition_evidence_json(transition_evidence)
+    source_alert_status = str(_get(alert, "status") or "").strip()
 
     request = _insert_request(
         db, alert_id=alert_id, tier=tier, requested_outcome=requested_outcome,
         dismissal_reason=dismissal_reason, rationale=rationale, evidence_ref=evidence_ref,
+        transition_evidence=evidence_json,
+        source_alert_status=source_alert_status,
         initiated_by=(user or {}).get("sub", ""), state="senior_cleared",
         second_review_bypassed=1,
         approved_by=(user or {}).get("sub", ""), approval_note="senior_direct_clear",
     )
-    audit_writer(
+    _write_audit(
+        audit_writer,
         dict(user or {}),
         "monitoring.alert.dismissal_senior_cleared",
         f"monitoring_alert:{alert_id}",
@@ -302,6 +543,8 @@ def record_senior_clear(db, *, alert, tier, requested_outcome, dismissal_reason,
             "actor_role": (user or {}).get("role", ""),
             "rationale": rationale,
             "evidence_note": evidence_ref or "",
+            "transition_evidence_types": sorted(json.loads(evidence_json)),
+            "source_alert_status": source_alert_status,
             "outcome": requested_outcome,
             "dismissal_reason": dismissal_reason,
             "alert_type": _get(alert, "alert_type"),
@@ -310,22 +553,85 @@ def record_senior_clear(db, *, alert, tier, requested_outcome, dismissal_reason,
         }, default=str, sort_keys=True),
         db=db,
         after_state={"second_review_bypassed": True},
+        commit=False,
     )
-    db.commit()
     return request
 
 
-def assert_can_review(request, approver) -> None:
+def assert_can_review(db, request, approver) -> None:
     """Validate approver eligibility WITHOUT mutating. Raises on wrong role or
     self-review (four-eyes). Used before any terminal action so approval and
     clearing can be sequenced atomically by the caller."""
-    approver_id = (approver or {}).get("sub", "")
-    role = str((approver or {}).get("role") or "").strip().lower()
+    approver_row = _authoritative_active_officer(
+        db,
+        approver,
+        allowed_roles=SENIOR_ROLES,
+        error_message=(
+            "Only an active Senior Compliance Officer or Administrator can "
+            "action this clearance."
+        ),
+    )
+    approver_id = str(approver_row.get("id") or "").strip()
+    role = _token(approver_row.get("role"))
     tier = int(request.get("tier") or 1)
     if role not in approver_roles_for_tier(tier):
         raise DismissalControlError("Only a Senior Compliance Officer or Administrator can action this clearance.", 403)
-    if approver_id and approver_id == (request.get("initiated_by") or ""):
+    initiated_by = str(request.get("initiated_by") or "").strip()
+    if not initiated_by:
+        raise DismissalControlError(
+            "This clearance request has no authoritative initiating officer; "
+            "reject it and submit a new request.",
+            409,
+        )
+    maker = db.execute(
+        "SELECT id, role, status FROM users WHERE id = ?",
+        (initiated_by,),
+    ).fetchone()
+    if (
+        maker is None
+        or _token(_get(maker, "status", "active")) != "active"
+        or _token(_get(maker, "role")) not in INITIATOR_ROLES
+    ):
+        raise DismissalControlError(
+            "This clearance request has no authoritative active initiating "
+            "officer; reject it and submit a new request.",
+            409,
+        )
+    if approver_id == initiated_by:
         raise DismissalControlError("The same user cannot review their own clearance request (four-eyes).", 403)
+
+
+def assert_request_source_status_current(request: Any, alert: Any) -> None:
+    """Fail closed unless approval is bound to the exact creation-time status.
+
+    The caller must invoke this only after locking the authoritative alert row
+    and the review-request row in the canonical alert-first order. Historical
+    requests without the additive source-status field are intentionally not
+    guessed; they must be rejected and recreated against current state.
+    """
+    from monitoring_alert_state_machine import CANONICAL_STATUS_SET
+
+    requested_status = str(
+        _get(request, "source_alert_status") or ""
+    ).strip()
+    current_status = str(_get(alert, "status") or "").strip()
+    if requested_status not in CANONICAL_STATUS_SET:
+        raise DismissalControlError(
+            "This review request is not bound to a canonical source status. "
+            "Reject it and submit a new clearance request.",
+            409,
+        )
+    if current_status not in CANONICAL_STATUS_SET:
+        raise DismissalControlError(
+            "The stored Monitoring Alert status is not canonical.",
+            409,
+        )
+    if requested_status != current_status:
+        raise DismissalControlError(
+            "The Monitoring Alert status changed after this review request "
+            "was created. Reject it and submit a new clearance request.",
+            409,
+        )
 
 
 def _current_state(db, request_id):
@@ -335,12 +641,13 @@ def _current_state(db, request_id):
     return (dict(row).get("state") if row else None)
 
 
-def mark_request_approved(db, *, request, approver, approval_note, audit_writer) -> None:
+def mark_request_approved(db, *, request, approver, approval_note, audit_writer,
+                          commit: bool = False) -> None:
     """Transition a still-pending request to approved. Verifies the row was
     actually pending (DBConnection has no rowcount) so a race/duplicate cannot
-    record a false approval. Caller must run the terminal clear FIRST so the two
-    are sequenced together."""
-    assert_can_review(request, approver)
+    record a false approval. The caller owns the transaction and must run the
+    terminal transition in the same unit."""
+    assert_can_review(db, request, approver)
     approver_id = (approver or {}).get("sub", "")
     tier = int(request.get("tier") or 1)
     db.execute(
@@ -352,10 +659,10 @@ def mark_request_approved(db, *, request, approver, approval_note, audit_writer)
         """,
         (approver_id, (approval_note or "approved"), request.get("id")),
     )
-    db.commit()
     if _current_state(db, request.get("id")) != "approved":
         raise DismissalControlError("This review request is no longer pending.", 409)
-    audit_writer(
+    _write_audit(
+        audit_writer,
         dict(approver or {}),
         "monitoring.alert.dismissal_approved",
         f"monitoring_alert:{request.get('alert_id')}",
@@ -369,12 +676,13 @@ def mark_request_approved(db, *, request, approver, approval_note, audit_writer)
         }, sort_keys=True),
         db=db,
         after_state={"review_request_state": "approved"},
+        commit=False,
     )
-    db.commit()
 
 
-def reject_request(db, *, request, approver, rejection_reason, audit_writer) -> None:
-    assert_can_review(request, approver)
+def reject_request(db, *, request, approver, rejection_reason, audit_writer,
+                   commit: bool = False) -> None:
+    assert_can_review(db, request, approver)
     if not (rejection_reason or "").strip():
         raise DismissalControlError("A rejection reason is required.", 400)
     approver_id = (approver or {}).get("sub", "")
@@ -387,10 +695,10 @@ def reject_request(db, *, request, approver, rejection_reason, audit_writer) -> 
         """,
         (approver_id, rejection_reason, request.get("id")),
     )
-    db.commit()
     if _current_state(db, request.get("id")) != "rejected":
         raise DismissalControlError("This review request is no longer pending.", 409)
-    audit_writer(
+    _write_audit(
+        audit_writer,
         dict(approver or {}),
         "monitoring.alert.dismissal_rejected",
         f"monitoring_alert:{request.get('alert_id')}",
@@ -402,28 +710,31 @@ def reject_request(db, *, request, approver, rejection_reason, audit_writer) -> 
         }, sort_keys=True),
         db=db,
         after_state={"review_request_state": "rejected"},
+        commit=False,
     )
-    db.commit()
 
 
-def audit_blocked(db, *, alert_id, user, reason, detail, audit_writer) -> None:
+def audit_blocked(db, *, alert_id, user, reason, detail, audit_writer,
+                  commit: bool = False) -> None:
     """Emit the retained dismissal_blocked signal (self-approval / wrong role /
     missing rationale)."""
-    audit_writer(
+    _write_audit(
+        audit_writer,
         dict(user or {}),
         "monitoring.alert.dismissal_blocked",
         f"monitoring_alert:{alert_id}",
         json.dumps({"alert_id": alert_id, "reason": reason, **(detail or {})}, sort_keys=True),
         db=db,
         after_state={"blocked": True},
+        commit=False,
     )
-    db.commit()
 
 
-def fetch_request(db, request_id) -> Optional[Dict[str, Any]]:
-    row = db.execute(
-        "SELECT * FROM monitoring_alert_review_requests WHERE id = ?", (request_id,)
-    ).fetchone()
+def fetch_request(db, request_id, *, for_update: bool = False) -> Optional[Dict[str, Any]]:
+    sql = "SELECT * FROM monitoring_alert_review_requests WHERE id = ?"
+    if for_update and getattr(db, "is_postgres", False):
+        sql += " FOR UPDATE"
+    row = db.execute(sql, (request_id,)).fetchone()
     return dict(row) if row else None
 
 
@@ -447,9 +758,13 @@ def pending_requests_for_approver(db, approver, *, limit: int = 100) -> List[Dic
 
 __all__ = [
     "DismissalControlError",
+    "PENDING_REVIEW_UNIQUE_INDEX",
     "TIER1_APPROVER_ROLES",
+    "TRANSITION_EVIDENCE_KEYS",
     "approver_roles_for_tier",
+    "assert_authoritative_senior",
     "assert_can_review",
+    "assert_request_source_status_current",
     "audit_blocked",
     "classify_alert_tier",
     "create_pending_request",
@@ -463,4 +778,5 @@ __all__ = [
     "record_senior_clear",
     "reject_request",
     "requires_control",
+    "transition_evidence_for_request",
 ]

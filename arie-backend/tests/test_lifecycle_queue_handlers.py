@@ -254,9 +254,14 @@ class TestLifecycleQueueEndpoint(_LifecycleQueueHandlerBase):
         )
         body = json.loads(resp.body)
         self.assertEqual(body["counts"]["alert"], 2)
-        # Active first, historical second (deterministic ordering)
-        self.assertTrue(body["items"][0]["is_active"])
-        self.assertTrue(body["items"][1]["is_historical"])
+        by_state = {item["state"]: item for item in body["items"]}
+        self.assertTrue(by_state["open"]["is_active"])
+        self.assertFalse(by_state["open"]["is_action_locked"])
+        # A downstream handoff remains an active signal but Monitoring may no
+        # longer act on it; only the owner workflow can advance it.
+        self.assertTrue(by_state["routed_to_edd"]["is_active"])
+        self.assertFalse(by_state["routed_to_edd"]["is_historical"])
+        self.assertTrue(by_state["routed_to_edd"]["is_action_locked"])
 
     def test_type_singular_and_plural_both_accepted(self):
         self._review(status="pending")
@@ -282,7 +287,7 @@ class TestLifecycleQueueEndpoint(_LifecycleQueueHandlerBase):
         self._alert(status="open")  # healthy active
         self._alert(status="dismissed")  # healthy historical
         ghost_a = self._alert(status="escalated", application_id=None)
-        ghost_b = self._alert(status="escalated")  # vocab ghost only
+        canonical_escalation = self._alert(status="escalated")
         resp = self._get(
             "/api/lifecycle/queue?include=legacy_unmapped",
             token=self.admin_token,
@@ -290,10 +295,14 @@ class TestLifecycleQueueEndpoint(_LifecycleQueueHandlerBase):
         self.assertEqual(resp.code, 200)
         body = json.loads(resp.body)
         ids = {it["id"] for it in body["items"]}
-        self.assertEqual(ids, {ghost_a, ghost_b})
+        self.assertEqual(ids, {ghost_a})
+        self.assertNotIn(canonical_escalation, ids)
         for it in body["items"]:
             self.assertTrue(it["is_legacy_unmapped"])
-            self.assertGreater(len(it["quarantine_reasons"]), 0)
+            self.assertEqual(
+                it["quarantine_reasons"],
+                ["unscopable_no_application"],
+            )
 
     def test_invalid_type_returns_400(self):
         resp = self._get(
@@ -412,13 +421,20 @@ class TestApplicationSummaryEndpoint(_LifecycleQueueHandlerBase):
         self.assertIn("active", body)
         self.assertIn("historical", body)
         self.assertIn("linkage", body)
-        # Active: in_progress review only
+        # The in-progress review and its linked Monitoring handoff are both
+        # active; the handoff is action-locked in Monitoring.
         active_kinds = {(it["type"], it["state"])
                         for it in body["active"]["items"]}
         self.assertIn(("review", "in_progress"), active_kinds)
-        # Historical: routed alert + approved edd
+        self.assertIn(("alert", "routed_to_review"), active_kinds)
+        routed = next(
+            item for item in body["active"]["items"]
+            if item["type"] == "alert"
+        )
+        self.assertTrue(routed["is_action_locked"])
+        # Historical: the approved EDD case only.
         hist_states = {it["state"] for it in body["historical"]["items"]}
-        self.assertIn("routed_to_review", hist_states)
+        self.assertNotIn("routed_to_review", hist_states)
         self.assertIn("edd_approved", hist_states)
         # Linkage edge present
         kinds = {e["kind"] for e in body["linkage"]["edges"]}
