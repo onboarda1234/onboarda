@@ -658,18 +658,32 @@ def scan_exact_image(
     transient = {"IN_PROGRESS", "PENDING", "ACTIVE"}
     payload: dict[str, Any] | None = None
     for attempt in range(1, attempts + 1):
-        payload = aws_call(
-            [
-                "ecr",
-                "describe-image-scan-findings",
-                "--repository-name",
-                repository,
-                "--image-id",
-                f"imageDigest={digest}",
-                "--region",
-                region,
-            ]
-        )
+        try:
+            payload = aws_call(
+                [
+                    "ecr",
+                    "describe-image-scan-findings",
+                    "--repository-name",
+                    repository,
+                    "--image-id",
+                    f"imageDigest={digest}",
+                    "--region",
+                    region,
+                ]
+            )
+        except ReleaseImageError as exc:
+            # Immediately after a scan-on-push image becomes visible, ECR may
+            # briefly return ScanNotFound before the scan record is created.
+            # Treat only that named AWS state as transient; every other AWS
+            # error remains an immediate fail-closed result.
+            if "ScanNotFoundException" not in str(exc):
+                raise
+            if attempt == attempts:
+                raise ReleaseImageError(
+                    "exact-image vulnerability scan did not become available"
+                ) from exc
+            sleeper(interval_seconds)
+            continue
         status = str((payload.get("imageScanStatus") or {}).get("status") or "")
         if status == "COMPLETE":
             break

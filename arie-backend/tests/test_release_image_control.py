@@ -305,6 +305,81 @@ def test_scan_exact_digest_retries_only_transient_states():
     assert sleeps == [3]
 
 
+def test_scan_exact_digest_retries_brief_scan_not_found_state():
+    responses = iter(
+        [
+            control.ReleaseImageError(
+                "aws failed: ScanNotFoundException: scan record is not ready"
+            ),
+            _scan([]),
+        ]
+    )
+    sleeps = []
+
+    def eventual_scan(arguments):
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    result = control.scan_exact_image(
+        digest=DIGEST,
+        region=control.EXPECTED_REGION,
+        repository=control.EXPECTED_REPOSITORY,
+        aws_json=eventual_scan,
+        attempts=2,
+        interval_seconds=3,
+        sleeper=sleeps.append,
+    )
+
+    assert result["ok"] is True
+    assert sleeps == [3]
+
+
+def test_scan_exact_digest_does_not_retry_other_aws_errors():
+    sleeps = []
+
+    def access_denied(arguments):
+        raise control.ReleaseImageError(
+            "aws failed: AccessDeniedException: denied"
+        )
+
+    with pytest.raises(control.ReleaseImageError, match="AccessDeniedException"):
+        control.scan_exact_image(
+            digest=DIGEST,
+            region=control.EXPECTED_REGION,
+            repository=control.EXPECTED_REPOSITORY,
+            aws_json=access_denied,
+            attempts=2,
+            interval_seconds=3,
+            sleeper=sleeps.append,
+        )
+
+    assert sleeps == []
+
+
+def test_scan_exact_digest_fails_after_scan_not_found_budget():
+    sleeps = []
+
+    def scan_not_found(arguments):
+        raise control.ReleaseImageError(
+            "aws failed: ScanNotFoundException: scan record is not ready"
+        )
+
+    with pytest.raises(control.ReleaseImageError, match="did not become available"):
+        control.scan_exact_image(
+            digest=DIGEST,
+            region=control.EXPECTED_REGION,
+            repository=control.EXPECTED_REPOSITORY,
+            aws_json=scan_not_found,
+            attempts=2,
+            interval_seconds=3,
+            sleeper=sleeps.append,
+        )
+
+    assert sleeps == [3]
+
+
 def test_release_context_rejects_short_sha_and_non_main_ref():
     with pytest.raises(control.ReleaseImageError, match="40-character"):
         control.validate_release_context("abc1234", control.EXPECTED_REF)

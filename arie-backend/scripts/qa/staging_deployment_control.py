@@ -55,10 +55,16 @@ LOG_PATTERNS = (
     "connection pool exhausted",
     "falling back to mock mode",
 )
+DEFAULT_SERVICE_ATTEMPTS = 30
+ALB_DRAIN_SAFETY_MARGIN_SECONDS = 60
 
 
 class StagingControlError(RuntimeError):
     """Raised when required staging release evidence cannot be proven."""
+
+
+class StagingConvergencePending(StagingControlError):
+    """Raised only for a bounded, explicitly transient rollout state."""
 
 
 def _run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -157,16 +163,36 @@ def _healthy_service(service: Mapping[str, Any]) -> dict[str, Any]:
     desired = int(service.get("desiredCount") or 0)
     running = int(service.get("runningCount") or 0)
     pending = int(service.get("pendingCount") or 0)
+    service_name = service.get("serviceName") or "<missing>"
+    if service.get("status") != "ACTIVE":
+        raise StagingControlError(f"ECS service {service_name} is not ACTIVE")
+    if desired <= 0:
+        raise StagingControlError(
+            f"ECS service {service_name} has no desired runtime capacity"
+        )
+    failed = [
+        item
+        for item in deployments
+        if isinstance(item, Mapping) and item.get("rolloutState") == "FAILED"
+    ]
+    if failed:
+        raise StagingControlError(f"ECS service {service_name} rollout FAILED")
+    if len(primary) != 1:
+        raise StagingControlError(
+            f"ECS service {service_name} primary deployment inventory is invalid"
+        )
+    rollout_state = primary[0].get("rolloutState")
+    if rollout_state not in {"IN_PROGRESS", "COMPLETED"}:
+        raise StagingControlError(
+            f"ECS service {service_name} rollout state is invalid"
+        )
     if (
-        service.get("status") != "ACTIVE"
-        or desired <= 0
-        or running != desired
+        running != desired
         or pending != 0
         or len(deployments) != 1
-        or len(primary) != 1
-        or primary[0].get("rolloutState") != "COMPLETED"
+        or rollout_state != "COMPLETED"
     ):
-        raise StagingControlError(
+        raise StagingConvergencePending(
             f"ECS service {service.get('serviceName') or '<missing>'} is not stable"
         )
     task_definition = str(service.get("taskDefinition") or "")
@@ -565,6 +591,9 @@ def verify_runtime(
     region: str = EXPECTED_REGION,
     cluster: str = EXPECTED_CLUSTER,
     aws_json: Callable[[Sequence[str]], dict[str, Any]] = _aws_json,
+    attempts: int | None = None,
+    interval_seconds: int = 10,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     sha = _validate_sha(sha)
     if not DIGEST_RE.fullmatch(digest):
@@ -573,7 +602,10 @@ def verify_runtime(
         raise StagingControlError("expected backend task-definition ARN is invalid")
     if not TASK_DEFINITION_RE.fullmatch(worker_task_definition):
         raise StagingControlError("expected worker task-definition ARN is invalid")
+    if (attempts is not None and attempts <= 0) or interval_seconds <= 0:
+        raise StagingControlError("runtime verification retry policy is invalid")
     _validate_target(region, cluster)
+    service_attempts = attempts or DEFAULT_SERVICE_ATTEMPTS
 
     # Re-check repository controls after deployment as well as re-resolving the
     # immutable tag, so a mid-run configuration downgrade cannot pass.
@@ -589,95 +621,210 @@ def verify_runtime(
     if observed_digest != digest:
         raise StagingControlError("ECR SHA tag no longer resolves to the scanned digest")
 
-    services_payload = aws_json(
-        [
-            "ecs",
-            "describe-services",
-            "--cluster",
-            cluster,
-            "--services",
-            EXPECTED_BACKEND_SERVICE,
-            EXPECTED_WORKER_SERVICE,
-            "--region",
-            region,
-        ]
-    )
-    services = _service_map(
-        services_payload,
-        (EXPECTED_BACKEND_SERVICE, EXPECTED_WORKER_SERVICE),
-    )
-    expected_task_definitions = {
-        "backend": backend_task_definition,
-        "worker": worker_task_definition,
-    }
-    result_services: dict[str, Any] = {}
-    for label, name in (
-        ("backend", EXPECTED_BACKEND_SERVICE),
-        ("worker", EXPECTED_WORKER_SERVICE),
-    ):
-        summary = _healthy_service(services[name])
-        expected_td = expected_task_definitions[label]
-        if summary["task_definition_arn"] != expected_td:
-            raise StagingControlError(f"{name} did not activate the expected task definition")
-        task_payload = aws_json(
+    def load_services() -> dict[str, Mapping[str, Any]]:
+        services_payload = aws_json(
             [
                 "ecs",
-                "describe-task-definition",
-                "--task-definition",
-                expected_td,
+                "describe-services",
+                "--cluster",
+                cluster,
+                "--services",
+                EXPECTED_BACKEND_SERVICE,
+                EXPECTED_WORKER_SERVICE,
                 "--region",
                 region,
             ]
         )
-        task_summary = _task_definition_summary(
-            task_payload.get("taskDefinition") or {}
+        return _service_map(
+            services_payload,
+            (EXPECTED_BACKEND_SERVICE, EXPECTED_WORKER_SERVICE),
         )
-        environment = task_summary["environment"]
-        if (
-            task_summary["image_tag"] != sha
-            or environment.get("GIT_SHA") != sha
-            or environment.get("IMAGE_TAG") != sha
-            or environment.get("ENVIRONMENT") != "staging"
-            or environment.get("SERVICE_NAME") != name
-        ):
-            raise StagingControlError(f"{name} task-definition provenance mismatch")
-        summary["tasks"] = _running_tasks(
-            service_name=name,
-            expected_task_definition=expected_td,
-            expected_tag=sha,
-            expected_digest=digest,
-            expected_count=summary["desired_count"],
-            region=region,
-            cluster=cluster,
-            aws_json=aws_json,
-        )
-        summary["task_definition"] = task_summary
-        result_services[label] = summary
 
-    load_balancers = services[EXPECTED_BACKEND_SERVICE].get("loadBalancers") or []
-    if len(load_balancers) != 1:
-        raise StagingControlError("backend must have exactly one ALB target group")
-    target_group_arn = str(load_balancers[0].get("targetGroupArn") or "")
-    if not target_group_arn:
-        raise StagingControlError("backend ALB target-group ARN is missing")
-    target_payload = aws_json(
+    def summarize_services(
+        services: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        return {
+            "backend": _healthy_service(services[EXPECTED_BACKEND_SERVICE]),
+            "worker": _healthy_service(services[EXPECTED_WORKER_SERVICE]),
+        }
+
+    services: dict[str, Mapping[str, Any]] | None = None
+    service_summaries: dict[str, dict[str, Any]] = {}
+    for attempt in range(1, service_attempts + 1):
+        services = load_services()
+        try:
+            service_summaries = summarize_services(services)
+            break
+        except StagingConvergencePending as exc:
+            # The ECS waiter can return immediately before a draining
+            # deployment disappears from describe-services. Retry only the
+            # typed convergence state. FAILED, inactive, zero-capacity,
+            # inventory, and provenance errors remain immediate failures.
+            if attempt == service_attempts:
+                raise StagingControlError(
+                    "ECS services did not converge to one completed deployment"
+                ) from exc
+            sleeper(interval_seconds)
+    if services is None:
+        raise StagingControlError("ECS service verification returned no evidence")
+
+    expected_task_definitions = {
+        "backend": backend_task_definition,
+        "worker": worker_task_definition,
+    }
+
+    def collect_service_evidence(
+        current_services: Mapping[str, Mapping[str, Any]],
+        current_summaries: Mapping[str, dict[str, Any]],
+    ) -> tuple[dict[str, Any], str]:
+        result_services: dict[str, Any] = {}
+        for label, name in (
+            ("backend", EXPECTED_BACKEND_SERVICE),
+            ("worker", EXPECTED_WORKER_SERVICE),
+        ):
+            summary = current_summaries[label]
+            expected_td = expected_task_definitions[label]
+            if summary["task_definition_arn"] != expected_td:
+                raise StagingControlError(
+                    f"{name} did not activate the expected task definition"
+                )
+            task_payload = aws_json(
+                [
+                    "ecs",
+                    "describe-task-definition",
+                    "--task-definition",
+                    expected_td,
+                    "--region",
+                    region,
+                ]
+            )
+            task_summary = _task_definition_summary(
+                task_payload.get("taskDefinition") or {}
+            )
+            environment = task_summary["environment"]
+            if (
+                task_summary["image_tag"] != sha
+                or environment.get("GIT_SHA") != sha
+                or environment.get("IMAGE_TAG") != sha
+                or environment.get("ENVIRONMENT") != "staging"
+                or environment.get("SERVICE_NAME") != name
+            ):
+                raise StagingControlError(
+                    f"{name} task-definition provenance mismatch"
+                )
+            summary["tasks"] = _running_tasks(
+                service_name=name,
+                expected_task_definition=expected_td,
+                expected_tag=sha,
+                expected_digest=digest,
+                expected_count=summary["desired_count"],
+                region=region,
+                cluster=cluster,
+                aws_json=aws_json,
+            )
+            summary["task_definition"] = task_summary
+            result_services[label] = summary
+
+        load_balancers = current_services[EXPECTED_BACKEND_SERVICE].get(
+            "loadBalancers"
+        ) or []
+        if len(load_balancers) != 1:
+            raise StagingControlError("backend must have exactly one ALB target group")
+        target_group_arn = str(load_balancers[0].get("targetGroupArn") or "")
+        if not target_group_arn:
+            raise StagingControlError("backend ALB target-group ARN is missing")
+        return result_services, target_group_arn
+
+    result_services, target_group_arn = collect_service_evidence(
+        services,
+        service_summaries,
+    )
+    attribute_payload = aws_json(
         [
             "elbv2",
-            "describe-target-health",
+            "describe-target-group-attributes",
             "--target-group-arn",
             target_group_arn,
             "--region",
             region,
         ]
     )
-    descriptions = target_payload.get("TargetHealthDescriptions") or []
-    desired = result_services["backend"]["desired_count"]
-    states = [
-        str((item.get("TargetHealth") or {}).get("State") or "")
-        for item in descriptions
+    delay_values = [
+        str(item.get("Value") or "")
+        for item in attribute_payload.get("Attributes") or []
+        if isinstance(item, Mapping)
+        and item.get("Key") == "deregistration_delay.timeout_seconds"
     ]
+    if len(delay_values) != 1 or not delay_values[0].isdigit():
+        raise StagingControlError("ALB deregistration delay evidence is invalid")
+    deregistration_delay_seconds = int(delay_values[0])
+    if not 0 <= deregistration_delay_seconds <= 3600:
+        raise StagingControlError("ALB deregistration delay is outside AWS bounds")
+    alb_attempts = attempts or max(
+        DEFAULT_SERVICE_ATTEMPTS,
+        (
+            deregistration_delay_seconds
+            + ALB_DRAIN_SAFETY_MARGIN_SECONDS
+            + interval_seconds
+            - 1
+        )
+        // interval_seconds
+        + 1,
+    )
+    desired = result_services["backend"]["desired_count"]
+
+    def load_target_states() -> list[str]:
+        target_payload = aws_json(
+            [
+                "elbv2",
+                "describe-target-health",
+                "--target-group-arn",
+                target_group_arn,
+                "--region",
+                region,
+            ]
+        )
+        descriptions = target_payload.get("TargetHealthDescriptions") or []
+        return [
+            str((item.get("TargetHealth") or {}).get("State") or "")
+            for item in descriptions
+        ]
+
+    states: list[str] = []
+    for attempt in range(1, alb_attempts + 1):
+        states = load_target_states()
+        if len(states) == desired and all(state == "healthy" for state in states):
+            break
+        if attempt == alb_attempts:
+            raise StagingControlError("ALB target health is incomplete or unhealthy")
+        sleeper(interval_seconds)
+
+    # ALB draining can consume several minutes. Re-read both services, task
+    # definitions, and every running task after target convergence so a
+    # concurrent rollback or redeploy cannot yield stale success evidence.
+    final_services = load_services()
+    final_summaries = summarize_services(final_services)
+    result_services, final_target_group_arn = collect_service_evidence(
+        final_services,
+        final_summaries,
+    )
+    if final_target_group_arn != target_group_arn:
+        raise StagingControlError("backend ALB target group changed during verification")
+    states = load_target_states()
+    desired = result_services["backend"]["desired_count"]
     if len(states) != desired or any(state != "healthy" for state in states):
-        raise StagingControlError("ALB target health is incomplete or unhealthy")
+        raise StagingControlError(
+            "ALB target health changed during final runtime verification"
+        )
+    final_repository_controls = _ecr_repository_controls(
+        region=region,
+        aws_json=aws_json,
+    )
+    if final_repository_controls != repository_controls:
+        raise StagingControlError("ECR repository controls changed during verification")
+    if _ecr_digest(image_tag=sha, region=region, aws_json=aws_json) != digest:
+        raise StagingControlError("ECR SHA tag changed during verification")
+
     return {
         "schema_version": "staging_runtime_release_evidence_v1",
         "ok": True,
@@ -693,6 +840,8 @@ def verify_runtime(
             "expected_target_count": desired,
             "healthy_target_count": len(states),
             "states": states,
+            "deregistration_delay_seconds": deregistration_delay_seconds,
+            "verification_attempt_budget": alb_attempts,
         },
     }
 
