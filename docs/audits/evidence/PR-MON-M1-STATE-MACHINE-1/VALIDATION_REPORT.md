@@ -23,6 +23,12 @@ State-machine version: `monitoring_alert_state_machine_v1`
   update, plus one live create, with no failure, `ERROR`, or `CRITICAL` event
   in the creation window. These paths predate this PR and have no governed-flag
   consumer.
+- A final pre-merge revalidation against current main SHA
+  `2287a0ce2992f8941dbe0be49e86b23fe3272962` reconfirmed the same 22-alert
+  canonical inventory and empty review ledger. Authenticated `/api/version`,
+  backend 2/2, workers 6/6, ALB 2/2, exact immutable image digest, 0-Critical /
+  0-High scan evidence, and CloudWatch were healthy; the transaction was
+  explicitly read-only and rolled back.
 - The latest reconciled inventory is 22 Monitoring Alerts; all are canonical,
   the review ledger remains empty, and schema version remains 053.
 - Every stored status is in the v1 vocabulary.
@@ -162,6 +168,26 @@ Post-fix validation on Python 3.11:
 The superseded green CI result is not merge evidence for the review-fix commit.
 Every required GitHub check, including the exact-image vulnerability gate,
 must rerun and pass on the new head before merge.
+
+### Final main-rebase review pass
+
+After rebasing onto PR #912, three further live review threads were reconciled
+before merge:
+
+- both locked document-outcome paths and their shared clearance preflight now
+  reject a blank or noncanonical alert status before requirement, document,
+  review-control, metadata, or audit writes;
+- every Monitoring routing error handler explicitly rolls back the
+  caller-owned transaction before returning; and
+- the immutable Phase 0B-1 guard now distinguishes unavailable history,
+  non-descendant branches, and an ancestry-command failure while preserving
+  the complete 18-path historical proof.
+
+Fourteen focused regressions pass for these exact fixes. Expanded local lanes
+produced 31 document-refresh passes (one PostgreSQL-only local skip), 187
+routing/state-machine passes (the two PostgreSQL-only contracts require the CI
+DSN), and 204 Supervisor/write-guard passes. Required GitHub CI remains the
+authoritative PostgreSQL and full-suite gate for the final exact head.
 
 ## Protected expectation reconciliation
 

@@ -1058,3 +1058,24 @@ def test_locked_review_request_early_returns_roll_back_first():
         r'return self\.error\("Review request is no longer pending\.", 409\)',
         locked_section,
     )
+
+
+def test_monitoring_alert_action_routing_errors_roll_back_before_return():
+    import inspect
+    import re
+    import server as server_module
+
+    source = inspect.getsource(server_module.MonitoringAlertDetailHandler.patch)
+    expected_handlers = (
+        (r"except mr\.AlertNotFound:", r'return self\.error\("Alert not found", 404\)'),
+        (r"except mr\.InvalidDismissalReason as e:", r"return self\.error\(str\(e\), 400\)"),
+        (r"except mr\.AlertAlreadyTerminal as e:", r"return self\.error\(str\(e\), 409\)"),
+        (r"except mr\.MonitoringRoutingError as e:", r"return self\.error\(str\(e\), 400\)"),
+    )
+    for exception_pattern, return_pattern in expected_handlers:
+        assert re.search(
+            exception_pattern
+            + r"\s+_rollback_monitoring_transaction\(db\)\s+"
+            + return_pattern,
+            source,
+        )

@@ -912,6 +912,22 @@ def prepare_document_refresh_clearance(
     application_id = alert.get("application_id")
     if outcome not in {"accept", "waive"}:
         return "execute", None
+    alert_status = str(alert.get("status") or "").strip()
+    if not monitoring_state_machine.is_canonical_status(alert_status):
+        raise MonitoringDocumentRefreshError(
+            "Cannot prepare document clearance because the Monitoring Alert "
+            "status is not canonical",
+            409,
+        )
+    if (
+        monitoring_state_machine.is_terminal_status(alert_status)
+        or monitoring_state_machine.is_handoff_status(alert_status)
+    ):
+        raise MonitoringDocumentRefreshError(
+            "Cannot prepare document clearance for a terminal or "
+            "downstream-owned alert",
+            409,
+        )
     if (
         alert_id in (None, "")
         or request_id in (None, "")
@@ -1121,6 +1137,12 @@ def review_document_refresh(
             db, alert.get("id")
         )
         expected_status = str(locked_alert.get("status") or "").strip()
+        if not monitoring_state_machine.is_canonical_status(expected_status):
+            raise MonitoringDocumentRefreshError(
+                "Cannot review a document refresh because the Monitoring "
+                "Alert status is not canonical",
+                409,
+            )
         if (
             monitoring_state_machine.is_terminal_status(expected_status)
             or monitoring_state_machine.is_handoff_status(expected_status)
@@ -1389,6 +1411,12 @@ def sync_requirement_review_to_monitoring_alert(
             db, alert_id
         )
         expected_status = str(locked_alert.get("status") or "").strip()
+        if not monitoring_state_machine.is_canonical_status(expected_status):
+            raise MonitoringDocumentRefreshError(
+                "Cannot synchronize a document outcome because the Monitoring "
+                "Alert status is not canonical",
+                409,
+            )
         if (
             monitoring_state_machine.is_terminal_status(expected_status)
             or monitoring_state_machine.is_handoff_status(expected_status)

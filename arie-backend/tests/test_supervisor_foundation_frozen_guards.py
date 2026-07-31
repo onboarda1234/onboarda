@@ -74,7 +74,32 @@ def _phase_0b1_changed_paths() -> list[str]:
     try:
         _git("cat-file", "-e", f"{PHASE_0B1_BASE}^{{commit}}")
         _git("cat-file", "-e", f"{PHASE_0B1_HEAD}^{{commit}}")
-        _git("merge-base", "--is-ancestor", PHASE_0B1_HEAD, "HEAD")
+    except subprocess.CalledProcessError as exc:  # pragma: no cover - CI guard
+        pytest.fail(
+            "Phase 0B-1 history is unavailable; checkout must use "
+            "fetch-depth: 0 before this proof can run. "
+            f"git error: {exc.stderr.strip()}"
+        )
+
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", PHASE_0B1_HEAD, "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if ancestor.returncode == 1:
+        pytest.fail(
+            f"HEAD does not descend from Phase 0B-1 head {PHASE_0B1_HEAD}; "
+            "the historical proof does not apply to this branch."
+        )
+    if ancestor.returncode != 0:
+        pytest.fail(
+            "Phase 0B-1 ancestry could not be verified; git merge-base "
+            f"failed with exit {ancestor.returncode}: {ancestor.stderr.strip()}"
+        )
+
+    try:
         return _git(
             "diff",
             "--name-only",

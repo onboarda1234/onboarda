@@ -38230,12 +38230,16 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         commit=False,
                     )
             except mr.AlertNotFound:
+                _rollback_monitoring_transaction(db)
                 return self.error("Alert not found", 404)
             except mr.InvalidDismissalReason as e:
+                _rollback_monitoring_transaction(db)
                 return self.error(str(e), 400)
             except mr.AlertAlreadyTerminal as e:
+                _rollback_monitoring_transaction(db)
                 return self.error(str(e), 409)
             except mr.MonitoringRoutingError as e:
+                _rollback_monitoring_transaction(db)
                 return self.error(str(e), 400)
             except _MonitoringDocumentRefreshError as e:
                 _rollback_monitoring_transaction(db)

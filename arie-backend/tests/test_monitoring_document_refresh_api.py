@@ -1206,6 +1206,138 @@ def test_requirement_sync_rejects_foreign_application_before_any_mutation(
         conn.close()
 
 
+@pytest.mark.parametrize(
+    "outcome_path",
+    ("clearance", "review", "requirement_sync"),
+)
+def test_document_outcome_paths_reject_noncanonical_locked_status_before_mutation(
+    monitoring_doc_refresh_server,
+    outcome_path,
+):
+    from monitoring_document_refresh import (
+        MonitoringDocumentRefreshError,
+        prepare_document_refresh_clearance,
+        review_document_refresh,
+        sync_requirement_review_to_monitoring_alert,
+    )
+
+    base_url, db_module = monitoring_doc_refresh_server
+    admin_token = _token("admin_m3", "admin", "Admin M3")
+    client_token = _token(
+        "client_m3",
+        "client",
+        "Monitoring Three Client Ltd",
+        "client",
+    )
+
+    assert _request_updated_document(base_url, admin_token).status_code == 200
+    task = requests.get(
+        f"{base_url}/api/portal/applications/app_m3/enhanced-requirements",
+        headers=_auth_headers(client_token),
+        timeout=5,
+    ).json()["requirements"][0]
+    upload = _upload_client_document(base_url, client_token, task["id"])
+    assert upload.status_code == 201, upload.text
+    replacement_id = upload.json()["document"]["id"]
+
+    def audit_must_not_run(*_args, **_kwargs):
+        raise AssertionError("non-canonical status reached an audit write")
+
+    conn = db_module.get_db()
+    try:
+        # Simulate a legacy/corrupt row that predates migration 054. The
+        # database constraint is re-enabled before the runtime path executes.
+        conn.execute("PRAGMA ignore_check_constraints = ON")
+        conn.execute(
+            "UPDATE monitoring_alerts SET status = 'OPEN' WHERE id = ?",
+            (9301,),
+        )
+        conn.execute("PRAGMA ignore_check_constraints = OFF")
+        conn.commit()
+        requirement = dict(
+            conn.execute(
+                "SELECT * FROM application_enhanced_requirements WHERE id = ?",
+                (task["id"],),
+            ).fetchone()
+        )
+
+        with pytest.raises(
+            MonitoringDocumentRefreshError,
+            match="not canonical",
+        ) as exc_info:
+            if outcome_path == "clearance":
+                prepare_document_refresh_clearance(
+                    conn,
+                    alert=dict(
+                        conn.execute(
+                            "SELECT * FROM monitoring_alerts WHERE id = ?",
+                            (9301,),
+                        ).fetchone()
+                    ),
+                    request=requirement,
+                    outcome="accept",
+                    note="This non-canonical alert must fail closed.",
+                    evidence_ref="",
+                    user={"sub": "co_m3", "name": "CO M3", "role": "co"},
+                    audit_writer=audit_must_not_run,
+                )
+            elif outcome_path == "review":
+                review_document_refresh(
+                    conn,
+                    9301,
+                    outcome="reject",
+                    note="This non-canonical alert must fail closed.",
+                    user={"sub": "admin_m3", "name": "Admin M3", "role": "admin"},
+                    audit_writer=audit_must_not_run,
+                )
+            else:
+                conn.execute(
+                    "UPDATE application_enhanced_requirements "
+                    "SET status = 'rejected' WHERE id = ?",
+                    (task["id"],),
+                )
+                requirement.update(
+                    {
+                        "status": "rejected",
+                        "review_notes": "This non-canonical alert must fail closed.",
+                    }
+                )
+                sync_requirement_review_to_monitoring_alert(
+                    conn,
+                    requirement,
+                    user={"sub": "admin_m3", "name": "Admin M3", "role": "admin"},
+                    audit_writer=audit_must_not_run,
+                )
+
+        assert exc_info.value.status_code == 409
+        assert conn.execute(
+            "SELECT status FROM monitoring_alerts WHERE id = ?",
+            (9301,),
+        ).fetchone()["status"] == "OPEN"
+        assert conn.execute(
+            "SELECT status FROM application_enhanced_requirements WHERE id = ?",
+            (task["id"],),
+        ).fetchone()["status"] == "uploaded"
+        assert conn.execute(
+            "SELECT review_status FROM documents WHERE id = ?",
+            (replacement_id,),
+        ).fetchone()["review_status"] == "pending"
+        assert conn.execute(
+            "SELECT COUNT(*) AS count FROM audit_log WHERE target = ? "
+            "AND action IN ('updated_document_rejected', "
+            "'monitoring.alert.status_transition')",
+            ("monitoring_alert:9301",),
+        ).fetchone()["count"] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) AS count FROM monitoring_alert_review_requests "
+            "WHERE alert_id = ?",
+            (9301,),
+        ).fetchone()["count"] == 0
+    finally:
+        conn.rollback()
+        conn.close()
+
+
 def test_application_requirement_controlled_acceptance_stays_unchanged_pending_review(
     monitoring_doc_refresh_server,
 ):
