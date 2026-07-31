@@ -52,7 +52,7 @@ query evidence and mutation-path inventory.
 | Protected-module regression (73-file manifest) | 1,601 passed; zero skips/xfails |
 | PostgreSQL append-only grants | 5 passed |
 | Protected inventory contracts | 17 passed |
-| Static direct-write guard | 23 passed |
+| Static direct-write guard | 26 passed |
 | Release-control compatibility | 86 passed |
 | Independent final runtime focus | 210 passed; 3 PostgreSQL cases deselected and covered by the PostgreSQL-enabled root lanes |
 | Full repository suite | 8,661 passed; 3 expected skips; 4 expected xfails |
@@ -93,6 +93,50 @@ aliased SQL executor detection (including chained aliases), narrowed
 PostgreSQL exception assertions, and corrected the four-eyes import boundary.
 The rebased validation above re-exercised those remediations with disposable
 local PostgreSQL databases.
+
+### Post-publication review pass
+
+The rebased head `795cea0ec426f29aae606c4e4efd653393596f9c`
+completed every then-required GitHub check: full lint/test, protected-module
+regression, Docker validation, PDF, two exact-SHA container-security runs, and
+CodeRabbit. The fresh CodeRabbit review opened ten threads. Seven were valid
+and were fixed before merge:
+
+- document outcomes now bind exactly to their governed requested action and
+  any non-accept/non-waive helper invocation fails closed;
+- enhanced-requirement synchronization proves both alert identity and locked
+  application identity before any document, alert metadata, or audit write;
+- unknown, blank, and NULL stored statuses action-lock instead of permitting a
+  late failure;
+- review-request early returns explicitly roll back after the alert lock;
+- indirect fixture-helper inspection resolves positional, keyword, qualified,
+  and aliased calls and fails closed on unresolved call shapes;
+- function decorators, defaults, annotations, returns, and type-parameter
+  expressions are inspected in their enclosing scope by the SQL guard; and
+- the two staging observations and historical `cancelled`/`canceled` read
+  aliases are documented unambiguously.
+
+Three suggestions were independently verified as non-actionable and were not
+applied. List action ownership must use the raw stored status, not the derived
+display key, or a blank invalid value would be reopened as display `open`.
+`review_document_refresh` has no `commit` parameter and contains no commit, so
+the caller already owns the single transaction. Finally, closing the database
+would already release the review lock; the explicit rollback was retained as
+harmless defense-in-depth.
+
+Post-fix validation on Python 3.11:
+
+- focused production/API set: **73 passed**;
+- static direct-write guard: **26 passed**;
+- expanded affected lane with PostgreSQL: **591 passed**;
+- permanent protected-module regression: **1,601 passed**, zero skips/xfails;
+- production compilation and `git diff --check`: passed; and
+- independent post-fix review: **P0=0, P1=0, P2=0, P3=0**, no actionable
+  finding.
+
+The superseded green CI result is not merge evidence for the review-fix commit.
+Every required GitHub check, including the exact-image vulnerability gate,
+must rerun and pass on the new head before merge.
 
 ## Protected expectation reconciliation
 

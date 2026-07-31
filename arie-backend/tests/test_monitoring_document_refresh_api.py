@@ -250,6 +250,47 @@ def test_updated_document_notification_uses_boolean_read_status_parameter():
     assert row["read_status"] is False
 
 
+@pytest.mark.parametrize(
+    ("outcome", "requested_outcome", "status_code"),
+    (
+        ("accept", "waive_with_reason", 409),
+        ("waive", "accept_updated_document", 409),
+        ("waive", "mark_already_updated", 409),
+        ("reject", "accept_updated_document", 400),
+    ),
+)
+def test_document_transition_rejects_mismatched_requested_outcome_before_write(
+    monkeypatch,
+    outcome,
+    requested_outcome,
+    status_code,
+):
+    import monitoring_document_refresh as refresh
+
+    transition_calls = []
+    monkeypatch.setattr(
+        refresh.monitoring_state_machine,
+        "transition_alert_status",
+        lambda *_args, **_kwargs: transition_calls.append(True),
+    )
+
+    with pytest.raises(refresh.MonitoringDocumentRefreshError) as exc_info:
+        refresh._transition_document_alert(
+            object(),
+            alert={"id": 9301},
+            expected_status="open",
+            outcome=outcome,
+            requested_outcome=requested_outcome,
+            request_id=73,
+            document_id="doc-73",
+            note="Controlled document decision.",
+            user={"sub": "admin_m3", "role": "admin"},
+        )
+
+    assert exc_info.value.status_code == status_code
+    assert transition_calls == []
+
+
 def _request_updated_document(base_url, token):
     return requests.patch(
         f"{base_url}/api/monitoring/alerts/9301",
@@ -1085,6 +1126,82 @@ def test_application_requirement_acceptance_sync_uses_canonical_transition(
         assert control["state"] == "senior_cleared"
         assert control["requested_outcome"] == "accept_updated_document"
         assert detail["evidence"]["review_request_id"] == control["id"]
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("invalid_application_id", ("foreign_application", None))
+def test_requirement_sync_rejects_foreign_application_before_any_mutation(
+    monitoring_doc_refresh_server,
+    invalid_application_id,
+):
+    from monitoring_document_refresh import (
+        MonitoringDocumentRefreshError,
+        sync_requirement_review_to_monitoring_alert,
+    )
+
+    base_url, db_module = monitoring_doc_refresh_server
+    admin_token = _token("admin_m3", "admin", "Admin M3")
+    client_token = _token(
+        "client_m3",
+        "client",
+        "Monitoring Three Client Ltd",
+        "client",
+    )
+
+    assert _request_updated_document(base_url, admin_token).status_code == 200
+    task = requests.get(
+        f"{base_url}/api/portal/applications/app_m3/enhanced-requirements",
+        headers=_auth_headers(client_token),
+        timeout=5,
+    ).json()["requirements"][0]
+    upload = _upload_client_document(base_url, client_token, task["id"])
+    assert upload.status_code == 201, upload.text
+    replacement_id = upload.json()["document"]["id"]
+
+    conn = db_module.get_db()
+    try:
+        requirement = dict(
+            conn.execute(
+                "SELECT * FROM application_enhanced_requirements WHERE id = ?",
+                (task["id"],),
+            ).fetchone()
+        )
+        requirement.update(
+            {
+                "status": "accepted",
+                "application_id": invalid_application_id,
+                "review_notes": "A foreign requirement must fail closed.",
+            }
+        )
+
+        with pytest.raises(MonitoringDocumentRefreshError) as exc_info:
+            sync_requirement_review_to_monitoring_alert(
+                conn,
+                requirement,
+                user={"sub": "admin_m3", "role": "admin"},
+                audit_writer=lambda *_args, **_kwargs: None,
+            )
+
+        assert exc_info.value.status_code == 409
+        assert "not linked" in str(exc_info.value).lower()
+        assert conn.execute(
+            "SELECT status FROM monitoring_alerts WHERE id = ?",
+            (9301,),
+        ).fetchone()["status"] == "open"
+        assert conn.execute(
+            "SELECT status FROM application_enhanced_requirements WHERE id = ?",
+            (task["id"],),
+        ).fetchone()["status"] == "uploaded"
+        assert conn.execute(
+            "SELECT review_status FROM documents WHERE id = ?",
+            (replacement_id,),
+        ).fetchone()["review_status"] == "pending"
+        assert conn.execute(
+            "SELECT COUNT(*) AS count FROM audit_log WHERE target = ? "
+            "AND action = 'monitoring.alert.status_transition'",
+            ("monitoring_alert:9301",),
+        ).fetchone()["count"] == 0
     finally:
         conn.close()
 

@@ -37,7 +37,8 @@ Result: the current regulated alert dataset and schema still satisfy the
 fail-closed assumptions for migrations 054–056. No row, schema object,
 service setting, or feature flag was changed.
 
-Runtime evidence:
+Runtime evidence captured at `2026-07-31T03:12:13.624740Z`
+(pre-rebase observation):
 
 - backend task `b9e91f2a47d54bc5b2877f4b6e977d88`;
 - backend task definition `regmind-staging:989`;

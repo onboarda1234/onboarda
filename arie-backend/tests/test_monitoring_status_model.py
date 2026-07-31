@@ -102,6 +102,9 @@ def test_action_lock_is_separate_from_terminality():
     assert ms.is_action_locked("routed_to_review") is True
     assert ms.is_action_locked("resolved") is True
     assert ms.is_action_locked("open") is False
+    assert ms.is_action_locked("unknown_future_status") is True
+    assert ms.is_action_locked("") is True
+    assert ms.is_action_locked(None) is True
     assert ms.is_terminal("routed_to_edd") is False
 
 

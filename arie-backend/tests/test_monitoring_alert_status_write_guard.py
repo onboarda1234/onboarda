@@ -872,14 +872,48 @@ class _SqlWriteVisitor(ast.NodeVisitor):
 
     def _record_helper_insert(self, call):
         """Inspect fixture helper calls whose SQL is constructed indirectly."""
-        name = getattr(call.func, "id", "")
-        if name != "_insert_returning_id" or len(call.args) < 4:
-            return
-        table = self._literal_string(call.args[1])
-        if str(table or "").strip().lower() != "monitoring_alerts":
+        callee = self._resolve_expression(call.func)
+        name = getattr(callee, "id", "") or getattr(callee, "attr", "")
+        if name != "_insert_returning_id":
             return
         location = self._location(call)
-        columns_text = self._literal_string(call.args[2])
+        if (
+            any(isinstance(argument, ast.Starred) for argument in call.args)
+            or any(keyword.arg is None for keyword in call.keywords)
+            or len(call.args) > 4
+            or any(
+                keyword.arg not in {"db", "table", "cols", "values"}
+                for keyword in call.keywords
+            )
+        ):
+            self.invalid_inserts.append(location)
+            return
+        db_argument = self._call_argument(call, 0, {"db"})
+        table_argument = self._call_argument(call, 1, {"table"})
+        columns_argument = self._call_argument(call, 2, {"cols"})
+        values_argument = self._call_argument(call, 3, {"values"})
+        if any(
+            argument is None
+            for argument in (
+                db_argument,
+                table_argument,
+                columns_argument,
+                values_argument,
+            )
+        ):
+            self.invalid_inserts.append(location)
+            return
+        table = self._literal_string(table_argument)
+        if table is None:
+            self.invalid_inserts.append(location)
+            return
+        if not re.fullmatch(
+            rf"\s*{_MONITORING_TABLE}\s*",
+            table,
+            re.IGNORECASE,
+        ):
+            return
+        columns_text = self._literal_string(columns_argument)
         if columns_text is None:
             self.invalid_inserts.append(location)
             return
@@ -890,7 +924,7 @@ class _SqlWriteVisitor(ast.NodeVisitor):
         if "status" not in columns:
             return
         status_argument = self._tuple_item(
-            call.args[3],
+            values_argument,
             columns.index("status"),
         )
         if self._literal_string(status_argument) == "open":
@@ -899,6 +933,16 @@ class _SqlWriteVisitor(ast.NodeVisitor):
             self.invalid_inserts.append(location)
 
     def visit_FunctionDef(self, node):
+        # Function header expressions execute in the enclosing scope rather
+        # than in the function's local scope. Inspect them before pushing the
+        # function binding frame so decorators/defaults cannot hide SQL calls.
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        self.visit(node.args)
+        if node.returns is not None:
+            self.visit(node.returns)
+        for type_parameter in getattr(node, "type_params", ()):
+            self.visit(type_parameter)
         self.functions.append(node.name)
         self._string_bindings.append({})
         self._expression_bindings.append({})
@@ -1563,6 +1607,41 @@ def test_bare_keyword_and_aliased_execute_callees_fail_closed():
     }
 
 
+def test_function_decorators_and_defaults_are_scanned_in_enclosing_scope():
+    visitor = _scan_source(
+        """
+        @register(
+            db.execute(
+                "UPDATE monitoring_alerts SET status = ? WHERE id = ?",
+                ("resolved", 1),
+            )
+        )
+        def decorated():
+            pass
+
+        def positional_default(
+            result=db.execute(
+                "UPDATE monitoring_alerts SET status = ? WHERE id = ?",
+                ("dismissed", 2),
+            ),
+        ):
+            pass
+
+        async def unresolved_keyword_default(*, result=db.execute(sql)):
+            pass
+        """
+    )
+    assert len(visitor.writes) == 2
+    assert {
+        (path, function)
+        for path, function, _line in visitor.writes
+    } == {("synthetic_guard_probe.py", "<module>")}
+    assert {
+        (path, function)
+        for path, function, _line in visitor.unresolved_risks
+    } == {("synthetic_guard_probe.py", "<module>")}
+
+
 def test_merge_and_tuple_assignment_status_writes_are_detected():
     visitor = _scan_source(
         """
@@ -1635,6 +1714,108 @@ def test_non_open_insert_is_detected_while_fixed_open_insert_passes():
     }
     assert invalid == {("synthetic_guard_probe.py", "malicious")}
     assert verified == {("synthetic_guard_probe.py", "permitted")}
+
+
+def test_helper_insert_call_forms_are_resolved_or_fail_closed():
+    visitor = _scan_source(
+        '''
+        def keyword_good(db):
+            _insert_returning_id(
+                db=db,
+                table='"public"."monitoring_alerts"',
+                cols="id, status, summary",
+                values=(1, "open", "canonical initial signal"),
+            )
+
+        def qualified_bad(seeder, db):
+            seeder._insert_returning_id(
+                db,
+                table="public.monitoring_alerts",
+                cols="id, status, summary",
+                values=(2, "resolved", "bypass"),
+            )
+
+        def aliased_good(seeder, db):
+            insert = seeder._insert_returning_id
+            insert(
+                db,
+                "monitoring_alerts",
+                cols="id, status, summary",
+                values=(3, "open", "canonical initial signal"),
+            )
+
+        def unresolved_table(db, table):
+            _insert_returning_id(
+                db,
+                table,
+                "id, status, summary",
+                (4, "open", "unknown target"),
+            )
+
+        def starred_shape(args):
+            _insert_returning_id(*args)
+
+        def unexpected_keyword(db):
+            _insert_returning_id(
+                db=db,
+                table="monitoring_alerts",
+                cols="id, status, summary",
+                values=(5, "open", "unreviewed signature"),
+                schema="public",
+            )
+
+        def unrelated_table(db, seeder):
+            seeder._insert_returning_id(
+                db,
+                "applications",
+                "id, status",
+                (6, "approved"),
+            )
+        '''
+    )
+    assert {
+        (path, function)
+        for path, function, _line in visitor.invalid_inserts
+    } == {
+        ("synthetic_guard_probe.py", "qualified_bad"),
+        ("synthetic_guard_probe.py", "starred_shape"),
+        ("synthetic_guard_probe.py", "unexpected_keyword"),
+        ("synthetic_guard_probe.py", "unresolved_table"),
+    }
+    assert {
+        (path, function)
+        for path, function, _line in visitor.verified_open_inserts
+    } == {
+        ("synthetic_guard_probe.py", "aliased_good"),
+        ("synthetic_guard_probe.py", "keyword_good"),
+    }
+
+
+def test_helper_insert_parameter_contract_remains_exact():
+    helper_path = BACKEND / "fixtures" / "seeder.py"
+    helper_tree = ast.parse(
+        helper_path.read_text(encoding="utf-8"),
+        filename=str(helper_path),
+    )
+    definitions = [
+        node
+        for node in helper_tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_insert_returning_id"
+    ]
+    assert len(definitions) == 1
+    arguments = definitions[0].args
+    assert [argument.arg for argument in arguments.args] == [
+        "db",
+        "table",
+        "cols",
+        "values",
+    ]
+    assert arguments.posonlyargs == []
+    assert arguments.kwonlyargs == []
+    assert arguments.defaults == []
+    assert arguments.vararg is None
+    assert arguments.kwarg is None
 
 
 def test_aliased_quoted_and_schema_qualified_updates_are_detected():

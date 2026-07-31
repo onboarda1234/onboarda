@@ -38534,12 +38534,14 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
                     db, request_id, for_update=True
                 )
                 if not request:
+                    _rollback_monitoring_transaction(db)
                     return self.error("Review request not found", 404)
                 if str(request.get("alert_id")) != str(alert_id):
                     raise _monitoring_state_machine.StaleCurrentState(
                         "The review request linkage changed; refresh and retry."
                     )
                 if str(request.get("state")) != "pending":
+                    _rollback_monitoring_transaction(db)
                     return self.error("Review request is no longer pending.", 409)
                 if verb == "reject":
                     _mdc.reject_request(

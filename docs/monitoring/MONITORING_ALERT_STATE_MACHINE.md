@@ -40,7 +40,9 @@ The following are not valid new stored values:
 
 - `closed` duplicates `resolved` and has no reconciled staging row or current
   production writer.
-- `cancelled` and `failed` have no audited Monitoring semantics.
+- `cancelled` and `failed` have no audited Monitoring semantics. The historical
+  spellings `cancelled` and `canceled` remain read-only projection aliases for
+  `resolved`; neither is a valid stored value or transition target.
 - `action_required` overlaps triage/assignment.
 - `officer_review` overlaps the deployed `in_review` API contract.
 - `client_requested`, `awaiting_client`, `received`, and `verifying` belong to

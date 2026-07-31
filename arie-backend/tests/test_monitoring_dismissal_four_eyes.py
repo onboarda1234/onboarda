@@ -1034,3 +1034,27 @@ def test_request_source_status_binding_unit():
         )
     assert legacy.value.status_code == 409
     assert "not bound" in str(legacy.value).lower()
+
+
+def test_locked_review_request_early_returns_roll_back_first():
+    import inspect
+    import re
+    import server as server_module
+
+    source = inspect.getsource(
+        server_module.MonitoringReviewRequestActionHandler.post
+    )
+    locked_section = source[source.index("lock_alert_for_transition") :]
+
+    assert re.search(
+        r"if not request:\s+"
+        r"_rollback_monitoring_transaction\(db\)\s+"
+        r'return self\.error\("Review request not found", 404\)',
+        locked_section,
+    )
+    assert re.search(
+        r'if str\(request\.get\("state"\)\) != "pending":\s+'
+        r"_rollback_monitoring_transaction\(db\)\s+"
+        r'return self\.error\("Review request is no longer pending\.", 409\)',
+        locked_section,
+    )

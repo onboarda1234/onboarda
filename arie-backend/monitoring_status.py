@@ -179,6 +179,10 @@ def is_action_locked(value: Any) -> bool:
     Monitoring controls.
     """
     lifecycle = lifecycle_status(value)
+    if lifecycle is None:
+        # An uninterpretable stored status cannot prove that Monitoring still
+        # owns the next decision.
+        return True
     return lifecycle in _HANDOFF_STATUSES or lifecycle in TERMINAL_STATUSES
 
 

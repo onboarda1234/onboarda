@@ -289,6 +289,26 @@ def test_list_terminality_ignores_resolved_at_drift():
     )
 
 
+def test_blank_stored_status_displays_compatibly_but_actions_fail_closed():
+    import server
+
+    projected = server._monitoring_list_project_row(
+        {
+            "id": 999999,
+            "status": " ",
+            "alert_type": "other",
+            "severity": "medium",
+            "summary": "Synthetic invalid-status projection",
+        }
+    )
+
+    # Historical list display continues to normalize a blank token to Open,
+    # while action ownership remains based on the uninterpretable stored value.
+    assert projected["status_key"] == "open"
+    assert projected["is_terminal"] is False
+    assert projected["is_action_locked"] is True
+
+
 def test_canonical_type_and_severity_filters_are_server_side(monitoring_list_server):
     base_url, _db_module = monitoring_list_server
     token = _token("admin_list", "admin", "Admin List")

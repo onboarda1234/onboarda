@@ -1018,7 +1018,25 @@ def _transition_document_alert(
     user,
     review_request_id=None,
 ):
-    target_status = "resolved" if outcome == "accept" else "waived"
+    if outcome == "accept":
+        target_status = "resolved"
+        permitted_outcomes = {
+            "accept_updated_document",
+            "mark_already_updated",
+        }
+    elif outcome == "waive":
+        target_status = "waived"
+        permitted_outcomes = {"waive_with_reason"}
+    else:
+        raise MonitoringDocumentRefreshError(
+            "Invalid document refresh outcome",
+            400,
+        )
+    if requested_outcome not in permitted_outcomes:
+        raise MonitoringDocumentRefreshError(
+            "The document clearance outcome does not match the requested action",
+            409,
+        )
     reason_code = (
         "document_already_updated"
         if requested_outcome == "mark_already_updated"
@@ -1380,6 +1398,17 @@ def sync_requirement_review_to_monitoring_alert(
                 409,
             )
         alert.update(locked_alert)
+
+        if (
+            str(requirement.get("monitoring_alert_id") or "")
+            != str(locked_alert.get("id") or "")
+            or str(requirement.get("application_id") or "")
+            != str(locked_alert.get("application_id") or "")
+        ):
+            raise MonitoringDocumentRefreshError(
+                "The requirement is not linked to this Monitoring Alert's application",
+                409,
+            )
 
         linked_document_id = requirement.get("linked_document_id")
         doc_status = (
