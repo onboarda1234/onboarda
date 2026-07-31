@@ -234,7 +234,7 @@ class TestEnrichedAtomicPurgeLog:
         )
         gdpr_db.execute(
             "INSERT INTO monitoring_alerts (application_id, alert_type, severity, status, created_at) "
-            "VALUES ('p128-app', 'risk_drift', 'low', 'new', ?)",
+            "VALUES ('p128-app', 'risk_drift', 'low', 'open', ?)",
             (old,),
         )
         gdpr_db.commit()

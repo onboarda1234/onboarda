@@ -2,8 +2,9 @@
 Document health monitoring for ongoing monitoring alerts.
 
 Small deterministic helper that scans current application documents and
-creates / updates / resolves monitoring_alerts rows for document health
-issues without introducing a new workflow engine.
+creates / updates monitoring_alerts rows for document health issues without
+introducing a new workflow engine. Disappeared issues are reported as
+resolution candidates but are never resolved by this detector.
 """
 from __future__ import annotations
 
@@ -226,9 +227,20 @@ def _emit_audit(audit_writer, *, user, action, target, detail,
             db=db,
             before_state=before_state,
             after_state=after_state,
+            commit=False,
         )
     except Exception:
         logger.exception("document health audit failed action=%s target=%s", action, target)
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception(
+                "document health rollback failed after audit failure "
+                "action=%s target=%s",
+                action,
+                target,
+            )
+        raise
 
 
 def _active_documents_for_application(db, application_id) -> List[Any]:
@@ -323,7 +335,15 @@ def sync_document_health_alerts_for_application(
 ) -> Dict[str, Any]:
     _require_audit_writer(audit_writer)
     if not application_id:
-        return {"application_id": application_id, "created": 0, "updated": 0, "resolved": 0}
+        return {
+            "application_id": application_id,
+            "created": 0,
+            "updated": 0,
+            "resolved": 0,
+            "resolution_candidates": [],
+            "resolution_deferred": 0,
+            "open_issues": 0,
+        }
 
     acting_user = dict(user or SYSTEM_USER)
     today = today or datetime.now(timezone.utc).date()
@@ -351,7 +371,7 @@ def sync_document_health_alerts_for_application(
         if mr.is_alert_unresolved(row):
             open_existing[key] = row
 
-    created = updated = resolved = 0
+    created = updated = 0
     for key, issue in desired.items():
         existing = open_existing.pop(key, None)
         after_state = {
@@ -455,54 +475,34 @@ def sync_document_health_alerts_for_application(
             after_state=after_state,
         )
 
-    for existing in open_existing.values():
-        resolved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        before_state = {
-            "status": _row_get(existing, "status"),
-            "resolved_at": _row_get(existing, "resolved_at"),
-        }
-        db.execute(
-            """
-            UPDATE monitoring_alerts
-               SET status = 'resolved',
-                   officer_action = 'auto_resolved',
-                   officer_notes = ?,
-                   resolved_at = CURRENT_TIMESTAMP,
-                   reviewed_at = CURRENT_TIMESTAMP
-             WHERE id = ?
-            """,
-            (
-                json.dumps({
-                    "auto_resolved": True,
-                    "reason": "document_issue_no_longer_current",
-                    "resolution": "superseded_or_no_longer_current",
-                }, sort_keys=True),
-                _row_get(existing, "id"),
-            ),
-        )
-        resolved += 1
-        _emit_audit(
-            audit_writer,
-            user=acting_user,
-            action="monitoring.document_health_alert.resolved",
-            target=f"monitoring_alert:{_row_get(existing, 'id')}",
-            detail={
+    resolution_candidates = sorted(
+        (
+            {
+                "alert_id": _row_get(existing, "id"),
                 "application_id": application_id,
                 "alert_type": _row_get(existing, "alert_type"),
                 "source_reference": _row_get(existing, "source_reference"),
-            },
-                db=db,
-                before_state=before_state,
-                after_state={"status": "resolved", "resolved_at": resolved_at},
-            )
+                "current_status": _row_get(existing, "status"),
+                "reason": "document_issue_no_longer_current",
+            }
+            for existing in open_existing.values()
+        ),
+        key=lambda candidate: (
+            str(candidate["alert_id"]),
+            str(candidate["alert_type"]),
+            str(candidate["source_reference"]),
+        ),
+    )
 
-    if created or updated or resolved:
+    if created or updated:
         db.commit()
     return {
         "application_id": application_id,
         "created": created,
         "updated": updated,
-        "resolved": resolved,
+        "resolved": 0,
+        "resolution_candidates": resolution_candidates,
+        "resolution_deferred": len(resolution_candidates),
         "open_issues": len(desired),
     }
 
@@ -529,6 +529,7 @@ def compute_document_health_plan(
             "application_id": application_id,
             "would_create": [], "would_update": 0,
             "would_resolve": 0, "unchanged": 0,
+            "resolution_candidates": [], "resolution_deferred": 0,
         }
 
     desired = {}
@@ -574,11 +575,31 @@ def compute_document_health_plan(
         else:
             would_update += 1
 
+    resolution_candidates = sorted(
+        (
+            {
+                "alert_id": _row_get(existing, "id"),
+                "application_id": application_id,
+                "alert_type": _row_get(existing, "alert_type"),
+                "source_reference": _row_get(existing, "source_reference"),
+                "current_status": _row_get(existing, "status"),
+                "reason": "document_issue_no_longer_current",
+            }
+            for existing in open_existing.values()
+        ),
+        key=lambda candidate: (
+            str(candidate["alert_id"]),
+            str(candidate["alert_type"]),
+            str(candidate["source_reference"]),
+        ),
+    )
     return {
         "application_id": application_id,
         "would_create": would_create,
         "would_update": would_update,
-        "would_resolve": len(open_existing),
+        "would_resolve": 0,
+        "resolution_candidates": resolution_candidates,
+        "resolution_deferred": len(resolution_candidates),
         "unchanged": unchanged,
     }
 
@@ -596,7 +617,14 @@ def sync_document_health_alerts(
             _row_get(r, "id")
             for r in db.execute("SELECT id FROM applications ORDER BY id").fetchall()
         ]
-    totals = {"created": 0, "updated": 0, "resolved": 0, "applications": 0}
+    totals = {
+        "created": 0,
+        "updated": 0,
+        "resolved": 0,
+        "resolution_candidates": [],
+        "resolution_deferred": 0,
+        "applications": 0,
+    }
     for application_id in application_ids:
         result = sync_document_health_alerts_for_application(
             db,
@@ -608,6 +636,16 @@ def sync_document_health_alerts(
         totals["created"] += result["created"]
         totals["updated"] += result["updated"]
         totals["resolved"] += result["resolved"]
+        totals["resolution_candidates"].extend(result["resolution_candidates"])
+        totals["resolution_deferred"] += result["resolution_deferred"]
+    totals["resolution_candidates"].sort(
+        key=lambda candidate: (
+            str(candidate["application_id"]),
+            str(candidate["alert_id"]),
+            str(candidate["alert_type"]),
+            str(candidate["source_reference"]),
+        )
+    )
     if totals["created"] or totals["updated"] or totals["resolved"]:
         db.commit()
     return totals

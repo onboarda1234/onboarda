@@ -3,8 +3,10 @@
 **Status:** Design only. No production code, schema, routes, flags or UI.
 **Phase:** 0A — product and control architecture
 **Revision:** amended per founder review — approved in principle subject to the
-ten amendments in §14.2, with eight consistency invariants confirmed in §14.6.
-All seven decisions D1–D7 resolved (§14.3).
+eleven amendments in §14.2, with eight consistency invariants confirmed in
+§14.6. All seven decisions D1–D7 resolved (§14.3). **Corrected in the Phase
+0B-1 closure pass (A11)** so the determinism, `as_of` and privacy sections match
+the delivered implementation.
 **Supersedes in part:** [`challenge-mode-spec.md`](./challenge-mode-spec.md) (see §14.1)
 **Audience:** founder review of the amended specification, prior to Phase 0B build authorisation
 
@@ -718,15 +720,33 @@ This distinguishes two very different findings:
 Where the timestamp cannot be established, `existed_at_decision` is `null` and
 any finding depending on it must carry `status: not_replayable`.
 
-### 7.5 PII discipline
+### 7.5 Privacy discipline — PII-minimised, not anonymous
 
-`evidence_refs` carry **addresses and assertions, not personal data**. `value`
-is populated only for non-sensitive scalars (a percentage, a score, a state
-token, a count). Names, identifiers, addresses and dates of birth are
-referenced, never copied. This keeps the finding set safe to hash, log, export
-and — later — pass to a narration model. It also keeps `gdpr_erasure.py`
-semantics intact: erasing the underlying record makes the reference dangle
-rather than leaving a hidden copy.
+`evidence_refs` carry **addresses and assertions, not direct identifiers**.
+`value` is populated only for non-sensitive scalars (a percentage, a score, a
+state token, a count).
+
+**Excluded:** names, dates of birth, residential and registered addresses,
+contact details, professional profile URLs, raw extracted document field values,
+free-text officer prose, file paths and storage keys.
+
+**Retained, deliberately:** stable internal identifiers (`ubo:{id}`,
+`document:{id}`, `person_key`) and name fingerprints used as sort keys. These
+are **pseudonymous, linkable identifiers**. They contain no direct identifier,
+but they resolve to a natural person by joining the source tables, and a name
+fingerprint is reversible by hashing a list of candidate names — the input space
+of personal names is small and enumerable.
+
+**Therefore the bundle and the finding set are personal data under GDPR** and
+must be access-controlled, retention-bound, and in scope for `gdpr_erasure.py`.
+They are not de-identified artifacts, and no part of this system may be
+described as "PII-free" or "all PII removed". The correct terms are *direct
+identifiers excluded* and *PII-minimised*.
+
+Erasing an underlying record makes a reference dangle rather than leaving a
+hidden copy — which is the property that keeps erasure meaningful — but a
+dangling reference plus a retained fingerprint is still linkable, so erasure
+handling must reach the bundle store when one exists.
 
 ---
 
@@ -1345,7 +1365,7 @@ convention.
 |---|---|
 | `meta` | `subject_type`, `subject_id`, `as_of`, `bundle_schema_version` |
 | `application` | Whitelisted `applications` columns, `prescreening_data` |
-| `parties` | `directors[]`, `ubos[]`, `intermediaries[]` — PII fields excluded, replaced by stable IDs and non-sensitive scalars (`ownership_pct`, `nationality`, `is_pep`) |
+| `parties` | `directors[]`, `ubos[]`, `intermediaries[]` — **direct identifiers excluded** (names, DOB, addresses, profile URLs), replaced by stable IDs and non-sensitive scalars (`ownership_pct`, `nationality`, `is_pep`). The retained IDs are pseudonymous and linkable, so the bundle remains personal data — see §10.9 |
 | `documents` | Active document rows (`is_current = TRUE`) with `doc_type`, `slot_key`, `verification_status`, `expiry_date`, `version`, `file_sha256` |
 | `document_gate` | Output of `evaluate_document_reliance_gate()` with `generated_at` **stripped** |
 | `screening` | Output of `build_screening_truth_summary()` |
@@ -1380,16 +1400,101 @@ review_hash       = sha256(canonical_json({
 
 ### 10.4 Timestamps — the main determinism hazard
 
-Three known non-determinism sources exist in the modules the Supervisor reads:
+Five known non-determinism sources exist in the modules the Supervisor reads.
+The list below was **verified against the code during Phase 0B-1**; the audit
+table is reproduced in `supervisor_foundation/adapters.py`.
 
-| Source | Problem | Treatment |
-|---|---|---|
-| `evaluate_document_reliance_gate()` calls `datetime.now(timezone.utc)` for `generated_at` **and derives staleness from it** | Same case yields different gate output on different days | Strip `generated_at`; **derive staleness inside the probe from the injected `as_of`**, not from the gate's internal clock. Phase 0B must not call the gate for staleness |
-| `run_memo_supervisor()` emits `"checked_at": datetime.now().isoformat()` | Hash-breaking field | Strip before hashing |
-| `Finding.created_at` | Would make every run unique | Set from the injected `as_of`, never wall-clock |
+Two distinct severities matter here, and conflating them is the trap:
+
+- **Cosmetic** — the clock reaches a single terminal output field and influences
+  nothing else. Stripping the field makes the whole result deterministic, so the
+  function may still be called.
+- **Material** — the clock feeds a *verdict*. Stripping a timestamp is not
+  enough, because the substantive answer changes between days for unchanged
+  evidence. The function must not be called at all; its **inputs** are assembled
+  instead and the time-relative judgement is deferred to a probe using `as_of`.
+
+| Source | Severity | Problem | Treatment |
+|---|---|---|---|
+| `evaluate_document_reliance_gate()` | **Material** | Calls `datetime.now(timezone.utc)` for `generated_at` **and derives the `stale_verification` blocker from it** | **Do not call.** Assemble `build_required_document_expectations()` output plus per-document reliance state; derive staleness from `as_of` |
+| `build_screening_truth_summary()` | **Material** | Reaches a clock transitively via `screening_state._timestamp_is_past`, which compares `screening_valid_until` against `datetime.now(timezone.utc)`. This feeds **`freshness`, `stale` and `approval_blocking`** | **Do not call.** Assemble the stored screening report and officer dispositions; derive freshness from `as_of` |
+| `evaluate_edd_routing()` | Cosmetic (but out of scope) | Emits `evaluated_at` | Not called in Phase 0B — re-running the policy is probe P-03 |
+| `run_memo_supervisor()` | Cosmetic | Emits `"checked_at": datetime.now().isoformat()` | Call behind a stripping adapter; strip before hashing |
+| `Finding.created_at` | Cosmetic | Would make every run unique | Set from the injected `as_of`, never wall-clock |
+
+#### 10.4.1 `build_screening_truth_summary()` — recorded in Phase 0B-1
+
+This entry was **absent from the original Phase 0A list** and was found during
+implementation. It is recorded here because it is the least obvious of the five:
+the clock is two calls deep, and the affected outputs are exactly the ones a
+screening probe would most want to rely on.
+
+`screening_state._timestamp_is_past()` returns `parsed < datetime.now(timezone.utc)`.
+It is reached from `build_screening_truth_summary()` via the
+`stale_from_expiry` computation, which sets `stale`, which in turn forces
+`approval_blocking = True` and rewrites `blocking_reasons`. A case whose
+screening validity lapses overnight therefore produces a materially different
+summary the next morning **from identical stored evidence**.
+
+Consequences, all binding on later phases:
+
+1. The output of `build_screening_truth_summary()` **must not enter the
+   canonical hashed bundle**, directly or in any derived form.
+2. The bundle carries **stored screening evidence** instead: the persisted
+   report projection, `screening_valid_until`, and officer dispositions from
+   `screening_reviews`.
+3. Any time-relative screening judgement — freshness, staleness, validity
+   expiry — **must be computed by a probe from the injected `as_of`**, not
+   inherited from the authoritative summary.
+4. `screening_state.py` is **not** modified to accommodate this. It is
+   authoritative and correct for its own runtime purpose, where reading the
+   current clock is exactly right. The constraint belongs to the Supervisor.
 
 **Rule:** no probe may call a clock. `as_of` is the only time source, and it is
 an input.
+
+### 10.4.2 `as_of` is part of the bundle — and therefore part of its hash
+
+**Intentional, and easy to misread.** `as_of` sits in `meta`, so it is covered by
+`input_bundle_hash`. Two consequences follow, and both must be understood before
+review-history logic is designed:
+
+1. **Changing `as_of` changes `input_bundle_hash`, even when every stored
+   evidence value is identical.** A review of the same untouched case yesterday
+   and today produces two different bundle hashes.
+2. **`input_bundle_hash` therefore means "review input state as of time X"** —
+   not "the evidence content". It is an identity for *a review's inputs*,
+   not a content digest of the case.
+
+This is the correct design, because `as_of` is a genuine input: it is the basis
+against which every time-relative judgement (document staleness, screening
+freshness, review-frequency compliance) is made. Two reviews taken at different
+instants can legitimately reach different conclusions from the same stored rows,
+and the hash must distinguish them or the conclusions would be
+indistinguishable in the audit record.
+
+**Consequence for review history (§8, output section 14).** A later phase
+comparing two reviews of the same subject must distinguish **three independent
+causes** of divergence, and must not collapse them:
+
+| Cause | Signature | Meaning to an officer |
+|---|---|---|
+| **Evidence change** | `input_bundle_hash` differs; `as_of` and `policy_version` unchanged | The case itself changed — a new document, a new screening result, a new decision |
+| **Time-basis change** | `input_bundle_hash` differs; **only** `as_of` differs | Nothing about the case changed; it was simply re-reviewed later, and time-relative judgements may have moved |
+| **Policy change** | `input_bundle_hash` identical; `review_hash` differs | Same evidence, same instant, different institution policy |
+
+Presenting a time-basis change as an evidence change would be actively
+misleading — it would tell an officer a file moved when it did not. The
+mechanism for separating them already exists: `as_of` is recorded in `meta` and
+on every finding, so a diff can compare the two bundles field-by-field and
+attribute the difference precisely. §10.7 lists the two further causes
+(engine non-determinism and unavailable dependencies) that a full divergence
+analysis must also rule out.
+
+**Not redesigned in Phase 0B-1.** Hoisting `as_of` out of the hashed bundle
+would make two reviews at different instants collide, which would be worse. The
+current implementation matches the merged architecture; this section documents
+its semantics rather than changing them.
 
 ### 10.5 Missing data
 
@@ -1438,6 +1543,33 @@ A single test decides whether Phase 0B is real:
 
 If this cannot be made to pass, the Supervisor is not shippable as specified,
 and that must be discovered in Phase 0B week one — not in an inspection.
+
+**Strengthened in Phase 0B-1.** In-process repetition cannot catch drift that
+varies per interpreter — hash randomisation, set-iteration order, an
+import-time cache. The gate therefore also assembles the same stored row from
+independent Python processes, including under varied `PYTHONHASHSEED`, and
+requires byte-identical canonical JSON.
+
+A caveat that fair comparison depends on: several columns carry database
+`CURRENT_TIMESTAMP` defaults — `applications.inputs_updated_at` among them — so
+two *separately created* fixture cases legitimately differ. Determinism means
+*the same stored row* yields the same bundle, not that two independently seeded
+cases collide. Cross-process tests must pin those columns before comparing, or
+they measure the fixture rather than the assembler.
+
+### 10.9 Hash comparability across environments
+
+`input_bundle_hash` is **not** comparable between databases. Surrogate keys —
+`screening_reviews.id`, `edd_cases.id`, `periodic_reviews.id`,
+`compliance_memos.id` — are autoincrement values, so structurally identical
+cases in staging and production carry different references and therefore
+different hashes.
+
+This is correct: the hash identifies *this subject's evidence state in this
+system of record*, and `screening_review:{id}` is a pointer to a specific
+persisted record, not a content descriptor. It is stated here because the
+tempting misuse — comparing a staging hash against a production hash to assert
+"same case" — would silently always report a difference.
 
 ---
 
@@ -1662,6 +1794,7 @@ Applied in this revision.
 | **A7** | **Adverse-media default separated (D6)** | Classified as a distinct governed remediation with a three-state target. P-04 reports; the Supervisor implementation changes no scoring |
 | **A8** | **New taxonomy and schema members** | Category `F-28 policy_configuration`; availability status `policy_not_configured`; evidence type `policy_profile` |
 | **A9** | **Phase 0B staged** into 0B-1 … 0B-4 (§9.5) | Policy-independent probes separated from policy-dependent ones so engineering is not blocked on compliance configuration, and vice versa |
+| **A11** | **Phase 0B-1 closure-pass corrections** | Four alignments made after implementation. (a) `build_screening_truth_summary()` recorded as a **material** clock hazard (§10.4.1) — found during implementation, absent from the original list. (b) Clock hazards now classified *cosmetic* vs *material*, since stripping a timestamp is sufficient for one and not the other. (c) `as_of` hash semantics documented (§10.4.2), including the three divergence causes review history must distinguish. (d) Privacy language corrected throughout (§7.5): the bundle is PII-minimised, not anonymous — retained IDs and name fingerprints are pseudonymous and linkable, so it is personal data. Also adds §10.9 on hash comparability across environments |
 | **A10** | **Implementation boundary on the policy contract** (§3.3.5) | The policy profile is an input contract, not authorisation for a policy-management subsystem. 0B-1 and 0B-2 may introduce only the minimum typed, versioned contract needed to represent policy availability — no administration UI, rule builder, approval workflow, scoring change, gate change or authoritative enforcement. Persistence and administration require separate founder approval. Eight consistency invariants recorded in §14.6 |
 
 ### 14.3 Founder decision register
@@ -1721,7 +1854,7 @@ a governed change, not an editorial one.
 ### **Proceed to Phase 0B, staged per §9.5 — subject to review of this amended specification.**
 
 Phase 0A is approved in principle. All seven founder decisions are resolved
-(§14.3), ten amendments are applied (§14.2), and eight consistency invariants
+(§14.3), eleven amendments are applied (§14.2), and eight consistency invariants
 are confirmed (§14.6). Phase 0B code should not begin
 until this amended specification has been reviewed.
 

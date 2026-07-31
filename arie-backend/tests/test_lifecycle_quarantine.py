@@ -4,8 +4,7 @@ PR-A: Lifecycle Data Trust Hardening -- quarantine classifier tests.
 Covers the three acceptance criteria that are runtime-testable in CI:
 
   (1) GET /api/lifecycle/queue?include=active returns ZERO rows that are
-      legacy-ghost (state='escalated' AND no linkage AND/OR
-      application_id IS NULL).
+      legacy-ghost (unknown status and/or application_id IS NULL).
 
   (2) include=legacy_unmapped returns exactly the seeded legacy rows.
 
@@ -126,32 +125,40 @@ class _LifecycleQuarantineBase(unittest.TestCase):
         defaults.update(kw)
         cols = ",".join(defaults.keys())
         ph = ",".join(["?"] * len(defaults))
-        self._conn.execute(
-            f"INSERT INTO monitoring_alerts ({cols}) VALUES ({ph})",
-            tuple(defaults.values()),
-        )
-        self._conn.commit()
+        from monitoring_alert_state_machine import CANONICAL_STATUS_SET
+
+        # Quarantine tests intentionally model rows persisted before the v1
+        # database constraint existed. Fresh schemas correctly reject those
+        # values, so narrowly suspend CHECK evaluation only while seeding a
+        # noncanonical historical row; production code never does this.
+        status = str(defaults.get("status") or "").strip().lower()
+        seed_legacy_row = status not in CANONICAL_STATUS_SET
+        if seed_legacy_row:
+            self._conn.execute("PRAGMA ignore_check_constraints = ON")
+        try:
+            self._conn.execute(
+                f"INSERT INTO monitoring_alerts ({cols}) VALUES ({ph})",
+                tuple(defaults.values()),
+            )
+            self._conn.commit()
+        finally:
+            if seed_legacy_row:
+                self._conn.execute("PRAGMA ignore_check_constraints = OFF")
         return self._conn.execute(
             "SELECT id FROM monitoring_alerts ORDER BY id DESC LIMIT 1"
         ).fetchone()["id"]
 
 
 # ─────────────────────────────────────────────────────────────────
-# Vocabulary parity (the canonical set must match monitoring_routing)
+# Vocabulary parity (the canonical set comes from the state machine)
 # ─────────────────────────────────────────────────────────────────
 class TestQuarantineVocabularyParity(unittest.TestCase):
-    def test_canonical_vocabulary_matches_monitoring_routing(self):
+    def test_canonical_vocabulary_matches_state_machine(self):
         import lifecycle_quarantine as lq
-        import monitoring_routing as mr
-        # If PR-02 changes the routing vocabulary the quarantine
-        # classifier must be updated explicitly. This test is the
-        # tripwire.
-        canonical_from_engine = {
-            mr.STATUS_OPEN, mr.STATUS_TRIAGED, mr.STATUS_ASSIGNED,
-            mr.STATUS_DISMISSED, mr.STATUS_ROUTED_REVIEW, mr.STATUS_ROUTED_EDD,
-        }
-        self.assertEqual(set(lq.CANONICAL_ALERT_VOCABULARY),
-                         canonical_from_engine)
+        from monitoring_alert_state_machine import CANONICAL_STATUSES
+
+        self.assertEqual(lq.CANONICAL_ALERT_VOCABULARY, CANONICAL_STATUSES)
+        self.assertEqual(len(lq.CANONICAL_ALERT_VOCABULARY), 10)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -185,30 +192,39 @@ class TestPureClassifier(unittest.TestCase):
     def test_vocabulary_ghost_state_is_quarantined(self):
         import lifecycle_quarantine as lq
         is_q, reasons = lq.is_legacy_unmapped(
-            self._row(status="escalated", application_id="app-1")
+            self._row(status="legacy_ghost", application_id="app-1")
         )
         self.assertTrue(is_q)
         self.assertEqual(reasons, [lq.QUARANTINE_REASON_VOCABULARY_GHOST])
 
-    def test_vocabulary_ghost_with_downstream_linkage_is_NOT_quarantined(self):
-        # If a non-canonical state somehow has a downstream object,
-        # the linkage rescues it from the vocabulary_ghost predicate
-        # (only the unscopable predicate could still apply).
+    def test_case_or_whitespace_variants_are_not_canonical_storage(self):
+        import lifecycle_quarantine as lq
+        for status in ("Open", " open ", "OPEN"):
+            with self.subTest(status=status):
+                is_q, reasons = lq.is_legacy_unmapped(
+                    self._row(status=status, application_id="app-1")
+                )
+                self.assertTrue(is_q)
+                self.assertEqual(
+                    reasons, [lq.QUARANTINE_REASON_VOCABULARY_GHOST]
+                )
+
+    def test_vocabulary_ghost_with_downstream_linkage_stays_quarantined(self):
+        # Link existence is not evidence that an invalid status is safe.
         import lifecycle_quarantine as lq
         is_q, reasons = lq.is_legacy_unmapped(
-            self._row(status="escalated", application_id="app-1",
+            self._row(status="legacy_ghost", application_id="app-1",
                       linked_periodic_review_id=42)
         )
-        self.assertFalse(is_q)
-        self.assertEqual(reasons, [])
+        self.assertTrue(is_q)
+        self.assertEqual(reasons, [lq.QUARANTINE_REASON_VOCABULARY_GHOST])
 
-    def test_seeded_in_review_fixture_row_is_not_quarantined(self):
+    def test_in_review_is_canonical_without_fixture_exception(self):
         import lifecycle_quarantine as lq
         is_q, reasons = lq.is_legacy_unmapped(
             self._row(
                 status="in_review",
                 application_id="app-1",
-                source_reference="FIX_SCEN04_ALERT",
             )
         )
         self.assertFalse(is_q)
@@ -224,10 +240,10 @@ class TestPureClassifier(unittest.TestCase):
         self.assertEqual(reasons, [lq.QUARANTINE_REASON_UNSCOPABLE])
 
     def test_both_predicates_fire_yields_both_reasons(self):
-        # The brief's id=1: escalated AND application_id IS NULL.
+        # Unknown status and missing application trigger both predicates.
         import lifecycle_quarantine as lq
         is_q, reasons = lq.is_legacy_unmapped(
-            self._row(status="escalated", application_id=None)
+            self._row(status="legacy_ghost", application_id=None)
         )
         self.assertTrue(is_q)
         self.assertEqual(reasons, [
@@ -241,7 +257,7 @@ class TestPureClassifier(unittest.TestCase):
         import lifecycle_quarantine as lq
         for _ in range(5):
             _, reasons = lq.is_legacy_unmapped(
-                self._row(status="escalated", application_id=None)
+                self._row(status="legacy_ghost", application_id=None)
             )
             self.assertEqual(reasons, list(lq.QUARANTINE_REASON_ORDER))
 
@@ -254,13 +270,12 @@ class TestQuarantineBuckets(_LifecycleQuarantineBase):
     verify active / historical / legacy_unmapped containment."""
 
     def _seed_brief_ghosts(self):
-        # Mirrors the staging ghost-row inventory described in the brief.
-        # id A: vocabulary_ghost AND unscopable (matches staging id=1).
+        # id A: vocabulary_ghost AND unscopable.
         a_id = self._alert(
             client_name="Test Corp Ltd",
             alert_type="Sanctions Match",
             severity="Critical",
-            status="escalated",
+            status="legacy_ghost",
             application_id=None,
             summary="OFAC SDN List",
         )
@@ -271,12 +286,11 @@ class TestQuarantineBuckets(_LifecycleQuarantineBase):
             application_id=None,
         )
         # id C: vocabulary_ghost only -- has app_id but no linkage
-        # (matches staging id=3).
         c_id = self._alert(
             client_name="Staging E2E Corp",
             alert_type="Audit Check",
             severity="Medium",
-            status="escalated",
+            status="legacy_ghost",
             application_id=self._app_id,
         )
         return a_id, b_id, c_id
@@ -292,7 +306,7 @@ class TestQuarantineBuckets(_LifecycleQuarantineBase):
 
     def test_active_bucket_excludes_all_quarantined_rows(self):
         # Acceptance criterion 1: active queue returns zero rows that
-        # are escalated-no-linkage and zero that are application_id IS NULL.
+        # have unknown state and zero that are application_id IS NULL.
         import lifecycle_queue as lq
         a, b, c = self._seed_brief_ghosts()
         active_id, _ = self._seed_healthy_rows()
@@ -367,8 +381,10 @@ class TestQuarantineBuckets(_LifecycleQuarantineBase):
         self._seed_brief_ghosts()
         self._seed_healthy_rows()
         # Add additional canonical rows of every status.
-        for status in ("triaged", "assigned", "routed_to_review",
-                       "routed_to_edd"):
+        for status in (
+            "triaged", "assigned", "in_review", "escalated",
+            "routed_to_review", "routed_to_edd", "resolved", "waived",
+        ):
             self._alert(status=status)
 
         all_rows = self._conn.execute(
@@ -480,10 +496,10 @@ class TestMigration012AuditEmission(_LifecycleQuarantineBase):
     def test_audit_log_row_emitted_for_each_quarantined_row(self):
         # Seed three ghosts + a healthy row, re-run migration to emit
         # audit entries for the new rows, then verify shape.
-        a = self._alert(status="escalated", application_id=None,
+        a = self._alert(status="legacy_ghost", application_id=None,
                         client_name="Test Corp Ltd")
         b = self._alert(status="dismissed", application_id=None)
-        c = self._alert(status="escalated", application_id=self._app_id,
+        c = self._alert(status="legacy_ghost", application_id=self._app_id,
                         client_name="Staging E2E Corp")
         # Healthy control row -- must NOT produce an audit entry.
         healthy = self._alert(status="open")
@@ -556,9 +572,9 @@ class TestMigration012AuditEmission(_LifecycleQuarantineBase):
             self.assertEqual(after, {"bucket": "legacy_unmapped"})
 
     def test_audit_payload_reasons_match_classifier_per_row(self):
-        a = self._alert(status="escalated", application_id=None)
+        a = self._alert(status="legacy_ghost", application_id=None)
         b = self._alert(status="dismissed", application_id=None)
-        c = self._alert(status="escalated", application_id=self._app_id)
+        c = self._alert(status="legacy_ghost", application_id=self._app_id)
         self._conn.execute(
             "DELETE FROM audit_log WHERE action = 'lifecycle.alert.quarantined'"
         )
@@ -639,9 +655,9 @@ class TestMigration012AuditEmission(_LifecycleQuarantineBase):
         # PR-A follow-up #1: the migration must not duplicate audit
         # rows when executed twice in a row, even if the schema_version
         # gate is bypassed (DBA re-run, test harness, etc).
-        self._alert(status="escalated", application_id=None)
+        self._alert(status="legacy_ghost", application_id=None)
         self._alert(status="dismissed", application_id=None)
-        self._alert(status="escalated", application_id=self._app_id)
+        self._alert(status="legacy_ghost", application_id=self._app_id)
         self._conn.execute(
             "DELETE FROM audit_log WHERE action = 'lifecycle.alert.quarantined'"
         )
@@ -680,9 +696,9 @@ class TestUIReadsAgreeWithClassifier(_LifecycleQuarantineBase):
         # Mix of canonical + ghost rows.
         self._alert(status="open")
         self._alert(status="dismissed", application_id=self._app_id)
-        self._alert(status="escalated", application_id=None)
+        self._alert(status="legacy_ghost", application_id=None)
         self._alert(status="dismissed", application_id=None)
-        self._alert(status="escalated", application_id=self._app_id)
+        self._alert(status="legacy_ghost", application_id=self._app_id)
 
         for include in ("active", "historical", "all", "legacy_unmapped"):
             result = lq.build_lifecycle_queue(
@@ -704,18 +720,15 @@ class TestUIReadsAgreeWithClassifier(_LifecycleQuarantineBase):
 # SQL-side vocabulary parity (PR-A review blocker 2, option B)
 # ─────────────────────────────────────────────────────────────────
 class TestSqlVocabularyParity(unittest.TestCase):
-    """Migration 012 hardcodes the canonical PR-02 vocabulary in three
+    """Migration 012 permanently records the historical PR-02 vocabulary in three
     SQL ``IN (...)`` lists. This test reads the migration file as text,
     extracts every status literal, and asserts set equality with
-    monitoring_routing.STATUS_*. If PR-02 ever renames a canonical
-    status, the Python tripwire fires AND this SQL tripwire fires --
-    so the migration's classification cannot drift silently from the
-    runtime classifier."""
+    clauses. The applied migration is immutable; current runtime classification
+    is governed separately by ``monitoring_alert_state_machine``."""
 
-    def test_sql_vocabulary_matches_monitoring_routing(self):
+    def test_sql_vocabulary_matches_immutable_pr02_migration_contract(self):
         import re
         from pathlib import Path
-        import monitoring_routing as mr
 
         sql_path = (
             Path(__file__).parent.parent
@@ -728,9 +741,9 @@ class TestSqlVocabularyParity(unittest.TestCase):
             line.split("--", 1)[0] for line in sql.splitlines()
         )
 
-        canonical_from_engine = {
-            mr.STATUS_OPEN, mr.STATUS_TRIAGED, mr.STATUS_ASSIGNED,
-            mr.STATUS_DISMISSED, mr.STATUS_ROUTED_REVIEW, mr.STATUS_ROUTED_EDD,
+        historical_pr02_vocabulary = {
+            "open", "triaged", "assigned", "dismissed",
+            "routed_to_review", "routed_to_edd",
         }
 
         # Find every ``status NOT IN (...)`` clause and extract its
@@ -753,11 +766,8 @@ class TestSqlVocabularyParity(unittest.TestCase):
         for clause in in_clauses:
             literals = set(re.findall(r"'([^']*)'", clause))
             self.assertEqual(
-                literals, canonical_from_engine,
-                f"SQL IN-clause vocabulary {literals!r} drifted from "
-                f"monitoring_routing.STATUS_* {canonical_from_engine!r}; "
-                "update both the Python constant in lifecycle_quarantine "
-                "AND every IN-clause in migration 012 together.",
+                literals, historical_pr02_vocabulary,
+                f"immutable migration vocabulary drifted: {literals!r}",
             )
 
 
@@ -853,7 +863,7 @@ class TestQuarantineAuditRowShapeMatchesLifecycleLinkAuditRow(
         self._make_canonical_lifecycle_audit_row()
 
         # Step 2: emit a lifecycle.alert.quarantined row via the migration.
-        self._alert(status="escalated", application_id=None)
+        self._alert(status="legacy_ghost", application_id=None)
         self._conn.execute(
             "DELETE FROM audit_log WHERE action = 'lifecycle.alert.quarantined'"
         )
