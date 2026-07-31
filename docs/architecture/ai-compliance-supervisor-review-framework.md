@@ -2,8 +2,10 @@
 
 **Status:** Design only. No production code, schema, routes, flags or UI.
 **Phase:** 0A — product and control architecture
+**Revision:** amended per founder review — approved in principle subject to the
+nine amendments in §14.2. All seven decisions D1–D7 resolved (§14.3).
 **Supersedes in part:** [`challenge-mode-spec.md`](./challenge-mode-spec.md) (see §14.1)
-**Audience:** founder review, prior to Phase 0B build authorisation
+**Audience:** founder review of the amended specification, prior to Phase 0B build authorisation
 
 ---
 
@@ -148,6 +150,90 @@ The Supervisor reviews **from first principles**, in this order:
 
 The 30 control domains in §4 are grouped along this spine.
 
+### 3.3 Institution policy configuration model
+
+**Founder amendment (D1, D2, D5).** The Supervisor reviews a case against **the
+institution's active, approved, versioned policy** — never against a universal
+rule hard-coded by RegMind. Compliance policy is jurisdiction-specific and
+risk-appetite-specific; a threshold that is correct for a Mauritius EMI is not
+automatically correct for a UK payments firm or a Luxembourg fund
+administrator.
+
+#### 3.3.1 The three-layer hierarchy
+
+This is the governing structure for every evidence and threshold question in
+this document:
+
+| Layer | Owner | Responsibility |
+|---|---|---|
+| **1. Institution policy** | The institution's MLRO / compliance function | *Defines* what is required — thresholds, exemptions, acceptable evidence, conditional requirements |
+| **2. Document gate** | `document_reliance_gate.py` (authoritative) | *Enforces* the explicit mandatory requirements that policy has declared |
+| **3. Supervisor** | This framework (advisory) | *Reviews* policy configuration completeness, evidence–risk coupling, conditional requirements, and officer reliance |
+
+The Supervisor sits **above** the gate, not beside it. It does not enforce, and
+it does not compensate for gaps in enforcement by design. Where an evidence
+requirement should be mandatory, the correct remedy is to configure it in policy
+and let the gate enforce it — not to leave it unenforced so the Supervisor has
+something to find (see D5, §14.3).
+
+The Supervisor's distinct contribution at layer 3 is the class of questions the
+gate structurally cannot ask: *is the policy itself complete?* *does the
+evidence actually corroborate the risk it is claimed to address?* *was a
+conditional requirement triggered and honoured?* *did the officer rely on
+something the policy does not accept?*
+
+#### 3.3.2 The policy profile
+
+A versioned, approved configuration object. RegMind ships **deployment
+templates**; an institution must review, amend and approve one before it becomes
+active. A template value is a proposal, never a default that silently governs a
+finding.
+
+```
+policy_profile
+  policy_version            str    institution-approved, immutable once active
+  policy_jurisdiction       str    the regulatory regime the profile encodes
+  approved_by               str    approving officer
+  approved_at               str
+  effective_from            str
+  effective_to              str    null while active
+  supersedes                str    prior policy_version
+  <configuration keys below>
+```
+
+#### 3.3.3 Configuration key register (Phase 0B scope)
+
+| Key | Type | Governs | Used by |
+|---|---|---|---|
+| `ubo_identification_threshold` | percent | The holding at or above which a person must be identified as a beneficial owner | P-01 |
+| `ownership_reconciliation_tolerance` | percent | Residual below which no finding is raised | P-01 |
+| `ownership_exemption_types` | list | Entity types exempt from full reconciliation (e.g. listed, widely-held fund) | P-01 |
+| `control_person_required` | bool | Whether a fallback controller must be identified where no owner meets the threshold | P-01 |
+| `pep_evidence_requirements` | map | Per PEP class, which of the seven evidence elements are required (§9.2 P-05) | P-05 |
+| `factor_evidence_mapping` | map | Per `factor_key`, the set of evidence types any one of which corroborates it | P-07 |
+| `factor_materiality_threshold` | int | The `rule_score` at or above which a factor requires corroboration | P-07 |
+| `manual_acceptance_roles` | list | Roles permitted to manually accept evidence (mirrors `MANUAL_ACCEPTANCE_ROLES`) | P-07 |
+
+The register is versioned with the probe set. Adding a key, or changing what a
+key governs, is a governed change requiring both a `policy_version` bump by the
+institution and a `probe_set_version` bump by RegMind.
+
+#### 3.3.4 The unconfigured-policy rule
+
+**A probe that depends on policy configuration and finds none configured must
+emit `status: unavailable` with `availability_status: policy_not_configured`.**
+
+It must not fall back to a template value, a RegMind default, or an inferred
+threshold. A finding derived from an unapproved default is a finding the
+institution never agreed to be measured against, and it is indefensible in an
+inspection — the officer's correct response would be "we never adopted that
+rule."
+
+The absence of configuration is itself a reportable condition, surfaced through
+category `F-28 policy_configuration` (§5.2) and visible in output section 2
+`review_completeness`. Reviewing whether the institution has configured a
+complete policy is a legitimate — and genuinely valuable — Supervisor function.
+
 ---
 
 ## 4. Domain-by-domain control matrix
@@ -195,7 +281,7 @@ feasible (data does not exist).
 
 | # | Sources / existing functions | Deterministic today | Data gaps | FP risk | FN risk | Phase |
 |---|---|---|---|---|---|---|
-| 3 | `ubos.ownership_pct`; `intermediaries`; `documents` slot `structure_chart` (DOC-27 UBO Chain, DOC-28 Ownership Match); `rule_engine` factor `ownership_structure` | **Sum of `ownership_pct` across UBOs; count of UBOs at/above threshold; presence of unattributed residual** | No configured UBO threshold constant — the 25%/10% threshold is not encoded anywhere in the backend | Medium — legitimate free-float or listed-parent structures will not sum to 100%; needs an entity-type exemption list | Low | **0B** — highest-value probe |
+| 3 | `ubos.ownership_pct`; `intermediaries`; `documents` slot `structure_chart` (DOC-27 UBO Chain, DOC-28 Ownership Match); `rule_engine` factor `ownership_structure` | **Sum of `ownership_pct` (including totals exceeding 100%); count of parties at/above the configured identification threshold; unattributed residual** | No identification threshold, tolerance or exemption list is encoded anywhere in the backend. Per D1 these become **institution-configured policy keys** (§3.3.3), not RegMind constants | Medium if reduced to "must sum to 100%" — legitimate free-float, widely-held fund and co-operative structures do not. Mitigated by policy-configured exemptions and the five-sub-check design in §9.2 P-01 | Low | **0B-3** — gated on policy configuration |
 | 4 | — | **None** | **No field for control-other-than-ownership anywhere in the schema.** `directors` captures appointment, not control rights. There is no senior-managing-official fallback field | — | Total — the domain is invisible | **NF** — requires a new intake field before any probe is possible |
 | 5 | `intermediaries`; `rule_engine._is_opaque_ownership()`, `OPAQUE_OWNERSHIP_KEYWORDS`, `_ownership_transparency_tier()`; `applications.ownership_structure`; `structure_chart` slot | Opacity markers detected by keyword; `ownership_transparency_status` value; structure-chart expectation satisfied | Opacity detection is keyword matching over a free-text field — a nominee structure described in other words is missed | Medium — keyword hits on innocuous prose | **High** — free-text keyword matching has poor recall | **0B** — but scoped to *"opaque marker present AND no structure chart verified"*, which is a conjunction of two reliable signals |
 | 6 | `directors`; `company_registry.py::_normalize_officers()`, `_is_director_role()`, `_normalize_companies_house_officer()`; per-director `passport`/`poa` expectations | Per-director document expectation satisfied; registry officer list retrieved (when credentialed) | Registry officer comparison requires name normalisation across sources; no canonical person-matching utility exists for registry↔declared reconciliation | Medium — name-form variance produces spurious mismatches | Medium | **0B** for KYC-completeness; **L** for registry officer reconciliation (needs a matching utility) |
@@ -261,7 +347,7 @@ feasible (data does not exist).
 |---|---|---|---|---|---|---|
 | 14 | `screening_state.build_screening_truth_summary()` → `canonical_state`, `provider_mode` (`live_provider`/`sandbox_provider`/`simulated_fallback`), `terminal`, `defensible_clear`, `screening_gate_ready`, `has_stale`, `required_evidence[]`, `freshness`; `screening_freshness_metadata`; `environment.get_screening_validity_days()` | **Everything.** This is the richest deterministic surface in the codebase | None material | Very low — these are explicit engine states | Low | **0B** — strongest probe family |
 | 15 | `screening_adverse_truth.py` (`STATE_SANCTIONS_HIT`, `EFFECT_PROHIBITED`, `MATERIALITY_*`); `screening_hit_dispositions`; `screening_reviews`; `screening_state._is_false_positive_clearance()`, `_review_second_signoff_satisfied()` | Hit present; disposition present; second sign-off satisfied; clearing officer identity and reason present | None material | Low | Low | **0B** |
-| 16 | `directors.is_pep` / `pep_declaration`, `ubos.is_pep` / `pep_declaration`; `rule_engine.GATE0_DECLARED_PEP_SCORE = 4`, `_party_has_declared_or_confirmed_pep()`, `_declared_pep_score_evidence()`; `verification_matrix` doc types **`pep_declaration`**, **`bankref_pep`**; memo `declared_pep_count` | **Declared PEP present AND no verified `pep_declaration` document AND no `bankref_pep`** — a three-way conjunction, all deterministic | `pep_declaration` / `bankref_pep` are not in `build_required_document_expectations()`, so they are never *required* — which is precisely why the gap goes unnoticed | Low | Low | **0B** — high-value probe |
+| 16 | `directors.is_pep` / `pep_declaration`, `ubos.is_pep` / `pep_declaration`; `rule_engine.GATE0_DECLARED_PEP_SCORE = 4`, `_party_has_declared_or_confirmed_pep()`, `_declared_pep_score_evidence()`; `verification_matrix` doc types **`pep_declaration`**, **`bankref_pep`**; screening PEP state; `decision_records`; `periodic_reviews`; memo `declared_pep_count` | **Presence or absence of each of the seven evidence elements in §9.2 P-05, evaluated against the institution's configured requirement set** | `pep_declaration` / `bankref_pep` are not in `build_required_document_expectations()`, so they are never *required*. Per D5 the remedy is to configure them in policy where genuinely mandatory, not to leave the gate weak. PEP class (domestic / foreign / by association) is not distinguished in the schema | Medium if a fixed document list is assumed — a bank reference is not universally mandatory. Eliminated by driving requirements from `pep_evidence_requirements` | Low | **0B-3** — gated on policy configuration |
 | 17 | `screening_adverse_truth.py` (`STATE_ADVERSE_MEDIA_HIT`, `STATE_ADVERSE_MEDIA_FALSE_POSITIVE`); `rule_engine` D1 factor `adverse_media`, `ADVERSE_MEDIA_SCORE_4_KEYWORDS` etc. | Adverse-media state and disposition presence | **No external adverse-media provider exists** (per CLAUDE.md). Signals are parsed from screening-provider results only. `d1_adverse` defaults to **1 (clear) when no screening data is available** — an absence-means-clear default | Low | **High** — the `d1_adverse = 1` default on missing data is a systematic false-negative source | **0B** — and the probe should specifically target *"adverse-media scored clear because no data was available"* |
 
 ---
@@ -381,7 +467,7 @@ compliance officer · `MLRO` = money laundering reporting officer ·
 |---|---|---|---|---|---|---|---|
 | F-01 | `identity` | Identity of a natural person not established to standard | Director has no IDV resolution and no verified passport | `high` if party is a UBO or director; `medium` otherwise | Party ref + document/IDV ref | Verified identity artifact present for the party | Officer |
 | F-02 | `legal_existence` | Entity existence not independently corroborated | No registry lookup and no verified certificate of incorporation | `high` | Document ref + registry lookup ref (or `unavailable`) | Verified cert-inc or terminal registry lookup | Officer |
-| F-03 | `ownership` | Beneficial ownership incomplete or non-reconciling | UBO holdings total 74%; 26% unattributed | `critical` if unattributed ≥ threshold; else `high` | Party refs with `ownership_pct` values | Holdings reconcile or residual is documented | Officer |
+| F-03 | `ownership` | Ownership coverage falls short of the institution's configured policy, or is internally incoherent | Holdings total 118%; or no party above the configured identification threshold on a non-exempt entity | `critical` if the gap ≥ `ubo_identification_threshold`; else `high`; `medium` for a missing exemption rationale | Party refs with `ownership_pct` + the `policy_profile` keys relied on | Coverage satisfies the active policy, or the shortfall carries a recorded attributed rationale | Officer |
 | F-04 | `control` | Control other than by ownership not identified | *(no probe — see domain 4)* | `high` | Application field ref | Control disclosure captured | Officer |
 | F-05 | `corporate_structure` | Chain to natural persons not traceable | Nominee marker present, no verified structure chart | `high` | Application field ref + document ref | Verified structure chart tracing to natural persons | Officer |
 | F-06 | `source_of_wealth` | SOW undeclared or uncorroborated where it drives risk | `d1_sow = 3` (undeclared) with no `sow` document | `high` if SOW factor ≥ 3; else `medium` | Risk factor ref + document ref | Verified SOW evidence present | Officer |
@@ -392,9 +478,9 @@ compliance officer · `MLRO` = money laundering reporting officer ·
 | F-11 | `jurisdiction` | Jurisdictional exposure unresolved or unscored | Operating country did not resolve to a controlled score | `high` if the factor drives an elevation; else `medium` | Risk factor ref with `resolution_status` | Country resolves under current registry | Ops |
 | F-12 | `screening` | Screening not performed, not terminal, not live, or stale | `provider_mode = simulated_fallback` at decision time | `critical` if relied on for approval; else `high` | Screening evidence ref | Terminal live screening within validity window | Officer |
 | F-13 | `sanctions` | Sanctions hit without adequate disposition | Sanctions match with no second sign-off | `critical` | Screening evidence ref + disposition ref | Disposition recorded with reason, actor and sign-off | SCO |
-| F-14 | `pep` | PEP exposure declared or detected without required evidence | Declared PEP, no PEP declaration document | `high` | Party ref + document refs | PEP declaration and bank reference verified | Officer |
-| F-15 | `adverse_media` | Adverse media hit undispositioned, **or scored clear on absent data** | `d1_adverse = 1` because no screening data existed | `high` when scored clear on absence; `medium` otherwise | Screening evidence ref + risk factor ref | Adverse-media state terminal and dispositioned | Officer |
-| F-16 | `documentation` | Required evidence absent, unverified, stale or superseded **where it corroborates a material risk factor** | Risk factor scored 4 with no verified corroborating document | `high` | Document expectation ref + risk factor ref | Document verified under the reliance gate | Officer |
+| F-14 | `pep` | PEP exposure declared or detected without an evidence element the institution's policy requires | Declared PEP; `pep_evidence_requirements` mandates source-of-wealth evidence; none present | From the configured requirement — mandatory yields `high`, recommended yields `medium`. Never hard-coded per element | Party ref + the specific element's refs + `policy_profile:{version}#pep_evidence_requirements` | Every element the **active policy** requires for that PEP class is present and verified | Officer |
+| F-15 | `adverse_media` | Adverse media hit undispositioned, **or scored clear on absent data** | `d1_adverse = 1` because no screening data existed | `high` when scored clear on absence; `medium` otherwise | Screening evidence ref + risk factor ref | Adverse-media state terminal and dispositioned. **Note (D6):** the scoring default itself is a separate governed remediation (§14.4) — the Supervisor reports it, never changes it | Officer |
+| F-16 | `documentation` | No artifact accepted by the institution's evidence policy corroborates a materially elevated risk factor | Factor scored 4; none of the accepted evidence types for it is in an allowed reliance state | From the configured materiality band — `high` where the factor drives a level-changing elevation | Risk factor ref + every candidate expectation ref + `policy_profile:{version}#factor_evidence_mapping` | At least one accepted artifact reaches an allowed reliance state under the active policy | Officer |
 | F-17 | `registry` | Declared particulars diverge from registry | *(deferred — see domain 20)* | `high` | Registry lookup ref | Divergence explained or corrected | Officer |
 | F-18 | `risk` | Risk score not defensible — silent defaults, unrecorded elevation, stale config | Sector defaulted via unresolved mapping sentinel | `high` | Risk factor refs + `risk_config_version` | All scored factors resolved under a valid config version | Ops / SCO |
 | F-19 | `edd` | EDD policy and actual routing diverge | Policy routes `edd`; no `edd_cases` row exists | `critical` | EDD policy evaluation ref + EDD case ref | Case routed to EDD or divergence formally accepted | SCO |
@@ -406,10 +492,19 @@ compliance officer · `MLRO` = money laundering reporting officer ·
 | F-25 | `governance` | Segregation-of-duties or authority defect | Same actor generated the memo and approved it | `high` | Actor refs on both events | Independent approver recorded | MLRO |
 | F-26 | `monitoring` | Monitoring commitment not established | Memo commits to enhanced monitoring; no review scheduled | `high` | Memo section ref + periodic review ref | Review scheduled at policy frequency | Officer |
 | F-27 | `audit` | Audit record missing or chain broken | Decision with no `decision_records` row | `critical` | Decision ref + audit refs | Record reconstructed or break formally logged | MLRO |
+| F-28 | `policy_configuration` | A policy key the Supervisor depends on is unconfigured, expired, or incomplete | No `ubo_identification_threshold` configured; `factor_evidence_mapping` missing entries for scored factors | `high` when it disables a control the institution's regime requires; `medium` otherwise | `policy_profile:{version}#{key}` ref | Key configured and approved under an active policy version | MLRO |
 
 Categories F-04, F-08, F-09, F-17 and F-24 are **defined but have no Phase 0B
 probe**. They are reserved so that later probes do not force a taxonomy version
 bump.
+
+**F-28 is the taxonomy consequence of §3.3.4.** When a probe cannot run because
+policy is unconfigured, two records result: the probe's own
+`status: unavailable` / `availability_status: policy_not_configured`, and an
+F-28 finding naming the missing key. The first tells the officer the check did
+not happen; the second tells the MLRO why, and who can fix it. Reviewing policy
+completeness is a Supervisor function in its own right, not merely an error
+path.
 
 ---
 
@@ -430,7 +525,8 @@ severity                  enum   critical | high | medium | low | info
 status                    enum   hit | clear | unavailable | not_applicable |
                                  not_replayable
 availability_status       enum   available | dependency_gated | credentials_absent |
-                                 data_absent | snapshot_incomplete
+                                 data_absent | snapshot_incomplete |
+                                 policy_not_configured
 confidence                float  0.0–1.0 — probe-declared, NOT model-generated
 claim                     str    what is wrong, in one sentence
 evidence_refs             list   EvidenceRef[] (§7)
@@ -451,7 +547,7 @@ created_at                str    the run's injected as_of, NOT wall-clock (§10.
 |---|---|---|
 | `hit` | The probe ran and found a defect | Present as a finding |
 | `clear` | The probe ran on complete data and found nothing | May be summarised in review completeness |
-| `unavailable` | The probe **could not run** | **Must be shown distinctly.** Never rendered as, aggregated with, or counted as `clear` |
+| `unavailable` | The probe **could not run** — including because the policy it depends on is unconfigured (§3.3.4) | **Must be shown distinctly.** Never rendered as, aggregated with, or counted as `clear` |
 | `not_applicable` | The probe does not apply to this subject | Shown in review completeness |
 | `not_replayable` | The probe requires historic state that was not snapshotted (§11) | **Must be shown distinctly.** Never rendered as `clear` |
 
@@ -521,6 +617,7 @@ existed_at_decision bool   whether this evidence predates the decision (§7.4)
 | `risk_dimension` | `risk:{application_id}#dimension:{D1..D5}` | `factor_computation_evidence.dimensions[]` | `risk-factor-evidence-v1` |
 | `risk_factor` | `risk:{application_id}#factor:{factor_key}` | `factor_computation_evidence.factors[]` | `risk-factor-evidence-v1` |
 | `risk_config` | `risk_config:{version}` | `applications.risk_config_version`, `risk_config` | `REGISTRY_VERSION` |
+| `policy_profile` | `policy_profile:{policy_version}#{config_key}` | institution policy profile (§3.3) | `policy_version` |
 | `risk_rule` | `risk_rule:{rule_id}` | `rule_engine` Rules 4A–4E | — |
 | `edd_rule` | `edd_policy:{policy_version}#trigger:{trigger}` | `edd_routing_policy.ALL_TRIGGERS` | `edd_routing_policy_v1` |
 | `edd_case` | `edd_case:{id}` | `edd_cases` | — |
@@ -662,33 +759,84 @@ uncredentialed provider. None restates an existing screen.
 The bar applied: *would a competent SCO be surprised, and is the probe wrong
 less than one time in twenty?*
 
+**Policy dependency splits the set in two.** Four probes (P-02, P-03, P-04,
+P-06) read governed engine state and versioned platform policy that already
+exists in code — `risk_config_version`, `edd_routing_policy_v1`,
+`document_reliance_gate_v2`, `RISK_FREQUENCY_MONTHS`. They can be built and
+validated immediately.
+
+Three probes (P-01, P-05, P-07) depend on **institution policy configuration**
+that does not yet exist (§3.3). They must not be built against RegMind defaults,
+because a finding derived from an unapproved default is one the institution
+never agreed to be measured against. This split drives the staging in §9.5.
+
 ### 9.2 The Phase 0B set
 
 ---
 
-**P-01 — Ownership reconciliation** · category `F-03` · severity `critical`/`high`
+**P-01 — Ownership coverage and unexplained residual** · category `F-03`/`F-05`/`F-28` · severity per sub-check
 
-- **Control objective:** beneficial ownership is complete and reconciles.
-- **Question:** do declared UBO holdings account for the entity's ownership?
-- **Source fields:** `ubos.ownership_pct`, `ubos.id`, `intermediaries.id`,
-  `applications.entity_type`, `applications.ownership_structure`.
-- **Source functions:** direct table read; `rule_engine._ownership_transparency_tier()`
-  for context only.
-- **Deterministic logic:** sum `ownership_pct` across UBO rows for the
-  application. Hit when the residual exceeds a configured tolerance and the
-  entity type is not on an exemption list (listed entity, widely-held fund).
-- **Evidence refs:** `ubo:{id}` per party with its `ownership_pct`;
-  `application:{id}#entity_type`.
-- **Severity logic:** `critical` when residual ≥ the UBO disclosure threshold
-  (an unidentified person could be a UBO); `high` otherwise.
-- **Availability:** `data_absent` when no UBO rows exist — reported as
-  `unavailable`, since zero UBOs is itself unreviewable rather than clear.
-- **Limitations:** the UBO threshold is **not currently encoded anywhere** in
-  the backend. Phase 0B must introduce it as a probe-local constant and flag it
-  for policy ownership. Exemption list must be founder-approved.
-- **Fixtures:** exact 100%; residual 26%; residual 3% (tolerance); zero UBOs;
-  listed-entity exemption; intermediary-held chain.
-- **Closure:** holdings reconcile, or the residual is documented and accepted.
+> **Founder amendment (D1).** This probe does **not** assume ownership must sum
+> to 100%. Many legitimate structures do not: listed entities with free float,
+> widely-held funds, co-operatives, foundations and partnerships with fluid
+> capital accounts. The probe tests **coverage against the institution's
+> configured policy**, not arithmetic against a universal rule.
+
+- **Control objective:** beneficial ownership is identified to the standard the
+  institution's policy requires, and any shortfall is explained.
+- **Question:** does the institution know who ultimately owns and controls this
+  entity, to the standard it has committed to — and where it does not, is the
+  gap explained?
+- **Source fields:** `ubos.ownership_pct`, `ubos.id`, `ubos.full_name`;
+  `intermediaries.id`, `.jurisdiction`; `applications.entity_type`,
+  `.ownership_structure`; `documents` slot `structure_chart`,
+  `reg_sh`; `application_notes` for recorded rationale.
+- **Source functions:** direct table reads;
+  `rule_engine._ownership_transparency_tier()`,
+  `_is_opaque_ownership()` for structural context;
+  `document_reliance_gate` reliance state for the structure chart.
+- **Policy inputs (§3.3.3):** `ubo_identification_threshold`,
+  `ownership_reconciliation_tolerance`, `ownership_exemption_types`,
+  `control_person_required`, `policy_jurisdiction`, `policy_version`.
+
+**Five distinct sub-checks**, each its own finding:
+
+| Sub-check | Condition | Category |
+|---|---|---|
+| **(a) Overstated ownership** | Sum of `ownership_pct` **exceeds 100%** beyond `ownership_reconciliation_tolerance` | `F-03` |
+| **(b) No identified beneficial owner** | No party meets `ubo_identification_threshold`, **and** policy expects one — i.e. entity type is not in `ownership_exemption_types` | `F-03` |
+| **(c) Unexplained residual** | Unattributed ownership ≥ `ubo_identification_threshold`, with no recorded rationale | `F-03` |
+| **(d) Chain does not terminate** | Ownership traces to intermediaries with no natural person, **and** no permitted fallback controller where `control_person_required` is true | `F-05` |
+| **(e) Missing exemption rationale** | Entity type **is** in `ownership_exemption_types` but no exemption rationale is recorded on the case | `F-03` |
+
+Sub-check (a) is the only one that is pure arithmetic and policy-independent —
+holdings exceeding 100% is a data-integrity defect under any regime. It is the
+one sub-check that remains available when policy is unconfigured.
+
+- **Evidence refs:** `ubo:{id}` per party with `ownership_pct`;
+  `intermediary:{id}` for chain links; `application:{id}#entity_type`;
+  `policy_profile:{version}#ubo_identification_threshold` and the other
+  configured keys relied on; `document:{id}` for the structure chart;
+  `note:{id}` for a recorded rationale.
+- **Severity logic:** `critical` for (b) and (c) where the gap equals or exceeds
+  the identification threshold — an unidentified person could be a beneficial
+  owner. `high` for (a) and (d). `medium` for (e).
+- **Availability:** `policy_not_configured` for sub-checks (b)–(e) when the
+  relevant keys are unset, accompanied by an `F-28` finding. `data_absent` when
+  no party rows exist at all — reported as `unavailable`, because zero parties
+  is unreviewable, not clear.
+- **Limitations:** `ownership_pct` is a declared figure; the probe tests
+  internal coherence and policy coverage, not truthfulness. Sub-check (d)
+  depends on intermediary chain data that is captured but not always complete.
+  Recorded rationale detection keys on structured note linkage, not free-text
+  interpretation.
+- **Fixtures:** sum 118% (a); no party above threshold, non-exempt entity (b);
+  residual 26% with threshold 25% (c); residual 3% within tolerance; chain
+  terminating in a foreign intermediary with no natural person (d); listed
+  entity with recorded exemption; listed entity with no rationale (e); zero
+  parties; policy unconfigured.
+- **Closure:** ownership coverage satisfies the active policy, or the shortfall
+  carries a recorded, attributed rationale.
 
 ---
 
@@ -774,6 +922,12 @@ less than one time in twenty?*
 - **Limitations:** adverse media is limited to signals inside screening-provider
   payloads; there is no external adverse-media source. The probe must state this
   in `why_it_matters` rather than implying full coverage.
+- **D6 boundary:** the adverse-media sub-check **reports** current-state cases
+  where a clear rating rests on absent data. It does **not** change
+  `rule_engine` scoring. Correcting the `d1_adverse = 1`-on-absence default, and
+  moving to the three-state model (`clear` · `adverse_media_detected` ·
+  `not_assessed_unavailable`), is a separate governed remediation tracked in
+  §14.4.
 - **Fixtures:** simulated fallback at approval; uncleared completed match;
   cleared without second sign-off; stale at decision; adverse-media clear on
   absent data; fully clean live terminal case.
@@ -782,31 +936,74 @@ less than one time in twenty?*
 
 ---
 
-**P-05 — Declared PEP evidence gap** · category `F-14` · severity `high`
+**P-05 — PEP evidence requirement gap** · category `F-14`/`F-28` · severity per configured requirement
 
-- **Control objective:** declared PEP exposure carries its required evidence.
-- **Question:** is there a declared PEP with no PEP declaration and no bank reference?
+> **Founder amendment (D2).** A bank reference is **not** universally mandatory
+> for every PEP. PEP evidence expectations vary by institution, by jurisdiction,
+> and by PEP class — a domestic PEP holding a minor public office and a foreign
+> head of state do not attract the same file. The probe tests against the
+> institution's configured requirement set and **names which specific
+> requirement is missing**, rather than asserting a fixed document list.
+
+- **Control objective:** PEP exposure carries the evidence the institution's
+  active policy requires for that PEP class.
+- **Question:** for each PEP-exposed party, which configured evidence elements
+  are absent?
 - **Source fields:** `directors.is_pep` / `pep_declaration`,
-  `ubos.is_pep` / `pep_declaration`; `documents.doc_type` in
-  (`pep_declaration`, `bankref_pep`) with `verification_status`.
+  `ubos.is_pep` / `pep_declaration`, party `id`, `country_of_residence`;
+  `documents.doc_type` with `verification_status` and `is_current`;
+  screening PEP state from `build_screening_truth_summary().required_evidence[]`;
+  `decision_records` for senior approval; `periodic_reviews` for enhanced
+  monitoring; risk factors `source_of_wealth`, `source_of_funds`.
 - **Source functions:** `rule_engine._party_has_declared_or_confirmed_pep()`,
   `_declared_pep_score_evidence()`, `GATE0_DECLARED_PEP_SCORE`;
-  `verification_matrix` doc definitions.
-- **Deterministic logic:** for each party where PEP is declared or confirmed,
-  hit when no current, verified `pep_declaration` document is linked to that
-  party; separate lower-severity hit when no `bankref_pep` exists.
-- **Evidence refs:** `director:{id}` / `ubo:{id}`; `document:{id}` or the absent
-  expectation; `risk:{app}#factor:pep_status`.
-- **Severity logic:** `high` for a missing declaration; `medium` for a missing
-  bank reference.
-- **Availability:** always available — reads only stored state.
-- **Limitations:** `pep_declaration` and `bankref_pep` are **not** in
-  `build_required_document_expectations()`, so no gate ever demanded them. That
-  is exactly why the gap exists, and the probe should say so.
-- **Fixtures:** declared PEP with full evidence; declared PEP with neither;
-  declared PEP with declaration but no bank reference; screening-detected PEP
-  with no declaration; no PEP.
-- **Closure:** verified PEP declaration and bank reference linked to the party.
+  `screening_adverse_truth` (`STATE_PEP_DETECTED`); `verification_matrix`
+  document definitions.
+- **Policy inputs (§3.3.3):** `pep_evidence_requirements` — a map from PEP class
+  to the subset of the seven elements below that the institution requires,
+  plus `policy_jurisdiction` and `policy_version`.
+
+**The seven distinguishable evidence elements.** Each is independently
+detectable and independently reportable:
+
+| # | Element | Detected from |
+|---|---|---|
+| 1 | PEP declaration | current verified `pep_declaration` document linked to the party |
+| 2 | Screening evidence | terminal, live PEP screening result for that party |
+| 3 | Source-of-wealth evidence | verified artifact accepted under `factor_evidence_mapping[source_of_wealth]` |
+| 4 | Source-of-funds evidence | verified artifact accepted under `factor_evidence_mapping[source_of_funds]` |
+| 5 | Senior approval | `decision_records` entry by an actor holding the required role |
+| 6 | Enhanced monitoring | `periodic_reviews` row at or within the enhanced frequency |
+| 7 | Bank reference | current verified `bankref_pep` document — **only where policy requires it** |
+
+- **Deterministic logic:** for each party where PEP is declared or
+  screening-confirmed, resolve the party's PEP class, look up the configured
+  requirement set, and emit **one finding per missing required element**, naming
+  that element. Elements the institution does not require are not evaluated and
+  produce no finding.
+- **Evidence refs:** `director:{id}` / `ubo:{id}`;
+  `policy_profile:{version}#pep_evidence_requirements`;
+  `document:{id}` or the absent expectation per element;
+  `screening:{app}#subject:...`; `decision:{id}`; `periodic_review:{id}`;
+  `risk:{app}#factor:pep_status`.
+- **Severity logic:** taken from the configured requirement — an element the
+  institution marks mandatory yields `high`; an element marked recommended
+  yields `medium`. Severity is **not** hard-coded per element.
+- **Availability:** `policy_not_configured` when `pep_evidence_requirements` is
+  unset, accompanied by an `F-28` finding. The probe does **not** fall back to
+  assuming declaration + bank reference.
+- **Limitations:** PEP class must be derivable from stored state. Where the
+  schema does not distinguish domestic from foreign PEP, or PEP by association
+  from principal, the probe evaluates against the institution's default class
+  and must say so in the finding. Refining PEP classification is a later intake
+  question, not a Phase 0B dependency.
+- **Fixtures:** declared PEP, all configured elements present; declared PEP
+  missing element 1 only; missing elements 3 and 5; policy that does **not**
+  require element 7 with no bank reference present (must produce **no** finding);
+  screening-detected PEP with no declaration; no PEP; policy unconfigured.
+- **Closure:** every element the **active institution policy** requires for that
+  party's PEP class is present and verified. Closure is evaluated against the
+  policy version in force, not a global document list.
 
 ---
 
@@ -838,40 +1035,78 @@ less than one time in twenty?*
 
 ---
 
-**P-07 — Evidence–risk coupling** · category `F-16`/`F-06` · severity `high`
+**P-07 — Evidence–risk coupling** · category `F-16`/`F-06`/`F-28` · severity per configured materiality
 
-- **Control objective:** every materially elevated risk factor is corroborated by verified evidence.
-- **Question:** which risk factors scored high with nothing verified behind them?
-- **Source fields:** `factor_computation_evidence.factors[]` (`rule_score`,
-  `factor_key`); `document_reliance_gate` snapshots and blockers;
-  `documents.verification_status`, `is_current`.
+> **Founder amendment (D2).** The factor-to-evidence mapping is a **versioned
+> institutional policy artifact**, not a RegMind constant. Each factor may have
+> **several acceptable evidence types**, any one of which satisfies
+> corroboration. No single document type is treated as universally sufficient or
+> universally mandatory.
+
+- **Control objective:** every materially elevated risk factor is corroborated
+  by at least one artifact the institution's evidence policy accepts.
+- **Question:** *"Does a materially elevated factor have at least one verified
+  artifact accepted by the institution's active evidence policy?"*
+- **Source fields:** `factor_computation_evidence.factors[]` (`factor_key`,
+  `rule_score`, `normalized_value`, `resolution_status`);
+  `documents.doc_type`, `verification_status`, `is_current`, `person_id`;
+  `document_reliance_gate` per-slot reliance snapshots; manual-acceptance
+  fields (`workflow_test_accepted*`, `evidence_class`,
+  `evidence_classification_note`, `evidence_classified_by`).
 - **Source functions:** `compute_risk_score()`,
   `document_reliance_gate.evaluate_document_reliance_gate()`,
-  `build_required_document_expectations()`.
-- **Deterministic logic:** a **static, founder-approved mapping** from
-  `factor_key` → corroborating document slot(s). Hit when the factor's
-  `rule_score` ≥ 3 and no document in the mapped slots is in an allowed
-  reliance state (`verified`, `manual_accepted`). Initial mapping:
-  `source_of_wealth` → `sow`; `ownership_structure` → `structure_chart`,
-  `reg_sh`; `pep_status` → `pep_declaration`, `bankref_pep`;
-  `entity_type` → `cert_inc`, `memarts`.
-- **Evidence refs:** `risk:{app}#factor:{factor_key}` with its score;
-  `expectation:{slot_key}` with its reliance state.
-- **Severity logic:** `high` — an elevated factor with no evidence is the
-  archetypal inspection finding.
-- **Availability:** `data_absent` when `factor_computation_evidence` is absent.
-- **Limitations:** the mapping is a policy artifact, not a derivation. It must
-  be reviewed and signed off, and versioned with the probe set.
-- **Fixtures:** high SOW score with no `sow` document; high SOW with verified
-  `sow`; high ownership score with no structure chart; PEP score 4 with no
-  declaration; all-low case.
-- **Closure:** a corroborating document reaches an allowed reliance state.
+  `manual_acceptance_details()`; `ALLOWED_RELIANCE_STATES`.
+- **Policy inputs (§3.3.3):** `factor_evidence_mapping`,
+  `factor_materiality_threshold`, `manual_acceptance_roles`, `policy_version`.
+- **Deterministic logic:** for each factor whose `rule_score` ≥
+  `factor_materiality_threshold`, hit when **no** artifact of **any** accepted
+  evidence type for that `factor_key` is in an allowed reliance state
+  (`verified` or `manual_accepted`). Satisfaction is a disjunction across
+  accepted types — one qualifying artifact closes the coupling.
+- **Evidence refs:** `risk:{app}#factor:{factor_key}` with its `rule_score`;
+  `policy_profile:{version}#factor_evidence_mapping`; every candidate
+  `expectation:{slot_key}` with its reliance state; `document:{id}` where an
+  artifact exists but is not in an allowed state.
+- **Severity logic:** from the configured materiality band for that factor.
+  Where the factor drives a level-changing elevation, `high`; otherwise
+  `medium`.
+- **Availability:** `policy_not_configured` when `factor_evidence_mapping` has
+  no entry for a scored factor, accompanied by an `F-28` finding naming the
+  factor. `data_absent` when `factor_computation_evidence` is absent.
+
+**Interpretive limits that must appear in the finding text.** These are the
+reasons the mapping is a policy artifact rather than a derivation, and the
+Supervisor must not overstate what a satisfied coupling proves:
+
+| Limit | Why it matters |
+|---|---|
+| **A SOW declaration may not by itself corroborate wealth.** A signed declaration is an assertion by the customer, not independent evidence of origin. An institution may accept it alone, or may require corroborating financial records alongside it — that is a policy choice, and the finding must reflect which was configured. | Prevents "coupling satisfied" from reading as "wealth verified" |
+| **A certificate of incorporation demonstrates legal existence but may not fully corroborate entity-type risk.** It evidences that the entity exists in a legal form; it says little about the risk that form carries in practice, particularly for trusts, foundations and hybrid vehicles. | Prevents a formation document from closing a substantive risk question |
+| **PEP evidence requirements vary by policy.** The coupling for `pep_status` is defined by `pep_evidence_requirements` (P-05), not by a fixed document pair. | Keeps P-05 and P-07 consistent under one policy source |
+| **Manual acceptance remains governed by role and rationale.** An artifact in `manual_accepted` state satisfies the coupling **only** when accepted by an actor holding a role in `manual_acceptance_roles`, with a recorded reason, actor and timestamp — the conditions `document_reliance_gate` already enforces. A manual acceptance failing those conditions does not satisfy the coupling, and is itself a finding. | Prevents manual acceptance becoming a silent bypass |
+
+- **Limitations:** the mapping expresses what the institution *accepts as
+  corroboration*, not what *proves* the underlying fact. A satisfied coupling
+  means the file meets the institution's evidence standard — no more. The
+  finding text must not imply substantive verification.
+- **Fixtures:** elevated SOW with no accepted artifact; elevated SOW satisfied
+  by the second of three accepted types; elevated SOW satisfied only by a
+  manual acceptance with a valid role and reason; the same manual acceptance by
+  an ineligible role (must **not** satisfy); elevated factor with no mapping
+  entry (must yield `F-28`); all-low case; policy unconfigured.
+- **Closure:** at least one artifact of an accepted evidence type for that
+  factor reaches an allowed reliance state under the active policy version.
 
 ---
 
 ### 9.3 Classification of the full candidate set
 
-**Ready now (Phase 0B):** P-01, P-02, P-03, P-04, P-05, P-06, P-07.
+**Ready now (stage 0B-2):** P-02, P-03, P-04, P-06 — governed engine state and
+platform policy that already exists in code.
+
+**Ready once institution policy is configured (stage 0B-3):** P-01, P-05, P-07.
+Blocked on the `policy_profile` keys in §3.3.3, not on engineering. Building
+them earlier against RegMind defaults is explicitly prohibited by §3.3.4.
 
 **Requiring gated `supervisor/` package assets — deferred:** cross-agent
 contradiction detection (`supervisor/contradictions.py`, 9 checks), UBO chain
@@ -898,10 +1133,10 @@ status (domain 24), plain document-blocker listing (domain 18 raw).
 
 | Old | Disposition |
 |---|---|
-| C1 Evidence sufficiency | **Kept** as P-07, tightened to a signed-off factor→slot mapping |
+| C1 Evidence sufficiency | **Kept** as P-07, reframed as a versioned institution evidence policy with multiple acceptable types per factor |
 | C2 Unsupported conclusion | **Dropped** — requires assertion-to-artifact linkage that memo sections do not carry |
 | C3 Screening vs documents | **Dropped as standalone** — needs the field-level extraction schema that does not exist (domain 19) |
-| C4 Ownership arithmetic | **Kept** as P-01, and moved off the gated Agent 4 onto direct `ubos.ownership_pct` reads |
+| C4 Ownership arithmetic | **Kept but substantially reframed** as P-01 *ownership coverage and unexplained residual* — five policy-driven sub-checks, no universal sum-to-100% assumption. Moved off the gated Agent 4 onto direct `ubos.ownership_pct` reads |
 | C5 Registry divergence | **Deferred** — credential-gated and needs a name-matching utility |
 | C6 Risk-score divergence | **Reframed** as P-02 — resolution integrity, not score comparison. The original framing risked creating a competing score |
 | C7 Peer divergence | **Deferred** to Institution Memory, unchanged |
@@ -910,9 +1145,87 @@ status (domain 24), plain document-blocker listing (domain 18 raw).
 | C10 Override scrutiny | **Narrowed** to exact-match reason reuse; semantic scoring dropped |
 | C11 Missing evidence set | **Absorbed** into P-07; the standalone list was a restatement |
 | C12 Inspector lens | **Kept** as output section 10 — a derived view, no independent findings |
-| — | **New:** P-05 declared-PEP evidence gap |
+| — | **New:** P-05 PEP evidence requirement gap, driven by configured requirements rather than a fixed document pair |
 | — | **New:** P-06 monitoring commitment not established |
 | — | **New:** the adverse-media-clear-on-absent-data sub-check inside P-04 |
+| — | **New:** category `F-28 policy_configuration` and status `policy_not_configured`, the taxonomy consequences of §3.3 |
+
+### 9.5 Phase 0B implementation stages
+
+**Founder amendment (D3, sequencing).** Four stages, strictly ordered. Each
+stage has an exit criterion that must be met before the next begins.
+
+---
+
+#### 0B-1 — Deterministic harness *(no probes, no UI)*
+
+The foundation, and the gate on everything after it.
+
+- Canonical input bundle assembler (§10.2)
+- Deterministic canonical-JSON serializer (§10.3)
+- Injected `as_of` — **no probe may call a clock** (§10.4)
+- `input_bundle_hash` and `review_hash`
+- Deterministic `finding_id` derivation (§10.6)
+- Availability status handling, including `policy_not_configured` (§3.3.4)
+- Reproducibility test (§10.8) and frozen-module guard tests
+
+**Exit criterion:** three consecutive runs over the fixture corpus produce an
+identical `review_hash` and an identical `finding_id` set. If this cannot be
+achieved, **stop** — the Supervisor is not shippable as specified.
+
+---
+
+#### 0B-2 — Policy-independent probes
+
+Four probes that read governed state already present in code.
+
+- **P-02** risk factor resolution integrity
+- **P-03** EDD routing divergence
+- **P-04** screening reliance defensibility
+- **P-06** monitoring requirement establishment
+
+**Exit criterion:** all four pass the reproducibility harness on real fixtures;
+no frozen-module guard test regresses; findings are advisory-only and provably
+cannot reach an approval gate.
+
+---
+
+#### 0B-3 — Policy-dependent probes
+
+**Blocked until the institution's `policy_profile` keys are defined and
+approved.** This is a compliance-configuration task, not an engineering one, and
+it can proceed in parallel with 0B-1 and 0B-2.
+
+- **P-01** ownership coverage and unexplained residual
+- **P-05** PEP evidence requirement gap
+- **P-07** evidence–risk coupling
+
+Prerequisite configuration: `ubo_identification_threshold`,
+`ownership_reconciliation_tolerance`, `ownership_exemption_types`,
+`control_person_required`, `pep_evidence_requirements`,
+`factor_evidence_mapping`, `factor_materiality_threshold`.
+
+**Exit criterion:** each probe demonstrably emits `unavailable` /
+`policy_not_configured` plus an `F-28` finding when its keys are unset, and
+correct findings when they are set. Both paths are fixture-tested.
+
+---
+
+#### 0B-4 — Immutable decision-input snapshot *(before any Supervisor UI)*
+
+**Founder amendment (D3).** Moved ahead of UI delivery. See §11.3 for the
+capture triggers and immutability requirements.
+
+**Exit criterion:** snapshots are written on every trigger event, are immutable,
+versioned and hashed, and a snapshot can be re-loaded into the 0B-1 bundle
+assembler to reproduce the review that was current at capture time.
+
+---
+
+#### After 0B-4 — Supervisor UI
+
+Not in Phase 0B. Requires founder sign-off in any case, since the Application
+Review surface is frozen.
 
 ---
 
@@ -1065,18 +1378,52 @@ used, but the *input values* the config was applied to are gone.
 application state as it stood at `decided_at`. Probes P-01, P-02, P-03 and P-07
 all depend on that state.
 
-### 11.3 The consequence for phasing
+### 11.3 The decision-input snapshot
 
-- **Phase 0B evaluates current state only.** No retrospective claims.
-- Any historic review must mark affected findings `not_replayable` with
-  `availability_status: snapshot_incomplete`.
-- Meaningful historic replay — and therefore Policy Replay — requires a
-  **decision input snapshot** written at decision time. That is a schema change
-  and belongs to a later phase, but it should be scheduled **early**, because
-  replay depth only starts accruing from the day it ships. Every month of delay
-  is a permanently missing month of replayable history.
+**Founder amendment (D3 — approved).** The minimum canonical decision-input
+snapshot is scheduled as **stage 0B-4**: immediately after the deterministic
+probe harness and the probe set, and **before any Supervisor UI development**.
 
-This is the single most important sequencing insight in Phase 0A.
+The reasoning is that replay depth accrues only from the day capture ships.
+Every month of delay is a permanently missing month of replayable history, and
+no later work recovers it. UI can be built at any time; history cannot be
+built retroactively.
+
+#### 11.3.1 Properties
+
+The snapshot must be **immutable, versioned and hashed**:
+
+| Property | Requirement |
+|---|---|
+| **Immutable** | Append-only. No update path. A correction is a new snapshot superseding the prior one, never an edit |
+| **Versioned** | Carries `snapshot_schema_version`, plus the `policy_version`, `risk_config_version`, and relevant platform policy versions in force at capture |
+| **Hashed** | `snapshot_hash = sha256(canonical_json(snapshot))` under the §10.3 rules, so tampering is detectable and identity is stable |
+| **Self-describing** | Records which sections were captured and which were unavailable, so a later replay can distinguish "not captured" from "captured as empty" |
+| **Replay-loadable** | Must load directly into the 0B-1 bundle assembler. If a snapshot cannot reproduce the review that was current at capture, it is not fit for purpose |
+
+#### 11.3.2 Capture triggers
+
+At minimum, a snapshot is written on:
+
+| Trigger | Why |
+|---|---|
+| **Final approval** | The primary regulatory artifact — the state the institution relied on to accept the customer |
+| **Final rejection** | Rejections are challenged too, and the basis must be reconstructable |
+| **Decision override** | The case most likely to be examined, and the one where contemporaneous state matters most |
+| **Completed EDD decision** | EDD conclusions carry their own evidentiary weight and a distinct approval path |
+| **Material post-approval risk recomputation** | A rating that moves after onboarding creates a before/after pair; without both, neither the original decision nor the change is defensible |
+
+#### 11.3.3 Interim position
+
+- **Phase 0B probes remain current-state only.** No retrospective claims are
+  made in 0B-2 or 0B-3.
+- Any historic review before capture ships marks affected findings
+  `not_replayable` with `availability_status: snapshot_incomplete`.
+- Replayable history begins accumulating at 0B-4 — **before** UI delivery, so
+  that by the time the Supervisor is visible to officers, it already has a
+  growing base of reproducible decisions behind it.
+
+This sequencing is the single most consequential decision in Phase 0A.
 
 ---
 
@@ -1101,10 +1448,12 @@ cannot must not ship.
 
 This is the section to read if you read nothing else.
 
-1. **Ownership that does not reconcile.** No screen in RegMind sums
-   `ubos.ownership_pct`. A 74% total renders exactly as legibly as 100%. An
-   inspector's first question on a corporate file is "who owns the rest?", and
-   today nothing asks it.
+1. **Ownership coverage that falls short of policy.** No screen in RegMind sums
+   `ubos.ownership_pct` or tests coverage against an identification threshold. A
+   74% total renders exactly as legibly as 100%, and an entity with no party
+   above the threshold renders as legibly as one with a clearly identified
+   owner. An inspector's first question on a corporate file is "who owns the
+   rest, and why is that acceptable?" — today nothing asks it.
 
 2. **Risk factors that defaulted instead of resolving.** `resolution_status`
    and the unresolved-mapping sentinels are computed on every scoring run and
@@ -1118,15 +1467,22 @@ This is the section to read if you read nothing else.
    invisible today, and is the finding most likely to be material in a
    supervisory visit.
 
-4. **A declared PEP with no PEP declaration on file.** `pep_declaration` and
-   `bankref_pep` exist as document types in `verification_matrix` but are absent
-   from `build_required_document_expectations()`, so no gate has ever demanded
-   them. The gap is structural, not incidental.
+4. **PEP exposure missing a specific required evidence element.** `pep_declaration`
+   and `bankref_pep` exist as document types in `verification_matrix` but are
+   absent from `build_required_document_expectations()`, and nothing correlates
+   PEP status with source-of-wealth evidence, senior approval or enhanced
+   monitoring. The Supervisor names *which configured element* is missing, per
+   the institution's policy — not a fixed document list. Per D5, the correct
+   long-term remedy for genuinely mandatory elements is to configure them and
+   let the gate enforce them; the Supervisor's lasting contribution here is the
+   conditional and correlated requirements a gate cannot express.
 
 5. **Adverse media scored clear because there was no data.** `d1_adverse`
    defaults to **1 (clear)** when screening data is absent. On screen this reads
    as a clean adverse-media assessment. It is an absence, not a clearance, and
-   the distinction is currently invisible.
+   the distinction is currently invisible. Per D6, P-04 **reports** affected
+   current-state cases; changing the scoring default is a separate governed
+   remediation and is out of scope for the Supervisor implementation.
 
 6. **Approval on sandbox or simulated screening.** `provider_mode` distinguishes
    `live_provider`, `sandbox_provider` and `simulated_fallback`. The
@@ -1137,9 +1493,16 @@ This is the section to read if you read nothing else.
    monitoring; whether a `periodic_reviews` row was created at the policy
    frequency is not checked against that commitment.
 
-8. **A materially elevated risk factor with no verified evidence behind it.**
+8. **A materially elevated risk factor with no accepted evidence behind it.**
    The score and the document list are both on screen — the *coupling* between
-   them is not.
+   them is not, and neither is whether the artifact present is one the
+   institution's evidence policy actually accepts for that factor.
+
+9. **Policy configuration that is incomplete.** Whether the institution has
+   configured the thresholds, exemptions and evidence mappings its own regime
+   requires is not visible anywhere. `F-28` makes an unconfigured control an
+   explicit, attributable finding rather than a silent absence — a check nobody
+   knew was not running.
 
 ### 12.3 Outputs explicitly removed as restatements
 
@@ -1168,7 +1531,7 @@ rewrite.
 | **Periodic reviews** | Review a review | `subject_type: periodic_review`; `periodic_review:{id}` evidence type defined; `policy_version` already stamped on `periodic_reviews` | **Low** |
 | **Change requests** | Review a change before implementation | `subject_type: change_request`; `change_management.py` already versions approved profiles | **Low** |
 | **Portfolio control themes** | Aggregate findings across the book | Closed category register + severity + workflow owner make aggregation a group-by | **None** |
-| **Policy replay** | Re-run findings under a different policy version | `review_hash` explicitly separates `input_bundle_hash` from `policy_version` (§10.7) — replay is "same bundle, different policy" | **None in design.** Blocked in practice by §11.2 until decision input snapshots exist |
+| **Policy replay** | Re-run findings under a different policy version | `review_hash` explicitly separates `input_bundle_hash` from `policy_version` (§10.7) — replay is "same bundle, different policy". The institution `policy_profile` (§3.3.2) is itself versioned and immutable once active, so *institution* policy replay works by the same mechanism as *platform* policy replay | **None in design.** Unblocked in practice at stage 0B-4 (§11.3) |
 | **Inspection readiness** | Export findings as evidence | Output contract sections 13–15 (`unavailable_checks`, `review_history`, `evidence_index`) are designed for it; slots into `evidence_pack_export.py` export types | **None** |
 
 The subject model, taxonomy, finding schema and evidence model are all
@@ -1176,9 +1539,13 @@ subject-agnostic. Nothing in Phase 0A hard-codes "application".
 
 ---
 
-## 14. Open founder decisions
+## 14. Founder decisions
 
-### 14.1 Changes from the existing Challenge Mode spec requiring acknowledgement
+**Status: Phase 0A approved in principle, subject to the amendments recorded
+below.** All seven decisions D1–D7 are resolved. §14.3 is the authoritative
+register.
+
+### 14.1 Changes from the existing Challenge Mode spec
 
 | # | Change | Rationale |
 |---|---|---|
@@ -1188,58 +1555,125 @@ subject-agnostic. Nothing in Phase 0A hard-codes "application".
 | 4 | Phase 0B is **current state only** — no historic replay | §11.2: application state is not snapshotted |
 | 5 | Findings now carry `not_replayable` as a distinct status | Required by 4 |
 
-### 14.2 Decisions required before Phase 0B starts
+### 14.2 Founder amendments to Phase 0A
 
-| # | Decision | Why it blocks | Recommendation |
-|---|---|---|---|
-| **D1** | **UBO disclosure threshold** (25% / 10% / other) and the entity-type exemption list for P-01 | The threshold is not encoded anywhere in the backend; P-01 cannot compute severity without it | 25% with exemptions for listed entities and widely-held funds |
-| **D2** | **Sign off the `factor_key` → document slot mapping** for P-07 | It is a policy artifact, not a derivation; it must be owned | Approve the four initial mappings in §9.2 P-07; extend later |
-| **D3** | **Decision input snapshot** — schedule it now or accept permanent loss of replay history | Every month without it is a permanently unreplayable month (§11.3) | Schedule for the phase immediately after 0B |
-| **D4** | **Enterprise-veto exemption** — should the Supervisor be visible in pilot? | `_enterprise_scope_permitted()` refuses the gated `supervisor/` package in any pilot regardless of flags. Phase 0B avoids that package entirely, but the eventual surface needs a decision | Exempt: the Supervisor is non-authoritative and read-only |
-| **D5** | **Required-document policy** — should `sow`, `pep_declaration` and `bankref_pep` become required expectations? | P-05 and P-07 exist *because* they are not required. Making them required would move enforcement into the gate and change the Supervisor's role for those checks | Keep them non-required for now; let the Supervisor surface the gap first, then decide with evidence |
-| **D6** | **Adverse-media absence default** — `d1_adverse = 1` on missing data | This is a scoring-behaviour question, not a Supervisor question. The Supervisor can only report it | Report via P-04 in Phase 0B; treat the scoring change as a separate governed change |
-| **D7** | **Control-other-than-ownership intake field** (domain 4) | An entire FATF-relevant control domain is currently invisible | Add to the intake roadmap; not a Phase 0B dependency |
+Applied in this revision.
+
+| # | Amendment | Effect on the design |
+|---|---|---|
+| **A1** | **Institution policy configuration layer** introduced (§3.3) | New `policy_profile` object, an eight-key configuration register, the three-layer policy hierarchy, and the rule that an unconfigured policy yields `unavailable`, never a template default |
+| **A2** | **P-01 reframed** as *ownership coverage and unexplained residual* | No universal sum-to-100% assumption. Five policy-driven sub-checks: overstated ownership, no identified owner where policy expects one, unexplained residual, chain not terminating in natural persons or a permitted fallback controller, missing exemption rationale |
+| **A3** | **P-05 reframed** as *PEP evidence requirement gap* | Seven independently detectable evidence elements; requirements and severity come from `pep_evidence_requirements`; a bank reference is required only where policy says so; findings name the specific missing element |
+| **A4** | **P-07 mapping becomes a versioned policy artifact** | Multiple acceptable evidence types per factor, satisfied by disjunction; four interpretive limits documented so a satisfied coupling is never read as substantive verification; manual acceptance governed by role and rationale |
+| **A5** | **Decision-input snapshot moved to stage 0B-4** | Immediately after the probe harness, **before** any Supervisor UI. Immutable, versioned, hashed, with five capture triggers (§11.3) |
+| **A6** | **Policy hierarchy corrected (D5)** | Deliberately leaving evidence outside the document gate so the Supervisor has something to find is rejected. Policy defines, the gate enforces, the Supervisor reviews |
+| **A7** | **Adverse-media default separated (D6)** | Classified as a distinct governed remediation with a three-state target. P-04 reports; the Supervisor implementation changes no scoring |
+| **A8** | **New taxonomy and schema members** | Category `F-28 policy_configuration`; availability status `policy_not_configured`; evidence type `policy_profile` |
+| **A9** | **Phase 0B staged** into 0B-1 … 0B-4 (§9.5) | Policy-independent probes separated from policy-dependent ones so engineering is not blocked on compliance configuration, and vice versa |
+
+### 14.3 Founder decision register
+
+| ID | Decision | Status | Resolution | Implemented in |
+|---|---|---|---|---|
+| **D1** | UBO threshold and exemptions | ✅ **Approved** | **Configurable, not hard-coded.** `ubo_identification_threshold`, `ownership_reconciliation_tolerance`, `ownership_exemption_types`, `control_person_required` become institution-configured, versioned policy keys. A deployment template may *propose* 25%, but the institution must approve and version it. No universal hard-coded 25% rule | §3.3.3, §9.2 P-01 |
+| **D2** | Factor-to-evidence mapping | ✅ **Approved in principle; detailed mapping pending** | The mapping is a **configurable, versioned institutional policy artifact** supporting multiple acceptable evidence types per factor. The specific per-factor mappings are still to be defined and are a prerequisite for stage 0B-3 | §3.3.3, §9.2 P-07 |
+| **D3** | Decision-input snapshot sequencing | ✅ **Approved** | Scheduled as **stage 0B-4** — immediately after the deterministic probe harness and probe set, and **before** Supervisor UI development. Immutable, versioned, hashed. Capture on final approval, final rejection, decision override, completed EDD decision, and material post-approval risk recomputation | §9.5, §11.3 |
+| **D4** | Supervisor surface visibility | ✅ **Approved** | The eventual Supervisor surface **may use an independent, pilot-visible feature flag**, provided it remains read-only, advisory, separately validated, and does not depend on the enterprise-gated `supervisor/` package | §2.3, §9.3 |
+| **D5** | Evidence requirements and the document gate | ✅ **Approved** | Evidence requirements are **governed by institution policy**. Deliberate gate gaps must **not** be preserved so the Supervisor has something to surface. Hierarchy: policy defines → gate enforces → Supervisor reviews configuration completeness, evidence–risk coupling, conditional requirements and officer reliance. Any actual gate change stays **outside Phase 0B**, since it could affect approval behaviour | §3.3.1 |
+| **D6** | Adverse-media absence default | ✅ **Approved** | `d1_adverse = 1` on absent data is a **separate governed remediation issue**, not a Supervisor change. P-04 may report affected current-state cases. The Supervisor implementation changes **no** risk scoring. Target future state distinguishes three states: **clear**, **adverse media detected**, **not assessed / unavailable** | §9.2 P-04, §12.2(5), §14.4 |
+| **D7** | Control other than ownership | ✅ **Approved** | Added to the **product intake roadmap**. Not implemented in Phase 0B. Category `F-04` remains reserved so the probe can be added later without a taxonomy version bump | §4 domain 4, §5.2 F-04, §14.5 |
+
+### 14.4 D6 — adverse-media remediation (separate workstream)
+
+Recorded here for traceability; **not** part of Phase 0B.
+
+| Aspect | Position |
+|---|---|
+| Current behaviour | `rule_engine` sets `d1_adverse = 1` (clear) when no screening data is available — an absence-means-clear default |
+| Phase 0B scope | **Report only.** P-04 identifies current-state cases where an adverse-media clear rating rests on absent data |
+| Explicitly out of scope | Any change to `rule_engine` scoring behaviour by the Supervisor implementation |
+| Target future state | A three-state adverse-media assessment: `clear` · `adverse_media_detected` · `not_assessed_unavailable`. The third state must be distinguishable everywhere the first is displayed |
+| Governance | A scoring change affects risk levels, EDD routing and approval outcomes. It requires its own change record, recomputation plan, and impact assessment over the existing book |
+
+### 14.5 D7 — control-other-than-ownership (intake roadmap)
+
+| Aspect | Position |
+|---|---|
+| Gap | No field anywhere in the schema captures control exercised other than through shareholding — voting agreements, board control, senior managing official fallback. `directors` captures appointment, not control rights |
+| Consequence | An entire FATF-relevant control domain (domain 4) is invisible, and P-01 sub-check (d) can only test the *ownership* chain, not the *control* chain |
+| Decision | Added to the **product intake roadmap**. Not a Phase 0B dependency |
+| Reserved | Category `F-04 control` and the `control_person_required` policy key are defined now so the later probe requires no taxonomy or config version bump |
 
 ---
 
 ## 15. Final recommendation
 
-### **Proceed to Phase 0B — with the revisions in §14.1.**
+### **Proceed to Phase 0B, staged per §9.5 — subject to review of this amended specification.**
 
-**Why proceed.** The determinism claim is well founded. `evaluate_edd_routing()`
-is documented as pure. `build_compliance_memo()` is documented as pure
-computation with no DB or HTTP dependency. `compute_risk_score()` is a pure
-function of `(app_data, config)` and already emits per-factor evidence under a
-declared `schema_version`. `build_screening_truth_summary()` returns a fully
-explicit state vector. The reproducibility invariant in §10 is achievable
-against real data, not aspirational.
+Phase 0A is approved in principle. All seven founder decisions are resolved
+(§14.3) and nine amendments are applied (§14.2). Phase 0B code should not begin
+until this amended specification has been reviewed.
 
-The commercial case is also real: §12.2 lists eight defects the platform
-computes today and displays nowhere. That is the entire product thesis, and it
-did not require inventing a single new capability.
+**Why proceed.** The determinism claim is well founded.
+`evaluate_edd_routing()` is documented as pure. `build_compliance_memo()` is
+documented as pure computation with no DB or HTTP dependency.
+`compute_risk_score()` is a pure function of `(app_data, config)` and already
+emits per-factor evidence under a declared `schema_version`.
+`build_screening_truth_summary()` returns a fully explicit state vector. The
+reproducibility invariant in §10 is achievable against real data, not
+aspirational.
 
-**Why with revisions.** Three findings from the codebase review change the plan
-materially:
+The commercial case holds: §12.2 lists nine defects the platform computes today
+and displays nowhere. None required inventing a new capability.
 
-1. **Historic replay is not available** (§11.2). The `applications` row is
-   mutated in place with no snapshot. Phase 0B must be scoped to current state,
-   and the decision input snapshot must be scheduled early or the replay
-   proposition erodes by a month every month.
+**What the founder amendments changed, and why they improve the design.** The
+three revised probes were the three that had quietly hard-coded a compliance
+policy into a product. P-01 assumed ownership sums to 100%, which is false for
+listed entities, widely-held funds, co-operatives and foundations. P-05 assumed
+a bank reference is universally required for every PEP, which no regime
+actually mandates uniformly. P-07 assumed one document type per risk factor,
+which conflates *the institution's evidence standard* with *substantive
+verification*.
 
-2. **The document reliance gate is not replay-safe** (§10.4). It calls
-   `datetime.now()` internally and derives staleness from it. Probes must derive
-   staleness from the injected `as_of` rather than calling the gate for it.
+Each would have produced confident false positives on legitimate structures —
+the precise failure mode that teaches officers to dismiss the panel, and the
+one thing §1.2 says the product cannot survive. Making policy configurable is
+not a concession; it is what allows the Supervisor to be deployed into more
+than one institution without being wrong in each of them differently.
+
+The D5 correction matters more than it appears. Leaving evidence outside the
+gate so the Supervisor has something to find would have made the product's value
+contingent on the platform staying weak. The three-layer hierarchy in §3.3.1
+puts the Supervisor's value where it is durable: policy completeness, evidence–
+risk coupling, conditional requirements, and officer reliance — questions a gate
+structurally cannot ask, however well configured it is.
+
+**Three constraints from the codebase review remain in force:**
+
+1. **Historic replay is not available today** (§11.2). The `applications` row is
+   mutated in place with no snapshot. Phase 0B is current-state only, and stage
+   0B-4 now lands before UI so history starts accruing at the earliest
+   defensible point.
+
+2. **The document reliance gate is not replay-safe as called** (§10.4). It calls
+   `datetime.now()` internally and derives staleness from it. Probes derive
+   staleness from the injected `as_of` instead.
 
 3. **Five of the twelve original probes do not survive contact with the data**
    (§9.4) — chiefly because cross-document field comparison depends on an
-   extraction schema that `documents.verification_results` does not guarantee.
+   extraction schema `documents.verification_results` does not guarantee.
 
 **What must not be built:** business model plausibility, expected-activity
 plausibility, semantic override scoring, control-other-than-ownership,
-source-of-funds corroboration, and any output listed in §12.3. Each is either
-unreliable, unsupported by data, or already on screen.
+source-of-funds corroboration, any risk-scoring change inside the Supervisor
+implementation (D6), any document-gate change inside Phase 0B (D5), and any
+output listed in §12.3.
 
-**The gate on Phase 0B:** the CI reproducibility test in §10.8. Build the bundle
-assembler and that test **first**. If `review_hash` is not stable across three
-runs on real fixtures, stop and reassess before writing a single probe beyond
-P-01.
+**The gate on Phase 0B remains stage 0B-1.** Build the bundle assembler and the
+reproducibility test in §10.8 first. If `review_hash` is not stable across three
+runs on real fixtures, stop and reassess before writing any probe.
+
+**The parallel track.** Stage 0B-3 is blocked on institution policy
+configuration (§3.3.3), not on engineering. That configuration work — D2's
+detailed per-factor mappings in particular — should start now, alongside 0B-1,
+or it will become the critical path.
