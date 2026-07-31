@@ -10,6 +10,10 @@ State-machine version: `monitoring_alert_state_machine_v1`
   `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8` from immutable backend task
   definition `regmind-staging:989`. `STAGING_SCHEMA_PREFLIGHT.md` records that
   observation rather than relabelling it as current after main advanced.
+- A fresh pre-merge read-only revalidation against deployed immutable SHA
+  `307b0d7bfc6ab855837f1c9b01f6d182748b8f2a` reconfirmed the same 19-alert
+  canonical inventory, empty review ledger, migration-053 schema, absent future
+  constraint/columns, and all governed flags defaulting OFF.
 - The reconciled inventory remains 19 Monitoring Alerts.
 - Every stored status is in the v1 vocabulary.
 - The review-control ledger contains zero rows and zero pending requests.

@@ -9,6 +9,34 @@ preserved as observed; current deployment and dataset compatibility must be
 reconfirmed through the fail-closed pre-merge/deployment gates.
 Mode: authenticated, read-only SQL executed in one healthy staging backend task
 
+## Fresh pre-merge revalidation
+
+Revalidated: `2026-07-31T08:33:24Z`
+
+- staging deployed immutable SHA
+  `307b0d7bfc6ab855837f1c9b01f6d182748b8f2a`, digest
+  `sha256:0e1f61e565d9a20db16b60fdc26e8bc303fcdf9013bc86398399d4647174f170`;
+- backend task definition `regmind-staging:990`, 2/2 running and zero
+  pending, rollout complete;
+- verification-worker task definition
+  `regmind-verification-worker:438`, 6/6 running and zero pending, rollout
+  complete;
+- all four governed Monitoring flag environment entries are absent and
+  therefore evaluate through the documented fail-closed default OFF;
+- SQL session set `TRANSACTION READ ONLY` before inspection and rolled back;
+- 19 alerts: `open=13`, `dismissed=3`, `resolved=1`, `escalated=1`,
+  `routed_to_edd=1`;
+- zero off-vocabulary statuses;
+- zero review-control rows, zero pending rows, and zero duplicate-pending
+  alert groups;
+- `schema_version` remains 053;
+- the future `monitoring_alerts_status_check` constraint and
+  `transition_evidence`/`source_alert_status` columns are not yet present.
+
+Result: the current regulated alert dataset and schema still satisfy the
+fail-closed assumptions for migrations 054–056. No row, schema object,
+service setting, or feature flag was changed.
+
 Runtime evidence:
 
 - backend task `b9e91f2a47d54bc5b2877f4b6e977d88`;
