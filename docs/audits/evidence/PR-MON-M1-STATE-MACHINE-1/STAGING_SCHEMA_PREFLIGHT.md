@@ -37,6 +37,42 @@ Result: the current regulated alert dataset and schema still satisfy the
 fail-closed assumptions for migrations 054–056. No row, schema object,
 service setting, or feature flag was changed.
 
+## Final pre-merge revalidation and inventory attribution
+
+Revalidated: `2026-07-31T11:40:19Z`
+
+- staging served immutable main SHA
+  `85c70431a2d2a2f4bd6dd3078257d5f22d92bad4`, digest
+  `sha256:fff009eed8150f0b84ff2caf0e8400bed600ce8241384b2a471aee1c8aaf9147`;
+- backend task definition `regmind-staging:991` was 2/2 running, and worker
+  task definition `regmind-verification-worker:439` was 6/6 running; both had
+  zero pending tasks and completed rollouts;
+- both ALB targets were healthy;
+- all four governed Monitoring flag environment entries were absent and
+  therefore evaluated through the fail-closed default OFF;
+- the SQL session again enforced `TRANSACTION READ ONLY` and rolled back;
+- 22 alerts: `open=16`, `dismissed=3`, `resolved=1`, `escalated=1`,
+  `routed_to_edd=1`;
+- zero off-vocabulary statuses, review-control rows, pending rows, or
+  duplicate-pending alert groups; and
+- schema version remained 053, without the future status constraint, review
+  columns, or partial unique index.
+
+The inventory evolved from 19 to 22 after the earlier observation. A
+read-only attribution found three new non-fixture, canonical `open` alerts
+created by existing ComplyAdvantage ingestion: two through the historical
+subscription-seed backfill and one through the live webhook path. CloudWatch
+operational evidence for the creation window recorded two completed backfill
+runs with one inserted row each and one live `MonitoringAlertCreated` event;
+it recorded no `ERROR` or `CRITICAL` event in that window. Those paths predate
+this PR and do not reference any of the four governed Monitoring feature
+flags. No customer identifier, application identifier, or source reference is
+included in this evidence.
+
+Result: the attributed runtime growth is compatible with migrations 054–056.
+It did not introduce a noncanonical status, review-ledger conflict, schema
+conflict, or feature activation, and no row was changed by either preflight.
+
 Runtime evidence captured at `2026-07-31T03:12:13.624740Z`
 (pre-rebase observation):
 
@@ -54,7 +90,7 @@ closed after the queries.
 
 ## Dataset compatibility
 
-The current staging inventory remains 19 Monitoring Alerts:
+The first two point-in-time observations contained 19 Monitoring Alerts:
 
 | Status | Count |
 |---|---:|
@@ -67,6 +103,8 @@ The current staging inventory remains 19 Monitoring Alerts:
 All values are members of `monitoring_alert_state_machine_v1`. The status
 constraint precondition is therefore satisfied without rewriting alert data.
 The combined NULL, blank, and noncanonical-status offender count was `0`.
+The final pre-merge observation contained 22 alerts after the attributed
+existing ingestion described above; its combined offender count was also `0`.
 
 ## Pending-review uniqueness preflight
 
@@ -160,9 +198,9 @@ transition service's exact current-status predicate, or migrations 055–056
 because the review ledger is empty.
 
 The read-only preflight must be repeated immediately before rollout. Any
-status-count drift requiring reconciliation, noncanonical status, review-ledger
-row, duplicate pending request, unexpected constraint/index, or enabled
-Monitoring flag is a stop condition.
+unattributed or incompatible status-count drift, noncanonical status,
+review-ledger row, duplicate pending request, unexpected constraint/index, or
+enabled Monitoring flag is a stop condition.
 
 ## Verdict
 

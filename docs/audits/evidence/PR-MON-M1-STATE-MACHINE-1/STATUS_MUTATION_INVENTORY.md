@@ -11,8 +11,8 @@ Inventory date: 2026-07-30; read-only revalidation: 2026-07-31
 
 ## Reconciled runtime baseline
 
-A fresh database-enforced read-only plan was run inside the staging backend
-task. It scanned all 19 Monitoring Alerts and changed nothing.
+A database-enforced read-only plan was run inside the staging backend task. Its
+first observations scanned 19 Monitoring Alerts and changed nothing.
 
 | Stored status | Count |
 |---|---:|
@@ -24,6 +24,15 @@ task. It scanned all 19 Monitoring Alerts and changed nothing.
 
 Alert `583` is already canonical at `routed_to_edd` with the PR #902
 hash-chained audit entry. The four governed Monitoring flags evaluated OFF.
+
+A final pre-merge read-only revalidation observed 22 alerts after existing
+ComplyAdvantage ingestion created three non-fixture canonical `open` rows (two
+historical subscription-seed backfill rows and one live-webhook row). The
+current status counts are `open=16`, `dismissed=3`, `resolved=1`,
+`escalated=1`, and `routed_to_edd=1`. CloudWatch creation-window counts and the
+production call paths attribute the change to pre-existing screening behavior,
+not a governed feature flag or this PR. The review ledger remains empty and
+the migration compatibility result is unchanged.
 
 The live PostgreSQL schema at the revalidated base has:
 
