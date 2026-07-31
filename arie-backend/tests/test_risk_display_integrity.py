@@ -114,7 +114,14 @@ class TestBackofficeRiskSourceOfTruth:
 
         assert "Overall risk" in risk_card
         assert "Approval route" in risk_card
-        assert "Evidence at a glance" in risk_card
+        # The "Evidence at a glance" panel was a hardcoded string asserting only
+        # that rows exist, and its ticks read as screening clearance even for a
+        # sanctions hit. Provenance is stated once, in the Technical provenance
+        # line. Kept as a negative guard so it cannot silently return.
+        assert "Evidence at a glance" not in risk_card
+        assert "✓ stored" not in risk_card
+        # Likewise the "Status: Verified" tile, whose value was a literal.
+        assert "'Status', 'Verified'" not in risk_card
         assert "risk-executive-dashboard" in risk_card
         assert "Configuration:" in risk_card
         assert "factor_evidence" in risk_card

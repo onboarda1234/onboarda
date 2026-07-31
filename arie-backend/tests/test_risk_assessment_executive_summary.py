@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import textwrap
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKOFFICE_HTML = ROOT / "arie-backoffice.html"
@@ -35,6 +37,18 @@ def _risk_report_helpers() -> str:
     )
 
 
+def _escape_html_source() -> str:
+    """Use the production escapeHtml itself, never a hand-copied stub.
+
+    A copied stub is how the zero-renders-blank defect survived: it used
+    `value == null` and rendered numeric 0 as "0", while production uses
+    `String(str || '')` and rendered it blank. Extracting the real function
+    makes that class of drift impossible rather than merely discouraged.
+    """
+    html = BACKOFFICE_HTML.read_text(encoding="utf-8")
+    return _source_region(html, "function escapeHtml(str) {", "\n}\n") + "\n}"
+
+
 def _run_node(script: str) -> dict:
     assert shutil.which("node"), "Node.js is required for Risk Assessment UI tests"
     result = subprocess.run(
@@ -52,11 +66,6 @@ def _run_node(script: str) -> dict:
 def _fixture_script(assertion: str) -> str:
     prelude = textwrap.dedent(
         """
-        function escapeHtml(value) {
-          return String(value == null ? '' : value)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-        }
         function getAuthoritativeRiskEvidence(app) {
           const evidence = app && app.riskReportEvidence;
           if (!evidence || evidence.available !== true || evidence.authoritative !== true || evidence.status !== 'ready') return null;
@@ -149,7 +158,9 @@ def _fixture_script(assertion: str) -> str:
         """
     )
     return (
-        prelude
+        _escape_html_source()
+        + "\n"
+        + prelude
         + "\n"
         + _risk_report_helpers()
         + "\n"
@@ -464,3 +475,126 @@ def test_ui_source_has_no_score_reconstruction_and_pdf_contract_remains_separate
     assert "app.entityType" not in ui
     assert "Executive Recommendation" not in ui
     assert "Executive Recommendation" in pdf
+
+
+def test_zero_contribution_renders_as_zero_and_bar_encodes_contribution():
+    """Reproduces the RM-PILOT LOW case: two dimensions contribute exactly 0.
+
+    A blank cell in an evidence table reads as "not computed"; 0 means
+    "computed, contributed nothing". The bar must agree with the figure beside
+    it, so a zero-contribution dimension draws no bar.
+    """
+    result = _run_node(
+        _fixture_script(
+            """
+            const stored = evidence({tier:'LOW', score:14.7, route:'direct_low_medium', edd:'Not required'});
+            stored.application.dimensions = [
+              {id:'D1',name:'Customer / Entity Risk',stored_score:1.3,weight:30},
+              {id:'D2',name:'Geographic Risk',stored_score:1.8,weight:25},
+              {id:'D3',name:'Product / Service Risk',stored_score:1,weight:20},
+              {id:'D4',name:'Industry / Sector Risk',stored_score:2,weight:15},
+              {id:'D5',name:'Delivery Channel Risk',stored_score:1,weight:10}
+            ];
+            stored.dimension_computation_evidence = [
+              {dimension_id:'D1',composite_contribution:3},
+              {dimension_id:'D2',composite_contribution:6.6667},
+              {dimension_id:'D3',composite_contribution:0},
+              {dimension_id:'D4',composite_contribution:5},
+              {dimension_id:'D5',composite_contribution:0}
+            ];
+            stored.factor_evidence = [
+              factor('D2','ubo_nationalities','UBO / Director Nationalities',['MU','MU'],2,0.2)
+            ];
+            app.riskReportEvidence = stored;
+            const html = renderStoredRiskComputationHtml(app);
+            const contributions = [...html.matchAll(/font-weight:700;font-variant-numeric:tabular-nums;">([^<]*)<\\/td>/g)].map((m) => m[1]);
+            const barWidths = [...html.matchAll(/height:100%;width:([\\d.]+)%/g)].map((m) => m[1]);
+            console.log(JSON.stringify({html, contributions, barWidths, drivers:driversOnly(html)}));
+            """
+        )
+    )
+
+    # Every dimension reports a contribution; zero is explicit, never blank.
+    # Stored precision is shown verbatim — the screen must not disagree with the
+    # exported report, so 6.6667 is NOT rounded for display (RSMP-0D).
+    assert result["contributions"] == ["3", "6.6667", "0", "5", "0"]
+    # Bars encode the Contribution figure beside them, scaled to the largest
+    # dimension WEIGHT (30 here) — a constant of the model, not of this case.
+    widths = [float(value) for value in result["barWidths"]]
+    assert widths[2] == 0 and widths[4] == 0
+    assert widths[0] == pytest.approx(10, rel=1e-3)
+    assert widths[1] == pytest.approx(22.2223, rel=1e-3)
+    assert widths[3] == pytest.approx(16.6667, rel=1e-3)
+    assert widths[0] < widths[3] < widths[1], "bar order must follow the figures"
+    # Array values stay verbatim — the screen must not re-order or re-word a
+    # persisted list that the export renders differently (RSMP-0D).
+    assert "MU, MU" in result["drivers"]
+    # Removed chrome stays removed.
+    assert "Evidence at a glance" not in result["html"]
+    assert "✓ stored" not in result["html"]
+    assert "Verified" not in result["html"]
+
+
+def test_low_risk_case_never_draws_a_louder_bar_column_than_a_high_risk_case():
+    """Bars must stay comparable BETWEEN applications.
+
+    Scaling each table to its own largest contribution gave every application a
+    full-width bar, so a LOW case rendered a more alarming column than a HIGH
+    one. The scale is the largest dimension weight, which is model-constant.
+    """
+    result = _run_node(
+        _fixture_script(
+            """
+            function widthsFor(contributions) {
+              const stored = evidence({tier:'LOW', score:22, route:'direct_low_medium'});
+              stored.dimension_computation_evidence = contributions.map((value, index) => (
+                {dimension_id:'D' + (index + 1), composite_contribution:value}
+              ));
+              app.riskReportEvidence = stored;
+              const html = renderStoredRiskComputationHtml(app);
+              return [...html.matchAll(/height:100%;width:([\\d.]+)%/g)].map((m) => Number(m[1]));
+            }
+            console.log(JSON.stringify({
+              low: widthsFor([6.0, 5.0, 4.3333, 5.0, 1.6667]),
+              high: widthsFor([14.0, 5.0, 11.3333, 5.0, 3.3333]),
+              maxed: widthsFor([30, 25, 20, 15, 10])
+            }));
+            """
+        )
+    )
+
+    assert max(result["low"]) < max(result["high"]), (
+        "a LOW-risk case must not render a louder bar column than a HIGH-risk one"
+    )
+    # A genuinely maximal application is the only one that fills the track.
+    assert max(result["maxed"]) == 100
+    assert max(result["low"]) == pytest.approx(20, rel=1e-3)
+
+
+def test_panel_carries_no_reassurance_ticks_and_exactly_three_outcome_tiles():
+    """Output-level guard, not a string guard.
+
+    Source-text checks for the exact removed wording are defeated by a rename:
+    a panel reading "Evidence summary — Screening ✓ recorded · Status: Confirmed"
+    is the same misrepresentation with different words. Assert instead that the
+    rendered panel contains no reassurance tick at all, and that the tile row
+    holds exactly the three outcome tiles.
+    """
+    result = _run_node(
+        _fixture_script(
+            """
+            const stored = evidence({tier:'VERY_HIGH', score:82, route:'dual_control_required'});
+            app.riskReportEvidence = stored;
+            const html = renderStoredRiskComputationHtml(app);
+            const tiles = (html.match(/letter-spacing:\\.08em/g) || []).length;
+            console.log(JSON.stringify({html, tiles}));
+            """
+        )
+    )
+
+    for tick in ("✓", "✔", "☑"):
+        assert tick not in result["html"], (
+            f"panel must not render a reassurance tick ({tick}); stored evidence "
+            "can carry a sanctions hit while every row is present"
+        )
+    assert result["tiles"] == 3, "top row is Overall risk, Approval route, EDD"
