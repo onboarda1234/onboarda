@@ -19,12 +19,24 @@ Guarantees, all test-enforced:
   key with a ``None`` value; a field the row does not have at all is omitted and
   named in that section's ``absent_fields``.
 
-Excluded from the bundle by design: direct personal identifiers (names, dates
-of birth, addresses, contact details, professional profile URLs), free-text
-officer prose, file paths and storage keys. Parties and documents are addressed
-by their stable IDs, which is what later probes need; the identifiers
-themselves are never copied into a structure that gets hashed, logged and
-exported.
+**Privacy posture — PII-minimised, not anonymous.**
+
+Excluded by design: **direct identifiers** — names, dates of birth, residential
+and registered addresses, contact details, professional profile URLs — together
+with free-text officer prose, file paths, storage keys and raw extracted
+document field values.
+
+Retained by design: **stable internal identifiers** (``director:{id}``,
+``document:{id}``, ``person_key``) and **name fingerprints** (see
+:func:`_fingerprint`). These are **pseudonymous, linkable identifiers**: they
+carry no direct identifier themselves, but they resolve back to a natural
+person by joining against the source tables, and a fingerprint can be reversed
+by hashing a list of candidate names.
+
+The bundle is therefore **personal data under GDPR** and must be handled as
+such — access-controlled, retention-bound, and within scope of
+``gdpr_erasure``. It is not a de-identified artifact, and nothing in this
+package should be described as PII-free.
 """
 
 from __future__ import annotations
@@ -309,12 +321,16 @@ def _as_bool(value: Any) -> bool:
 
 
 def _fingerprint(value: Any) -> str | None:
-    """Stable, non-reversible stand-in for a personal-name sort key.
+    """Stable pseudonymous stand-in for a personal-name sort key.
 
     Screening reviews must be ordered deterministically, and their natural sort
     key is ``subject_name`` — a personal name. Hashing it preserves the ordering
-    while keeping the name itself out of a structure that is hashed, logged and
-    exported.
+    while keeping the name itself out of the bundle.
+
+    **This is a pseudonym, not an anonymisation.** The input space of personal
+    names is small and enumerable, so a fingerprint can be reversed by hashing a
+    list of candidate names, and it is stable enough to link the same person
+    across cases. Treat it as personal data.
     """
     if value is None:
         return None
@@ -371,7 +387,9 @@ def _parties_section(db: Any, application_id: str) -> dict[str, Any]:
         for row in rows:
             values, row_absent = _project(row, fields)
             absent.update(row_absent)
-            # Derived, PII-free: whether a PEP declaration payload exists at all.
+            # Derived presence flag: whether a PEP declaration payload exists at
+            # all. The declaration's contents — office held, relationships,
+            # named associates — stay out of the bundle.
             if "pep_declaration" in row:
                 values["has_pep_declaration"] = bool(
                     _load_json(row.get("pep_declaration"), {})
@@ -396,8 +414,9 @@ def _check_summary(verification_results: Any) -> list[dict[str, Any]]:
     """Per-check ``(id, status, classification)`` triples, sorted by check id.
 
     The full ``verification_results`` payload carries extracted field values —
-    names, numbers, addresses — so only the check outcomes are lifted. Those are
-    the evidentiary part; the extracted values are PII.
+    names, numbers, addresses — so only the check outcomes are lifted. The
+    outcomes are the evidentiary part; the extracted values are direct
+    identifiers and are excluded.
     """
     parsed = _load_json(verification_results, {})
     checks = parsed.get("checks") if isinstance(parsed, dict) else None

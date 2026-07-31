@@ -1,8 +1,13 @@
-"""Bundle contract tests: sections, whitelists, and PII exclusion.
+"""Bundle contract tests: sections, whitelists, and direct-identifier exclusion.
 
 The bundle is hashed, will later be logged and exported, and is the input to
 every probe. These tests pin what it must contain and — more importantly — what
 it must never contain.
+
+Scope note: these tests assert that **direct identifiers** are excluded. They do
+not assert the bundle is anonymous, and it is not — stable internal IDs and name
+fingerprints remain pseudonymous linkable identifiers, so the bundle is personal
+data. See the module docstring of ``supervisor_foundation.bundle``.
 """
 
 from __future__ import annotations
@@ -70,10 +75,11 @@ def test_missing_application_id_raises(db):
         assemble_application_bundle(db, "", as_of=AS_OF)
 
 
-# ── PII exclusion ────────────────────────────────────────────────────
+# ── Direct-identifier exclusion ──────────────────────────────────────
 
-#: Values seeded by ``complete_standard`` that must never reach the bundle.
-SEEDED_PERSONAL_VALUES = (
+#: Direct identifiers and free text seeded by ``complete_standard`` that must
+#: never reach the bundle.
+SEEDED_DIRECT_IDENTIFIERS = (
     "Jane Doe",
     "John Roe",
     "Holdco SA",
@@ -83,21 +89,38 @@ SEEDED_PERSONAL_VALUES = (
 )
 
 
-def test_no_personal_identifier_reaches_the_bundle(db):
+def test_no_direct_identifier_reaches_the_bundle(db):
     """Names, file paths and officer prose are addressed, never copied."""
     encoded = canonical_json(_bundle(db, complete_standard(db)))
-    leaked = [value for value in SEEDED_PERSONAL_VALUES if value in encoded]
-    assert not leaked, f"personal or free-text data leaked into the bundle: {leaked}"
+    leaked = [value for value in SEEDED_DIRECT_IDENTIFIERS if value in encoded]
+    assert not leaked, f"direct identifier or free text leaked into the bundle: {leaked}"
 
 
-def test_party_names_are_replaced_by_stable_ids(db):
+def test_party_names_are_replaced_by_pseudonymous_ids(db):
+    """Direct identifiers out; stable linkable IDs deliberately retained."""
     bundle = _bundle(db, complete_standard(db))
     for row in bundle["parties"]["ubos"]["rows"]:
         assert "full_name" not in row
         assert "first_name" not in row
         assert "date_of_birth" not in row
         assert "residential_address" not in row
+        # Retained on purpose: probes need to address the party. This is a
+        # pseudonymous identifier, so the bundle remains personal data.
         assert row["id"]
+
+
+def test_bundle_is_documented_as_personal_data_not_anonymous(db):
+    """The privacy posture is stated in the module, not left to inference."""
+    import supervisor_foundation.bundle as bundle_module
+
+    doc = bundle_module.__doc__ or ""
+    assert "PII-minimised" in doc
+    assert "pseudonymous" in doc.lower()
+    assert "personal data" in doc.lower()
+    # The docstring carries an explicit prohibition on the overclaim, so a naive
+    # substring check would match the prohibition itself. Pin the prohibition.
+    assert "should be described as PII-free" in doc
+    assert "is PII-free" not in doc
 
 
 def test_pep_declaration_is_reduced_to_a_boolean(db):
@@ -121,11 +144,21 @@ def test_document_checks_carry_outcomes_not_extracted_values(db):
 
 
 def test_screening_review_subject_is_fingerprinted(db):
-    """Ordering by a personal name without carrying the name."""
+    """Ordering by a personal name without carrying the name.
+
+    The fingerprint is a pseudonym, not an anonymisation — it is stable and
+    reversible against a candidate name list, which the docstring records.
+    """
     bundle = _bundle(db, complete_standard(db))
     review = bundle["screening"]["reviews"][0]
     assert "subject_name" not in review
     assert len(review["subject_name_fingerprint"]) == 16
+
+    from supervisor_foundation.bundle import _fingerprint
+
+    doc = (_fingerprint.__doc__ or "").lower()
+    assert "pseudonym" in doc
+    assert "not an anonymisation" in doc
 
 
 def test_override_reason_is_reduced_to_presence(db):
