@@ -72,9 +72,15 @@ STATUS_RESOLVED = "resolved"
 TERMINAL_ALERT_STATUSES = tuple(sorted(sm.TERMINAL_STATUSES))
 HANDOFF_ALERT_STATUSES = tuple(sorted(sm.HANDOFF_STATUSES))
 
-# EDD stages considered "active" for duplicate-prevention. Mirrors the
-# CHECK constraint in db.py exactly; intentionally duplicated rather
-# than imported to avoid coupling to db.py internals.
+# EDD stages considered "active" for duplicate-prevention. Together these
+# tuples mirror the CHECK constraint in db.py exactly; they are intentionally
+# duplicated rather than imported to avoid coupling to db.py internals.
+ACTIVE_EDD_STAGES = (
+    "triggered",
+    "information_gathering",
+    "analysis",
+    "pending_senior_review",
+)
 TERMINAL_EDD_STAGES = ("edd_approved", "edd_rejected")
 
 
@@ -660,63 +666,120 @@ def _create_edd_case_row(db, *, application_id, client_name, risk_level,
     ).fetchone()["id"]
 
 
-def _find_active_edd_for_application(db, application_id):
-    """Return one locked, unowned active EDD case for reuse, or ``None``.
+def _lock_application_for_edd_routing(db, application_id):
+    """Serialize EDD routing for one application and verify its linkage."""
+    lock_clause = " FOR UPDATE" if getattr(db, "is_postgres", False) else ""
+    row = db.execute(
+        f"SELECT id FROM applications WHERE id = ?{lock_clause}",
+        (application_id,),
+    ).fetchone()
+    if row is None:
+        raise sm.LinkedObjectMissing(
+            "The Monitoring Alert's linked application does not exist."
+        )
 
-    An EDD case already linked to another Monitoring Alert or Periodic Review
-    has an authoritative owner and must never be claimed by a second alert.
-    PostgreSQL skips concurrently claimed candidates.
+
+def _active_edds_for_application(db, application_id):
+    """Return every locked active EDD case for an application.
+
+    Callers hold the application row lock first. Querying all active cases,
+    including cases owned by another alert or review, prevents an ownership
+    conflict from being misread as permission to create a duplicate case.
     """
     if application_id is None:
-        return None
+        return ()
     placeholders = ",".join("?" for _ in TERMINAL_EDD_STAGES)
     lock_clause = (
-        " FOR UPDATE SKIP LOCKED"
+        " FOR UPDATE"
         if getattr(db, "is_postgres", False)
         else ""
     )
     rows = db.execute(
         f"SELECT * FROM edd_cases "
-        f"WHERE application_id = ? AND stage NOT IN ({placeholders}) "
-        "AND linked_monitoring_alert_id IS NULL "
-        "AND linked_periodic_review_id IS NULL "
+        f"WHERE application_id = ? "
+        f"AND (stage IS NULL OR stage NOT IN ({placeholders})) "
         f"ORDER BY id ASC{lock_clause}",
         (application_id, *TERMINAL_EDD_STAGES),
     ).fetchall()
-    try:
-        from investigation_scope import is_routine_onboarding_policy_case
-    except Exception:
-        is_routine_onboarding_policy_case = None
-    formal_reusable_sources = {
-        "monitoring_alert",
-        "periodic_review",
-        "change_request",
-        "manual",
-        "manual_onboarding_escalation",
-        "onboarding_escalation",
-        "officer_decision",
-        "officer_correction",
-        "screening_update",
-    }
-    for row in rows:
-        if is_routine_onboarding_policy_case and is_routine_onboarding_policy_case(row):
-            continue
-        origin = str(_row_get(row, "origin_context", "") or "").strip().lower()
-        trigger_source = str(_row_get(row, "trigger_source", "") or "").strip().lower()
-        linked_alert = _row_get(row, "linked_monitoring_alert_id")
-        linked_review = _row_get(row, "linked_periodic_review_id")
-        if (
-            origin not in formal_reusable_sources
-            and trigger_source not in formal_reusable_sources
-            and linked_alert in (None, "")
-            and linked_review in (None, "")
-        ):
-            # Legacy active rows without an origin/source are ambiguous. Do
-            # not let a real monitoring alert attach to routine onboarding
-            # policy debris; create a monitoring-origin case instead.
-            continue
-        return dict(row)
-    return None
+    return tuple(dict(row) for row in rows)
+
+
+def _reject_unlinked_active_edds(active_rows, *, alert_id):
+    """Fail closed when any active EDD is not the alert's exact known link.
+
+    An EDD without a reverse owner pointer is not safe for Monitoring to claim:
+    its origin/trigger fields may be the only surviving downstream provenance.
+    A future cross-workflow association model may support non-destructive
+    multi-source linkage; v1 must not overwrite that evidence.
+    """
+    if not active_rows:
+        return
+    if len(active_rows) != 1:
+        raise sm.AmbiguousAlertOwner(
+            "Multiple active EDD cases already exist for this application."
+        )
+
+    active = active_rows[0]
+    if _row_get(active, "stage") not in ACTIVE_EDD_STAGES:
+        raise sm.AmbiguousAlertOwner(
+            "An active EDD case has an invalid or missing stage and cannot "
+            "be reused safely."
+        )
+    linked_alert = _row_get(active, "linked_monitoring_alert_id")
+    linked_review = _row_get(active, "linked_periodic_review_id")
+    if linked_alert not in (None, ""):
+        if str(linked_alert) == str(alert_id):
+            raise sm.EvidenceLinkMismatch(
+                "The active EDD case points to this alert but the alert linkage "
+                "is incomplete."
+            )
+        raise sm.AmbiguousAlertOwner(
+            "An active EDD case is already owned by another Monitoring Alert."
+        )
+    if linked_review not in (None, ""):
+        raise sm.AmbiguousAlertOwner(
+            "An active EDD case is already owned by Periodic Review."
+        )
+    raise sm.AmbiguousAlertOwner(
+        "An active EDD case already exists without an exact link to this "
+        "Monitoring Alert; its provenance cannot be overwritten."
+    )
+
+
+def _require_only_active_edd_link(active_rows, *, alert_id, edd_case_id):
+    """Require the alert's exact link to be the only active EDD case.
+
+    The alert and application rows are already locked by the caller.  Checking
+    the complete active set prevents an otherwise-valid exact link from hiding
+    a second active case on the same application.
+    """
+    if len(active_rows) != 1:
+        if len(active_rows) > 1:
+            raise sm.AmbiguousAlertOwner(
+                "Multiple active EDD cases already exist for this application."
+            )
+        raise sm.EvidenceLinkMismatch(
+            "The linked active EDD case was not found for this application."
+        )
+
+    active = active_rows[0]
+    if _row_get(active, "stage") not in ACTIVE_EDD_STAGES:
+        raise sm.AmbiguousAlertOwner(
+            "The linked active EDD case has an invalid or missing stage."
+        )
+    if str(_row_get(active, "id") or "") != str(edd_case_id):
+        raise sm.AmbiguousAlertOwner(
+            "A different active EDD case already exists for this application."
+        )
+    if str(_row_get(active, "linked_monitoring_alert_id") or "") != str(alert_id):
+        raise sm.EvidenceLinkMismatch(
+            "The linked active EDD case does not point back to this "
+            "Monitoring Alert."
+        )
+    if _row_get(active, "linked_periodic_review_id") not in (None, ""):
+        raise sm.AmbiguousAlertOwner(
+            "The linked active EDD case is also owned by Periodic Review."
+        )
 
 
 def _load_periodic_review_for_routing(db, review_id):
@@ -968,8 +1031,8 @@ def route_alert_to_edd(db, alert_id, *,
     - If the alert is already linked to an EDD case AND that case is
       not in a terminal stage (edd_approved / edd_rejected), reuse it
       and emit a routing audit event with ``reused=True``.
-    - Else reuse only an active, genuinely unowned EDD case on the same
-      application. A case linked to another alert/review is never overwritten.
+    - Any other active EDD on the application fails closed. V1 never claims
+      an unlinked case or overwrites another workflow's provenance.
     - Else create a new edd_cases row, set origin_context to
       'monitoring_alert' via lifecycle_linkage.set_edd_origin, and
       bidirectionally link via lifecycle_linkage.link_alert_to_edd.
@@ -992,8 +1055,20 @@ def route_alert_to_edd(db, alert_id, *,
                 raise sm.EvidenceLinkMismatch(
                     "The routed Monitoring Alert has no EDD case linkage."
                 )
+            if application_id is None:
+                raise MonitoringRoutingError(
+                    f"alert id={alert_id} has no application_id; cannot route to EDD"
+                )
+            _lock_application_for_edd_routing(db, application_id)
+            active_edds = _active_edds_for_application(db, application_id)
             existing_edd = _load_edd_for_routing(db, existing_link_id)
             _validate_edd_link(alert, existing_edd, allow_terminal=True)
+            if _row_get(existing_edd, "stage") not in TERMINAL_EDD_STAGES:
+                _require_only_active_edd_link(
+                    active_edds,
+                    alert_id=alert_id,
+                    edd_case_id=existing_link_id,
+                )
             _finish(db, commit=commit)
             return {
                 "alert_id": alert_id,
@@ -1012,33 +1087,28 @@ def route_alert_to_edd(db, alert_id, *,
             raise MonitoringRoutingError(
                 f"alert id={alert_id} has no application_id; cannot create EDD case"
             )
+        _lock_application_for_edd_routing(db, application_id)
+        active_edds = _active_edds_for_application(db, application_id)
 
         if existing_link_id is not None:
             linked = _load_edd_for_routing(db, existing_link_id)
             _validate_edd_link(alert, linked, allow_terminal=False)
+            _require_only_active_edd_link(
+                active_edds,
+                alert_id=alert_id,
+                edd_case_id=existing_link_id,
+            )
             edd_case_id = existing_link_id
             reused = True
 
         if edd_case_id is None:
-            # Reuse only a locked, unowned active EDD. A case whose reverse
-            # pointer names another workflow is authoritative and cannot be
-            # displaced.
-            active_edd = _find_active_edd_for_application(db, application_id)
-            if active_edd is not None:
-                edd_case_id = active_edd["id"]
-                ll.link_alert_to_edd(
-                    db, alert_id, edd_case_id,
-                    user=user, audit_writer=audit_writer, commit=False,
-                )
-                ll.set_edd_origin(
-                    db, edd_case_id,
-                    origin_context="monitoring_alert",
-                    linked_monitoring_alert_id=alert_id,
-                    user=user,
-                    audit_writer=audit_writer,
-                    commit=False,
-                )
-                reused = True
+            # The application lock serializes all Monitoring routes. Inspect
+            # every active case: owned, ambiguous, or duplicate cases fail
+            # closed instead of being mistaken for permission to create one.
+            _reject_unlinked_active_edds(
+                active_edds,
+                alert_id=alert_id,
+            )
 
         if edd_case_id is None:
             # No active EDD anywhere — create one.

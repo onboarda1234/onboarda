@@ -27,6 +27,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 import monitoring_status as ms
+from monitoring_alert_state_machine import MAX_TEXT_EVIDENCE_LENGTH
 
 try:
     from document_health_monitor import CRITICAL_IDENTITY_DOC_TYPES, EXPIRY_REQUIRED_DOC_TYPES
@@ -52,6 +53,7 @@ TRANSITION_EVIDENCE_KEYS = {
 # Clearing outcomes subject to tier control (save_decision outcomes + the
 # dismiss action). Escalation / routing / info-request are intentionally absent.
 CLEARING_SAVE_DECISION_OUTCOMES = {
+    "accept_updated_document",
     "false_positive",
     "no_material_impact",
     "waive_with_reason",
@@ -293,6 +295,17 @@ def assert_authoritative_initiator(db, user: Any) -> Dict[str, Any]:
 
 
 # ── Request table CRUD ───────────────────────────────────────────────────────
+def _control_text(value: Any, *, field: str) -> str:
+    text = str(value or "").strip()
+    if len(text) > MAX_TEXT_EVIDENCE_LENGTH:
+        raise DismissalControlError(
+            f"{field} exceeds the "
+            f"{MAX_TEXT_EVIDENCE_LENGTH}-character limit.",
+            400,
+        )
+    return text
+
+
 def _transition_evidence_json(evidence: Optional[Dict[str, Any]]) -> str:
     if evidence is None:
         return "{}"
@@ -314,6 +327,12 @@ def _transition_evidence_json(evidence: Optional[Dict[str, Any]]) -> str:
         ):
             raise DismissalControlError(
                 f"Clearance evidence {key} must be a non-blank identifier.",
+                400,
+            )
+        if len(str(raw_value).strip()) > MAX_TEXT_EVIDENCE_LENGTH:
+            raise DismissalControlError(
+                f"Clearance evidence {key} exceeds the "
+                f"{MAX_TEXT_EVIDENCE_LENGTH}-character limit.",
                 400,
             )
         normalized[key] = raw_value
@@ -451,9 +470,19 @@ def create_pending_request(db, *, alert, tier, requested_outcome, dismissal_reas
     initiator = assert_authoritative_initiator(db, user)
     initiator_id = str(initiator.get("id") or "").strip()
     tier = classify_alert_tier(alert)
-    if not (rationale or "").strip():
+    rationale = _control_text(rationale, field="Clearance rationale")
+    evidence_ref = _control_text(evidence_ref, field="Clearance evidence note")
+    dismissal_reason = _control_text(
+        dismissal_reason,
+        field="Clearance dismissal reason",
+    )
+    requested_outcome = _control_text(
+        requested_outcome,
+        field="Clearance requested outcome",
+    )
+    if not rationale:
         raise DismissalControlError("A rationale is required to request clearance of this alert.", 400)
-    if requires_evidence(tier, alert) and not (evidence_ref or "").strip():
+    if requires_evidence(tier, alert) and not evidence_ref:
         raise DismissalControlError("An evidence note is required to request clearance of a sanctions/PEP/watchlist/adverse-media or CRITICAL-severity alert.", 400)
     if has_pending_request(db, alert_id):
         raise DismissalControlError("A review request is already pending for this alert.", 409)
@@ -510,9 +539,22 @@ def record_senior_clear(db, *, alert, tier, requested_outcome, dismissal_reason,
     assert_authoritative_senior(db, user)
     alert_id = _get(alert, "id")
     tier = classify_alert_tier(alert)
-    if not (rationale or "").strip():
+    rationale = _control_text(rationale, field="Senior clearance rationale")
+    evidence_ref = _control_text(
+        evidence_ref,
+        field="Senior clearance evidence note",
+    )
+    dismissal_reason = _control_text(
+        dismissal_reason,
+        field="Senior clearance dismissal reason",
+    )
+    requested_outcome = _control_text(
+        requested_outcome,
+        field="Senior clearance requested outcome",
+    )
+    if not rationale:
         raise DismissalControlError("Senior direct clearance requires an enhanced rationale.", 400)
-    if requires_evidence(tier, alert) and not (evidence_ref or "").strip():
+    if requires_evidence(tier, alert) and not evidence_ref:
         raise DismissalControlError("Senior direct clearance of a sanctions/PEP/watchlist/adverse-media or CRITICAL-severity alert requires an evidence note.", 400)
     if has_pending_request(db, alert_id):
         raise DismissalControlError(

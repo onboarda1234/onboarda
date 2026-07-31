@@ -239,6 +239,7 @@ from monitoring_document_refresh import (
     is_document_refresh_alert as _is_document_refresh_alert,
     mark_backoffice_upload_received as _mark_monitoring_backoffice_upload_received,
     mark_client_upload_received_if_monitoring_linked as _mark_monitoring_document_upload_received,
+    prepare_document_refresh_clearance as _prepare_monitoring_document_clearance,
     request_updated_document as _request_monitoring_updated_document,
     review_document_refresh as _review_monitoring_document_refresh,
     sync_requirement_review_to_monitoring_alert as _sync_monitoring_requirement_review,
@@ -16590,9 +16591,14 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
             # only edits and repeated identical outcomes must not attempt a
             # second terminal transition.
             _req_before = db.execute(
-                "SELECT status, monitoring_alert_id "
-                "FROM application_enhanced_requirements WHERE id = ?",
-                (requirement_id,),
+                """
+                SELECT aer.*
+                  FROM application_enhanced_requirements aer
+                  JOIN applications app ON app.id = aer.application_id
+                 WHERE aer.id = ?
+                   AND (app.id = ? OR app.ref = ?)
+                """,
+                (requirement_id, app_id, app_id),
             ).fetchone()
             _req_before_dict = dict(_req_before) if _req_before else {}
             _req_prev_status = _req_before_dict.get("status")
@@ -16610,6 +16616,7 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
                 != str(_req_prev_status or "").strip().lower()
             )
             _locked_monitoring_alert = None
+            _document_review_request_id = None
             if (
                 _actual_status_change_requested
                 and _linked_monitoring_alert_id not in (None, "")
@@ -16623,14 +16630,15 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
                     )
                 )
                 _locked_req_sql = (
-                    "SELECT status, monitoring_alert_id "
-                    "FROM application_enhanced_requirements WHERE id = ?"
+                    "SELECT * "
+                    "FROM application_enhanced_requirements "
+                    "WHERE id = ? AND application_id = ?"
                 )
                 if getattr(db, "is_postgres", False):
                     _locked_req_sql += " FOR UPDATE"
                 _locked_req = db.execute(
                     _locked_req_sql,
-                    (requirement_id,),
+                    (requirement_id, _req_before_dict.get("application_id")),
                 ).fetchone()
                 _locked_req_dict = dict(_locked_req) if _locked_req else {}
                 if (
@@ -16668,6 +16676,54 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
                         "A linked terminal Monitoring Alert cannot be reopened "
                         "through an enhanced requirement update."
                     )
+
+                if _requested_status in {"accepted", "waived"}:
+                    document_outcome = (
+                        "accept"
+                        if _requested_status == "accepted"
+                        else "waive"
+                    )
+                    disposition, review_request = (
+                        _prepare_monitoring_document_clearance(
+                            db,
+                            alert=_locked_monitoring_alert,
+                            request=_locked_req_dict,
+                            outcome=document_outcome,
+                            note=str(
+                                data.get("review_notes")
+                                or data.get("waiver_reason")
+                                or ""
+                            ).strip(),
+                            evidence_ref=str(
+                                data.get("evidence_ref")
+                                or data.get("evidence_note")
+                                or ""
+                            ).strip(),
+                            user=user,
+                            audit_writer=self.log_audit,
+                            send_for_second_review=bool(
+                                data.get("send_for_second_review")
+                            ),
+                        )
+                    )
+                    if disposition == "pending":
+                        db.commit()
+                        return self.success({
+                            "status": "review_requested",
+                            "result": {
+                                "review_request_id": (
+                                    review_request or {}
+                                ).get("id"),
+                                "alert_id": _linked_monitoring_alert_id,
+                                "pending_second_review": True,
+                            },
+                            "requirement": serialize_application_requirement(
+                                _locked_req_dict
+                            ),
+                        })
+                    _document_review_request_id = (
+                        review_request or {}
+                    ).get("id")
             result, error, status_code = update_application_enhanced_requirement(
                 db,
                 app_id,
@@ -16702,6 +16758,7 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
                     result.get("requirement") or {},
                     user=user,
                     audit_writer=self.log_audit,
+                    review_request_id=_document_review_request_id,
                 )
             # ── PR-AUTHORITY-AUDIT-HARDENING-1: first-class waiver event ──
             # An enhanced/EDD requirement waiver is a senior control action that
@@ -16728,6 +16785,9 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
                 )
             db.commit()
             self.success(result)
+        except _MonitoringDocumentRefreshError as exc:
+            _rollback_monitoring_transaction(db)
+            self.error(str(exc), exc.status_code)
         except _monitoring_state_machine.MonitoringTransitionError as exc:
             _rollback_monitoring_transaction(db)
             self.error(str(exc), exc.status_code)
@@ -37305,7 +37365,14 @@ def _execute_monitoring_decision_outcome(db, user, alert_id, alert_before, *,
         # Metadata-only outcomes and repeated in-review bookkeeping preserve the
         # authoritative lifecycle state. Every actual status change goes through
         # the canonical locked service below.
-        if status_value is None or status_value == prior_status:
+        repeated_in_review_bookkeeping = (
+            status_value == prior_status == "in_review"
+            and outcome in {
+                "update_risk_profile",
+                "request_further_information",
+            }
+        )
+        if status_value is None or repeated_in_review_bookkeeping:
             locked = _monitoring_state_machine.lock_alert_for_transition(db, alert_id)
             locked_status = str(locked.get("status") or "").strip()
             if locked_status != prior_status:
@@ -37726,6 +37793,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
             alert_before = dict(alert_before_row)
             try:
                 document_action = canonical_action
+                outcome_alias = ""
                 if canonical_action == "save_decision":
                     outcome_alias = str(data.get("outcome") or "").strip()
                     document_outcome_aliases = {
@@ -37761,6 +37829,21 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             "reject_updated_document": "reject",
                             "waive_updated_document": "waive",
                         }[document_action]
+                        requested_document_outcome = (
+                            outcome_alias
+                            if canonical_action == "save_decision"
+                            and outcome_alias in {
+                                "mark_already_updated",
+                                "waive_with_reason",
+                            }
+                            else (
+                                "accept_updated_document"
+                                if review_outcome == "accept"
+                                else "waive_with_reason"
+                                if review_outcome == "waive"
+                                else None
+                            )
+                        )
                         result = _review_monitoring_document_refresh(
                             db,
                             alert_id,
@@ -37768,9 +37851,37 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             note=note,
                             user=user,
                             audit_writer=self.log_audit,
+                            evidence_ref=str(
+                                data.get("evidence_ref")
+                                or data.get("evidence_note")
+                                or ""
+                            ).strip(),
+                            send_for_second_review=bool(
+                                data.get("send_for_second_review")
+                            ),
+                            requested_outcome=requested_document_outcome,
                         )
                     db.commit()
                     canonical_action = document_action
+                    if result.get("pending_second_review"):
+                        return self.success({
+                            "status": "review_requested",
+                            "action": "request_senior_approval",
+                            "result": {
+                                "review_request_id": result.get(
+                                    "review_request_id"
+                                ),
+                                "alert_id": alert_id,
+                                "pending_second_review": True,
+                            },
+                            "new_status": alert_before.get("status"),
+                            "alert": dict(
+                                _monitoring_alert_get(db, alert_id) or {}
+                            ),
+                            "audit_history": _monitoring_alert_audit_history(
+                                db, alert_id
+                            ),
+                        })
                 elif canonical_action == "start_review":
                     prior_status = str(alert_before.get("status") or "").strip()
                     # M1.1 decoupling: the refresh sub-state ('under_review')
@@ -37778,6 +37889,22 @@ class MonitoringAlertDetailHandler(BaseHandler):
                     # moves the alert itself to 'in_review'.
                     next_status = "in_review"
                     note = str(data.get("note") or data.get("reason") or "").strip()
+                    reason_code = (
+                        "senior_acknowledged"
+                        if prior_status == "escalated"
+                        else "review_started"
+                    )
+                    transition_evidence = _monitoring_alert_identity_evidence(
+                        alert_before
+                    )
+                    if prior_status == "escalated":
+                        if not note:
+                            return self.error(
+                                "A senior acknowledgement rationale is required "
+                                "to start review of an escalated alert.",
+                                400,
+                            )
+                        transition_evidence["officer_rationale"] = note
                     payload = {
                         "started_by": user.get("sub", ""),
                         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -37790,9 +37917,9 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         target_status=next_status,
                         actor=user,
                         source_workflow="monitoring",
-                        reason_code="review_started",
+                        reason_code=reason_code,
                         reason=note or "Monitoring Alert review started.",
-                        evidence=_monitoring_alert_identity_evidence(alert_before),
+                        evidence=transition_evidence,
                         request_id=(_obs_get_request_id() or ""),
                         commit=False,
                     )
@@ -37867,6 +37994,11 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         return self.error("Assigned officer is not active", 400)
                     previous_owner = alert_before.get("reviewed_by")
                     new_owner = assignee["id"]
+                    _monitoring_state_machine.validate_assignment_authority(
+                        db,
+                        user,
+                        new_owner,
+                    )
                     assignment_note = str(data.get("assignment_note") or data.get("note") or data.get("reason") or "").strip()
                     assignment_payload = {
                         "alert_id": alert_id,
@@ -38305,6 +38437,25 @@ def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
             document_request_id=evidence.get("document_request_id"),
             commit=False,
         )
+    if requested_outcome in {
+        "accept_updated_document",
+        "mark_already_updated",
+        "waive_with_reason",
+    }:
+        return _review_monitoring_document_refresh(
+            db,
+            alert_id,
+            outcome=(
+                "waive"
+                if requested_outcome == "waive_with_reason"
+                else "accept"
+            ),
+            requested_outcome=requested_outcome,
+            note=note,
+            user=user,
+            audit_writer=log_audit,
+            review_request_id=review_request_id,
+        )
     cfg = MONITORING_DECISION_OUTCOMES.get(requested_outcome) or {}
     if not cfg:
         raise _monitoring_state_machine.InvalidTransition(
@@ -38456,6 +38607,25 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
                         commit=False,
                     )
                     db.commit()
+                return self.error(str(exc), exc.status_code)
+            except _MonitoringDocumentRefreshError as exc:
+                _rollback_monitoring_transaction(db)
+                _mdc.audit_blocked(
+                    db,
+                    alert_id=alert_id,
+                    user=user,
+                    reason=str(exc),
+                    detail={
+                        "request_id": request_id,
+                        "verb": verb,
+                        "error_code": "document_refresh_error",
+                        "actor_role": (user or {}).get("role", ""),
+                        "initiated_by": request.get("initiated_by"),
+                    },
+                    audit_writer=self.log_audit,
+                    commit=False,
+                )
+                db.commit()
                 return self.error(str(exc), exc.status_code)
             except _monitoring_state_machine.MonitoringTransitionError as exc:
                 _rollback_monitoring_transaction(db)

@@ -1,8 +1,9 @@
 # PR-MON-M1-STATE-MACHINE-1 — Phase 1 status-mutation inventory
 
 Status: complete before implementation
-Base: `9fa083c1ac185ea65bfa8515dff315eb254701a5`
-Inventory date: 2026-07-30
+Original base: `9fa083c1ac185ea65bfa8515dff315eb254701a5`
+Revalidated base: `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`
+Inventory date: 2026-07-30; read-only revalidation: 2026-07-31
 
 ## Reconciled runtime baseline
 
@@ -20,7 +21,7 @@ task. It scanned all 19 Monitoring Alerts and changed nothing.
 Alert `583` is already canonical at `routed_to_edd` with the PR #902
 hash-chained audit entry. The four governed Monitoring flags evaluated OFF.
 
-The live PostgreSQL schema has:
+The live PostgreSQL schema at the revalidated base has:
 
 - `monitoring_alerts.status` nullable, defaulting to `open`;
 - no status-value `CHECK`;
@@ -40,15 +41,15 @@ proof.
 | ComplyAdvantage historical backfill (`historical_backfill.py`) | any existing status → `open` on conflict | operator/backfill | Critical silent reopening. Conflict updates must preserve status. |
 | Start review (`server.py`) | broad state → `in_review` | officer; optional note | Route through the service with exact source, role, and detection evidence. |
 | Triage (`monitoring_routing.py`) | `open` → `triaged` | officer | Route through the service. Remove duplicate transition logic. |
-| Assign (`server.py`, `monitoring_routing.py`) | broad state → `assigned` | officer/assignee | Assignment may advance only `open`/`triaged`; later reassignment is metadata-only. |
+| Assign (`server.py`, `monitoring_routing.py`) | broad state → `assigned` | officer/assignee | Assignment may advance only `open`/`triaged`; later reassignment is metadata-only but still uses the same authoritative active-role validation. |
 | Generic decision (`server.py`) | broad state → several statuses | officer; outcome-dependent note | Replace the open-ended map with explicit transition rules and typed evidence. |
 | Dismiss (`monitoring_routing.py`) | broad state → `dismissed` | officer/senior; reason/control evidence | Route through the service and keep four-eyes evidence atomic. |
 | Route to Periodic Review (`monitoring_routing.py`) | broad state → `routed_to_review` | officer; created/reused review | Lock first; require an exact same-application review link; route is nonterminal. |
-| Route to EDD (`monitoring_routing.py`) | broad state → `routed_to_edd` | officer; created/reused EDD case | Lock first; require an exact same-application EDD link; route is nonterminal. |
+| Route to EDD (`monitoring_routing.py`) | broad state → `routed_to_edd` | officer; created/reused EDD case | Lock the application and alert first. Reuse only one already-consistent active case linked to this alert; fail closed for another owner, ambiguous/malformed provenance, or multiple active cases. Route is nonterminal. |
 | Overdue escalation (`server.py`) | active → `escalated` | officer; SLA and reason | Route through the service; escalation remains active. |
-| Four-eyes clear (`monitoring_dismissal_control.py`, `server.py`) | active → terminal outcome | different senior approver or recorded senior override | Remove intermediate commits. Request/approval, transition, and audits must commit once. |
-| Document refresh acceptance/waiver (`monitoring_document_refresh.py`) | active → `resolved`/`waived` | KYC & Documents; request/document/reason | Route through the service with exact linked evidence. |
-| Enhanced-requirement review sync (`monitoring_document_refresh.py`) | active → `resolved`/`waived` | KYC & Documents | Same controlled transition contract; no duplicated direct writer. |
+| Four-eyes clear (`monitoring_dismissal_control.py`, `server.py`) | active → terminal outcome | different senior approver or recorded senior override | Request/approval, transition, and audits commit once. The ledger is bound to exact source status, terminal intent, rationale, and typed evidence. |
+| Document refresh acceptance/waiver (`monitoring_document_refresh.py`) | active → `resolved`/`waived` | KYC & Documents; request/document/reason | Route through the service with exact linked evidence. Controlled clears first create an approved or `senior_cleared` ledger entry bound to the exact `accept_updated_document`, `mark_already_updated`, or `waive_with_reason` intent. |
+| Enhanced-requirement review sync (`monitoring_document_refresh.py`) | active → `resolved`/`waived` | KYC & Documents | Scope the requirement to the route application before control preflight, then run the same document-control contract before changing requirement state. Cross-application or stale linkage fails without a review row; a pending review leaves requirement, document, and alert unchanged. |
 | Document-health issue disappearance (`document_health_monitor.py`) | active → `resolved` | scheduler inference | Automatic closure is not activated in this PR. Preserve status and report a resolution candidate. |
 | PR #902 backfill/rollback (`monitoring_status_backfill.py`) | exact manifest row only | approved operator and fingerprint | Narrow, versioned, audited direct-write exception retained for its rollback window. |
 | Fixture/demo seeders | fixture snapshot writes | guarded fixture operator | Narrow non-regulated exception; never a runtime mutation path. |
@@ -92,3 +93,11 @@ The static guard may allow only:
 
 All runtime status changes must use
 `monitoring_alert_state_machine.transition_alert_status`.
+
+The final guard masks SQL literals and comments and tracks parentheses before
+locating the outer `SET`/`WHERE` boundary. It preserves possible SQL and
+executor bindings across branches, loops, `match`, `try`, and
+exception-suppressing `with` blocks; inspects every statement in scripts/CTEs;
+recognizes PostgreSQL inheritance-table forms and SQLite conflict/`REPLACE`
+writes; and fails closed on unresolved executor SQL. Its allowlists remain
+exact, function-scoped, and counted.

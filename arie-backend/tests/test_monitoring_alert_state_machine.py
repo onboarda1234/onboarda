@@ -228,31 +228,67 @@ def _insert_review_control(
     alert_id,
     state="approved",
     *,
+    initiated_by="officer-1",
+    approved_by="senior-1",
     source_status="in_review",
     requested_outcome="no_material_impact",
     dismissal_reason=None,
     rationale="Senior evidence assessment.",
     evidence_ref="Documented review evidence.",
     transition_evidence=None,
+    tier=1,
+    second_review_bypassed=0,
 ):
     db.execute(
         "INSERT INTO monitoring_alert_review_requests "
         "(alert_id, state, initiated_by, approved_by, source_alert_status, "
         "requested_outcome, dismissal_reason, rationale, evidence_ref, "
-        "transition_evidence, tier) "
-        "VALUES (?, ?, 'officer-1', 'senior-1', ?, ?, ?, ?, ?, ?, 1)",
+        "transition_evidence, tier, second_review_bypassed) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             alert_id,
             state,
+            initiated_by,
+            approved_by,
             source_status,
             requested_outcome,
             dismissal_reason,
             rationale,
             evidence_ref,
             json.dumps(transition_evidence or {}, sort_keys=True),
+            tier,
+            second_review_bypassed,
         ),
     )
     return db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+
+
+def _insert_document_requirement(
+    db,
+    alert_id,
+    *,
+    status="accepted",
+    document_id="doc-controlled",
+    waiver_reason=None,
+):
+    db.execute(
+        "INSERT INTO documents (id, application_id) VALUES (?, 'app-1')",
+        (document_id,),
+    )
+    db.execute(
+        """
+        INSERT INTO application_enhanced_requirements
+            (application_id, monitoring_alert_id, linked_document_id,
+             status, waiver_reason)
+        VALUES ('app-1', ?, ?, ?, ?)
+        """,
+        (alert_id, document_id, status, waiver_reason),
+    )
+    request_id = db.execute(
+        "SELECT last_insert_rowid() AS id"
+    ).fetchone()["id"]
+    db.commit()
+    return request_id, document_id
 
 
 def _rule_case(db, rule):
@@ -1690,6 +1726,303 @@ def test_material_clear_requires_approved_four_eyes_record(state_db):
         },
     )
     assert result["status"] == "resolved"
+
+
+def test_controlled_document_accept_cannot_bypass_review_ledger(state_db):
+    alert_id = _insert_alert(
+        state_db,
+        status="open",
+        alert_type="document_expired",
+        detected_by="document_health",
+        summary="The client's passport is expired.",
+    )
+    request_id, document_id = _insert_document_requirement(state_db, alert_id)
+
+    with pytest.raises(sm.FourEyesRequired, match="review-control"):
+        sm.transition_alert_status(
+            state_db,
+            alert_id,
+            expected_status="open",
+            target_status="resolved",
+            actor=SENIOR,
+            source_workflow="kyc_documents",
+            reason_code="document_accepted",
+            reason="Direct service calls must not bypass document control.",
+            evidence={
+                "document_request_id": request_id,
+                "document_id": document_id,
+                "officer_rationale": "The replacement passport was reviewed.",
+            },
+        )
+
+    assert _status(state_db, alert_id) == "open"
+    assert _audit_rows(state_db, alert_id) == []
+
+
+def test_controlled_document_waiver_cannot_bypass_review_ledger(state_db):
+    alert_id = _insert_alert(
+        state_db,
+        status="open",
+        alert_type="document_expired",
+        detected_by="document_health",
+        summary="The client's passport is expired.",
+    )
+    waiver_reason = "Documented temporary regulatory exception."
+    request_id, _document_id = _insert_document_requirement(
+        state_db,
+        alert_id,
+        status="waived",
+        waiver_reason=waiver_reason,
+    )
+
+    with pytest.raises(sm.FourEyesRequired, match="review-control"):
+        sm.transition_alert_status(
+            state_db,
+            alert_id,
+            expected_status="open",
+            target_status="waived",
+            actor=SENIOR,
+            source_workflow="kyc_documents",
+            reason_code="document_waived",
+            reason="Direct service calls must not bypass waiver control.",
+            evidence={
+                "document_request_id": request_id,
+                "waiver_reason": waiver_reason,
+                "officer_rationale": waiver_reason,
+            },
+        )
+
+    assert _status(state_db, alert_id) == "open"
+    assert _audit_rows(state_db, alert_id) == []
+
+
+@pytest.mark.parametrize(
+    ("review_state", "initiated_by", "second_review_bypassed"),
+    (
+        ("approved", "officer-1", 0),
+        ("senior_cleared", "senior-1", 1),
+    ),
+)
+@pytest.mark.parametrize(
+    ("requested_outcome", "reason_code"),
+    (
+        ("accept_updated_document", "document_accepted"),
+        ("mark_already_updated", "document_already_updated"),
+    ),
+)
+def test_exact_document_review_control_authorizes_transition(
+    state_db,
+    review_state,
+    initiated_by,
+    second_review_bypassed,
+    requested_outcome,
+    reason_code,
+):
+    alert_id = _insert_alert(
+        state_db,
+        status="open",
+        alert_type="document_expired",
+        detected_by="document_health",
+        summary="The client's passport is expired.",
+    )
+    request_id, document_id = _insert_document_requirement(state_db, alert_id)
+    rationale = "The replacement passport was reviewed and accepted."
+    review_id = _insert_review_control(
+        state_db,
+        alert_id,
+        state=review_state,
+        initiated_by=initiated_by,
+        approved_by="senior-1",
+        source_status="open",
+        requested_outcome=requested_outcome,
+        rationale=rationale,
+        evidence_ref="Exact replacement-document review evidence.",
+        transition_evidence={
+            "document_request_id": request_id,
+            "document_id": document_id,
+        },
+        tier=2,
+        second_review_bypassed=second_review_bypassed,
+    )
+    state_db.commit()
+
+    result = sm.transition_alert_status(
+        state_db,
+        alert_id,
+        expected_status="open",
+        target_status="resolved",
+        actor=SENIOR,
+        source_workflow="kyc_documents",
+        reason_code=reason_code,
+        reason=rationale,
+        evidence={
+            "document_request_id": request_id,
+            "document_id": document_id,
+            "officer_rationale": rationale,
+            "review_request_id": review_id,
+        },
+    )
+
+    assert result["status"] == "resolved"
+    assert len(_audit_rows(state_db, alert_id)) == 1
+
+
+@pytest.mark.parametrize(
+    "stored_outcome",
+    ("mark_already_updated", "Accept-Updated-Document"),
+)
+def test_document_review_control_is_bound_to_exact_outcome(
+    state_db,
+    stored_outcome,
+):
+    alert_id = _insert_alert(
+        state_db,
+        status="open",
+        alert_type="document_expired",
+        detected_by="document_health",
+        summary="The client's passport is expired.",
+    )
+    request_id, document_id = _insert_document_requirement(state_db, alert_id)
+    rationale = "The replacement passport was reviewed."
+    review_id = _insert_review_control(
+        state_db,
+        alert_id,
+        source_status="open",
+        requested_outcome=stored_outcome,
+        rationale=rationale,
+        evidence_ref="Exact replacement-document review evidence.",
+        transition_evidence={
+            "document_request_id": request_id,
+            "document_id": document_id,
+        },
+        tier=2,
+    )
+    state_db.commit()
+
+    with pytest.raises(sm.EvidenceLinkMismatch, match="different terminal outcome"):
+        sm.transition_alert_status(
+            state_db,
+            alert_id,
+            expected_status="open",
+            target_status="resolved",
+            actor=SENIOR,
+            source_workflow="kyc_documents",
+            reason_code="document_accepted",
+            reason=rationale,
+            evidence={
+                "document_request_id": request_id,
+                "document_id": document_id,
+                "officer_rationale": rationale,
+                "review_request_id": review_id,
+            },
+        )
+
+    assert _status(state_db, alert_id) == "open"
+    assert _audit_rows(state_db, alert_id) == []
+
+
+@pytest.mark.parametrize(
+    ("review_state", "initiated_by", "second_review_bypassed"),
+    (
+        ("approved", "officer-1", 0),
+        ("senior_cleared", "senior-1", 1),
+    ),
+)
+def test_exact_document_waiver_control_authorizes_transition(
+    state_db,
+    review_state,
+    initiated_by,
+    second_review_bypassed,
+):
+    alert_id = _insert_alert(
+        state_db,
+        status="open",
+        alert_type="document_expired",
+        detected_by="document_health",
+        summary="The client's passport is expired.",
+    )
+    rationale = "Documented temporary regulatory exception."
+    request_id, _document_id = _insert_document_requirement(
+        state_db,
+        alert_id,
+        status="waived",
+        waiver_reason=rationale,
+    )
+    review_id = _insert_review_control(
+        state_db,
+        alert_id,
+        state=review_state,
+        initiated_by=initiated_by,
+        approved_by="senior-1",
+        source_status="open",
+        requested_outcome="waive_with_reason",
+        rationale=rationale,
+        evidence_ref="Exact waiver evidence.",
+        transition_evidence={"document_request_id": request_id},
+        tier=2,
+        second_review_bypassed=second_review_bypassed,
+    )
+    state_db.commit()
+
+    result = sm.transition_alert_status(
+        state_db,
+        alert_id,
+        expected_status="open",
+        target_status="waived",
+        actor=SENIOR,
+        source_workflow="kyc_documents",
+        reason_code="document_waived",
+        reason=rationale,
+        evidence={
+            "document_request_id": request_id,
+            "waiver_reason": rationale,
+            "officer_rationale": rationale,
+            "review_request_id": review_id,
+        },
+    )
+
+    assert result["status"] == "waived"
+    assert len(_audit_rows(state_db, alert_id)) == 1
+
+
+def test_oversized_text_evidence_is_rejected_without_mutation(state_db):
+    alert_id = _insert_alert(state_db, status="open")
+
+    with pytest.raises(sm.WrongEvidenceType, match="1000-character limit"):
+        sm.transition_alert_status(
+            state_db,
+            alert_id,
+            expected_status="open",
+            target_status="triaged",
+            actor=OFFICER,
+            source_workflow="monitoring",
+            reason_code="triage",
+            reason="Oversized evidence must fail explicitly.",
+            evidence={"source_reference": "x" * 1001},
+        )
+
+    assert _status(state_db, alert_id) == "open"
+    assert _audit_rows(state_db, alert_id) == []
+
+
+def test_oversized_transition_reason_is_rejected_without_mutation(state_db):
+    alert_id = _insert_alert(state_db, status="open")
+
+    with pytest.raises(sm.InvalidTransition, match="1000-character limit"):
+        sm.transition_alert_status(
+            state_db,
+            alert_id,
+            expected_status="open",
+            target_status="triaged",
+            actor=OFFICER,
+            source_workflow="monitoring",
+            reason_code="triage",
+            reason="x" * 1001,
+            evidence={"source_reference": "test-source"},
+        )
+
+    assert _status(state_db, alert_id) == "open"
+    assert _audit_rows(state_db, alert_id) == []
 
 
 def test_review_control_with_blank_maker_cannot_authorize_transition(state_db):

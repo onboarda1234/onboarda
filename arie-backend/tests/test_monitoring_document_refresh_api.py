@@ -96,11 +96,16 @@ def _reset_document_refresh_case(conn):
             "application_enhanced_requirements",
             "audit_log",
             "monitoring_alerts",
+            "monitoring_alert_review_requests",
         ),
         environment="testing",
         is_fixture=True,
         confirmed=True,
     ):
+        conn.execute(
+            "DELETE FROM monitoring_alert_review_requests WHERE alert_id = ?",
+            (9301,),
+        )
         conn.execute("DELETE FROM application_enhanced_requirements WHERE application_id = ? OR monitoring_alert_id = ?", ("app_m3", 9301))
         conn.execute("DELETE FROM client_notifications WHERE application_id = ?", ("app_m3",))
         conn.execute("DELETE FROM notifications WHERE message LIKE ?", ("%9301%",))
@@ -108,7 +113,10 @@ def _reset_document_refresh_case(conn):
         conn.execute("DELETE FROM monitoring_alerts WHERE id = 9301")
         conn.execute("DELETE FROM documents WHERE application_id = ?", ("app_m3",))
         conn.execute("DELETE FROM directors WHERE application_id = ?", ("app_m3",))
-        conn.execute("DELETE FROM applications WHERE id = ?", ("app_m3",))
+        conn.execute(
+            "DELETE FROM applications WHERE id IN (?, ?)",
+            ("app_m3", "app_cross_m3"),
+        )
         conn.execute("DELETE FROM clients WHERE id = ?", ("client_m3",))
 
     users = [
@@ -541,11 +549,182 @@ def test_officer_accepts_uploaded_document_and_resolves_alert(monitoring_doc_ref
         assert evidence["transition_matrix_version"] == "monitoring_alert_state_machine_v1"
         assert evidence["evidence"]["document_request_id"] == tasks[0]["id"]
         assert evidence["evidence"]["document_id"] == upload.json()["document"]["id"]
+        control = conn.execute(
+            "SELECT id, state, requested_outcome, second_review_bypassed "
+            "FROM monitoring_alert_review_requests WHERE alert_id = ?",
+            (9301,),
+        ).fetchone()
+        assert control["state"] == "senior_cleared"
+        assert control["requested_outcome"] == "accept_updated_document"
+        assert control["second_review_bypassed"] in (1, True)
+        assert evidence["evidence"]["review_request_id"] == control["id"]
         assert json.loads(canonical["before_state"]) == {"status": "open"}
         assert json.loads(canonical["after_state"]) == {"status": "resolved"}
         assert canonical["entry_hash"]
     finally:
         conn.close()
+
+
+def test_controlled_document_acceptance_is_pending_then_atomic(
+    monitoring_doc_refresh_server,
+):
+    base_url, db_module = monitoring_doc_refresh_server
+    admin_token = _token("admin_m3", "admin", "Admin M3")
+    co_token = _token("co_m3", "co", "CO M3")
+    client_token = _token(
+        "client_m3",
+        "client",
+        "Monitoring Three Client Ltd",
+        "client",
+    )
+
+    assert _request_updated_document(base_url, admin_token).status_code == 200
+    task = requests.get(
+        f"{base_url}/api/portal/applications/app_m3/enhanced-requirements",
+        headers=_auth_headers(client_token),
+        timeout=5,
+    ).json()["requirements"][0]
+    upload = _upload_client_document(base_url, client_token, task["id"])
+    assert upload.status_code == 201, upload.text
+
+    requested = requests.patch(
+        f"{base_url}/api/monitoring/alerts/9301",
+        headers=_json_headers(co_token),
+        json={
+            "action": "accept_updated_document",
+            "note": "Replacement passport evidence reviewed by the maker.",
+        },
+        timeout=5,
+    )
+    assert requested.status_code == 200, requested.text
+    assert requested.json()["status"] == "review_requested"
+    review_request_id = requested.json()["result"]["review_request_id"]
+
+    conn = db_module.get_db()
+    try:
+        alert = conn.execute(
+            "SELECT status FROM monitoring_alerts WHERE id = 9301"
+        ).fetchone()
+        requirement = conn.execute(
+            "SELECT status FROM application_enhanced_requirements WHERE id = ?",
+            (task["id"],),
+        ).fetchone()
+        replacement = conn.execute(
+            "SELECT review_status FROM documents WHERE id = ?",
+            (upload.json()["document"]["id"],),
+        ).fetchone()
+        control = conn.execute(
+            "SELECT state, requested_outcome FROM "
+            "monitoring_alert_review_requests WHERE id = ?",
+            (review_request_id,),
+        ).fetchone()
+        assert alert["status"] == "open"
+        assert requirement["status"] == "uploaded"
+        assert replacement["review_status"] == "pending"
+        assert control["state"] == "pending"
+        assert control["requested_outcome"] == "accept_updated_document"
+    finally:
+        conn.close()
+
+    approved = requests.post(
+        f"{base_url}/api/monitoring/review-requests/"
+        f"{review_request_id}/approve",
+        headers=_json_headers(admin_token),
+        json={"approval_note": "Independent senior acceptance approved."},
+        timeout=5,
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["new_status"] == "resolved"
+
+    conn = db_module.get_db()
+    try:
+        assert conn.execute(
+            "SELECT status FROM monitoring_alerts WHERE id = 9301"
+        ).fetchone()["status"] == "resolved"
+        assert conn.execute(
+            "SELECT status FROM application_enhanced_requirements WHERE id = ?",
+            (task["id"],),
+        ).fetchone()["status"] == "accepted"
+        assert conn.execute(
+            "SELECT review_status FROM documents WHERE id = ?",
+            (upload.json()["document"]["id"],),
+        ).fetchone()["review_status"] == "accepted"
+        assert conn.execute(
+            "SELECT state FROM monitoring_alert_review_requests WHERE id = ?",
+            (review_request_id,),
+        ).fetchone()["state"] == "approved"
+        assert conn.execute(
+            "SELECT COUNT(*) AS count FROM audit_log WHERE target = ? "
+            "AND action = 'monitoring.alert.status_transition'",
+            ("monitoring_alert:9301",),
+        ).fetchone()["count"] == 1
+    finally:
+        conn.close()
+
+
+def test_mark_already_updated_alias_preserves_control_outcome_and_reason(
+    monitoring_doc_refresh_server,
+):
+    base_url, db_module = monitoring_doc_refresh_server
+    admin_token = _token("admin_m3", "admin", "Admin M3")
+    co_token = _token("co_m3", "co", "CO M3")
+    client_token = _token(
+        "client_m3",
+        "client",
+        "Monitoring Three Client Ltd",
+        "client",
+    )
+    assert _request_updated_document(base_url, admin_token).status_code == 200
+    task = requests.get(
+        f"{base_url}/api/portal/applications/app_m3/enhanced-requirements",
+        headers=_auth_headers(client_token),
+        timeout=5,
+    ).json()["requirements"][0]
+    assert _upload_client_document(
+        base_url, client_token, task["id"]
+    ).status_code == 201
+
+    requested = requests.patch(
+        f"{base_url}/api/monitoring/alerts/9301",
+        headers=_json_headers(co_token),
+        json={
+            "action": "save_decision",
+            "outcome": "mark_already_updated",
+            "note": "Replacement was already received and reviewed.",
+        },
+        timeout=5,
+    )
+    assert requested.status_code == 200, requested.text
+    review_request_id = requested.json()["result"]["review_request_id"]
+
+    approved = requests.post(
+        f"{base_url}/api/monitoring/review-requests/"
+        f"{review_request_id}/approve",
+        headers=_json_headers(admin_token),
+        json={"approval_note": "Independent review confirms the replacement."},
+        timeout=5,
+    )
+    assert approved.status_code == 200, approved.text
+
+    conn = db_module.get_db()
+    try:
+        control = conn.execute(
+            "SELECT requested_outcome, state FROM "
+            "monitoring_alert_review_requests WHERE id = ?",
+            (review_request_id,),
+        ).fetchone()
+        transition = conn.execute(
+            "SELECT detail FROM audit_log WHERE target = ? "
+            "AND action = 'monitoring.alert.status_transition'",
+            ("monitoring_alert:9301",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert control["requested_outcome"] == "mark_already_updated"
+    assert control["state"] == "approved"
+    assert json.loads(transition["detail"])["reason_code"] == (
+        "document_already_updated"
+    )
 
 
 def test_accept_requires_uploaded_replacement_document(monitoring_doc_refresh_server):
@@ -630,20 +809,14 @@ def test_reject_requires_reason_and_reopens_request(monitoring_doc_refresh_serve
         conn.close()
 
 
-def test_waive_requires_reason_and_authorized_role(monitoring_doc_refresh_server):
+def test_waive_requires_reason_and_controlled_senior_approval(
+    monitoring_doc_refresh_server,
+):
     base_url, db_module = monitoring_doc_refresh_server
     admin_token = _token("admin_m3", "admin", "Admin M3")
     co_token = _token("co_m3", "co", "CO M3")
 
     assert _request_updated_document(base_url, admin_token).status_code == 200
-
-    co_waive = requests.patch(
-        f"{base_url}/api/monitoring/alerts/9301",
-        headers=_json_headers(co_token),
-        json={"action": "waive_updated_document", "note": "Temporary waiver."},
-        timeout=5,
-    )
-    assert co_waive.status_code == 403
 
     no_reason = requests.patch(
         f"{base_url}/api/monitoring/alerts/9301",
@@ -653,10 +826,20 @@ def test_waive_requires_reason_and_authorized_role(monitoring_doc_refresh_server
     )
     assert no_reason.status_code == 400
 
-    waived = requests.patch(
+    co_waive = requests.patch(
         f"{base_url}/api/monitoring/alerts/9301",
+        headers=_json_headers(co_token),
+        json={"action": "waive_updated_document", "note": "Temporary waiver."},
+        timeout=5,
+    )
+    assert co_waive.status_code == 200, co_waive.text
+    assert co_waive.json()["status"] == "review_requested"
+    request_id = co_waive.json()["result"]["review_request_id"]
+
+    waived = requests.post(
+        f"{base_url}/api/monitoring/review-requests/{request_id}/approve",
         headers=_json_headers(admin_token),
-        json={"action": "waive_updated_document", "note": "Passport renewal not required for dormant client."},
+        json={"approval_note": "Approve the documented temporary waiver."},
         timeout=5,
     )
     assert waived.status_code == 200, waived.text
@@ -681,8 +864,51 @@ def test_waive_requires_reason_and_authorized_role(monitoring_doc_refresh_server
         assert detail["reason_code"] == "document_waived"
         assert detail["evidence"]["document_request_id"]
         assert detail["evidence"]["waiver_reason"] == (
-            "Passport renewal not required for dormant client."
+            "Temporary waiver."
         )
+    finally:
+        conn.close()
+
+
+def test_oversized_document_waiver_reason_creates_no_control_or_transition(
+    monitoring_doc_refresh_server,
+):
+    base_url, db_module = monitoring_doc_refresh_server
+    admin_token = _token("admin_m3", "admin", "Admin M3")
+    co_token = _token("co_m3", "co", "CO M3")
+
+    assert _request_updated_document(base_url, admin_token).status_code == 200
+
+    refused = requests.patch(
+        f"{base_url}/api/monitoring/alerts/9301",
+        headers=_json_headers(co_token),
+        json={"action": "waive_updated_document", "note": "x" * 1001},
+        timeout=5,
+    )
+    assert refused.status_code == 400, refused.text
+    assert "1000-character limit" in refused.json()["error"]
+
+    conn = db_module.get_db()
+    try:
+        assert conn.execute(
+            "SELECT status FROM monitoring_alerts WHERE id = 9301"
+        ).fetchone()["status"] == "open"
+        assert conn.execute(
+            "SELECT status FROM application_enhanced_requirements "
+            "WHERE monitoring_alert_id = 9301"
+        ).fetchone()["status"] == "requested"
+        assert conn.execute(
+            "SELECT COUNT(*) AS count FROM monitoring_alert_review_requests "
+            "WHERE alert_id = 9301"
+        ).fetchone()["count"] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) AS count FROM audit_log WHERE target = ? "
+            "AND action IN ("
+            "'monitoring.alert.dismissal_requested', "
+            "'monitoring.alert.status_transition'"
+            ")",
+            ("monitoring_alert:9301",),
+        ).fetchone()["count"] == 0
     finally:
         conn.close()
 
@@ -690,7 +916,10 @@ def test_waive_requires_reason_and_authorized_role(monitoring_doc_refresh_server
 def test_metadata_audit_failure_rolls_back_requirement_document_status_and_canonical_transition(
     monitoring_doc_refresh_server,
 ):
-    from monitoring_document_refresh import review_document_refresh
+    from monitoring_document_refresh import (
+        prepare_document_refresh_clearance,
+        review_document_refresh,
+    )
 
     base_url, db_module = monitoring_doc_refresh_server
     officer_token = _token("admin_m3", "admin", "Admin M3")
@@ -716,6 +945,30 @@ def test_metadata_audit_failure_rolls_back_requirement_document_status_and_canon
 
     conn = db_module.get_db()
     try:
+        alert_before = dict(conn.execute(
+            "SELECT * FROM monitoring_alerts WHERE id = ?",
+            (9301,),
+        ).fetchone())
+        request_before = dict(conn.execute(
+            "SELECT * FROM application_enhanced_requirements WHERE id = ?",
+            (task["id"],),
+        ).fetchone())
+        disposition, control = prepare_document_refresh_clearance(
+            conn,
+            alert=alert_before,
+            request=request_before,
+            outcome="accept",
+            requested_outcome="accept_updated_document",
+            note="This outcome must roll back.",
+            evidence_ref="",
+            user={
+                "sub": "admin_m3",
+                "name": "Admin M3",
+                "role": "admin",
+            },
+            audit_writer=lambda *_args, **_kwargs: None,
+        )
+        assert disposition == "execute"
         with pytest.raises(RuntimeError, match="injected metadata audit failure"):
             review_document_refresh(
                 conn,
@@ -728,6 +981,8 @@ def test_metadata_audit_failure_rolls_back_requirement_document_status_and_canon
                     "role": "admin",
                 },
                 audit_writer=fail_metadata_audit,
+                requested_outcome="accept_updated_document",
+                review_request_id=control["id"],
             )
 
         alert = conn.execute(
@@ -758,6 +1013,11 @@ def test_metadata_audit_failure_rolls_back_requirement_document_status_and_canon
         assert requirement["status"] == "uploaded"
         assert document["review_status"] == "pending"
         assert canonical_count == 0
+        assert conn.execute(
+            "SELECT COUNT(*) AS count FROM monitoring_alert_review_requests "
+            "WHERE alert_id = ?",
+            (9301,),
+        ).fetchone()["count"] == 0
     finally:
         conn.close()
 
@@ -817,6 +1077,264 @@ def test_application_requirement_acceptance_sync_uses_canonical_transition(
         assert detail["reason_code"] == "document_accepted"
         assert detail["evidence"]["document_request_id"] == task["id"]
         assert detail["evidence"]["document_id"]
+        control = conn.execute(
+            "SELECT id, state, requested_outcome FROM "
+            "monitoring_alert_review_requests WHERE alert_id = ?",
+            (9301,),
+        ).fetchone()
+        assert control["state"] == "senior_cleared"
+        assert control["requested_outcome"] == "accept_updated_document"
+        assert detail["evidence"]["review_request_id"] == control["id"]
+    finally:
+        conn.close()
+
+
+def test_application_requirement_controlled_acceptance_stays_unchanged_pending_review(
+    monitoring_doc_refresh_server,
+):
+    base_url, db_module = monitoring_doc_refresh_server
+    admin_token = _token("admin_m3", "admin", "Admin M3")
+    co_token = _token("co_m3", "co", "CO M3")
+    client_token = _token(
+        "client_m3",
+        "client",
+        "Monitoring Three Client Ltd",
+        "client",
+    )
+
+    assert _request_updated_document(base_url, admin_token).status_code == 200
+    task = requests.get(
+        f"{base_url}/api/portal/applications/app_m3/enhanced-requirements",
+        headers=_auth_headers(client_token),
+        timeout=5,
+    ).json()["requirements"][0]
+    assert _upload_client_document(
+        base_url, client_token, task["id"]
+    ).status_code == 201
+
+    requested = requests.patch(
+        f"{base_url}/api/applications/app_m3/"
+        f"enhanced-requirements/{task['id']}",
+        headers=_json_headers(co_token),
+        json={
+            "status": "accepted",
+            "review_notes": "Maker reviewed the replacement passport.",
+        },
+        timeout=5,
+    )
+    assert requested.status_code == 200, requested.text
+    assert requested.json()["status"] == "review_requested"
+    review_request_id = requested.json()["result"]["review_request_id"]
+
+    conn = db_module.get_db()
+    try:
+        assert conn.execute(
+            "SELECT status FROM application_enhanced_requirements WHERE id = ?",
+            (task["id"],),
+        ).fetchone()["status"] == "uploaded"
+        assert conn.execute(
+            "SELECT status FROM monitoring_alerts WHERE id = 9301"
+        ).fetchone()["status"] == "open"
+        assert conn.execute(
+            "SELECT state FROM monitoring_alert_review_requests WHERE id = ?",
+            (review_request_id,),
+        ).fetchone()["state"] == "pending"
+    finally:
+        conn.close()
+
+    approved = requests.post(
+        f"{base_url}/api/monitoring/review-requests/"
+        f"{review_request_id}/approve",
+        headers=_json_headers(admin_token),
+        json={"approval_note": "Independent application-review approval."},
+        timeout=5,
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["new_status"] == "resolved"
+
+
+def test_cross_application_requirement_route_cannot_create_review_control(
+    monitoring_doc_refresh_server,
+):
+    base_url, db_module = monitoring_doc_refresh_server
+    admin_token = _token("admin_m3", "admin", "Admin M3")
+    co_token = _token("co_m3", "co", "CO M3")
+    client_token = _token(
+        "client_m3",
+        "client",
+        "Monitoring Three Client Ltd",
+        "client",
+    )
+
+    conn = db_module.get_db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO applications
+                (id, ref, company_name, status, risk_level)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "app_cross_m3",
+                "ARF-CROSS-M3",
+                "Unrelated Application Ltd",
+                "approved",
+                "LOW",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert _request_updated_document(base_url, admin_token).status_code == 200
+    task = requests.get(
+        f"{base_url}/api/portal/applications/app_m3/enhanced-requirements",
+        headers=_auth_headers(client_token),
+        timeout=5,
+    ).json()["requirements"][0]
+    assert _upload_client_document(
+        base_url, client_token, task["id"]
+    ).status_code == 201
+
+    conn = db_module.get_db()
+    try:
+        review_count_before = conn.execute(
+            "SELECT COUNT(*) AS c FROM monitoring_alert_review_requests "
+            "WHERE alert_id = ?",
+            (9301,),
+        ).fetchone()["c"]
+        audit_count_before = conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log WHERE target = ?",
+            ("monitoring_alert:9301",),
+        ).fetchone()["c"]
+    finally:
+        conn.close()
+
+    response = requests.patch(
+        f"{base_url}/api/applications/app_cross_m3/"
+        f"enhanced-requirements/{task['id']}",
+        headers=_json_headers(co_token),
+        json={
+            "status": "accepted",
+            "review_notes": "This cross-application route must be rejected.",
+        },
+        timeout=5,
+    )
+    assert response.status_code == 404, response.text
+
+    conn = db_module.get_db()
+    try:
+        requirement = conn.execute(
+            "SELECT status FROM application_enhanced_requirements WHERE id = ?",
+            (task["id"],),
+        ).fetchone()
+        alert = conn.execute(
+            "SELECT status FROM monitoring_alerts WHERE id = ?",
+            (9301,),
+        ).fetchone()
+        assert requirement["status"] == "uploaded"
+        assert alert["status"] == "open"
+        assert conn.execute(
+            "SELECT COUNT(*) AS c FROM monitoring_alert_review_requests "
+            "WHERE alert_id = ?",
+            (9301,),
+        ).fetchone()["c"] == review_count_before
+        assert conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log WHERE target = ?",
+            ("monitoring_alert:9301",),
+        ).fetchone()["c"] == audit_count_before
+    finally:
+        conn.close()
+
+
+def test_document_review_approval_returns_safe_4xx_when_link_is_stale(
+    monitoring_doc_refresh_server,
+):
+    base_url, db_module = monitoring_doc_refresh_server
+    admin_token = _token("admin_m3", "admin", "Admin M3")
+    co_token = _token("co_m3", "co", "CO M3")
+    client_token = _token(
+        "client_m3",
+        "client",
+        "Monitoring Three Client Ltd",
+        "client",
+    )
+
+    assert _request_updated_document(base_url, admin_token).status_code == 200
+    task = requests.get(
+        f"{base_url}/api/portal/applications/app_m3/enhanced-requirements",
+        headers=_auth_headers(client_token),
+        timeout=5,
+    ).json()["requirements"][0]
+    assert _upload_client_document(
+        base_url, client_token, task["id"]
+    ).status_code == 201
+    requested = requests.patch(
+        f"{base_url}/api/applications/app_m3/"
+        f"enhanced-requirements/{task['id']}",
+        headers=_json_headers(co_token),
+        json={
+            "status": "accepted",
+            "review_notes": "Maker reviewed the replacement passport.",
+        },
+        timeout=5,
+    )
+    assert requested.status_code == 200, requested.text
+    review_request_id = requested.json()["result"]["review_request_id"]
+
+    conn = db_module.get_db()
+    try:
+        conn.execute(
+            "UPDATE application_enhanced_requirements "
+            "SET monitoring_alert_id = NULL WHERE id = ?",
+            (task["id"],),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    approval = requests.post(
+        f"{base_url}/api/monitoring/review-requests/"
+        f"{review_request_id}/approve",
+        headers=_json_headers(admin_token),
+        json={"approval_note": "Independent approval on stale linkage."},
+        timeout=5,
+    )
+    assert approval.status_code == 404, approval.text
+    assert "linked" in approval.json()["error"].lower()
+
+    conn = db_module.get_db()
+    try:
+        assert conn.execute(
+            "SELECT state FROM monitoring_alert_review_requests WHERE id = ?",
+            (review_request_id,),
+        ).fetchone()["state"] == "pending"
+        assert conn.execute(
+            "SELECT status FROM monitoring_alerts WHERE id = ?",
+            (9301,),
+        ).fetchone()["status"] == "open"
+        assert conn.execute(
+            "SELECT status FROM application_enhanced_requirements WHERE id = ?",
+            (task["id"],),
+        ).fetchone()["status"] == "uploaded"
+        assert conn.execute(
+            """
+            SELECT COUNT(*) AS c
+              FROM audit_log
+             WHERE target = ?
+               AND action = 'monitoring.alert.status_transition'
+            """,
+            ("monitoring_alert:9301",),
+        ).fetchone()["c"] == 0
+        assert conn.execute(
+            """
+            SELECT COUNT(*) AS c
+              FROM audit_log
+             WHERE target = ?
+               AND action = 'monitoring.alert.dismissal_blocked'
+            """,
+            ("monitoring_alert:9301",),
+        ).fetchone()["c"] == 1
     finally:
         conn.close()
 

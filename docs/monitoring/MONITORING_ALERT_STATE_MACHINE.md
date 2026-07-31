@@ -248,6 +248,17 @@ human-readable `evidence_ref` remains separate and cannot substitute for those
 identifiers. Approval reloads and revalidates the typed object inside the
 transition transaction.
 
+Textual evidence and the human-readable transition reason are limited to 1,000
+characters. The same limit is enforced before pending or senior-cleared
+review-control rows are inserted, including officer rationale, waiver reason,
+the evidence note, and typed control identifiers. Oversized text is rejected
+before any alert, review-control, or audit row is mutated; it is never silently
+truncated.
+Document control also binds the ledger's requested outcome exactly:
+`accept_updated_document` authorizes only `document_accepted`,
+`mark_already_updated` authorizes only `document_already_updated`, and
+`waive_with_reason` authorizes only `document_waived`.
+
 ## Role and four-eyes policy
 
 - `co`, `sco`, and `admin` may perform ordinary officer transitions.
@@ -261,10 +272,15 @@ transition transaction.
   machine does not authorize automation.
 - Downstream actors may perform only the future downstream-owned terminal
   transitions listed above.
-- Material screening, critical alerts, and controlled waivers require a valid
-  review-control record or a recorded senior disposition under the existing
-  maker-checker policy.
-- The initiator may not approve their own controlled clearance.
+- Material screening, critical alerts, and controlled document acceptance or
+  waiver require a valid review-control record or a recorded senior disposition
+  under the existing maker-checker policy. Direct service calls receive the
+  same backstop as HTTP handlers.
+- A pending maker/checker request that reaches `approved` may not be approved
+  by its initiator. The explicit exception is the existing SCO/admin
+  direct-clear path: it records `senior_cleared` with
+  `second_review_bypassed=true`, rather than representing a self-approved
+  maker/checker request.
 
 ## Idempotency, concurrency, and terminal policy
 
@@ -275,6 +291,11 @@ transition transaction.
 - Repeating a transition whose target is already current returns a controlled
   409 conflict and creates no duplicate transition audit.
 - Two concurrent terminal decisions cannot both succeed.
+- EDD routing additionally locks the application row, inspects every active
+  EDD without `SKIP LOCKED`, and creates a case only when none exists. One
+  already-consistent case linked to the same alert may be reused; every other
+  active case fails closed without changing the alert or overwriting its
+  workflow provenance.
 - Terminal reopening is prohibited. V1 has no authorized reopening path.
 
 `is_action_locked` is deliberately broader than terminality: both handoff
@@ -287,6 +308,10 @@ For KYC & Documents specifically:
 
 - accepting a linked refresh request may resolve the alert, and waiving it may
   waive the alert, only through the exact document rules above;
+- a controlled non-senior acceptance or waiver creates a pending review record
+  before changing any requirement, document, or alert field; the approved
+  executor returns through the same document service, so linked-row updates,
+  the canonical transition, and all audits commit atomically;
 - rejecting an active refresh request reopens only the document requirement to
   its request state and never reopens or rewrites the Monitoring Alert;
 - an accepted/waived linked requirement cannot later be reversed through the
@@ -397,10 +422,15 @@ only inside the transition service. Conflict upserts must preserve the current
 status.
 
 The AST guard covers quoted/schema-qualified SQL, aliases, tuple assignments,
-PostgreSQL `MERGE`, f-strings, concatenation, augmented assignment, and fully
-unresolved SQL builder expressions. Dynamic or unresolved execute statements
-fail closed unless their exact function and statement count appear in a
-documented narrow allowlist.
+PostgreSQL `MERGE` and inheritance-table `*`/`ONLY` forms, SQLite conflict
+updates and `REPLACE`, f-strings, concatenation, augmented assignment, and
+fully unresolved SQL builder expressions. It masks SQL string literals and
+comments and tracks nested parentheses when identifying the outer
+`SET`/`WHERE` boundary. It inspects every statement in scripts/CTEs and
+preserves every possible string/executor binding across conditions, loops,
+`match`, `try`, and exception-suppressing `with` blocks. Dynamic or unresolved
+execute statements fail closed unless their exact function and statement count
+appear in a documented narrow allowlist.
 
 The narrow lifecycle-write exceptions are:
 

@@ -103,14 +103,6 @@ _APPROVED_DYNAMIC_SQL = {
         1,
     ),
     (
-        "fixtures/pilot_canonical_seeder.py",
-        "_upsert_people",
-    ): (
-        "Synthetic director/UBO convergence selects only those two fixed "
-        "party tables and has no status column.",
-        1,
-    ),
-    (
         "fixtures/seeder.py",
         "_insert_returning_id",
     ): (
@@ -249,13 +241,22 @@ _INSERT_ALIAS = (
     rf"(?:\s+AS\s+{_SQL_IDENTIFIER}"
     rf"|\s+{_SQL_IDENTIFIER})?"
 )
+_SQLITE_CONFLICT_ACTION = r"(?:ROLLBACK|ABORT|REPLACE|FAIL|IGNORE)"
 _MONITORING_UPDATE_PREFIX = (
-    rf"\bUPDATE\s+(?:ONLY\s+)?"
-    rf"{_MONITORING_TABLE}{_UPDATE_ALIAS}\s+SET\b"
+    rf"\bUPDATE(?:\s+OR\s+{_SQLITE_CONFLICT_ACTION})?\s+"
+    rf"(?:ONLY\s+(?:\(\s*{_MONITORING_TABLE}\s*\)|"
+    rf"{_MONITORING_TABLE})|{_MONITORING_TABLE})"
+    rf"\s*\*?{_UPDATE_ALIAS}\s+SET\b"
 )
 _MONITORING_INSERT_PREFIX = (
-    rf"\bINSERT(?:\s+OR\s+[A-Z_]+)?\s+INTO\s+"
+    rf"\b(?:INSERT(?:\s+OR\s+{_SQLITE_CONFLICT_ACTION})?|REPLACE)"
+    rf"\s+INTO\s+"
     rf"{_MONITORING_TABLE}{_INSERT_ALIAS}"
+)
+_REPLACING_MONITORING_INSERT = re.compile(
+    rf"\b(?:INSERT\s+OR\s+REPLACE|REPLACE)\s+INTO\s+"
+    rf"{_MONITORING_TABLE}",
+    re.IGNORECASE,
 )
 _STATUS_ASSIGNMENT = (
     rf"(?<![A-Za-z0-9_$])"
@@ -301,6 +302,148 @@ _MONITORING_UPDATE = re.compile(
 )
 _PLACEHOLDER = re.compile(r"^(?:\?|%s)$", re.IGNORECASE)
 _SQL_STRING_LITERAL = re.compile(r"^'((?:''|[^'])*)'$", re.DOTALL)
+
+
+def _mask_sql_literals_and_comments(sql):
+    """Mask SQL data literals/comments while preserving character offsets."""
+    masked = list(sql)
+    index = 0
+    state = "code"
+    dollar_delimiter = None
+    while index < len(sql):
+        if state == "code":
+            if sql.startswith("--", index):
+                masked[index:index + 2] = "  "
+                state = "line_comment"
+                index += 2
+                continue
+            if sql.startswith("/*", index):
+                masked[index:index + 2] = "  "
+                state = "block_comment"
+                index += 2
+                continue
+            if sql[index] == "'":
+                masked[index] = " "
+                state = "single_quote"
+                index += 1
+                continue
+            dollar = re.match(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$", sql[index:])
+            if dollar:
+                dollar_delimiter = dollar.group(0)
+                masked[index:index + len(dollar_delimiter)] = (
+                    " " * len(dollar_delimiter)
+                )
+                state = "dollar_quote"
+                index += len(dollar_delimiter)
+                continue
+            index += 1
+            continue
+        if state == "single_quote":
+            masked[index] = " "
+            if sql[index] == "'" and index + 1 < len(sql) and sql[index + 1] == "'":
+                masked[index + 1] = " "
+                index += 2
+                continue
+            if sql[index] == "'":
+                state = "code"
+            index += 1
+            continue
+        if state == "line_comment":
+            if sql[index] == "\n":
+                state = "code"
+            else:
+                masked[index] = " "
+            index += 1
+            continue
+        if state == "block_comment":
+            masked[index] = " "
+            if sql.startswith("*/", index):
+                if index + 1 < len(sql):
+                    masked[index + 1] = " "
+                index += 2
+                state = "code"
+            else:
+                index += 1
+            continue
+        if state == "dollar_quote":
+            if sql.startswith(dollar_delimiter, index):
+                masked[index:index + len(dollar_delimiter)] = (
+                    " " * len(dollar_delimiter)
+                )
+                index += len(dollar_delimiter)
+                state = "code"
+                dollar_delimiter = None
+            else:
+                masked[index] = " "
+                index += 1
+    return "".join(masked)
+
+
+def _sql_boundary_index(sql, keywords=("WHERE", "RETURNING")):
+    """Return the first top-level SQL keyword outside literals/comments."""
+    masked = _mask_sql_literals_and_comments(sql)
+    index = 0
+    quote_end = None
+    depth = 0
+    while index < len(masked):
+        char = masked[index]
+        if quote_end is not None:
+            if char == quote_end:
+                if index + 1 < len(masked) and masked[index + 1] == quote_end:
+                    index += 2
+                    continue
+                quote_end = None
+            index += 1
+            continue
+        if char == '"':
+            quote_end = '"'
+            index += 1
+            continue
+        if char == "`":
+            quote_end = "`"
+            index += 1
+            continue
+        if char == "[":
+            quote_end = "]"
+            index += 1
+            continue
+        if char == "(":
+            depth += 1
+            index += 1
+            continue
+        if char == ")":
+            depth = max(0, depth - 1)
+            index += 1
+            continue
+        token = re.match(r"[A-Za-z_][A-Za-z0-9_$]*", masked[index:])
+        if token:
+            if depth == 0 and token.group(0).upper() in keywords:
+                return index
+            index += len(token.group(0))
+            continue
+        index += 1
+    return None
+
+
+def _monitoring_update_writes_status(sql):
+    """Detect a status assignment in the actual UPDATE SET clause."""
+    executable = _mask_sql_literals_and_comments(sql)
+    for update in _MONITORING_UPDATE.finditer(executable):
+        tail = sql[update.end():]
+        boundary = _sql_boundary_index(tail)
+        assignment_region = (
+            tail[:boundary] if boundary is not None else tail
+        )
+        executable_assignments = _mask_sql_literals_and_comments(
+            assignment_region
+        )
+        if re.search(
+            _STATUS_WRITE_ASSIGNMENT,
+            executable_assignments,
+            re.IGNORECASE | re.DOTALL,
+        ):
+            return True
+    return False
 
 
 def _extract_parenthesized(text, opening_index):
@@ -405,7 +548,8 @@ def _dynamic_structural_monitoring_sql(sql):
     # statement can write a status field; callers must use a fixed table token
     # (or receive a narrowly reviewed function exception) to prove otherwise.
     update_prefix = re.search(
-        r"\bUPDATE\s+(?:ONLY\s+)?(?P<target>.*?)\bSET\b",
+        rf"\bUPDATE(?:\s+OR\s+{_SQLITE_CONFLICT_ACTION})?\s+"
+        r"(?:ONLY\s+)?(?P<target>.*?)\bSET\b",
         sql,
         re.IGNORECASE | re.DOTALL,
     )
@@ -414,12 +558,10 @@ def _dynamic_structural_monitoring_sql(sql):
         and _DYNAMIC_SQL_FRAGMENT in update_prefix.group("target")
     ):
         tail = sql[update_prefix.end():]
-        boundary = re.search(
-            r"\b(?:WHERE|RETURNING)\b",
-            tail,
-            re.IGNORECASE,
+        boundary = _sql_boundary_index(tail)
+        assignment_region = (
+            tail[:boundary] if boundary is not None else tail
         )
-        assignment_region = tail[:boundary.start()] if boundary else tail
         if (
             _DYNAMIC_SQL_FRAGMENT in assignment_region
             or re.search(
@@ -431,7 +573,8 @@ def _dynamic_structural_monitoring_sql(sql):
             return True
 
     insert_prefix = re.search(
-        r"\bINSERT(?:\s+OR\s+[A-Z_]+)?\s+INTO\s+",
+        rf"\b(?P<verb>INSERT(?:\s+OR\s+{_SQLITE_CONFLICT_ACTION})?"
+        r"|REPLACE)\s+INTO\s+",
         sql,
         re.IGNORECASE,
     )
@@ -446,6 +589,8 @@ def _dynamic_structural_monitoring_sql(sql):
             statement[:structure.start()] if structure else statement
         )
         if _DYNAMIC_SQL_FRAGMENT in target_region:
+            if "REPLACE" in insert_prefix.group("verb").upper():
+                return True
             # Without an explicit column list the guard cannot prove which
             # positional field receives a value, so fail closed.
             if structure is None or structure.group(0) != "(":
@@ -479,8 +624,10 @@ def _dynamic_structural_monitoring_sql(sql):
     update = _MONITORING_UPDATE.search(sql)
     if update:
         tail = sql[update.end():]
-        boundary = re.search(r"\b(?:WHERE|RETURNING)\b", tail, re.IGNORECASE)
-        assignment_region = tail[:boundary.start()] if boundary else tail
+        boundary = _sql_boundary_index(tail)
+        assignment_region = (
+            tail[:boundary] if boundary is not None else tail
+        )
         if _DYNAMIC_SQL_FRAGMENT in assignment_region:
             return True
 
@@ -521,6 +668,7 @@ class _SqlWriteVisitor(ast.NodeVisitor):
         self.functions = []
         self._string_bindings = [{}]
         self._expression_bindings = [{}]
+        self._exception_path_trackers = []
         self.writes = []
         self.upserts = []
         self.dynamic_risks = []
@@ -579,6 +727,18 @@ class _SqlWriteVisitor(ast.NodeVisitor):
                 return left[0] + _DYNAMIC_SQL_FRAGMENT, True
             if right is not None:
                 return _DYNAMIC_SQL_FRAGMENT + right[0], True
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "replace"
+            and len(node.args) == 2
+            and not node.keywords
+        ):
+            base = self._shape(node.func.value)
+            old = self._literal_string(node.args[0])
+            new = self._literal_string(node.args[1])
+            if base is not None and old is not None and new is not None:
+                return base[0].replace(old, new), base[1]
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -681,6 +841,12 @@ class _SqlWriteVisitor(ast.NodeVisitor):
         return self._literal_string(status_argument) == "open"
 
     def _record_insert(self, call, sql, location):
+        if _REPLACING_MONITORING_INSERT.search(sql):
+            # SQLite REPLACE deletes/reinserts an existing row on conflict and
+            # can therefore reset or overwrite lifecycle state even when an
+            # explicit status value is omitted or happens to be ``open``.
+            self.invalid_inserts.append(location)
+            return
         parts = _monitoring_insert_parts(sql)
         if parts is None:
             return
@@ -744,21 +910,277 @@ class _SqlWriteVisitor(ast.NodeVisitor):
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
+    def _binding_state(self):
+        return (
+            dict(self._string_bindings[-1]),
+            dict(self._expression_bindings[-1]),
+        )
+
+    def _visit_branch(self, statements, state):
+        self._string_bindings[-1] = dict(state[0])
+        self._expression_bindings[-1] = dict(state[1])
+        for statement in statements:
+            self.visit(statement)
+        return self._binding_state()
+
+    @staticmethod
+    def _shape_risk(value):
+        if value is None:
+            return -1
+        sql = value[0]
+        if (
+            _monitoring_update_writes_status(sql)
+            or _UPSERT_STATUS_UPDATE.search(sql)
+            or _MONITORING_MERGE_STATUS_UPDATE.search(sql)
+        ):
+            return 4
+        if _dynamic_structural_monitoring_sql(sql):
+            return 3
+        if (
+            _MONITORING_UPDATE.search(sql)
+            or _MONITORING_INSERT.search(sql)
+            or re.search(
+                rf"\bMERGE\s+INTO\s+{_MONITORING_TABLE}",
+                sql,
+                re.IGNORECASE,
+            )
+        ):
+            return 2
+        return 0
+
+    @classmethod
+    def _merge_string_binding(cls, values):
+        first = values[0]
+        if all(value == first for value in values[1:]):
+            return first
+        known = [value for value in values if value is not None]
+        if any(value is None for value in values) and not any(
+            cls._shape_risk(value) >= 3 for value in known
+        ):
+            return None
+        return max(
+            known,
+            key=cls._shape_risk,
+        )
+
+    @staticmethod
+    def _expression_key(value):
+        if value is None:
+            return None
+        return ast.dump(value, include_attributes=False)
+
+    @staticmethod
+    def _binding_executor_method(value, bindings):
+        seen = set()
+        while isinstance(value, ast.Name) and value.id not in seen:
+            seen.add(value.id)
+            if value.id not in bindings:
+                break
+            value = bindings[value.id]
+        method = getattr(value, "attr", "") or getattr(value, "id", "")
+        return method if method in _SQL_EXECUTOR_METHODS else None
+
+    def _merge_branch_states(self, states):
+        missing = object()
+        string_names = set().union(*(state[0] for state in states))
+        expression_names = set().union(*(state[1] for state in states))
+        merged_strings = {}
+        merged_expressions = {}
+
+        for name in string_names:
+            values = [state[0].get(name, missing) for state in states]
+            if any(value is missing for value in values):
+                known = [value for value in values if value is not missing]
+                risky = [
+                    value
+                    for value in known
+                    if self._shape_risk(value) >= 3
+                ]
+                merged_strings[name] = (
+                    max(risky, key=self._shape_risk)
+                    if risky
+                    else None
+                )
+            else:
+                merged_strings[name] = self._merge_string_binding(values)
+
+        for name in expression_names:
+            values = [state[1].get(name, missing) for state in states]
+            executor_methods = {
+                self._binding_executor_method(value, state[1])
+                for value, state in zip(values, states)
+                if value is not missing
+            } - {None}
+            if executor_methods:
+                merged_expressions[name] = ast.Name(
+                    id=sorted(executor_methods)[0],
+                    ctx=ast.Load(),
+                )
+                continue
+            if any(value is missing for value in values):
+                continue
+            keys = [self._expression_key(value) for value in values]
+            if all(key == keys[0] for key in keys[1:]):
+                merged_expressions[name] = values[0]
+
+        self._string_bindings[-1] = merged_strings
+        self._expression_bindings[-1] = merged_expressions
+
+    def _start_exception_path_tracker(self):
+        tracker = {
+            "scope": len(self._string_bindings) - 1,
+            "strings": {
+                name: value
+                for name, value in self._string_bindings[-1].items()
+                if self._shape_risk(value) >= 3
+            },
+            "executors": {},
+        }
+        for name, value in self._expression_bindings[-1].items():
+            method = self._binding_executor_method(
+                value,
+                self._expression_bindings[-1],
+            )
+            if method:
+                tracker["executors"][name] = method
+        self._exception_path_trackers.append(tracker)
+        return tracker
+
+    def _record_exception_path_binding(self, name, shape, expression):
+        scope = len(self._string_bindings) - 1
+        for tracker in self._exception_path_trackers:
+            if tracker["scope"] != scope:
+                continue
+            existing = tracker["strings"].get(name)
+            if shape is None:
+                if existing is None:
+                    tracker["strings"][name] = None
+            elif self._shape_risk(shape) >= 3 and (
+                existing is None
+                or self._shape_risk(shape) > self._shape_risk(existing)
+            ):
+                tracker["strings"][name] = shape
+            method = self._binding_executor_method(
+                expression,
+                self._expression_bindings[-1],
+            )
+            if method:
+                tracker["executors"][name] = method
+
+    def _finish_exception_path_tracker(self, tracker):
+        popped = self._exception_path_trackers.pop()
+        assert popped is tracker
+        for name, risky in tracker["strings"].items():
+            current = self._string_bindings[-1].get(name)
+            if risky is None:
+                if self._shape_risk(current) < 3:
+                    self._string_bindings[-1][name] = None
+            elif self._shape_risk(risky) > self._shape_risk(current):
+                self._string_bindings[-1][name] = risky
+        for name, method in tracker["executors"].items():
+            self._expression_bindings[-1][name] = ast.Name(
+                id=method,
+                ctx=ast.Load(),
+            )
+
+    def visit_If(self, node):
+        self.visit(node.test)
+        initial = self._binding_state()
+        body_state = self._visit_branch(node.body, initial)
+        else_state = (
+            self._visit_branch(node.orelse, initial)
+            if node.orelse
+            else initial
+        )
+        self._merge_branch_states((body_state, else_state))
+
+    def _visit_loop(self, node):
+        self.visit(node.iter if isinstance(node, (ast.For, ast.AsyncFor)) else node.test)
+        initial = self._binding_state()
+        body_state = self._visit_branch(node.body, initial)
+        states = (body_state, initial)
+        if node.orelse:
+            states = tuple(
+                self._visit_branch(node.orelse, state)
+                for state in states
+            )
+        self._merge_branch_states(states)
+
+    visit_For = _visit_loop
+    visit_AsyncFor = _visit_loop
+    visit_While = _visit_loop
+
+    def visit_Try(self, node):
+        initial = self._binding_state()
+        tracker = self._start_exception_path_tracker()
+        body_state = self._visit_branch(node.body, initial)
+        states = [
+            self._visit_branch(node.orelse, body_state)
+            if node.orelse
+            else body_state
+        ]
+        for handler in node.handlers:
+            if handler.type is not None:
+                self.visit(handler.type)
+            states.append(self._visit_branch(handler.body, initial))
+            states.append(self._visit_branch(handler.body, body_state))
+        if node.finalbody:
+            states = [
+                self._visit_branch(node.finalbody, state)
+                for state in states
+            ]
+        self._merge_branch_states(tuple(states))
+        self._finish_exception_path_tracker(tracker)
+
+    visit_TryStar = visit_Try
+
+    def visit_With(self, node):
+        for item in node.items:
+            self.visit(item.context_expr)
+        tracker = self._start_exception_path_tracker()
+        for statement in node.body:
+            self.visit(statement)
+        self._finish_exception_path_tracker(tracker)
+
+    visit_AsyncWith = visit_With
+
+    def visit_Match(self, node):
+        self.visit(node.subject)
+        initial = self._binding_state()
+        states = [initial]
+        for case in node.cases:
+            self._string_bindings[-1] = dict(initial[0])
+            self._expression_bindings[-1] = dict(initial[1])
+            if case.guard is not None:
+                self.visit(case.guard)
+            states.append(
+                self._visit_branch(case.body, self._binding_state())
+            )
+        self._merge_branch_states(tuple(states))
+
     def visit_Assign(self, node):
         shape = self._shape(node.value)
         for target in node.targets:
             if isinstance(target, ast.Name):
                 self._expression_bindings[-1][target.id] = node.value
-                if shape is not None:
-                    self._string_bindings[-1][target.id] = shape
+                self._string_bindings[-1][target.id] = shape
+                self._record_exception_path_binding(
+                    target.id,
+                    shape,
+                    node.value,
+                )
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node):
         if node.value is not None and isinstance(node.target, ast.Name):
             shape = self._shape(node.value)
             self._expression_bindings[-1][node.target.id] = node.value
-            if shape is not None:
-                self._string_bindings[-1][node.target.id] = shape
+            self._string_bindings[-1][node.target.id] = shape
+            self._record_exception_path_binding(
+                node.target.id,
+                shape,
+                node.value,
+            )
         self.generic_visit(node)
 
     def visit_AugAssign(self, node):
@@ -773,8 +1195,13 @@ class _SqlWriteVisitor(ast.NodeVisitor):
                     previous[1] or appended[1],
                 )
             else:
-                self._string_bindings[-1].pop(node.target.id, None)
+                self._string_bindings[-1][node.target.id] = None
             self._expression_bindings[-1].pop(node.target.id, None)
+            self._record_exception_path_binding(
+                node.target.id,
+                self._string_bindings[-1].get(node.target.id),
+                node.target,
+            )
         self.generic_visit(node)
 
     def visit_Call(self, node):
@@ -799,7 +1226,7 @@ class _SqlWriteVisitor(ast.NodeVisitor):
                 if _dynamic_structural_monitoring_sql(sql):
                     self.dynamic_risks.append(location)
                 if (
-                    _STATUS_UPDATE.search(sql)
+                    _monitoring_update_writes_status(sql)
                     or _UPSERT_STATUS_UPDATE.search(sql)
                     or _MONITORING_MERGE_STATUS_UPDATE.search(sql)
                 ):
@@ -1008,6 +1435,25 @@ def test_fully_dynamic_table_target_cannot_hide_status_update_or_insert():
                 f"INSERT INTO {table} VALUES (?, ?, ?)",
                 (20, "resolved", "bypass"),
             )
+
+        def malicious_replace(db, table):
+            db.execute(
+                f"REPLACE INTO {table} (id, summary) VALUES (?, ?)",
+                (21, "implicit status reset"),
+            )
+
+        def malicious_insert_or_replace(db, table):
+            db.execute(
+                f"INSERT OR REPLACE INTO {table} "
+                "(id, status, summary) VALUES (?, ?, ?)",
+                (22, "open", "destructive replacement"),
+            )
+
+        def malicious_conflict_update(db, table):
+            db.execute(
+                f"UPDATE OR REPLACE {table} SET status = ? WHERE id = ?",
+                ("resolved", 23),
+            )
         """
     )
     assert {
@@ -1018,6 +1464,9 @@ def test_fully_dynamic_table_target_cannot_hide_status_update_or_insert():
         ("synthetic_guard_probe.py", "malicious_qualified_update"),
         ("synthetic_guard_probe.py", "malicious_insert"),
         ("synthetic_guard_probe.py", "malicious_positional_insert"),
+        ("synthetic_guard_probe.py", "malicious_replace"),
+        ("synthetic_guard_probe.py", "malicious_insert_or_replace"),
+        ("synthetic_guard_probe.py", "malicious_conflict_update"),
     }
 
 
@@ -1228,6 +1677,302 @@ def test_aliased_quoted_and_schema_qualified_updates_are_detected():
         ("synthetic_guard_probe.py", "quoted"),
         ("synthetic_guard_probe.py", "qualified"),
         ("synthetic_guard_probe.py", "qualified_and_quoted"),
+    }
+
+
+def test_where_inside_literal_or_comment_cannot_hide_later_status_write():
+    visitor = _scan_source(
+        """
+        def literal_bypass(db):
+            db.execute(
+                "UPDATE monitoring_alerts "
+                "SET summary = 'WHERE', status = ? WHERE id = ?",
+                ("resolved", 1),
+            )
+
+        def block_comment_bypass(db):
+            db.execute(
+                "UPDATE monitoring_alerts "
+                "SET summary = ?, /* WHERE id = 0 */ status = ? WHERE id = ?",
+                ("note", "resolved", 2),
+            )
+
+        def line_comment_bypass(db):
+            db.execute(
+                "UPDATE monitoring_alerts SET summary = ? -- WHERE fake\\n"
+                ", status = ? WHERE id = ?",
+                ("note", "resolved", 3),
+            )
+        """
+    )
+    assert {
+        (path, function)
+        for path, function, _line in visitor.writes
+    } == {
+        ("synthetic_guard_probe.py", "block_comment_bypass"),
+        ("synthetic_guard_probe.py", "line_comment_bypass"),
+        ("synthetic_guard_probe.py", "literal_bypass"),
+    }
+
+
+def test_where_inside_set_subquery_cannot_hide_later_status_write():
+    visitor = _scan_source(
+        """
+        def subquery_bypass(db):
+            db.execute(
+                "UPDATE monitoring_alerts "
+                "SET summary = ("
+                "SELECT note FROM audit_log WHERE audit_log.id = 1"
+                "), status = ? WHERE id = ?",
+                ("resolved", 1),
+            )
+        """
+    )
+    assert {
+        (path, function)
+        for path, function, _line in visitor.writes
+    } == {
+        ("synthetic_guard_probe.py", "subquery_bypass"),
+    }
+
+
+def test_sqlite_conflict_updates_and_replace_inserts_cannot_bypass_guard():
+    visitor = _scan_source(
+        """
+        def update_or_rollback(db):
+            db.execute(
+                "UPDATE OR ROLLBACK monitoring_alerts "
+                "SET status = ? WHERE id = ?",
+                ("resolved", 1),
+            )
+
+        def update_or_abort(db):
+            db.execute(
+                "UPDATE OR ABORT monitoring_alerts SET status = ? WHERE id = ?",
+                ("resolved", 2),
+            )
+
+        def update_or_replace(db):
+            db.execute(
+                "UPDATE OR REPLACE monitoring_alerts "
+                "SET status = ? WHERE id = ?",
+                ("resolved", 3),
+            )
+
+        def update_or_fail(db):
+            db.execute(
+                "UPDATE OR FAIL monitoring_alerts SET status = ? WHERE id = ?",
+                ("resolved", 4),
+            )
+
+        def update_or_ignore(db):
+            db.execute(
+                "UPDATE OR IGNORE monitoring_alerts SET status = ? WHERE id = ?",
+                ("resolved", 5),
+            )
+
+        def replace_noncanonical(db):
+            db.execute(
+                "REPLACE INTO monitoring_alerts (id, status, summary) "
+                "VALUES (?, ?, ?)",
+                (6, "resolved", "replacement"),
+            )
+
+        def replace_implicit_default(db):
+            db.execute(
+                "REPLACE INTO monitoring_alerts (id, summary) VALUES (?, ?)",
+                (7, "implicit reset"),
+            )
+
+        def insert_or_replace_open(db):
+            db.execute(
+                "INSERT OR REPLACE INTO monitoring_alerts "
+                "(id, status, summary) VALUES (?, ?, ?)",
+                (8, "open", "destructive open replacement"),
+            )
+        """
+    )
+    assert {
+        (path, function)
+        for path, function, _line in visitor.writes
+    } == {
+        ("synthetic_guard_probe.py", "update_or_abort"),
+        ("synthetic_guard_probe.py", "update_or_fail"),
+        ("synthetic_guard_probe.py", "update_or_ignore"),
+        ("synthetic_guard_probe.py", "update_or_replace"),
+        ("synthetic_guard_probe.py", "update_or_rollback"),
+    }
+    assert {
+        (path, function)
+        for path, function, _line in visitor.invalid_inserts
+    } == {
+        ("synthetic_guard_probe.py", "insert_or_replace_open"),
+        ("synthetic_guard_probe.py", "replace_implicit_default"),
+        ("synthetic_guard_probe.py", "replace_noncanonical"),
+    }
+
+
+def test_postgresql_inheritance_update_forms_cannot_bypass_guard():
+    visitor = _scan_source(
+        """
+        def inherited_table(db):
+            db.execute(
+                "UPDATE monitoring_alerts * SET status = ? WHERE id = ?",
+                ("resolved", 1),
+            )
+
+        def only_inherited_table(db):
+            db.execute(
+                "UPDATE ONLY monitoring_alerts * AS ma "
+                "SET status = ? WHERE ma.id = ?",
+                ("resolved", 2),
+            )
+
+        def parenthesized_only_table(db):
+            db.execute(
+                "UPDATE ONLY (monitoring_alerts) AS ma "
+                "SET status = ? WHERE ma.id = ?",
+                ("resolved", 3),
+            )
+        """
+    )
+    assert {
+        (path, function)
+        for path, function, _line in visitor.writes
+    } == {
+        ("synthetic_guard_probe.py", "inherited_table"),
+        ("synthetic_guard_probe.py", "only_inherited_table"),
+        ("synthetic_guard_probe.py", "parenthesized_only_table"),
+    }
+
+
+def test_non_string_rebinding_cannot_reuse_stale_sql_shape():
+    visitor = _scan_source(
+        """
+        sql = "UPDATE monitoring_alerts SET status = ? WHERE id = ?"
+
+        def rebound(db, builder):
+            sql = "UPDATE monitoring_alerts SET status = ? WHERE id = ?"
+            sql = builder()
+            db.execute(sql, ("resolved", 1))
+
+        def shadows_module_binding(db, builder):
+            sql = builder()
+            db.execute(sql, ("resolved", 2))
+        """
+    )
+    assert {
+        (path, function)
+        for path, function, _line in visitor.unresolved_risks
+    } == {
+        ("synthetic_guard_probe.py", "rebound"),
+        ("synthetic_guard_probe.py", "shadows_module_binding"),
+    }
+    assert visitor.writes == []
+
+
+def test_conditional_and_loop_rebinding_preserve_every_possible_sql_path():
+    visitor = _scan_source(
+        """
+        def conditional_overwrite(db, use_safe):
+            sql = "UPDATE monitoring_alerts SET status = ? WHERE id = ?"
+            if use_safe:
+                sql = "UPDATE monitoring_alerts SET summary = ? WHERE id = ?"
+            db.execute(sql, ("value", 1))
+
+        def branch_assignment(db, use_safe):
+            if use_safe:
+                sql = "UPDATE monitoring_alerts SET summary = ? WHERE id = ?"
+            else:
+                sql = "UPDATE monitoring_alerts SET status = ? WHERE id = ?"
+            db.execute(sql, ("value", 2))
+
+        def loop_may_not_run(db, rows):
+            sql = "UPDATE monitoring_alerts SET status = ? WHERE id = ?"
+            for _row in rows:
+                sql = "UPDATE monitoring_alerts SET summary = ? WHERE id = ?"
+            db.execute(sql, ("value", 3))
+
+        def conditional_executor_alias(db, callback, use_db):
+            if use_db:
+                run_sql = db.execute
+            else:
+                run_sql = callback
+            run_sql(
+                "UPDATE monitoring_alerts SET status = ? WHERE id = ?",
+                ("resolved", 4),
+            )
+        """
+    )
+    assert {
+        (path, function)
+        for path, function, _line in visitor.writes
+    } == {
+        ("synthetic_guard_probe.py", "branch_assignment"),
+        ("synthetic_guard_probe.py", "conditional_overwrite"),
+        ("synthetic_guard_probe.py", "conditional_executor_alias"),
+        ("synthetic_guard_probe.py", "loop_may_not_run"),
+    }
+
+
+def test_try_and_match_paths_cannot_hide_a_possible_status_write():
+    visitor = _scan_source(
+        """
+        def try_overwrite(db, may_fail):
+            sql = "UPDATE monitoring_alerts SET summary = ? WHERE id = ?"
+            try:
+                sql = "UPDATE monitoring_alerts SET status = ? WHERE id = ?"
+                may_fail()
+                sql = "UPDATE monitoring_alerts SET summary = ? WHERE id = ?"
+            except RuntimeError:
+                pass
+            db.execute(sql, ("value", 1))
+
+        def suppressed_with_overwrite(db, suppressor, may_fail):
+            sql = "UPDATE monitoring_alerts SET summary = ? WHERE id = ?"
+            with suppressor():
+                sql = "UPDATE monitoring_alerts SET status = ? WHERE id = ?"
+                may_fail()
+                sql = "UPDATE monitoring_alerts SET summary = ? WHERE id = ?"
+            db.execute(sql, ("value", 2))
+
+        def match_assignment(db, decision):
+            match decision:
+                case "safe":
+                    sql = "UPDATE monitoring_alerts SET summary = ? WHERE id = ?"
+                case _:
+                    sql = "UPDATE monitoring_alerts SET status = ? WHERE id = ?"
+            db.execute(sql, ("value", 3))
+        """
+    )
+    assert {
+        (path, function)
+        for path, function, _line in visitor.writes
+    } == {
+        ("synthetic_guard_probe.py", "match_assignment"),
+        ("synthetic_guard_probe.py", "suppressed_with_overwrite"),
+        ("synthetic_guard_probe.py", "try_overwrite"),
+    }
+
+
+def test_every_monitoring_update_in_an_executescript_is_inspected():
+    visitor = _scan_source(
+        """
+        def later_statement_bypass(db):
+            db.executescript(
+                "UPDATE monitoring_alerts "
+                "SET summary = 'safe first statement' WHERE id = 1; "
+                "WITH selected AS (SELECT 2 AS id) "
+                "UPDATE monitoring_alerts SET status = 'resolved' "
+                "WHERE id IN (SELECT id FROM selected);"
+            )
+        """
+    )
+    assert {
+        (path, function)
+        for path, function, _line in visitor.writes
+    } == {
+        ("synthetic_guard_probe.py", "later_statement_bypass"),
     }
 
 

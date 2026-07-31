@@ -1,8 +1,22 @@
 # PR-MON-M1-STATE-MACHINE-1 — staging schema preflight
 
-Captured: `2026-07-30T07:10:18Z`
-Deployed/base SHA: `9fa083c1ac185ea65bfa8515dff315eb254701a5`
+Captured: `2026-07-31T03:12:13.624740Z`
+Deployed/current-main SHA: `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`
 Mode: authenticated, read-only SQL executed in one healthy staging backend task
+
+Runtime evidence:
+
+- backend task `b9e91f2a47d54bc5b2877f4b6e977d88`;
+- backend task definition `regmind-staging:989`;
+- exact image tag `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`;
+- image digest
+  `sha256:a98c9286479d1e32310f1ae4e402d3455abfc9904d7e2ee820374713443481d5`;
+- `GIT_SHA` and `IMAGE_TAG` both equal the deployed SHA;
+- backend service 2/2 and verification-worker service 6/6, with zero pending
+  tasks and completed rollouts.
+
+The database session was explicitly set to `READ ONLY`. It was rolled back and
+closed after the queries.
 
 ## Dataset compatibility
 
@@ -18,6 +32,7 @@ The current staging inventory remains 19 Monitoring Alerts:
 
 All values are members of `monitoring_alert_state_machine_v1`. The status
 constraint precondition is therefore satisfied without rewriting alert data.
+The combined NULL, blank, and noncanonical-status offender count was `0`.
 
 ## Pending-review uniqueness preflight
 
@@ -36,10 +51,6 @@ Result: `0` duplicate-pending alert groups.
 This proves the existing staging dataset is compatible with the proposed
 partial unique index. The migration does not merge, delete, reject, or
 otherwise rewrite a review request.
-
-At `2026-07-30 07:41:46.004068+00:00`, a second authenticated read-only
-preflight ran in backend task `ba97cef6735745a6a9d361a5a8cdd276`
-(`regmind-staging:985`):
 
 ```sql
 SELECT
@@ -67,7 +78,7 @@ ORDER BY state;
 Consequently, migration 056 cannot strand a historical pending request with a
 NULL `source_alert_status`: staging currently has no review-request rows. No
 row was inserted, updated, deleted, approved, rejected, or otherwise changed
-during either preflight.
+during the preflight.
 
 ## Existing review-request shape
 
@@ -88,6 +99,36 @@ Existing indexes:
 The proposed typed `transition_evidence` and exact `source_alert_status`
 columns are additive. The partial unique pending-review index is also
 additive and is installed only after the duplicate preflight passes.
+
+The latest applied file migration is `053`. Staging has no status-vocabulary
+constraint yet, no `transition_evidence` or `source_alert_status` column, and
+no pending-review partial unique index. Migrations 054–056 therefore remain
+available and compatible with the observed schema.
+
+## Feature-governance boundary
+
+All four governed Monitoring flags evaluated exactly OFF:
+
+- `ENABLE_DOCUMENT_RENEWAL_AUTOMATION`;
+- `ENABLE_AGENT1_REFRESH_VERIFICATION`;
+- `ENABLE_MONITORING_SCREENING_CHANGE`;
+- `ENABLE_MONITORING_AUTO_RESOLUTION`.
+
+No new Monitoring workflow consumer was observed.
+
+## PR #902 evidence freshness
+
+Alert 610 remains in canonical status `open`, but its unrelated `reviewed_at`
+metadata was populated after the PR #902 audit. That makes PR #902's historical
+whole-row fingerprint stale and unsuitable as current rollback evidence. It
+does not affect migration 054's status-only compatibility check, the v1
+transition service's exact current-status predicate, or migrations 055–056
+because the review ledger is empty.
+
+The read-only preflight must be repeated immediately before rollout. Any
+status-count drift requiring reconciliation, noncanonical status, review-ledger
+row, duplicate pending request, unexpected constraint/index, or enabled
+Monitoring flag is a stop condition.
 
 ## Verdict
 

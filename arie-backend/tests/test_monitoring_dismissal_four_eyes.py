@@ -533,6 +533,101 @@ def test_direct_senior_clear_helper_rejects_forged_co_role(four_eyes_server):
     assert _status(dbm, aid) == "open"
 
 
+@pytest.mark.parametrize(
+    ("helper_name", "user"),
+    (
+        ("create_pending_request", {"sub": "co_fe", "role": "co"}),
+        ("record_senior_clear", {"sub": "sco_fe", "role": "sco"}),
+    ),
+)
+def test_control_ledger_rejects_oversized_rationale_before_writes(
+    four_eyes_server,
+    helper_name,
+    user,
+):
+    _base, dbm = four_eyes_server
+    aid = _seed_alert(
+        dbm,
+        "misc_flag",
+        "critical",
+        "Oversized review-control rationale probe.",
+    )
+    actions_before = _audit_actions(dbm, aid)
+    audit_calls = []
+    conn = dbm.get_db()
+    try:
+        with pytest.raises(
+            mdc.DismissalControlError,
+            match="1000-character limit",
+        ):
+            getattr(mdc, helper_name)(
+                conn,
+                alert={"id": aid},
+                tier=3,
+                requested_outcome="dismiss",
+                dismissal_reason="false_positive",
+                rationale="x" * 1001,
+                evidence_ref="Exact evidence note.",
+                transition_evidence={},
+                user=user,
+                audit_writer=lambda *args, **kwargs: audit_calls.append(
+                    (args, kwargs)
+                ),
+                commit=False,
+            )
+        conn.rollback()
+    finally:
+        conn.close()
+
+    assert audit_calls == []
+    assert _audit_actions(dbm, aid) == actions_before
+    assert _review_requests(dbm, aid) == []
+    assert _status(dbm, aid) == "open"
+
+
+def test_pending_control_rejects_oversized_typed_evidence_before_writes(
+    four_eyes_server,
+):
+    _base, dbm = four_eyes_server
+    aid = _seed_alert(
+        dbm,
+        "misc_flag",
+        "critical",
+        "Oversized typed-control evidence probe.",
+    )
+    actions_before = _audit_actions(dbm, aid)
+    audit_calls = []
+    conn = dbm.get_db()
+    try:
+        with pytest.raises(
+            mdc.DismissalControlError,
+            match="1000-character limit",
+        ):
+            mdc.create_pending_request(
+                conn,
+                alert={"id": aid},
+                tier=3,
+                requested_outcome="dismiss",
+                dismissal_reason="false_positive",
+                rationale="Exact officer rationale.",
+                evidence_ref="Exact evidence note.",
+                transition_evidence={"case_identifier": "x" * 1001},
+                user={"sub": "co_fe", "role": "co"},
+                audit_writer=lambda *args, **kwargs: audit_calls.append(
+                    (args, kwargs)
+                ),
+                commit=False,
+            )
+        conn.rollback()
+    finally:
+        conn.close()
+
+    assert audit_calls == []
+    assert _audit_actions(dbm, aid) == actions_before
+    assert _review_requests(dbm, aid) == []
+    assert _status(dbm, aid) == "open"
+
+
 # ── Approval flow + same-user block ──────────────────────────────────────────
 
 def test_different_sco_can_approve_and_execute(four_eyes_server):
@@ -791,6 +886,33 @@ def test_escalation_on_tier1_is_single_officer(four_eyes_server):
     assert r.status_code == 200, r.text
     assert _status(dbm, aid) == "routed_to_edd"
     assert "monitoring.alert.dismissal_requested" not in _audit_actions(dbm, aid)
+
+
+def test_escalate_to_sco_replay_fails_without_duplicate_decision_audit(
+    four_eyes_server,
+):
+    base, dbm = four_eyes_server
+    aid = _seed_alert(
+        dbm,
+        "misc_flag",
+        "high",
+        "Manual concern requiring senior review",
+    )
+    co = _tok("co_fe", "co", "CO FE")
+    payload = {
+        "action": "save_decision",
+        "outcome": "escalate_to_sco",
+        "note": "Escalate once for senior review.",
+    }
+
+    first = _patch(base, co, aid, payload)
+    assert first.status_code == 200, first.text
+    before_actions = list(_audit_actions(dbm, aid))
+
+    replay = _patch(base, co, aid, payload)
+    assert replay.status_code == 409, replay.text
+    assert _status(dbm, aid) == "escalated"
+    assert _audit_actions(dbm, aid) == before_actions
 
 
 # ── No new stored status values ──────────────────────────────────────────────

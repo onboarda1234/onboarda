@@ -12,6 +12,7 @@ from enhanced_requirements import (
     update_application_enhanced_requirement,
 )
 import monitoring_alert_state_machine as monitoring_state_machine
+import monitoring_dismissal_control as dismissal_control
 
 logger = logging.getLogger("arie.monitoring_document_refresh")
 
@@ -864,15 +865,144 @@ def _rollback_quietly(db):
         logger.exception("monitoring document refresh rollback failed")
 
 
-def _document_transition_evidence(*, outcome, request_id, document_id, note):
+def _document_transition_evidence(
+    *,
+    outcome,
+    request_id,
+    document_id,
+    note,
+    review_request_id=None,
+):
     evidence = {"document_request_id": request_id}
+    if note:
+        evidence["officer_rationale"] = note
     if outcome == "accept":
         evidence["document_id"] = document_id
-        if note:
-            evidence["officer_rationale"] = note
     elif outcome == "waive":
         evidence["waiver_reason"] = note
+    if review_request_id not in (None, ""):
+        evidence["review_request_id"] = review_request_id
     return evidence
+
+
+def prepare_document_refresh_clearance(
+    db,
+    *,
+    alert,
+    request,
+    outcome,
+    requested_outcome=None,
+    note,
+    evidence_ref,
+    user,
+    audit_writer,
+    send_for_second_review=False,
+):
+    """Create the governed review-control disposition before a document clear.
+
+    The caller owns the surrounding transaction.  A controlled officer clear
+    returns ``pending`` without changing the requirement, document, or alert;
+    a senior direct clear returns the atomically linked ``senior_cleared``
+    record; a tier-3 clear returns ``execute`` with no ledger row.
+    """
+    alert = dict(alert or {})
+    request = dict(request or {})
+    alert_id = alert.get("id")
+    request_id = request.get("id")
+    application_id = alert.get("application_id")
+    if outcome not in {"accept", "waive"}:
+        return "execute", None
+    if (
+        alert_id in (None, "")
+        or request_id in (None, "")
+        or str(request.get("monitoring_alert_id") or "") != str(alert_id)
+        or str(request.get("application_id") or "") != str(application_id or "")
+    ):
+        raise MonitoringDocumentRefreshError(
+            "The document request is not exactly linked to this Monitoring Alert",
+            409,
+        )
+
+    transition_evidence = {"document_request_id": request_id}
+    if outcome == "accept":
+        linked_document_id = request.get("linked_document_id")
+        if linked_document_id in (None, ""):
+            raise MonitoringDocumentRefreshError(
+                "An uploaded replacement document is required before acceptance",
+                409,
+            )
+        linked_document = db.execute(
+            "SELECT id, application_id FROM documents WHERE id = ?",
+            (linked_document_id,),
+        ).fetchone()
+        if (
+            linked_document is None
+            or str(_row_get(linked_document, "application_id") or "")
+            != str(application_id or "")
+        ):
+            raise MonitoringDocumentRefreshError(
+                "The replacement document is not linked to this application",
+                409,
+            )
+        transition_evidence["document_id"] = linked_document_id
+
+    requested_outcome = str(
+        requested_outcome
+        or (
+            "accept_updated_document"
+            if outcome == "accept"
+            else "waive_with_reason"
+        )
+    ).strip()
+    permitted_outcomes = (
+        {"accept_updated_document", "mark_already_updated"}
+        if outcome == "accept"
+        else {"waive_with_reason"}
+    )
+    if requested_outcome not in permitted_outcomes:
+        raise MonitoringDocumentRefreshError(
+            "The document clearance outcome does not match the requested action",
+            409,
+        )
+    if not dismissal_control.requires_control(
+        alert,
+        action="save_decision",
+        outcome=requested_outcome,
+    ):
+        return "execute", None
+
+    try:
+        if dismissal_control.is_senior(user) and not send_for_second_review:
+            control = dismissal_control.record_senior_clear(
+                db,
+                alert=alert,
+                tier=dismissal_control.classify_alert_tier(alert),
+                requested_outcome=requested_outcome,
+                dismissal_reason=None,
+                rationale=str(note or "").strip(),
+                evidence_ref=str(evidence_ref or "").strip(),
+                transition_evidence=transition_evidence,
+                user=user,
+                audit_writer=audit_writer,
+                commit=False,
+            )
+            return "execute", control
+        control = dismissal_control.create_pending_request(
+            db,
+            alert=alert,
+            tier=dismissal_control.classify_alert_tier(alert),
+            requested_outcome=requested_outcome,
+            dismissal_reason=None,
+            rationale=str(note or "").strip(),
+            evidence_ref=str(evidence_ref or "").strip(),
+            transition_evidence=transition_evidence,
+            user=user,
+            audit_writer=audit_writer,
+            commit=False,
+        )
+        return "pending", control
+    except dismissal_control.DismissalControlError as exc:
+        raise MonitoringDocumentRefreshError(str(exc), exc.status_code) from exc
 
 
 def _transition_document_alert(
@@ -881,13 +1011,21 @@ def _transition_document_alert(
     alert,
     expected_status,
     outcome,
+    requested_outcome,
     request_id,
     document_id,
     note,
     user,
+    review_request_id=None,
 ):
     target_status = "resolved" if outcome == "accept" else "waived"
-    reason_code = "document_accepted" if outcome == "accept" else "document_waived"
+    reason_code = (
+        "document_already_updated"
+        if requested_outcome == "mark_already_updated"
+        else "document_accepted"
+        if outcome == "accept"
+        else "document_waived"
+    )
     return monitoring_state_machine.transition_alert_status(
         db,
         alert.get("id"),
@@ -903,12 +1041,25 @@ def _transition_document_alert(
             request_id=request_id,
             document_id=document_id,
             note=note,
+            review_request_id=review_request_id,
         ),
         commit=False,
     )
 
 
-def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
+def review_document_refresh(
+    db,
+    alert_id,
+    *,
+    outcome,
+    note,
+    user,
+    audit_writer,
+    evidence_ref="",
+    send_for_second_review=False,
+    review_request_id=None,
+    requested_outcome=None,
+):
     alert = _fetch_alert(db, alert_id)
     if not alert:
         raise MonitoringDocumentRefreshError("Alert not found", 404)
@@ -961,6 +1112,51 @@ def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
                 409,
             )
         alert.update(locked_alert)
+
+        if outcome in {"accept", "waive"} and review_request_id in (None, ""):
+            requested_outcome = str(
+                requested_outcome
+                or (
+                    "accept_updated_document"
+                    if outcome == "accept"
+                    else "waive_with_reason"
+                )
+            ).strip()
+            disposition, control = prepare_document_refresh_clearance(
+                db,
+                alert=alert,
+                request=request,
+                outcome=outcome,
+                requested_outcome=requested_outcome,
+                note=note,
+                evidence_ref=evidence_ref,
+                user=user,
+                audit_writer=audit_writer,
+                send_for_second_review=send_for_second_review,
+            )
+            if disposition == "pending":
+                return {
+                    "alert_id": alert.get("id"),
+                    "status": "review_requested",
+                    "changed": False,
+                    "pending_second_review": True,
+                    "review_request_id": (control or {}).get("id"),
+                    "alert": _fetch_alert(db, alert.get("id")),
+                    "document_request": request,
+                    "document_refresh": document_refresh_context(
+                        db, alert.get("id")
+                    ),
+                }
+            review_request_id = (control or {}).get("id")
+        elif outcome in {"accept", "waive"}:
+            requested_outcome = str(
+                requested_outcome
+                or (
+                    "accept_updated_document"
+                    if outcome == "accept"
+                    else "waive_with_reason"
+                )
+            ).strip()
 
         update_payload = {"status": target_status}
         if note:
@@ -1062,10 +1258,12 @@ def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
                 alert=alert,
                 expected_status=expected_status,
                 outcome=outcome,
+                requested_outcome=requested_outcome,
                 request_id=req_id,
                 document_id=linked_document_id,
                 note=note,
                 user=user,
+                review_request_id=review_request_id,
             )
             authoritative_alert = transition["alert"]
         else:
@@ -1128,7 +1326,15 @@ def review_document_refresh(db, alert_id, *, outcome, note, user, audit_writer):
         raise
 
 
-def sync_requirement_review_to_monitoring_alert(db, requirement, *, user, audit_writer):
+def sync_requirement_review_to_monitoring_alert(
+    db,
+    requirement,
+    *,
+    user,
+    audit_writer,
+    review_request_id=None,
+    requested_outcome=None,
+):
     requirement = serialize_application_requirement(requirement) if not isinstance(requirement, dict) else dict(requirement or {})
     alert_id = requirement.get("monitoring_alert_id")
     if not alert_id:
@@ -1249,15 +1455,25 @@ def sync_requirement_review_to_monitoring_alert(db, requirement, *, user, audit_
         )
 
         if alert_status is not None:
+            requested_outcome = str(
+                requested_outcome
+                or (
+                    "accept_updated_document"
+                    if outcome == "accept"
+                    else "waive_with_reason"
+                )
+            ).strip()
             _transition_document_alert(
                 db,
                 alert=alert,
                 expected_status=expected_status,
                 outcome=outcome,
+                requested_outcome=requested_outcome,
                 request_id=requirement.get("id"),
                 document_id=linked_document_id,
                 note=note,
                 user=user,
+                review_request_id=review_request_id,
             )
         else:
             authoritative_alert = _fetch_alert(db, alert_id)

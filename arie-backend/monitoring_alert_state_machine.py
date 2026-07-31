@@ -125,6 +125,8 @@ TEXT_EVIDENCE_TYPES: FrozenSet[str] = frozenset(
         "downstream_outcome",
     }
 )
+MAX_TEXT_EVIDENCE_LENGTH = 1000
+MAX_TRANSITION_REASON_LENGTH = 1000
 
 ALLOWED_REASON_CODES: Mapping[str, FrozenSet[str]] = {
     "triaged": frozenset({"triage"}),
@@ -552,7 +554,16 @@ def _normalize_evidence(evidence: Optional[Mapping[str, Any]]) -> Dict[str, Any]
             raise WrongEvidenceType(f"Evidence {key} must be a scalar identifier or text value.")
         if value is None or not str(value).strip():
             raise MissingEvidence(f"Evidence {key} must not be blank.")
-        normalized[key] = str(value).strip()[:1000] if key in TEXT_EVIDENCE_TYPES else value
+        if key in TEXT_EVIDENCE_TYPES:
+            text_value = str(value).strip()
+            if len(text_value) > MAX_TEXT_EVIDENCE_LENGTH:
+                raise WrongEvidenceType(
+                    f"Evidence {key} exceeds the "
+                    f"{MAX_TEXT_EVIDENCE_LENGTH}-character limit."
+                )
+            normalized[key] = text_value
+        else:
+            normalized[key] = value
     return normalized
 
 
@@ -929,8 +940,22 @@ def _requires_review_control(
             action="save_decision",
             outcome="no_material_impact",
         )
-    # Document acceptance is governed by its exact accepted requirement and
-    # linked document; waiver has its separate senior/downstream rule below.
+    if target == "resolved" and owner == "documents":
+        from monitoring_dismissal_control import requires_control
+
+        return requires_control(
+            alert,
+            action="save_decision",
+            outcome="accept_updated_document",
+        )
+    if target == "waived" and owner == "documents":
+        from monitoring_dismissal_control import requires_control
+
+        return requires_control(
+            alert,
+            action="save_decision",
+            outcome="waive_with_reason",
+        )
     return False
 
 
@@ -1296,7 +1321,9 @@ def _validate_linked_evidence(
                 "current source status."
             )
 
-        requested_outcome = _token(review_request.get("requested_outcome"))
+        requested_outcome = str(
+            review_request.get("requested_outcome") or ""
+        ).strip()
         expected_outcomes: FrozenSet[str]
         if target == "dismissed":
             expected_outcomes = frozenset(
@@ -1319,6 +1346,8 @@ def _validate_linked_evidence(
                 )
         elif target == "resolved" and reason_code == "no_material_impact":
             expected_outcomes = frozenset({"no_material_impact"})
+        elif target == "resolved" and reason_code == "document_accepted":
+            expected_outcomes = frozenset({"accept_updated_document"})
         elif target == "resolved" and reason_code == "document_already_updated":
             expected_outcomes = frozenset({"mark_already_updated"})
         elif target == "waived" and reason_code == "document_waived":
@@ -1435,6 +1464,14 @@ def _enforce_four_eyes(
     if target == "waived":
         if actor["type"] == "officer" and actor["role"] not in SENIOR_ROLES:
             raise FourEyesRequired("Only a senior officer may directly approve a waiver.")
+        if (
+            _requires_review_control(alert, owner, target, evidence)
+            and "review_request_id" not in evidence
+        ):
+            raise FourEyesRequired(
+                "This material waiver requires an approved review-control "
+                "record."
+            )
         return
     if target not in {"dismissed", "resolved"}:
         return
@@ -1559,7 +1596,11 @@ def transition_alert_status(
         human_reason = str(reason or "").strip()
         if not human_reason:
             human_reason = normalized_reason_code.replace("_", " ")
-        human_reason = human_reason[:1000]
+        if len(human_reason) > MAX_TRANSITION_REASON_LENGTH:
+            raise InvalidTransition(
+                "Transition reason exceeds the "
+                f"{MAX_TRANSITION_REASON_LENGTH}-character limit."
+            )
 
         alert = _lock_alert(db, alert_id)
         _validate_actor_identity(db, actor_info)
