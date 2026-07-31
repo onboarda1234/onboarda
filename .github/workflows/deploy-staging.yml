@@ -28,6 +28,10 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
+    # This job holds the `deploy-staging` concurrency lock, so an unbounded hang
+    # here blocks every later deploy for GitHub's 6-hour default. Typical
+    # duration is ~15m (ECS rollout + wait for services-stable).
+    timeout-minutes: 45
     needs: ci
     environment: staging
     defaults:
