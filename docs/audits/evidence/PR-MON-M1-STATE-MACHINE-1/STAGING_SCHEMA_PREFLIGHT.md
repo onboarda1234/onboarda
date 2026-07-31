@@ -1,7 +1,12 @@
 # PR-MON-M1-STATE-MACHINE-1 — staging schema preflight
 
 Captured: `2026-07-31T03:12:13.624740Z`
-Deployed/current-main SHA: `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`
+Observed deployed SHA: `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`
+
+This is point-in-time read-only evidence captured before the branch's final
+rebase to `7251bd7f24e6d4be87cc3d15566a219d3c1a12a4`. The SHA is intentionally
+preserved as observed; current deployment and dataset compatibility must be
+reconfirmed through the fail-closed pre-merge/deployment gates.
 Mode: authenticated, read-only SQL executed in one healthy staging backend task
 
 Runtime evidence:

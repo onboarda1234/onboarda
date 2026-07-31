@@ -2,7 +2,11 @@
 
 Status: complete before implementation
 Original base: `9fa083c1ac185ea65bfa8515dff315eb254701a5`
-Revalidated base: `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`
+Revalidated code base: `7251bd7f24e6d4be87cc3d15566a219d3c1a12a4`
+
+The point-in-time staging data/schema preflight remains identified by its
+observed deployed SHA, `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`, in
+`STAGING_SCHEMA_PREFLIGHT.md`; it is not silently relabelled after main moved.
 Inventory date: 2026-07-30; read-only revalidation: 2026-07-31
 
 ## Reconciled runtime baseline

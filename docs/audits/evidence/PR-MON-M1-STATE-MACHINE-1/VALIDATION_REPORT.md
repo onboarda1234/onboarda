@@ -1,13 +1,15 @@
 # PR-MON-M1-STATE-MACHINE-1 — validation report
 
 Date: 2026-07-31
-Base SHA: `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`
+Base SHA: `7251bd7f24e6d4be87cc3d15566a219d3c1a12a4`
 State-machine version: `monitoring_alert_state_machine_v1`
 
 ## Pre-implementation reconciliation
 
-- Staging serves the exact current-main SHA above from immutable backend task
-  definition `regmind-staging:989`.
+- The point-in-time read-only staging preflight served
+  `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8` from immutable backend task
+  definition `regmind-staging:989`. `STAGING_SCHEMA_PREFLIGHT.md` records that
+  observation rather than relabelling it as current after main advanced.
 - The reconciled inventory remains 19 Monitoring Alerts.
 - Every stored status is in the v1 vocabulary.
 - The review-control ledger contains zero rows and zero pending requests.
@@ -21,11 +23,15 @@ query evidence and mutation-path inventory.
 
 ## Rebase and release-control reconciliation
 
-- The branch was rebased from `9fa083c1ac185ea65bfa8515dff315eb254701a5`
-  onto hardened main `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`
-  without a conflict.
-- `git range-diff` proved both implementation commits patch-identical after
-  the rebase.
+- The branch was first rebased from
+  `9fa083c1ac185ea65bfa8515dff315eb254701a5` onto hardened main
+  `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`, then cleanly rebased again
+  onto current main `7251bd7f24e6d4be87cc3d15566a219d3c1a12a4`.
+- `git range-diff` proved all three branch commits patch-identical across the
+  final rebase. The seven intervening main commits changed the Periodic Reviews
+  back-office label/test and added architecture documents; they did not overlap
+  the state-machine patch. The main-side label and protected expectation are
+  preserved and tested.
 - The sole overlapping file was `arie-backend/server.py`; the resulting file
   preserves main's strict `IMAGE_TAG` lookup without a `GIT_SHA` fallback.
 - Migrations 054–056 do not collide with main, whose latest migration is 053.
@@ -36,21 +42,31 @@ query evidence and mutation-path inventory.
 
 | Lane | Result |
 |---|---:|
-| Rebased PR-delta files plus feature governance | 722 passed |
-| PostgreSQL constraint, migration, locking, and routing core | 186 passed |
-| Final EDD routing, ownership, and concurrency lane | 53 passed |
-| PostgreSQL audit chain and grants | 23 passed |
+| Post-rebase PR-delta, feature governance, and main-side lifecycle label | 784 passed |
+| Protected-module regression (73-file manifest) | 1,601 passed; zero skips/xfails |
+| PostgreSQL append-only grants | 5 passed |
 | Protected inventory contracts | 17 passed |
-| Static direct-write guard | 17 passed |
-| Final review-remediation focus (SQLite portion) | 169 passed, 1 PostgreSQL-only skip |
+| Static direct-write guard | 23 passed |
+| Release-control compatibility | 86 passed |
+| Independent final runtime focus | 210 passed; 3 PostgreSQL cases deselected and covered by the PostgreSQL-enabled root lanes |
+| Full repository suite | 8,658 passed; 3 expected skips; 4 expected xfails |
+| Dedicated PDF lane | 8 passed |
 
 Schema-migration policy, production Python compilation, the configured fatal
-flake8 classes, and `git diff --check` passed.
+flake8 classes, and `git diff --check` passed. The three full-suite skips are
+the optional Playwright import and two legacy tests gated on the separate
+`ARIE_PG_TEST_DSN` fixture contract; PostgreSQL state-machine, constraint,
+locking, routing, canonical-dataset, fresh-install, audit-chain, and grants
+tests ran through `TEST_POSTGRES_DSN`. Local Docker validation was unavailable
+because the desktop Docker daemon is not running; the hardened required
+GitHub Docker and exact-image vulnerability lanes remain mandatory before
+merge.
 
 ## GitHub review remediation
 
 After the draft PR was marked ready, CodeRabbit completed an actual review of
-all 48 changed files. Its four actionable threads were reconciled as follows:
+the then-current 48-file diff. Its four actionable threads were reconciled as
+follows; the later 49-file exact tree received a separate independent review:
 
 - PostgreSQL status-constraint verification now parses a narrow, fully
   consumed semantic grammar instead of requiring one exact
@@ -74,13 +90,14 @@ local PostgreSQL databases.
 
 ## Protected expectation reconciliation
 
-The permanent protected manifest remains unchanged at 73 files. Five
+The permanent protected manifest remains unchanged at 73 files. Six
 manifest-listed test files have intentional expectation changes in this PR:
 
 - `test_complyadvantage_webhook_storage.py`
 - `test_lifecycle_linkage.py`
 - `test_monitoring_refresh_status_decoupling.py`
 - `test_monitoring_routing.py`
+- `test_monitoring_alerts_sprint2_api.py`
 - `test_monitoring_status_model.py`
 
 Those changes replace legacy Monitoring status/write assumptions with the
@@ -105,8 +122,8 @@ multiple-case, malformed-stage, and real PostgreSQL concurrency regressions
 prove that one active EDD case is preserved without stealing ownership or
 rewriting another workflow's evidence.
 
-The same review then found two document/assignment P1s, three API/static-guard
-P2s, and one evidence-handling P3:
+The same review then found two document/assignment P1s, additional
+API/static-guard P2s, and evidence/operability P3s:
 
 - controlled document acceptance/waiver paths could bypass the maker-checker
   ledger through direct actions, aliases, enhanced-requirement sync, or a
@@ -117,32 +134,46 @@ P2s, and one evidence-handling P3:
   direct status write from the static guard;
 - `escalated` → `in_review` had no reachable API reason/evidence contract;
 - replaying `escalate_to_sco` could create metadata/audit churn; and
-- oversized text evidence was silently truncated.
+- oversized text evidence and the human transition reason could be silently
+  truncated;
+- a cross-application enhanced-requirement route could create a pending control
+  row before the route application was proven;
+- a stale linked document during approved execution surfaced a generic 500
+  instead of a controlled refusal with blocked-attempt evidence;
+- control-flow, nested-subquery, multi-statement/CTE, SQLite conflict/replace,
+  and PostgreSQL inheritance-table SQL forms could evade static inspection; and
+- an oversized pending review rationale or typed identifier could persist a
+  ledger row that could never be approved.
 
 The remediation now performs document-control preflight before any linked-row
 mutation, binds the ledger to the exact canonical outcome and typed evidence,
 dispatches approved requests back through the document service, enforces the
 same service-level backstop, validates every assignee authoritatively, masks
-SQL literals/comments and invalidates stale bindings, exposes the documented
-senior acknowledgement path, rejects same-state escalation replay, and rejects
-oversized text evidence explicitly. Focused service/API/atomicity/guard
-regressions pass as recorded above.
+SQL literals/comments, tracks nested boundaries and every control-flow binding,
+inspects every executable statement and supported PostgreSQL/SQLite write form,
+exposes the documented senior acknowledgement path, rejects same-state
+escalation replay, scopes enhanced requirements before preflight, maps stale
+approved document evidence to a safe refusal, and rejects oversized evidence,
+reasons, or control-ledger text before any write. Focused
+service/API/atomicity/guard regressions pass as recorded above.
 
 ## Protected and full regression
 
-- Protected-module regression: **final rerun pending**.
+- Protected-module regression: **1,601 passed**, zero skips/xfails.
 - Full repository suite with a disposable local PostgreSQL DSN:
-  **final exact-tree rerun pending**.
+  **8,658 passed, 3 expected skips, 4 expected xfails**.
 - Dedicated PDF lane: **8 passed**, zero skips/xfails.
 - PDF/evidence-pack coverage also ran inside the protected and full lanes.
 
 ## Independent review
 
 The fresh independent review found both EDD-routing P1s described above and
-blocked the merge after each discovery. Both have been remediated and the
-resulting ownership, provenance, and concurrency contract passes 53/53
-affected tests, including real PostgreSQL contention. The final review verdict
-is pending only the completed broad-validation counts and evidence cross-check.
+blocked the merge after each discovery. Both have been remediated, including
+real PostgreSQL contention coverage. Follow-up independent passes found and
+blocked every document, RBAC, static-guard, route-scoping, error-mapping, and
+text-bound issue described above. The exact post-rebase code/test tree has no
+remaining P0/P1/P2/P3 finding; the committed evidence cross-check is the final
+review handoff before publishing.
 
 The review specifically rechecked:
 
@@ -165,7 +196,7 @@ The review specifically rechecked:
 
 ## Result
 
-`LOCAL VALIDATION IN PROGRESS — FINAL INDEPENDENT REVIEW REQUIRED`
+`LOCAL VALIDATION PASS — CI, DEPLOYMENT, AND STAGING QA PENDING`
 
 All four Monitoring feature flags remain OFF. No document-renewal, Agent 1
 refresh-verification, screening-change, or automatic-resolution consumer was
