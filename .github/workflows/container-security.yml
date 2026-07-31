@@ -15,6 +15,9 @@ jobs:
   exact-sha-container-scan:
     name: exact-sha-container-scan
     runs-on: ubuntu-latest
+    # Typical duration under a minute; bounded so a stalled scan cannot leave a
+    # PR's required check pending for GitHub's 6-hour default.
+    timeout-minutes: 30
     env:
       TRIVY_IMAGE: >-
         aquasec/trivy:0.72.0@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f

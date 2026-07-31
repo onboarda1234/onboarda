@@ -124,6 +124,13 @@ jobs:
 
   lint-and-test:
     runs-on: ubuntu-latest
+    # Without this the job inherits GitHub's 6-hour default. deploy-staging.yml
+    # serialises on `concurrency: deploy-staging` with cancel-in-progress:false,
+    # so one hung run blocks every staging deploy behind it for those 6 hours —
+    # observed 2026-07-31, run 1159 stuck 95m on "Run tests with coverage" while
+    # the next deploy sat pending. Typical duration is ~33m, so 60m fails a hang
+    # fast while leaving ~2x headroom for a slow runner.
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: arie-backend
@@ -354,6 +361,9 @@ jobs:
 
   docker-validate:
     runs-on: ubuntu-latest
+    # Typical duration under a minute; bounded so a stalled image build cannot
+    # hold the serialised staging deploy queue (see lint-and-test above).
+    timeout-minutes: 30
     needs: lint-and-test
     defaults:
       run:
@@ -444,6 +454,8 @@ jobs:
 
   pdf-tests:
     runs-on: ubuntu-latest
+    # Typical duration under a minute; bounded for the same reason as above.
+    timeout-minutes: 20
     needs: lint-and-test
     defaults:
       run:
