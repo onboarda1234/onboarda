@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import textwrap
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKOFFICE_HTML = ROOT / "arie-backoffice.html"
@@ -52,10 +54,15 @@ def _run_node(script: str) -> dict:
 def _fixture_script(assertion: str) -> str:
     prelude = textwrap.dedent(
         """
-        function escapeHtml(value) {
-          return String(value == null ? '' : value)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        // Mirrors the production escapeHtml byte-for-byte, INCLUDING its
+        // String(str || '') branch. The previous stub used `value == null`,
+        // which rendered a numeric 0 as "0" while production rendered it blank
+        // — so the harness masked the zero-contribution defect it should have
+        // caught. Do not "improve" this stub away from production.
+        function escapeHtml(str) {
+          if (typeof str !== 'string') return String(str || '');
+          return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+            .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
         }
         function getAuthoritativeRiskEvidence(app) {
           const evidence = app && app.riskReportEvidence;
@@ -464,3 +471,62 @@ def test_ui_source_has_no_score_reconstruction_and_pdf_contract_remains_separate
     assert "app.entityType" not in ui
     assert "Executive Recommendation" not in ui
     assert "Executive Recommendation" in pdf
+
+
+def test_zero_contribution_renders_as_zero_and_bar_encodes_contribution():
+    """Reproduces the RM-PILOT LOW case: two dimensions contribute exactly 0.
+
+    A blank cell in an evidence table reads as "not computed"; 0 means
+    "computed, contributed nothing". The bar must agree with the figure beside
+    it, so a zero-contribution dimension draws no bar.
+    """
+    result = _run_node(
+        _fixture_script(
+            """
+            const stored = evidence({tier:'LOW', score:14.7, route:'direct_low_medium', edd:'Not required'});
+            stored.application.dimensions = [
+              {id:'D1',name:'Customer / Entity Risk',stored_score:1.3,weight:30},
+              {id:'D2',name:'Geographic Risk',stored_score:1.8,weight:25},
+              {id:'D3',name:'Product / Service Risk',stored_score:1,weight:20},
+              {id:'D4',name:'Industry / Sector Risk',stored_score:2,weight:15},
+              {id:'D5',name:'Delivery Channel Risk',stored_score:1,weight:10}
+            ];
+            stored.dimension_computation_evidence = [
+              {dimension_id:'D1',composite_contribution:3},
+              {dimension_id:'D2',composite_contribution:6.6667},
+              {dimension_id:'D3',composite_contribution:0},
+              {dimension_id:'D4',composite_contribution:5},
+              {dimension_id:'D5',composite_contribution:0}
+            ];
+            stored.factor_evidence = [
+              factor('D2','ubo_nationalities','UBO / Director Nationalities',['MU','MU'],2,0.2)
+            ];
+            app.riskReportEvidence = stored;
+            const html = renderStoredRiskComputationHtml(app);
+            const contributions = [...html.matchAll(/font-weight:700;font-variant-numeric:tabular-nums;">([^<]*)<\\/td>/g)].map((m) => m[1]);
+            const barWidths = [...html.matchAll(/height:100%;width:([\\d.]+)%/g)].map((m) => m[1]);
+            console.log(JSON.stringify({html, contributions, barWidths, drivers:driversOnly(html)}));
+            """
+        )
+    )
+
+    # Every dimension reports a contribution; zero is explicit, never blank.
+    # Stored precision is shown verbatim — the screen must not disagree with the
+    # exported report, so 6.6667 is NOT rounded for display (RSMP-0D).
+    assert result["contributions"] == ["3", "6.6667", "0", "5", "0"]
+    # Bars encode the Contribution figure beside them, scaled to the largest
+    # contribution — so the widest bar is the biggest contributor and a
+    # zero-contribution dimension draws nothing.
+    widths = [float(value) for value in result["barWidths"]]
+    assert widths[2] == 0 and widths[4] == 0
+    assert widths[1] == 100, "largest contribution must own the widest bar"
+    assert widths[0] == pytest.approx(45, rel=1e-3)
+    assert widths[3] == pytest.approx(75, rel=1e-3)
+    assert widths[0] < widths[3] < widths[1], "bar order must follow the figures"
+    # Repeated party attributes collapse but keep their count.
+    assert "MU ×2" in result["drivers"]
+    assert "MU, MU" not in result["drivers"]
+    # Removed chrome stays removed.
+    assert "Evidence at a glance" not in result["html"]
+    assert "✓ stored" not in result["html"]
+    assert "Verified" not in result["html"]

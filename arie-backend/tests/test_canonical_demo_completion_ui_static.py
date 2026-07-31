@@ -220,7 +220,11 @@ def test_risk_assessment_uses_compact_executive_dashboard_and_collapsed_technica
     assert "risk-score-adjustment" in region
     assert "Risk breakdown" in region
     assert "Rule outcomes" in region
-    assert "Evidence at a glance" in region
+    # Removed: hardcoded evidence ticks and the literal "Verified" status tile.
+    assert "Evidence at a glance" not in region
+    assert "'Status', 'Verified'" not in region
+    # Zero contribution must render as "0", never as an empty cell.
+    assert "riskExecutiveNumber(contribution)" in region
     assert "<details style=\"margin-top:12px" in region
     assert "applications.risk_dimensions" not in region
     pdf = _region(

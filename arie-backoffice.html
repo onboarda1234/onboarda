@@ -11369,11 +11369,15 @@ function renderRiskExecutiveDriverCards(drivers) {
   }
   return drivers.map(function(driver) {
     var factor = driver.factor;
+    // Free-text factors (e.g. source of wealth) are unbounded and stretch one
+    // card far beyond its neighbours. Clamp to two lines and keep the full
+    // value on hover; the authoritative report and export are unchanged.
+    var driverValue = riskExecutiveDriverValue(factor.raw_value);
     return '<div class="risk-primary-driver-card" style="min-width:0;padding:9px 10px;border:1px solid #dbe4f0;border-radius:10px;background:' +
       (driver.priority ? '#edf5ff' : '#f8fbff') + ';">' +
       '<strong style="display:block;font-size:11px;color:#102a43;">' + escapeHtml(factor.factor_label) + '</strong>' +
-      '<span style="display:block;margin-top:2px;font-size:10px;color:#52657a;overflow-wrap:anywhere;">' +
-        escapeHtml(riskReportFactorInputValue(factor.raw_value)) + '</span>' +
+      '<span title="' + escapeHtml(driverValue) + '" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-top:2px;font-size:10px;color:#52657a;overflow-wrap:anywhere;">' +
+        escapeHtml(driverValue) + '</span>' +
       '<span style="display:block;margin-top:4px;font-size:9px;font-weight:800;color:#234e7d;">' +
         escapeHtml(riskReportRiskRating(factor.rule_score)) + '</span>' +
       (driver.reason ? '<small class="risk-primary-driver-reason" style="display:block;margin-top:3px;font-size:9px;color:#38536f;">' +
@@ -11420,6 +11424,35 @@ function riskExecutiveApprovalRouteLabel(route) {
   return labels[String(route || '')] || 'Approval Route Not Recorded';
 }
 
+// Renders a persisted numeric VERBATIM, but never as a blank cell.
+// escapeHtml() returns String(value || '') for non-strings, so a numeric 0
+// rendered as an empty cell — and in an evidence table a blank reads as "not
+// computed / unknown" while 0 means "computed, contributed nothing".
+// Deliberately does NOT round: stored precision is authoritative and must match
+// the exported report (RSMP-0D). Column raggedness is handled by alignment.
+function riskExecutiveNumber(value) {
+  var num = Number(value);
+  if (!Number.isFinite(num)) return '—';
+  return String(num);
+}
+
+// Repeated party attributes (e.g. two Mauritian UBOs) arrive as ['MU','MU'] and
+// read as a duplication bug when joined verbatim. Collapse to distinct values
+// while preserving the count, so the evidence is not weakened.
+function riskExecutiveDriverValue(value) {
+  if (!Array.isArray(value) || !value.length) return riskReportFactorInputValue(value);
+  var order = [];
+  var counts = Object.create(null);
+  value.forEach(function(item) {
+    var label = riskReportFactorInputValue(item);
+    if (counts[label] == null) { counts[label] = 0; order.push(label); }
+    counts[label] += 1;
+  });
+  return order.map(function(label) {
+    return counts[label] > 1 ? label + ' ×' + counts[label] : label;
+  }).join(', ');
+}
+
 function renderStoredRiskComputationHtml(app) {
   var evidence = getAuthoritativeRiskEvidence(app);
   if (!evidence) {
@@ -11436,6 +11469,13 @@ function renderStoredRiskComputationHtml(app) {
     }
     var drivers = buildRiskExecutiveDrivers(evidence);
     var driverHtml = renderRiskExecutiveDriverCards(drivers);
+    // Display-only scale for the contribution bars: the widest bar is the
+    // largest stored contribution. No score is derived — every figure shown
+    // remains the persisted value.
+    var contributionScale = Math.max.apply(null, [0].concat(dimensionEvidence.map(function(item) {
+      var value = Number(item && item.composite_contribution);
+      return Number.isFinite(value) ? Math.abs(value) : 0;
+    })));
     var rowsHtml = dimensions.map(function(row) {
       var rowId = String(row && row.id != null ? row.id : '').trim();
       if (!rowId) {
@@ -11458,27 +11498,33 @@ function renderStoredRiskComputationHtml(app) {
       ) {
         throw new Error('Authoritative dimension evidence is incomplete. Recompute risk before using this breakdown.');
       }
-      var barWidth = Math.max(0, Math.min(100, score / 4 * 100));
+      // The bar sits beside the Contribution figure, so it encodes that figure
+      // — scaled to the largest contribution in the table. Encoding score/4
+      // previously drew a visible bar next to a contribution of zero, and made
+      // the widest bar belong to a dimension that contributed less.
+      var contribution = Number(storedDimension.composite_contribution);
+      var barWidth = contributionScale > 0 ? Math.max(0, Math.min(100, contribution / contributionScale * 100)) : 0;
+      var barTitle = 'Contribution ' + riskExecutiveNumber(contribution);
       return '<tr><td style="padding:8px 10px;font-weight:700;">' + escapeHtml(row.name || row.id) + '</td>' +
-        '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(row.stored_score) + '</td>' +
-        '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(weight) + '%</td>' +
-        '<td style="padding:8px 10px;text-align:center;font-weight:700;">' + escapeHtml(storedDimension.composite_contribution) + '</td>' +
-        '<td style="padding:8px 10px;min-width:150px;"><div style="height:7px;border-radius:99px;background:#e8eef6;overflow:hidden;"><div style="height:100%;width:' + barWidth + '%;background:linear-gradient(90deg,#234e7d,#4f83b7);border-radius:99px;"></div></div></td></tr>';
+        '<td style="padding:8px 10px;text-align:center;font-variant-numeric:tabular-nums;">' + escapeHtml(riskExecutiveNumber(row.stored_score)) + '</td>' +
+        '<td style="padding:8px 10px;text-align:center;font-variant-numeric:tabular-nums;">' + escapeHtml(riskExecutiveNumber(weight)) + '%</td>' +
+        '<td style="padding:8px 10px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;">' + escapeHtml(riskExecutiveNumber(contribution)) + '</td>' +
+        '<td style="padding:8px 10px;min-width:150px;"><div title="' + escapeHtml(barTitle) + '" style="height:7px;border-radius:99px;background:#e8eef6;overflow:hidden;"><div style="height:100%;width:' + barWidth + '%;background:linear-gradient(90deg,#234e7d,#4f83b7);border-radius:99px;"></div></div></td></tr>';
     }).join('');
     var score = risk.score == null ? '—' : String(risk.score);
     var tier = riskReportRiskTierLabel(risk.tier);
     var edd = riskReportEddLabel(risk.edd_route);
-    var evidenceStatus = evidence.config_version ? 'Authoritative stored evidence · configuration verified' : 'Authoritative stored evidence';
     var scoreAdjustmentHtml = renderRiskExecutiveScoreAdjustment(evidence);
     var floorLabels = (risk.floor_reasons || []).map(riskReportOutcomeLabel);
     var escalationLabels = (risk.escalations || []).map(riskReportOutcomeLabel);
     function card(label, value, helper) { return '<div style="padding:12px 14px;border:1px solid #dbe4f0;border-radius:12px;background:#fff;min-width:0;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#718096;font-weight:800;">' + label + '</div><div style="font-size:20px;line-height:1.2;font-weight:800;color:#102a43;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(value) + '</div><div style="font-size:10px;color:#718096;margin-top:4px;">' + escapeHtml(helper) + '</div></div>'; }
     return '<section class="risk-executive-dashboard" style="padding:14px;border:1px solid #dbe4f0;border-radius:14px;background:linear-gradient(180deg,#f7faff 0%,#fff 46%);color:#102a43;">' +
-      '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;">' +
+      // Three outcome tiles only. Evidence provenance is stated once, in the
+      // Technical provenance line; unusable evidence already fails closed above.
+      '<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;">' +
         card('Overall risk', score + ' / 100 · ' + tier, 'Authoritative stored outcome') +
         card('Approval route', riskExecutiveApprovalRouteLabel(policyRoute), 'Compliance decision path') +
         card('EDD', edd, 'Enhanced due diligence') +
-        card('Status', 'Verified', evidenceStatus) +
       '</div>' +
       scoreAdjustmentHtml +
       '<div style="margin-top:14px;"><div style="font-size:13px;font-weight:800;margin-bottom:8px;">Primary Risk Drivers <span style="font-size:10px;color:#718096;font-weight:600;">Persisted risk factors only</span></div><div class="risk-primary-driver-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:7px;">' + driverHtml + '</div></div>' +
@@ -11486,7 +11532,11 @@ function renderStoredRiskComputationHtml(app) {
         '<div><div style="font-size:13px;font-weight:800;margin-bottom:6px;">Risk breakdown</div><table style="width:100%;border-collapse:collapse;font-size:11px;"><thead><tr><th style="text-align:left;padding:6px 10px;color:#718096;font-size:9px;text-transform:uppercase;">Dimension</th><th style="text-align:center;padding:6px;color:#718096;font-size:9px;">Score</th><th style="text-align:center;padding:6px;color:#718096;font-size:9px;">Weight</th><th style="text-align:center;padding:6px;color:#718096;font-size:9px;">Contribution</th><th style="padding:6px;"></th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>' +
         '<div style="display:flex;align-items:center;justify-content:center;min-height:150px;border:1px solid #dbe4f0;border-radius:12px;background:#fff;"><div style="width:112px;height:112px;border-radius:50%;background:conic-gradient(#234e7d ' + Math.min(100, Number(score)) + '%,#e8eef6 0);display:flex;align-items:center;justify-content:center;"><div style="width:76px;height:76px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;text-align:center;font-size:16px;font-weight:800;color:#102a43;">' + escapeHtml(score) + '<small style="display:block;font-size:9px;font-weight:600;color:#718096;">/ 100</small></div></div></div>' +
       '</div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;"><div style="padding:10px 12px;border-radius:10px;background:#f8fbff;border:1px solid #dbe4f0;font-size:11px;"><strong>Rule outcomes</strong><div style="margin-top:5px;">High floor: ' + escapeHtml(floorLabels.join(', ') || 'None recorded') + '<br>Escalation: ' + escapeHtml(escalationLabels.join(', ') || 'None recorded') + '</div></div><div style="padding:10px 12px;border-radius:10px;background:#f8fbff;border:1px solid #dbe4f0;font-size:11px;"><strong>Evidence at a glance</strong><div style="margin-top:5px;">Screening ✓ stored · KYC ✓ stored · Risk evidence ✓ authoritative</div></div></div>' +
+      // Rule outcomes stays: "None recorded" is an affirmative audit statement
+      // that no floor or escalation was applied. The former "Evidence at a
+      // glance" panel beside it was a hardcoded string reporting only that rows
+      // exist, and its ticks read as screening clearance regardless of hits.
+      '<div style="margin-top:12px;padding:9px 12px;border-radius:10px;background:#f8fbff;border:1px solid #dbe4f0;font-size:11px;"><strong>Rule outcomes</strong> · High floor: ' + escapeHtml(floorLabels.join(', ') || 'None recorded') + ' · Escalation: ' + escapeHtml(escalationLabels.join(', ') || 'None recorded') + '</div>' +
       '<details style="margin-top:12px;border-top:1px solid #dbe4f0;padding-top:9px;"><summary style="cursor:pointer;font-size:11px;font-weight:800;color:#234e7d;">Calculation details · Runtime configuration · Factor evidence · Technical provenance</summary><div style="margin-top:9px;font-size:11px;color:#52606d;">Configuration: ' + escapeHtml(evidence.config_version || '—') + '. Computed: ' + escapeHtml(evidence.risk_computed_at || '—') + '. Evidence source: ' + escapeHtml(evidence.source || 'stored runtime evidence') + '. Factor and dimension evidence is retained in the authoritative report and export.</div></details>' +
     '</section>';
   } catch (error) {
