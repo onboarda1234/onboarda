@@ -11,7 +11,9 @@ Two kinds of evidence:
   foundation. Non-evidentiary timestamp fields are excluded from the comparison
   because they legitimately move between calls.
 * **File identity** — the frozen Application Review and Screening Queue sources
-  are unchanged against ``origin/main``.
+  were unchanged by the commit that introduced the foundation. Anchoring this
+  proof to its introducing commit keeps the historical invariant valid on
+  descendant branches that legitimately change other files.
 """
 
 from __future__ import annotations
@@ -43,6 +45,12 @@ PROTECTED_FILES = (
     "arie-backend/server.py",
 )
 
+# Immutable historical bounds for PR #912 / Phase 0B-1. The feature commit and
+# closure commit both belong to the reviewed phase; comparing only the first
+# commit would omit three test/document paths from the proof.
+PHASE_0B1_BASE = "85c70431a2d2a2f4bd6dd3078257d5f22d92bad4"
+PHASE_0B1_HEAD = "901265f9cbfb45bac62358da6a453e24c052078e"
+
 
 def _git(*args: str) -> str:
     return subprocess.run(
@@ -54,27 +62,71 @@ def _git(*args: str) -> str:
     ).stdout
 
 
+def _phase_0b1_changed_paths() -> list[str]:
+    """Return the complete file set changed by PR #912 / Phase 0B-1.
+
+    ``origin/main...HEAD`` describes the *current* pull request, not historical
+    Phase 0B-1 after that work has merged. The immutable phase base and final
+    head preserve the original full PR proof on descendant branches. Missing
+    history is a hard failure because silently skipping would erase the proof.
+    """
+
+    try:
+        _git("cat-file", "-e", f"{PHASE_0B1_BASE}^{{commit}}")
+        _git("cat-file", "-e", f"{PHASE_0B1_HEAD}^{{commit}}")
+    except subprocess.CalledProcessError as exc:  # pragma: no cover - CI guard
+        pytest.fail(
+            "Phase 0B-1 history is unavailable; checkout must use "
+            "fetch-depth: 0 before this proof can run. "
+            f"git error: {exc.stderr.strip()}"
+        )
+
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", PHASE_0B1_HEAD, "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if ancestor.returncode == 1:
+        pytest.fail(
+            f"HEAD does not descend from Phase 0B-1 head {PHASE_0B1_HEAD}; "
+            "the historical proof does not apply to this branch."
+        )
+    if ancestor.returncode != 0:
+        pytest.fail(
+            "Phase 0B-1 ancestry could not be verified; git merge-base "
+            f"failed with exit {ancestor.returncode}: {ancestor.stderr.strip()}"
+        )
+
+    try:
+        return _git(
+            "diff",
+            "--name-only",
+            PHASE_0B1_BASE,
+            PHASE_0B1_HEAD,
+        ).split()
+    except subprocess.CalledProcessError as exc:  # pragma: no cover - CI guard
+        pytest.fail(
+            "Phase 0B-1 history is unavailable; checkout must use "
+            "fetch-depth: 0 before this proof can run. "
+            f"git error: {exc.stderr.strip()}"
+        )
+
+
 # ── File identity ────────────────────────────────────────────────────
 
 
-def test_protected_files_unchanged_against_main():
-    """No authoritative or frozen file differs from ``origin/main``."""
-    try:
-        changed = _git("diff", "--name-only", "origin/main...HEAD").split()
-    except subprocess.CalledProcessError:  # pragma: no cover - shallow clone
-        pytest.skip("origin/main not available in this checkout")
-
+def test_protected_files_unchanged_by_phase_0b1():
+    """Phase 0B-1 itself changed no authoritative or frozen file."""
+    changed = _phase_0b1_changed_paths()
     touched = sorted(set(changed) & set(PROTECTED_FILES))
     assert not touched, f"Phase 0B-1 modified protected files: {touched}"
 
 
 def test_phase_0b1_adds_only_new_paths():
     """Every changed path is a new foundation module, test, or document."""
-    try:
-        changed = _git("diff", "--name-only", "origin/main...HEAD").split()
-    except subprocess.CalledProcessError:  # pragma: no cover - shallow clone
-        pytest.skip("origin/main not available in this checkout")
-
+    changed = _phase_0b1_changed_paths()
     allowed_prefixes = (
         "arie-backend/supervisor_foundation/",
         "arie-backend/tests/supervisor_foundation_fixtures.py",

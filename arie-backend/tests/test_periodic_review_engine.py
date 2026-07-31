@@ -116,7 +116,7 @@ def audit_sink():
     events = []
 
     def writer(user, action, target, detail, db=None,
-               before_state=None, after_state=None):
+               before_state=None, after_state=None, commit=True):
         events.append({
             "user": dict(user) if user else {},
             "action": action,
@@ -124,6 +124,7 @@ def audit_sink():
             "detail": detail,
             "before_state": before_state,
             "after_state": after_state,
+            "commit": commit,
         })
 
     writer.events = events
@@ -171,17 +172,91 @@ def _insert_review(conn, *, application_id="test-app-100",
 
 def _insert_alert(conn, *, application_id="test-app-100",
                   client_name="Test Co Ltd", status="open",
-                  severity="medium"):
+                  severity="medium", linked_periodic_review_id=None):
     conn.execute(
         "INSERT INTO monitoring_alerts "
-        "(application_id, client_name, alert_type, severity, status) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (application_id, client_name, "adverse_media", severity, status),
+        "(application_id, client_name, alert_type, severity, status, "
+        " linked_periodic_review_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            application_id,
+            client_name,
+            "adverse_media",
+            severity,
+            status,
+            linked_periodic_review_id,
+        ),
     )
     conn.commit()
     return conn.execute(
         "SELECT id FROM monitoring_alerts ORDER BY id DESC LIMIT 1"
     ).fetchone()["id"]
+
+
+@pytest.mark.parametrize(
+    ("review", "alert"),
+    (
+        (
+            {
+                "id": 10,
+                "application_id": "app-1",
+                "linked_monitoring_alert_id": 20,
+            },
+            {
+                "id": 20,
+                "application_id": "app-1",
+                "linked_periodic_review_id": 999,
+                "status": "routed_to_review",
+            },
+        ),
+        (
+            {
+                "id": 10,
+                "application_id": "app-1",
+                "linked_monitoring_alert_id": 999,
+            },
+            {
+                "id": 20,
+                "application_id": "app-1",
+                "linked_periodic_review_id": 10,
+                "status": "routed_to_review",
+            },
+        ),
+        (
+            {
+                "id": 10,
+                "application_id": None,
+                "linked_monitoring_alert_id": 20,
+            },
+            {
+                "id": 20,
+                "application_id": "app-1",
+                "linked_periodic_review_id": 10,
+                "status": "routed_to_review",
+            },
+        ),
+        (
+            {
+                "id": 10,
+                "application_id": "app-1",
+                "linked_monitoring_alert_id": 20,
+            },
+            {
+                "id": 20,
+                "application_id": None,
+                "linked_periodic_review_id": 10,
+                "status": "routed_to_review",
+            },
+        ),
+    ),
+)
+def test_periodic_handoff_exemption_rejects_conflicts_and_missing_applications(
+    review,
+    alert,
+):
+    from periodic_review_blockers import _is_owning_periodic_review_handoff
+
+    assert _is_owning_periodic_review_handoff(review, alert) is False
 
 
 def _insert_edd(conn, *, application_id="test-app-100",
@@ -804,7 +879,7 @@ class TestRecordOutcome:
                 user=USER, audit_writer=audit_sink,
             )
 
-    def test_dismissed_and_routed_alerts_do_not_block_completion(self, review_db, audit_sink):
+    def test_dismissed_alert_does_not_block_completion(self, review_db, audit_sink):
         from periodic_review_engine import (
             generate_required_items, record_review_outcome,
             OUTCOME_NO_CHANGE,
@@ -815,22 +890,104 @@ class TestRecordOutcome:
         )
         review_db.commit()
         _insert_alert(review_db, status="dismissed", severity="high")
-        _insert_alert(review_db, status="routed_to_review", severity="critical")
-        _insert_alert(review_db, status="routed_to_edd", severity="critical")
         rid = _insert_review(review_db, status="in_progress")
         generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
         result = record_review_outcome(
             review_db, rid,
             outcome=OUTCOME_NO_CHANGE,
-            outcome_reason="terminal alerts only",
+            outcome_reason="terminal alert only",
             user=USER, audit_writer=audit_sink,
         )
         assert result["status"] == "completed"
 
-    def test_resolved_at_alert_does_not_block_completion(self, review_db, audit_sink):
+    @pytest.mark.parametrize("link_direction", ["review_to_alert", "alert_to_review"])
+    def test_exact_own_routed_to_review_handoff_does_not_block_completion(
+        self,
+        review_db,
+        audit_sink,
+        link_direction,
+    ):
         from periodic_review_engine import (
             generate_required_items, record_review_outcome,
             OUTCOME_NO_CHANGE,
+        )
+        review_db.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), "test-app-100"),
+        )
+        review_db.commit()
+
+        if link_direction == "review_to_alert":
+            alert_id = _insert_alert(
+                review_db,
+                status="routed_to_review",
+                severity="critical",
+            )
+            rid = _insert_review(
+                review_db,
+                status="in_progress",
+                linked_monitoring_alert_id=alert_id,
+            )
+        else:
+            rid = _insert_review(review_db, status="in_progress")
+            alert_id = _insert_alert(
+                review_db,
+                status="routed_to_review",
+                severity="critical",
+                linked_periodic_review_id=rid,
+            )
+
+        generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        result = record_review_outcome(
+            review_db, rid,
+            outcome=OUTCOME_NO_CHANGE,
+            outcome_reason="owning review completed its decision",
+            user=USER, audit_writer=audit_sink,
+        )
+
+        assert result["status"] == "completed"
+        assert _alert(review_db, alert_id)["status"] == "routed_to_review"
+
+    def test_unrelated_routed_alerts_remain_nonterminal_and_block_completion(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_NO_CHANGE, ReviewCompletionBlocked,
+        )
+        review_db.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), "test-app-100"),
+        )
+        review_db.commit()
+        review_alert_id = _insert_alert(
+            review_db,
+            status="routed_to_review",
+            severity="critical",
+        )
+        edd_alert_id = _insert_alert(
+            review_db,
+            status="routed_to_edd",
+            severity="critical",
+        )
+        rid = _insert_review(review_db, status="in_progress")
+        generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        with pytest.raises(ReviewCompletionBlocked) as exc:
+            record_review_outcome(
+                review_db, rid,
+                outcome=OUTCOME_NO_CHANGE,
+                outcome_reason="handoff alerts",
+                user=USER, audit_writer=audit_sink,
+            )
+        blocker_source_ids = {
+            item.get("source_id")
+            for item in exc.value.blocking_items
+            if item.get("item_type") == "monitoring_alert_followup"
+        }
+        assert {review_alert_id, edd_alert_id}.issubset(blocker_source_ids)
+
+    def test_resolved_at_does_not_override_active_status(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_NO_CHANGE, ReviewCompletionBlocked,
         )
         review_db.execute(
             "UPDATE applications SET prescreening_data = ? WHERE id = ?",
@@ -845,13 +1002,13 @@ class TestRecordOutcome:
         review_db.commit()
         rid = _insert_review(review_db, status="in_progress")
         generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
-        result = record_review_outcome(
-            review_db, rid,
-            outcome=OUTCOME_NO_CHANGE,
-            outcome_reason="resolved_at only",
-            user=USER, audit_writer=audit_sink,
-        )
-        assert result["status"] == "completed"
+        with pytest.raises(ReviewCompletionBlocked):
+            record_review_outcome(
+                review_db, rid,
+                outcome=OUTCOME_NO_CHANGE,
+                outcome_reason="resolved_at only",
+                user=USER, audit_writer=audit_sink,
+            )
 
     def test_blocks_completion_for_expired_regulatory_licence(self, review_db, audit_sink):
         from periodic_review_engine import (

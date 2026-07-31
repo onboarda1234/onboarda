@@ -83,8 +83,8 @@ def test_due_at_is_start_plus_business_days():
     assert d["sla_due_at"] == THU.strftime("%Y-%m-%d %H:%M:%S")  # Mon +3 bdays = Thu
 
 
-# ── closed alerts never show as active overdue ───────────────────────────────
-@pytest.mark.parametrize("status", ["resolved", "dismissed", "closed", "waived", "routed_to_edd"])
+# ── terminal alerts never show as active overdue ─────────────────────────────
+@pytest.mark.parametrize("status", ["resolved", "dismissed", "waived"])
 def test_closed_alert_is_never_active_overdue(status):
     # Very old start, but terminal → 'closed', not 'overdue'.
     d = sla.derive(_alert(severity="critical", status=status,
@@ -92,6 +92,20 @@ def test_closed_alert_is_never_active_overdue(status):
                    now=datetime(2024, 2, 1, 9, 0, 0))
     assert d["sla_state"] == "closed"
     assert d["days_overdue"] is None
+
+
+@pytest.mark.parametrize("status", ["routed_to_review", "routed_to_edd"])
+def test_downstream_handoff_remains_active_for_sla(status):
+    d = sla.derive(
+        _alert(
+            severity="critical",
+            status=status,
+            resolved_at=NEXT_MON.strftime("%Y-%m-%d %H:%M:%S"),
+        ),
+        now=datetime(2024, 2, 1, 9, 0, 0),
+    )
+    assert d["sla_state"] == "overdue"
+    assert d["closed_within_sla"] is None
 
 
 def test_closed_within_sla_vs_breached():
@@ -105,12 +119,14 @@ def test_closed_within_sla_vs_breached():
     assert breached["sla_breached"] is True
 
 
-def test_resolved_at_stops_clock_even_without_terminal_status():
-    # is_terminal honours a non-empty resolved_at regardless of status text.
+def test_resolved_at_drift_does_not_stop_active_status_clock():
+    # Terminality is status-authoritative. A stale resolved_at timestamp must
+    # not silently turn an active alert into a closed decision.
     d = sla.derive(_alert(severity="critical", status="open",
                           resolved_at=TUE.strftime("%Y-%m-%d %H:%M:%S")),
                    now=datetime(2024, 3, 1, 9, 0, 0))
-    assert d["sla_state"] == "closed"
+    assert d["sla_state"] == "overdue"
+    assert d["closed_within_sla"] is None
 
 
 # ── robustness ───────────────────────────────────────────────────────────────

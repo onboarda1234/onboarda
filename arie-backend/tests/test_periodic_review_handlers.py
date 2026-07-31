@@ -193,12 +193,29 @@ class _PRReviewHandlerBase(AsyncHTTPTestCase):
         )
         self._conn.commit()
 
-    def _create_alert(self, *, status="open", severity="high", alert_type="adverse_media", resolved_at=None):
+    def _create_alert(
+        self,
+        *,
+        status="open",
+        severity="high",
+        alert_type="adverse_media",
+        resolved_at=None,
+        linked_periodic_review_id=None,
+    ):
         self._conn.execute(
             "INSERT INTO monitoring_alerts "
-            "(application_id, client_name, alert_type, severity, status, resolved_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (self._app_id, "PR03 Test Co", alert_type, severity, status, resolved_at),
+            "(application_id, client_name, alert_type, severity, status, "
+            " resolved_at, linked_periodic_review_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                self._app_id,
+                "PR03 Test Co",
+                alert_type,
+                severity,
+                status,
+                resolved_at,
+                linked_periodic_review_id,
+            ),
         )
         self._conn.commit()
         return self._conn.execute(
@@ -1012,24 +1029,80 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         self.assertEqual(body["error"], "Periodic review cannot be completed")
         self.assertTrue(body["blocking_items"])
 
-    def test_dismissed_and_routed_alerts_do_not_block(self):
+    def test_dismissed_alert_does_not_block(self):
         self._conn.execute(
             "UPDATE applications SET prescreening_data = ? WHERE id = ?",
             (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), self._app_id),
         )
         self._conn.commit()
         self._create_alert(status="dismissed", severity="high")
-        self._create_alert(status="routed_to_review", severity="critical")
-        self._create_alert(status="routed_to_edd", severity="critical")
         rid = self._create_review(status="in_progress")
         self._post(f"/api/monitoring/reviews/{rid}/required-items/generate", {})
         resp = self._post(
             f"/api/monitoring/reviews/{rid}/complete",
-            self._completion_payload(reason="terminal alerts only"),
+            self._completion_payload(reason="terminal alert only"),
         )
         self.assertEqual(resp.code, 200)
 
-    def test_resolved_at_alert_does_not_block(self):
+    def test_exact_own_routed_to_review_handoff_does_not_block(self):
+        self._conn.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), self._app_id),
+        )
+        self._conn.commit()
+        alert_id = self._create_alert(
+            status="routed_to_review",
+            severity="critical",
+        )
+        rid = self._create_review(
+            status="in_progress",
+            linked_alert_id=alert_id,
+        )
+        self._post(f"/api/monitoring/reviews/{rid}/required-items/generate", {})
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            self._completion_payload(reason="owning review decision"),
+        )
+        self.assertEqual(resp.code, 200)
+        alert = self._conn.execute(
+            "SELECT status FROM monitoring_alerts WHERE id = ?",
+            (alert_id,),
+        ).fetchone()
+        self.assertEqual(alert["status"], "routed_to_review")
+
+    def test_unrelated_routed_alerts_remain_nonterminal_and_block(self):
+        self._conn.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), self._app_id),
+        )
+        self._conn.commit()
+        review_alert_id = self._create_alert(
+            status="routed_to_review",
+            severity="critical",
+        )
+        edd_alert_id = self._create_alert(
+            status="routed_to_edd",
+            severity="critical",
+        )
+        rid = self._create_review(status="in_progress")
+        self._post(f"/api/monitoring/reviews/{rid}/required-items/generate", {})
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            self._completion_payload(reason="handoff alerts"),
+        )
+        self.assertEqual(resp.code, 409)
+        body = json.loads(resp.body)
+        self.assertEqual(body["error"], "Periodic review cannot be completed")
+        blocker_source_ids = {
+            item.get("source_id")
+            for item in body["blocking_items"]
+            if item.get("item_type") == "monitoring_alert_followup"
+        }
+        self.assertTrue(
+            {review_alert_id, edd_alert_id}.issubset(blocker_source_ids)
+        )
+
+    def test_resolved_at_does_not_override_active_status(self):
         self._conn.execute(
             "UPDATE applications SET prescreening_data = ? WHERE id = ?",
             (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), self._app_id),
@@ -1044,9 +1117,9 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         self._post(f"/api/monitoring/reviews/{rid}/required-items/generate", {})
         resp = self._post(
             f"/api/monitoring/reviews/{rid}/complete",
-            self._completion_payload(reason="resolved alert"),
+            self._completion_payload(reason="timestamp drift"),
         )
-        self.assertEqual(resp.code, 200)
+        self.assertEqual(resp.code, 409)
 
 
 # ─────────────────────────────────────────────────────────────────

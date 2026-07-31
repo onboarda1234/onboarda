@@ -74,10 +74,13 @@ def monitoring_api_server():
 
 
 def _seed_monitoring_users_and_alerts(conn):
+    from regulated_deletion import sanctioned_delete_context
+
     users = [
         ("admin_s2", "admin-s2@example.test", "Admin S2", "admin"),
         ("sco_s2", "sco-s2@example.test", "SCO S2", "sco"),
         ("co_s2", "co-s2@example.test", "CO S2", "co"),
+        ("analyst_s2", "analyst-s2@example.test", "Analyst S2", "analyst"),
     ]
     for user_id, email, name, role in users:
         conn.execute(
@@ -91,8 +94,25 @@ def _seed_monitoring_users_and_alerts(conn):
         )
     except Exception:
         conn.execute("INSERT OR IGNORE INTO applications (id, status) VALUES (?, ?)", ("app_s2", "approved"))
-    conn.execute("DELETE FROM monitoring_alert_evidence WHERE monitoring_alert_id IN (?, ?)", (9201, 9202))
-    conn.execute("DELETE FROM monitoring_alerts WHERE id IN (?, ?)", (9201, 9202))
+    with sanctioned_delete_context(
+        "fixture_cleanup_nonprod",
+        actor_id="pytest:monitoring-sprint2",
+        role="system",
+        reason="Reset the isolated synthetic Monitoring Sprint 2 fixture.",
+        allowed_tables=("monitoring_alert_evidence", "monitoring_alerts"),
+        environment="testing",
+        is_fixture=True,
+        confirmed=True,
+    ):
+        conn.execute(
+            "DELETE FROM monitoring_alert_evidence "
+            "WHERE monitoring_alert_id IN (?, ?)",
+            (9201, 9202),
+        )
+        conn.execute(
+            "DELETE FROM monitoring_alerts WHERE id IN (?, ?)",
+            (9201, 9202),
+        )
     conn.execute(
         """
         INSERT INTO monitoring_alerts
@@ -271,3 +291,109 @@ def test_co_cannot_assign_alert_to_another_officer(monitoring_api_server):
     )
     assert resp.status_code == 403
     assert "only administrator and senior co" in resp.json()["error"].lower()
+
+
+def test_metadata_reassignment_rejects_active_non_officer_role(
+    monitoring_api_server,
+):
+    base_url, db_module = monitoring_api_server
+    token = _token("admin_s2", "admin", "Admin S2")
+    conn = db_module.get_db()
+    try:
+        conn.execute(
+            "UPDATE monitoring_alerts SET status = 'assigned', "
+            "reviewed_by = 'co_s2' WHERE id = 9202"
+        )
+        conn.commit()
+        before = dict(conn.execute(
+            "SELECT status, reviewed_by, reviewed_at, assigned_at "
+            "FROM monitoring_alerts WHERE id = 9202"
+        ).fetchone())
+        audit_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM audit_log "
+            "WHERE target = ? AND action = ?",
+            ("monitoring_alert:9202", "monitoring.alert.assigned"),
+        ).fetchone()["count"]
+    finally:
+        conn.close()
+
+    response = requests.patch(
+        f"{base_url}/api/monitoring/alerts/9202",
+        headers=_headers(token),
+        json={
+            "action": "assign",
+            "assignee_id": "analyst_s2",
+            "assignment_note": "This role must remain ineligible.",
+        },
+        timeout=5,
+    )
+    assert response.status_code == 403, response.text
+
+    conn = db_module.get_db()
+    try:
+        after = dict(conn.execute(
+            "SELECT status, reviewed_by, reviewed_at, assigned_at "
+            "FROM monitoring_alerts WHERE id = 9202"
+        ).fetchone())
+        after_audit_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM audit_log "
+            "WHERE target = ? AND action = ?",
+            ("monitoring_alert:9202", "monitoring.alert.assigned"),
+        ).fetchone()["count"]
+    finally:
+        conn.close()
+    assert after == before
+    assert after_audit_count == audit_count
+
+
+def test_senior_start_review_acknowledges_escalated_alert(
+    monitoring_api_server,
+):
+    base_url, db_module = monitoring_api_server
+    token = _token("sco_s2", "sco", "SCO S2")
+    conn = db_module.get_db()
+    try:
+        conn.execute(
+            "UPDATE monitoring_alerts SET status = 'escalated' WHERE id = 9201"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    missing_rationale = requests.patch(
+        f"{base_url}/api/monitoring/alerts/9201",
+        headers=_headers(token),
+        json={"action": "start_review"},
+        timeout=5,
+    )
+    assert missing_rationale.status_code == 400
+
+    acknowledged = requests.patch(
+        f"{base_url}/api/monitoring/alerts/9201",
+        headers=_headers(token),
+        json={
+            "action": "start_review",
+            "note": "Senior acknowledges the escalation for controlled review.",
+        },
+        timeout=5,
+    )
+    assert acknowledged.status_code == 200, acknowledged.text
+    assert acknowledged.json()["new_status"] == "in_review"
+
+    conn = db_module.get_db()
+    try:
+        row = conn.execute(
+            "SELECT detail FROM audit_log WHERE target = ? "
+            "AND action = 'monitoring.alert.status_transition' "
+            "ORDER BY id DESC LIMIT 1",
+            ("monitoring_alert:9201",),
+        ).fetchone()
+    finally:
+        conn.close()
+    detail = json.loads(row["detail"])
+    assert detail["previous_status"] == "escalated"
+    assert detail["new_status"] == "in_review"
+    assert detail["reason_code"] == "senior_acknowledged"
+    assert detail["evidence"]["officer_rationale"].startswith(
+        "Senior acknowledges"
+    )

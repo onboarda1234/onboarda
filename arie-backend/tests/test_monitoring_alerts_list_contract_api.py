@@ -221,8 +221,8 @@ def test_default_monitoring_alert_list_is_active_paginated_and_clean(monitoring_
 
     assert body["page"] == 1
     assert body["page_size"] == 2
-    assert body["total"] == 6
-    assert body["total_pages"] == 3
+    assert body["total"] == 7
+    assert body["total_pages"] == 4
     assert body["has_next"] is True
     assert body["has_previous"] is False
     assert len(body["alerts"]) == 2
@@ -251,7 +251,9 @@ def test_monitoring_alert_list_page_two_returns_next_records(monitoring_list_ser
     )
 
 
-def test_closed_alerts_require_explicit_filter(monitoring_list_server):
+def test_terminal_alerts_require_explicit_filter_but_handoffs_remain_visible(
+    monitoring_list_server,
+):
     base_url, _db_module = monitoring_list_server
     token = _token("admin_list", "admin", "Admin List")
 
@@ -259,9 +261,52 @@ def test_closed_alerts_require_explicit_filter(monitoring_list_server):
     include_closed = _get(base_url, token, "?include_closed=true&page_size=50")
     routed = _get(base_url, token, "?status=routed_to_edd&page_size=50")
 
-    assert {item["id"] for item in default["alerts"]}.isdisjoint({9404, 9405, 9411})
+    assert {item["id"] for item in default["alerts"]}.isdisjoint({9404, 9405})
+    routed_default = next(item for item in default["alerts"] if item["id"] == 9411)
+    assert routed_default["status_group"] == "handoff"
+    assert routed_default["is_terminal"] is False
+    assert routed_default["is_action_locked"] is True
     assert {9404, 9405, 9411}.issubset({item["id"] for item in include_closed["alerts"]})
     assert [item["id"] for item in routed["alerts"]] == [9411]
+
+
+def test_list_terminality_ignores_resolved_at_drift():
+    import server
+
+    assert (
+        server._monitoring_list_is_terminal(
+            {"status": "open", "resolved_at": "2026-07-01T00:00:00Z"},
+            "open",
+        )
+        is False
+    )
+    assert (
+        server._monitoring_list_is_terminal(
+            {"status": "routed_to_edd", "resolved_at": "2026-07-01T00:00:00Z"},
+            "routed_to_edd",
+        )
+        is False
+    )
+
+
+def test_blank_stored_status_displays_compatibly_but_actions_fail_closed():
+    import server
+
+    projected = server._monitoring_list_project_row(
+        {
+            "id": 999999,
+            "status": " ",
+            "alert_type": "other",
+            "severity": "medium",
+            "summary": "Synthetic invalid-status projection",
+        }
+    )
+
+    # Historical list display continues to normalize a blank token to Open,
+    # while action ownership remains based on the uninterpretable stored value.
+    assert projected["status_key"] == "open"
+    assert projected["is_terminal"] is False
+    assert projected["is_action_locked"] is True
 
 
 def test_canonical_type_and_severity_filters_are_server_side(monitoring_list_server):
@@ -277,7 +322,7 @@ def test_canonical_type_and_severity_filters_are_server_side(monitoring_list_ser
 
     assert {item["id"] for item in doc_expiry["alerts"]} == {9402}
     assert {item["id"] for item in missing_refresh["alerts"]} == {9403}
-    assert {item["id"] for item in adverse["alerts"]} == {9401, 9408}
+    assert {item["id"] for item in adverse["alerts"]} == {9401, 9408, 9411}
     assert {item["id"] for item in sanctions["alerts"]} == {9410}
     assert risk_drift["total"] == 0
     assert {item["id"] for item in high["alerts"]} == {9401, 9408}

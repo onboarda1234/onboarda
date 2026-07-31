@@ -17,56 +17,28 @@ Scope of this module (deliberately narrow):
 - Expose ``derive_display_state`` so "Awaiting Client" / "Awaiting Officer" /
   "Ready to Close" can be shown as DERIVED labels — never stored.
 
-Explicitly NOT in scope (later PRs):
-- No DB schema, no CHECK constraint, no migration.
-- No change to how any writer sets ``monitoring_alerts.status``.
-- No workflow / routing / document-refresh behaviour change.
-
-Because the document-refresh flow currently *overloads* ``monitoring_alerts.status``
-with ``document_requested`` / ``client_uploaded`` / ``under_review``, this module
-must (for now) recognise those values and present them as derived display states.
-De-coupling that overload is a separate, later PR.
+Document-refresh request states and legacy read aliases are accepted only for
+projection. They are never members of the canonical stored vocabulary.
 """
 from __future__ import annotations
 
 import re
 from typing import Any, Dict, Optional
 
+from monitoring_alert_state_machine import (
+    ACTIVE_STATUSES as _ACTIVE_STATUSES,
+    CANONICAL_STATUSES as _CANONICAL_STATUSES,
+    HANDOFF_STATUSES as _HANDOFF_STATUSES,
+    TERMINAL_STATUSES as _TERMINAL_STATUSES,
+)
+
 # ── Canonical Monitoring ALERT lifecycle statuses ────────────────────────────
-# These 9 are the governed alert-lifecycle vocabulary. Document-refresh request
-# states (requested/uploaded/under_review/rejected/...) are NOT in this set.
-CANONICAL_ALERT_STATUSES = (
-    "open",
-    "triaged",
-    "assigned",
-    "routed_to_review",
-    "routed_to_edd",
-    "dismissed",
-    "resolved",
-    "closed",
-    "waived",
-)
-
-# Alert-lifecycle statuses that are also written today by decision outcomes
-# (escalate_to_sco/escalate_overdue_item -> 'escalated';
-#  update_risk_profile/request_further_information -> 'in_review').
-# They are genuine ALERT lifecycle states (not refresh states) and are the
-# candidates to widen the canonical set from 9 -> 11 in the DB-hardening PR.
-EXTENDED_ALERT_STATUSES = CANONICAL_ALERT_STATUSES + ("in_review", "escalated")
-
-# Terminal statuses (an alert here should no longer be treated as actionable).
-# Mirrors server._MONITORING_LIST_TERMINAL_STATUSES exactly so guards agree.
-TERMINAL_STATUSES = frozenset(
-    {
-        "resolved",
-        "closed",
-        "dismissed",
-        "waived",
-        "cancelled",
-        "routed_to_edd",
-        "routed_to_review",
-    }
-)
+# Compatibility exports for existing read-only consumers. The state-machine
+# module is authoritative; there is no longer a smaller "base" vocabulary plus
+# an extended set.
+CANONICAL_ALERT_STATUSES = _CANONICAL_STATUSES
+EXTENDED_ALERT_STATUSES = CANONICAL_ALERT_STATUSES
+TERMINAL_STATUSES = _TERMINAL_STATUSES
 
 # ── Document-refresh REQUEST lifecycle (separate object) ─────────────────────
 # Home: application_enhanced_requirements.status. Listed here ONLY so callers can
@@ -75,9 +47,8 @@ REFRESH_REQUEST_STATUSES = frozenset(
     {"generated", "requested", "uploaded", "under_review", "rejected", "accepted", "waived"}
 )
 
-# Alert-status values that the refresh flow currently overloads onto the alert
-# row. Recognised so we can render derived "Awaiting …" labels until the refresh
-# lifecycle is decoupled in a later PR.
+# Historical alert-row overloads are recognised for read compatibility only.
+# New writes must keep these states on the linked refresh-request object.
 _REFRESH_OVERLOADED_ALERT_STATUSES = frozenset(
     {"document_requested", "client_uploaded", "under_review", "awaiting_review", "notification_failed"}
 )
@@ -92,14 +63,14 @@ def token(value: Any) -> str:
 
 
 # ── Filter-status aliases ────────────────────────────────────────────────────
-# Copied verbatim from the previous inline server map so delegation is a no-op
-# in behaviour. A parity test locks this to the historical mapping.
+# Read aliases may normalize into a canonical stored status or a derived display
+# status. They do not widen the canonical stored vocabulary.
 FILTER_STATUS_ALIASES: Dict[str, str] = {
     "": "open",
     "new": "open",
     "opened": "open",
     "open": "open",
-    "triaged": "in_review",
+    "triaged": "triaged",
     "review": "in_review",
     "inreview": "in_review",
     "in_review": "in_review",
@@ -127,11 +98,11 @@ FILTER_STATUS_ALIASES: Dict[str, str] = {
     "closed_dismissed": "dismissed",
     "resolved": "resolved",
     "resolved_no_change": "resolved",
-    "closed": "closed",
+    "closed": "resolved",
     "waived": "waived",
     "waiver": "waived",
-    "cancelled": "cancelled",
-    "canceled": "cancelled",
+    "cancelled": "resolved",
+    "canceled": "resolved",
 }
 
 
@@ -143,22 +114,20 @@ def canonical_filter_status(value: Any) -> str:
     unchanged. It is intentionally broader than CANONICAL_ALERT_STATUSES because
     it must still distinguish refresh-overloaded states for the UI.
     """
-    tok = token(value or "open")
+    tok = token(value)
     return FILTER_STATUS_ALIASES.get(tok, tok or "open")
 
 
 # ── Canonical lifecycle mapping ──────────────────────────────────────────────
-# Best-effort fold of any status into one of the 9 canonical alert statuses.
+# Strict fold of known stored/read-alias values into the canonical lifecycle.
 # Refresh-overloaded states fold back to the underlying alert lifecycle (open),
 # because the alert itself has not advanced — only the refresh sub-flow has.
 _LIFECYCLE_MAP: Dict[str, str] = {
     "open": "open",
-    "new": "open",
-    "opened": "open",
-    "in_review": "triaged",
+    "in_review": "in_review",
     "triaged": "triaged",
-    "review": "triaged",
     "assigned": "assigned",
+    "escalated": "escalated",
     "document_requested": "open",
     "client_uploaded": "open",
     "under_review": "open",
@@ -166,30 +135,55 @@ _LIFECYCLE_MAP: Dict[str, str] = {
     "notification_failed": "open",
     "routed_to_review": "routed_to_review",
     "routed_to_edd": "routed_to_edd",
-    "escalated": "routed_to_edd",  # SCO/MLRO escalation ~ EDD-style routing
     "dismissed": "dismissed",
     "resolved": "resolved",
-    "closed": "closed",
-    "cancelled": "closed",
     "waived": "waived",
 }
 
 
-def lifecycle_status(value: Any) -> str:
-    """Return the canonical alert-lifecycle status (one of CANONICAL_ALERT_STATUSES)."""
-    tok = canonical_filter_status(value)
-    return _LIFECYCLE_MAP.get(tok, "open")
+def lifecycle_status(value: Any) -> Optional[str]:
+    """Return a canonical lifecycle status, or ``None`` for unknown values.
+
+    Unknown/free-text values must remain visibly unmapped. Treating them as
+    ``open`` would hide invalid persisted state and defeat fail-closed guards.
+    """
+    raw_token = token(value)
+    if not raw_token:
+        return None
+    tok = canonical_filter_status(raw_token)
+    return _LIFECYCLE_MAP.get(tok)
 
 
 def is_canonical_alert_status(value: Any) -> bool:
-    return token(value) in CANONICAL_ALERT_STATUSES
+    # This predicate answers whether a value is safe to persist, not whether it
+    # can be interpreted as a read alias. Stored values are exact and lowercase.
+    return isinstance(value, str) and value in CANONICAL_ALERT_STATUSES
 
 
 def is_terminal(value: Any, resolved_at: Any = None) -> bool:
-    """True when an alert should no longer be treated as actionable."""
-    if resolved_at not in (None, ""):
-        return True
+    """Return terminality from canonical status only.
+
+    ``resolved_at`` remains accepted for call-site compatibility, but timestamp
+    drift cannot turn an active/handoff status into a terminal decision.
+    """
+    del resolved_at
     return canonical_filter_status(value) in TERMINAL_STATUSES
+
+
+def is_action_locked(value: Any) -> bool:
+    """Return whether Monitoring officer actions are prohibited for the state.
+
+    Handoffs are deliberately nonterminal, but their downstream owner controls
+    the next decision.  Keeping this separate from terminality prevents list
+    filtering and counters from misclassifying routed alerts merely to disable
+    Monitoring controls.
+    """
+    lifecycle = lifecycle_status(value)
+    if lifecycle is None:
+        # An uninterpretable stored status cannot prove that Monitoring still
+        # owns the next decision.
+        return True
+    return lifecycle in _HANDOFF_STATUSES or lifecycle in TERMINAL_STATUSES
 
 
 # ── Display labels + groups ──────────────────────────────────────────────────
@@ -197,6 +191,7 @@ def is_terminal(value: Any, resolved_at: Any = None) -> bool:
 # (including refresh-overloaded ones) resolves to a clean, officer-facing label.
 STATUS_LABELS: Dict[str, str] = {
     "open": "Open",
+    "triaged": "Triaged",
     "in_review": "In Review",
     "assigned": "Assigned",
     "document_requested": "Awaiting Client",
@@ -209,14 +204,13 @@ STATUS_LABELS: Dict[str, str] = {
     "routed_to_edd": "Routed to EDD",
     "dismissed": "Dismissed",
     "resolved": "Resolved",
-    "closed": "Closed",
     "waived": "Waived",
-    "cancelled": "Cancelled",
 }
 
 # Display group buckets used for grouping/soft-colouring in the UI.
 _STATUS_GROUPS: Dict[str, str] = {
     "open": "active",
+    "triaged": "active",
     "in_review": "active",
     "assigned": "active",
     "document_requested": "awaiting_client",
@@ -225,13 +219,11 @@ _STATUS_GROUPS: Dict[str, str] = {
     "under_review": "awaiting_officer",
     "awaiting_review": "awaiting_officer",
     "escalated": "escalated",
-    "routed_to_review": "terminal",
-    "routed_to_edd": "terminal",
+    "routed_to_review": "handoff",
+    "routed_to_edd": "handoff",
     "dismissed": "terminal",
     "resolved": "terminal",
-    "closed": "terminal",
     "waived": "terminal",
-    "cancelled": "terminal",
 }
 
 
@@ -241,7 +233,7 @@ def label(value: Any) -> str:
 
 
 def group(value: Any) -> str:
-    return _STATUS_GROUPS.get(canonical_filter_status(value), "active")
+    return _STATUS_GROUPS.get(canonical_filter_status(value), "unknown")
 
 
 # Refresh-request status -> effective alert display/filter status key.
@@ -267,9 +259,10 @@ def effective_status(alert_status: Any, refresh_request_status: Optional[Any] = 
     via canonical_filter_status, so pre-M1.1 rows keep working.
     """
     base = canonical_filter_status(alert_status)
+    lifecycle = lifecycle_status(base)
     if is_terminal(base, resolved_at=resolved_at):
         return base
-    if refresh_request_status is not None:
+    if lifecycle in _ACTIVE_STATUSES and refresh_request_status is not None:
         mapped = REFRESH_REQUEST_TO_EFFECTIVE_STATUS.get(token(refresh_request_status))
         if mapped:
             return mapped
@@ -321,12 +314,20 @@ def derive_display_state(
     ``all_required_items_cleared=True`` on a non-terminal alert yields the derived
     "Ready to Close" state.
     """
+    lifecycle = lifecycle_status(alert_status)
     canonical = canonical_filter_status(alert_status)
-    display_label = label(canonical)
-    display_group = group(canonical)
+    if lifecycle is None:
+        display_label = (
+            str(alert_status or "Unknown").replace("_", " ").strip().title()
+            or "Unknown"
+        )
+        display_group = "unknown"
+    else:
+        display_label = label(canonical)
+        display_group = group(canonical)
 
     # Refine "Awaiting …" from the linked refresh request when provided.
-    if refresh_request_status is not None:
+    if lifecycle in _ACTIVE_STATUSES and refresh_request_status is not None:
         rtok = token(refresh_request_status)
         if rtok in {"requested"}:
             display_label, display_group = "Awaiting Client", "awaiting_client"
@@ -334,12 +335,18 @@ def derive_display_state(
             display_label, display_group = "Awaiting Officer", "awaiting_officer"
 
     # Ready to Close: non-terminal alert whose linked required items are all done.
-    if all_required_items_cleared and not is_terminal(canonical):
+    if (
+        all_required_items_cleared
+        and lifecycle in _ACTIVE_STATUSES
+        and lifecycle not in _HANDOFF_STATUSES
+        and not is_terminal(canonical)
+    ):
         display_label, display_group = "Ready to Close", "ready_to_close"
 
     return {
         "status_label": display_label,
         "status_group": display_group,
-        "lifecycle_status": lifecycle_status(canonical),
+        "lifecycle_status": lifecycle,
         "is_terminal": is_terminal(canonical),
+        "is_action_locked": is_action_locked(canonical),
     }

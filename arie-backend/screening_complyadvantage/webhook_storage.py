@@ -714,7 +714,7 @@ def _upsert_monitoring_alert(db, row):
         INSERT INTO monitoring_alerts
             (provider, case_identifier, application_id, client_name, alert_type, severity,
              detected_by, summary, source_reference, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
         ON CONFLICT(provider, case_identifier)
         WHERE provider IS NOT NULL AND case_identifier IS NOT NULL
         DO UPDATE SET
@@ -724,8 +724,10 @@ def _upsert_monitoring_alert(db, row):
             severity = EXCLUDED.severity,
             detected_by = EXCLUDED.detected_by,
             summary = EXCLUDED.summary,
-            source_reference = EXCLUDED.source_reference,
-            status = EXCLUDED.status
+            source_reference = EXCLUDED.source_reference
+            -- Provider refreshes update evidence metadata only. Lifecycle
+            -- status is officer/workflow-owned and must never be reopened by
+            -- a repeated webhook.
         """,
         (
             row["provider"],
@@ -737,7 +739,6 @@ def _upsert_monitoring_alert(db, row):
             row["detected_by"],
             row["summary"],
             row["source_reference"],
-            row["status"],
         ),
     )
     after = db.execute(

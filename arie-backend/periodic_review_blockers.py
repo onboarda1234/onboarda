@@ -6,9 +6,12 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 from environment import get_screening_validity_days
 from enhanced_requirements import validate_enhanced_requirement_document_link
+from monitoring_alert_state_machine import TERMINAL_STATUSES
 
 TERMINAL_EDD_STAGES = {"edd_approved", "edd_rejected"}
-TERMINAL_ALERT_STATES = {"dismissed", "resolved", "routed_to_review", "routed_to_edd"}
+# Compatibility name retained for focused tests/readers. Handoff states remain
+# unresolved and therefore continue to block a Periodic Review when material.
+TERMINAL_ALERT_STATES = TERMINAL_STATUSES
 RESOLVED_ITEM_STATUSES = {"cleared", "not_applicable"}
 DOCUMENT_EVIDENCE_ITEM_TYPES = {
     "kyc_refresh",
@@ -72,6 +75,53 @@ def _row_get(row, key, default=None):
 
 def _severity_rank(value: Any) -> int:
     return SEVERITY_RANK.get(str(value or "medium").strip().lower(), 2)
+
+
+def _same_identifier(left: Any, right: Any) -> bool:
+    if left in (None, "") or right in (None, ""):
+        return False
+    return str(left) == str(right)
+
+
+def _is_owning_periodic_review_handoff(review, alert) -> bool:
+    """Return whether *alert* is the exact handoff owned by *review*.
+
+    ``routed_to_review`` remains a nonterminal Monitoring state.  The exact
+    Periodic Review that owns that handoff must nevertheless be able to record
+    its downstream decision; otherwise the handoff would deadlock itself.
+    Unrelated handoffs, all other active statuses, and cross-application links
+    continue to block.
+    """
+    if str(_row_get(alert, "status") or "").strip().lower() != "routed_to_review":
+        return False
+
+    review_application_id = _row_get(review, "application_id")
+    alert_application_id = _row_get(alert, "application_id")
+    if (
+        review_application_id in (None, "")
+        or alert_application_id in (None, "")
+        or not _same_identifier(review_application_id, alert_application_id)
+    ):
+        return False
+
+    review_id = _row_get(review, "id")
+    alert_id = _row_get(alert, "id")
+    if review_id in (None, "") or alert_id in (None, ""):
+        return False
+
+    review_alert_id = _row_get(review, "linked_monitoring_alert_id")
+    alert_review_id = _row_get(alert, "linked_periodic_review_id")
+    review_points_to_alert = _same_identifier(review_alert_id, alert_id)
+    alert_points_to_review = _same_identifier(alert_review_id, review_id)
+
+    # One direction is sufficient for compatible historical rows, but every
+    # populated pointer must agree. Conflicting dual pointers are impossible
+    # linkage, not an ownership exemption.
+    if review_alert_id not in (None, "") and not review_points_to_alert:
+        return False
+    if alert_review_id not in (None, "") and not alert_points_to_review:
+        return False
+    return review_points_to_alert or alert_points_to_review
 
 
 def decode_required_items(value: Any) -> List[Dict[str, Any]]:
@@ -417,12 +467,17 @@ def evaluate_operational_blockers(
     linked_alert_id = _row_get(review, "linked_monitoring_alert_id")
     if linked_alert_id:
         alert = db.execute(
-            "SELECT status, severity, summary FROM monitoring_alerts WHERE id = ?",
+            "SELECT id, application_id, status, severity, summary, "
+            "linked_periodic_review_id FROM monitoring_alerts WHERE id = ?",
             (linked_alert_id,),
         ).fetchone()
         if alert is not None:
             alert_status = str(_row_get(alert, "status") or "").strip().lower()
-            if alert_status not in TERMINAL_ALERT_STATES and _severity_rank(_row_get(alert, "severity")) >= _severity_rank("high"):
+            if (
+                not _is_owning_periodic_review_handoff(review, alert)
+                and alert_status not in TERMINAL_ALERT_STATES
+                and _severity_rank(_row_get(alert, "severity")) >= _severity_rank("high")
+            ):
                 blockers.append(
                     _blocker(
                         "monitoring_alert_followup",
@@ -472,12 +527,17 @@ def evaluate_operational_blockers(
     )
     if has_monitoring_requirement and application_id:
         rows = db.execute(
-            "SELECT id, severity, summary, status FROM monitoring_alerts WHERE application_id = ?",
+            "SELECT id, application_id, severity, summary, status, "
+            "linked_periodic_review_id FROM monitoring_alerts WHERE application_id = ?",
             (application_id,),
         ).fetchall()
         for alert in rows:
             alert_status = str(_row_get(alert, "status") or "").strip().lower()
-            if alert_status in TERMINAL_ALERT_STATES or _severity_rank(_row_get(alert, "severity")) < _severity_rank("high"):
+            if (
+                _is_owning_periodic_review_handoff(review, alert)
+                or alert_status in TERMINAL_ALERT_STATES
+                or _severity_rank(_row_get(alert, "severity")) < _severity_rank("high")
+            ):
                 continue
             blockers.append(
                 _blocker(
