@@ -1,5 +1,6 @@
 """Authoritative factor-level computation evidence remains arithmetic, not a scorer."""
 
+import json
 import os
 import sys
 
@@ -198,3 +199,132 @@ def test_medium_floor_preserves_the_raw_score_and_leaves_the_ledger_untouched():
     assert result["score"] == before["final_composite_score"]
     assert ledger["policy_adjustment"] == before["policy_adjustment"]
     assert ledger["final_composite_score"] == before["final_composite_score"]
+
+
+def _evidence_for(result, config):
+    return build_authoritative_risk_report_evidence({
+        "risk_score": result["score"], "risk_level": result["level"],
+        "risk_dimensions": result["dimensions"], "risk_escalations": result["escalations"],
+        "risk_computed_at": "2026-07-31T00:00:00Z", "risk_config_version": config["_config_version"],
+        "onboarding_lane": result["lane"],
+    }, config, approval_route={"route": "dual_control_required", "reasons": []})
+
+
+def test_stacked_floors_telescope_instead_of_double_counting():
+    """Two floors can fire on one result (EDD routing, then screening).
+
+    Each delta is measured against the CURRENT score, so the adjustments
+    accumulate to the total movement. Measuring from the original base instead
+    would double-count the first floor and leave the ledger unreconcilable.
+    """
+    config = _config()
+    result = compute_risk_score(_inputs(), config_override=config)
+    ledger = result["dimensions"]["factor_computation_evidence"]
+    base_score = result["score"]
+    start_adjustment = ledger["policy_adjustment"]
+
+    apply_risk_floor(result, "HIGH", "floor_rule_edd_routing", "first floor")
+    assert result["score"] == 55.0
+    apply_risk_floor(result, "VERY_HIGH", "floor_rule_screening", "second floor")
+    assert result["score"] == 70.0
+
+    assert ledger["policy_adjustment"] == pytest.approx(
+        start_adjustment + (70.0 - base_score), abs=1e-4
+    )
+    assert ledger["final_composite_score"] == 70.0
+    reproduced = (
+        sum(row["composite_contribution"] for row in ledger["dimensions"])
+        + ledger["policy_adjustment"]
+    )
+    assert reproduced == pytest.approx(70.0, abs=1e-4)
+    assert _evidence_for(result, config)["available"] is True
+
+
+def test_floor_updates_a_ledger_rebuilt_from_a_stored_row():
+    """A risk result rebuilt from a persisted row carries only the nested ledger."""
+    config = _config()
+    result = compute_risk_score(_inputs(), config_override=config)
+    base_score = result["score"]
+
+    rebuilt = json.loads(json.dumps(result))
+    rebuilt.pop("factor_computation_evidence", None)
+    apply_risk_floor(rebuilt, "HIGH", "floor_rule_test", "floor")
+
+    ledger = rebuilt["dimensions"]["factor_computation_evidence"]
+    assert ledger["final_composite_score"] == 55.0
+    assert ledger["policy_adjustment"] == pytest.approx(55.0 - base_score, abs=1e-4)
+    assert _evidence_for(rebuilt, config)["available"] is True
+
+
+def test_floor_updates_both_ledger_copies_once_they_are_distinct_objects():
+    """A JSON round-trip de-aliases the two copies; both must stay in step."""
+    config = _config()
+    result = compute_risk_score(_inputs(), config_override=config)
+    base_score = result["score"]
+
+    deduped = json.loads(json.dumps(result))
+    assert (
+        deduped["factor_computation_evidence"]
+        is not deduped["dimensions"]["factor_computation_evidence"]
+    )
+    apply_risk_floor(deduped, "HIGH", "floor_rule_test", "floor")
+
+    for ledger in (
+        deduped["factor_computation_evidence"],
+        deduped["dimensions"]["factor_computation_evidence"],
+    ):
+        assert ledger["final_composite_score"] == 55.0
+        assert ledger["policy_adjustment"] == pytest.approx(55.0 - base_score, abs=1e-4)
+
+
+def test_floor_on_a_result_that_already_carries_a_policy_adjustment():
+    """An in-engine elevation leaves a non-zero adjustment the floor must keep."""
+    config = _config()
+    result = compute_risk_score(
+        _inputs(entity_type="Trust", ownership_structure="Opaque", country="Turkey",
+                sector="Private Banking", monthly_volume="Over USD 5m"),
+        config_override=config,
+    )
+    ledger = result["dimensions"]["factor_computation_evidence"]
+    start_adjustment = ledger["policy_adjustment"]
+    base_score = result["score"]
+
+    apply_risk_floor(result, "VERY_HIGH", "floor_rule_test", "floor")
+
+    assert ledger["policy_adjustment"] == pytest.approx(
+        start_adjustment + (70.0 - base_score), abs=1e-4
+    )
+    reproduced = (
+        sum(row["composite_contribution"] for row in ledger["dimensions"])
+        + ledger["policy_adjustment"]
+    )
+    assert reproduced == pytest.approx(result["score"], abs=1e-4)
+    assert _evidence_for(result, config)["available"] is True
+
+
+def test_unknown_prior_score_leaves_the_ledger_untouched():
+    """A missing score makes the delta meaningless; do not write a wrong one."""
+    config = _config()
+    result = compute_risk_score(_inputs(), config_override=config)
+    ledger = result["dimensions"]["factor_computation_evidence"]
+    before = dict(ledger)
+
+    result["score"] = None
+    apply_risk_floor(result, "HIGH", "floor_rule_test", "floor")
+
+    assert ledger["policy_adjustment"] == before["policy_adjustment"]
+    assert ledger["final_composite_score"] == before["final_composite_score"]
+
+
+def test_a_floor_cannot_fabricate_a_missing_policy_adjustment():
+    """A floor must never turn a correctly fail-closed ledger into an available one."""
+    config = _config()
+    result = compute_risk_score(_inputs(), config_override=config)
+    ledger = result["dimensions"]["factor_computation_evidence"]
+    ledger.pop("policy_adjustment")
+    assert _evidence_for(result, config)["available"] is False
+
+    apply_risk_floor(result, "HIGH", "floor_rule_test", "floor")
+
+    assert "policy_adjustment" not in ledger
+    assert _evidence_for(result, config)["available"] is False

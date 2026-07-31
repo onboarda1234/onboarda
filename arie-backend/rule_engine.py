@@ -802,8 +802,15 @@ def _record_floor_in_factor_evidence(risk_dict, previous_score, new_score):
     if not delta:
         return
     for ledger in _factor_evidence_ledgers(risk_dict):
+        # An absent or unparsable policy_adjustment means the ledger is already
+        # unreconcilable. Leave it that way: fabricating 0.0 here could flip a
+        # correctly fail-closed record to available, which is the one direction
+        # this must never move.
+        raw_adjustment = ledger.get("policy_adjustment")
+        if raw_adjustment is None:
+            continue
         try:
-            adjustment = float(ledger.get("policy_adjustment") or 0.0)
+            adjustment = float(raw_adjustment)
         except (TypeError, ValueError):
             continue
         ledger["policy_adjustment"] = round(adjustment + delta, 4)
@@ -834,8 +841,10 @@ def apply_risk_floor(risk_dict, minimum_level, reason_code, reason_text):
     previous_score = risk_dict.get("score")
     try:
         previous_score_num = float(previous_score)
+        previous_score_known = True
     except (TypeError, ValueError):
         previous_score_num = 0.0
+        previous_score_known = False
 
     risk_dict.setdefault("base_risk_score", previous_score_num)
     risk_dict.setdefault("base_risk_level", current)
@@ -843,7 +852,11 @@ def apply_risk_floor(risk_dict, minimum_level, reason_code, reason_text):
     risk_dict["level"] = minimum
     risk_dict["final_risk_level"] = minimum
     risk_dict["lane"] = RISK_LANE_MAP.get(minimum, "Standard Review")
-    _record_floor_in_factor_evidence(risk_dict, previous_score_num, risk_dict["score"])
+    if previous_score_known:
+        # A missing/unparsable prior score makes the delta meaningless (the 0.0
+        # fallback would overstate it), so the ledger is left alone rather than
+        # written with a wrong adjustment.
+        _record_floor_in_factor_evidence(risk_dict, previous_score_num, risk_dict["score"])
 
     escalations = risk_dict.get("escalations")
     if not isinstance(escalations, list):
