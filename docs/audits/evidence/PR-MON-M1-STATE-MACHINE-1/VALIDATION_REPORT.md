@@ -1,7 +1,7 @@
 # PR-MON-M1-STATE-MACHINE-1 — validation report
 
 Date: 2026-07-31
-Base SHA: `7251bd7f24e6d4be87cc3d15566a219d3c1a12a4`
+Base SHA: `85c70431a2d2a2f4bd6dd3078257d5f22d92bad4`
 State-machine version: `monitoring_alert_state_machine_v1`
 
 ## Pre-implementation reconciliation
@@ -26,12 +26,14 @@ query evidence and mutation-path inventory.
 - The branch was first rebased from
   `9fa083c1ac185ea65bfa8515dff315eb254701a5` onto hardened main
   `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`, then cleanly rebased again
-  onto current main `7251bd7f24e6d4be87cc3d15566a219d3c1a12a4`.
-- `git range-diff` proved all three branch commits patch-identical across the
-  final rebase. The seven intervening main commits changed the Periodic Reviews
-  back-office label/test and added architecture documents; they did not overlap
-  the state-machine patch. The main-side label and protected expectation are
-  preserved and tested.
+  onto `7251bd7f24e6d4be87cc3d15566a219d3c1a12a4`, and finally onto current
+  main `85c70431a2d2a2f4bd6dd3078257d5f22d92bad4`.
+- `git range-diff` proved all four branch commits patch-identical across the
+  final rebase. The first intervening main set changed the Periodic Reviews
+  back-office label/test and added architecture documents. The final three
+  commits changed risk-presentation HTML and three focused tests. Neither set
+  overlapped the state-machine patch; all main-side expectations are preserved
+  and included in the post-rebase validation lane.
 - The sole overlapping file was `arie-backend/server.py`; the resulting file
   preserves main's strict `IMAGE_TAG` lookup without a `GIT_SHA` fallback.
 - Migrations 054–056 do not collide with main, whose latest migration is 053.
@@ -42,14 +44,14 @@ query evidence and mutation-path inventory.
 
 | Lane | Result |
 |---|---:|
-| Post-rebase PR-delta, feature governance, and main-side lifecycle label | 784 passed |
+| Post-rebase PR-delta, feature governance, lifecycle label, and risk-presentation integration | 826 passed |
 | Protected-module regression (73-file manifest) | 1,601 passed; zero skips/xfails |
 | PostgreSQL append-only grants | 5 passed |
 | Protected inventory contracts | 17 passed |
 | Static direct-write guard | 23 passed |
 | Release-control compatibility | 86 passed |
 | Independent final runtime focus | 210 passed; 3 PostgreSQL cases deselected and covered by the PostgreSQL-enabled root lanes |
-| Full repository suite | 8,658 passed; 3 expected skips; 4 expected xfails |
+| Full repository suite | 8,661 passed; 3 expected skips; 4 expected xfails |
 | Dedicated PDF lane | 8 passed |
 
 Schema-migration policy, production Python compilation, the configured fatal
@@ -161,7 +163,7 @@ service/API/atomicity/guard regressions pass as recorded above.
 
 - Protected-module regression: **1,601 passed**, zero skips/xfails.
 - Full repository suite with a disposable local PostgreSQL DSN:
-  **8,658 passed, 3 expected skips, 4 expected xfails**.
+  **8,661 passed, 3 expected skips, 4 expected xfails**.
 - Dedicated PDF lane: **8 passed**, zero skips/xfails.
 - PDF/evidence-pack coverage also ran inside the protected and full lanes.
 

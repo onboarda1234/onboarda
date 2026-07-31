@@ -4,7 +4,7 @@ Captured: `2026-07-31T03:12:13.624740Z`
 Observed deployed SHA: `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`
 
 This is point-in-time read-only evidence captured before the branch's final
-rebase to `7251bd7f24e6d4be87cc3d15566a219d3c1a12a4`. The SHA is intentionally
+rebase to `85c70431a2d2a2f4bd6dd3078257d5f22d92bad4`. The SHA is intentionally
 preserved as observed; current deployment and dataset compatibility must be
 reconfirmed through the fail-closed pre-merge/deployment gates.
 Mode: authenticated, read-only SQL executed in one healthy staging backend task

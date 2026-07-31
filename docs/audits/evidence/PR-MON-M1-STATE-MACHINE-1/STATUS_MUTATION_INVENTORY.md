@@ -2,7 +2,7 @@
 
 Status: complete before implementation
 Original base: `9fa083c1ac185ea65bfa8515dff315eb254701a5`
-Revalidated code base: `7251bd7f24e6d4be87cc3d15566a219d3c1a12a4`
+Revalidated code base: `85c70431a2d2a2f4bd6dd3078257d5f22d92bad4`
 
 The point-in-time staging data/schema preflight remains identified by its
 observed deployed SHA, `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`, in
