@@ -3,7 +3,8 @@
 **Status:** Design only. No production code, schema, routes, flags or UI.
 **Phase:** 0A — product and control architecture
 **Revision:** amended per founder review — approved in principle subject to the
-nine amendments in §14.2. All seven decisions D1–D7 resolved (§14.3).
+ten amendments in §14.2, with eight consistency invariants confirmed in §14.6.
+All seven decisions D1–D7 resolved (§14.3).
 **Supersedes in part:** [`challenge-mode-spec.md`](./challenge-mode-spec.md) (see §14.1)
 **Audience:** founder review of the amended specification, prior to Phase 0B build authorisation
 
@@ -112,6 +113,27 @@ The Supervisor must never:
   (`supervisor/audit.py::append_verdict_chain_entry`);
 - re-run a screening provider, IDV provider, or registry lookup;
 - emit a decision, recommendation, or approval verdict of any kind.
+
+**No Phase 0B probe changes existing behaviour.** Stated exhaustively, because
+it is the invariant every other guarantee rests on — no probe in any 0B stage
+may change:
+
+| Domain | Authoritative owner, unchanged |
+|---|---|
+| Existing workflow and case state transitions | `server.py` handlers, `applications.status` |
+| Risk scoring | `rule_engine.compute_risk_score()` — see also D6, §14.4 |
+| EDD routing | `edd_routing_policy.evaluate_edd_routing()` and `edd_cases` |
+| Document gates | `document_reliance_gate.py` — see also D5, §14.3 |
+| Screening | `screening_state.py`, screening providers, dispositions |
+| Approval | approval gates, `can_approve`, dual-approval controls |
+| Monitoring | `periodic_review_engine.py`, `monitoring_automation.py` |
+| Decision authority | the human officer, `decision_records` |
+
+The Supervisor reads all of these and writes to none of them. Enforcement is by
+the non-authoritative guard test named in §9.5 stage 0B-2.
+
+See also §3.3.5 — the institution policy contract is an input, not a licence to
+build a policy-management subsystem.
 
 ---
 
@@ -233,6 +255,41 @@ The absence of configuration is itself a reportable condition, surfaced through
 category `F-28 policy_configuration` (§5.2) and visible in output section 2
 `review_completeness`. Reviewing whether the institution has configured a
 complete policy is a legitimate — and genuinely valuable — Supervisor function.
+
+#### 3.3.5 Implementation boundary
+
+> **The institution policy profile defined in Phase 0A is an input contract for
+> policy-dependent Supervisor probes. It is not authorisation to build a full
+> policy-management subsystem during Phase 0B. Phases 0B-1 and 0B-2 must not
+> introduce a policy administration UI, generic rule builder, policy approval
+> workflow, operational risk-scoring changes, document-gate changes or
+> authoritative enforcement. Only the minimum typed and versioned contract
+> needed to represent policy availability may be introduced. Detailed policy
+> persistence and administration require separate founder approval.**
+
+**What this permits in 0B-1 and 0B-2.** A typed, versioned representation of the
+policy contract — sufficient to record *which* keys a probe requires, *whether*
+they are configured, and *which* `policy_version` was in force — and nothing
+more. In practice that is a read-only contract definition plus the availability
+metadata it feeds into `availability_status`, `F-28` findings, and the
+`policy_profile` evidence type.
+
+**What this prohibits in 0B-1 and 0B-2.** Explicitly:
+
+| Prohibited | Why it is out of scope |
+|---|---|
+| Policy administration UI | Administration is a product surface in its own right, requiring its own design, permissions and change control |
+| Generic rule builder | A configurable rule engine is a far larger system than an input contract, and would create a second authority over decisions |
+| Policy approval workflow | Approval, versioning and supersession of institution policy is a governance workflow needing separate design |
+| Operational risk-scoring changes | `rule_engine` remains authoritative and untouched (see also D6, §14.4) |
+| Document-gate changes | `document_reliance_gate` remains authoritative and untouched (see also D5, §14.3) |
+| Authoritative enforcement of any kind | The Supervisor is advisory. A policy contract must not become a gate |
+
+**Consequence for §3.3.3.** The configuration key register is a *contract
+specification* — it declares what a probe needs and how it is versioned. It is
+not a build specification for a configuration management system. How policy is
+persisted, edited, approved and superseded is deliberately unspecified here and
+requires separate founder approval before any work begins.
 
 ---
 
@@ -835,8 +892,8 @@ one sub-check that remains available when policy is unconfigured.
   terminating in a foreign intermediary with no natural person (d); listed
   entity with recorded exemption; listed entity with no rationale (e); zero
   parties; policy unconfigured.
-- **Closure:** ownership coverage satisfies the active policy, or the shortfall
-  carries a recorded, attributed rationale.
+- **Closure:** ownership coverage satisfies the active, approved policy, or the
+  shortfall carries a recorded, attributed rationale.
 
 ---
 
@@ -1001,9 +1058,10 @@ detectable and independently reportable:
   missing element 1 only; missing elements 3 and 5; policy that does **not**
   require element 7 with no bank reference present (must produce **no** finding);
   screening-detected PEP with no declaration; no PEP; policy unconfigured.
-- **Closure:** every element the **active institution policy** requires for that
-  party's PEP class is present and verified. Closure is evaluated against the
-  policy version in force, not a global document list.
+- **Closure:** every element the **active, approved institution policy** requires
+  for that party's PEP class is present and verified. Closure is evaluated
+  against the approved policy version in force, never against a template value
+  or a global document list.
 
 ---
 
@@ -1095,7 +1153,7 @@ Supervisor must not overstate what a satisfied coupling proves:
   an ineligible role (must **not** satisfy); elevated factor with no mapping
   entry (must yield `F-28`); all-low case; policy unconfigured.
 - **Closure:** at least one artifact of an accepted evidence type for that
-  factor reaches an allowed reliance state under the active policy version.
+  factor reaches an allowed reliance state under the active, approved policy version.
 
 ---
 
@@ -1169,6 +1227,12 @@ The foundation, and the gate on everything after it.
 - Availability status handling, including `policy_not_configured` (§3.3.4)
 - Reproducibility test (§10.8) and frozen-module guard tests
 
+**Policy dependency: none.** 0B-1 does **not** require an approved institution
+policy profile. It requires only the minimum typed, versioned contract needed to
+*represent policy availability* — enough to record which keys a probe would
+require and whether they are configured. Subject to the implementation boundary
+in §3.3.5.
+
 **Exit criterion:** three consecutive runs over the fixture corpus produce an
 identical `review_hash` and an identical `finding_id` set. If this cannot be
 achieved, **stop** — the Supervisor is not shippable as specified.
@@ -1184,26 +1248,42 @@ Four probes that read governed state already present in code.
 - **P-04** screening reliance defensibility
 - **P-06** monitoring requirement establishment
 
+**Policy dependency: none.** These four read versioned *platform* policy that
+already exists in code — `risk_config_version`, `edd_routing_policy_v1`,
+`document_reliance_gate_v2`, `RISK_FREQUENCY_MONTHS`. They do **not** require an
+approved institution policy profile, and must not be blocked waiting for one.
+Availability metadata is the only policy-contract surface they touch. Subject to
+the implementation boundary in §3.3.5.
+
 **Exit criterion:** all four pass the reproducibility harness on real fixtures;
 no frozen-module guard test regresses; findings are advisory-only and provably
-cannot reach an approval gate.
+cannot reach an approval gate — enforced by a guard test asserting no write path
+exists to any authority listed in §2.3.
 
 ---
 
 #### 0B-3 — Policy-dependent probes
 
-**Blocked until the institution's `policy_profile` keys are defined and
-approved.** This is a compliance-configuration task, not an engineering one, and
-it can proceed in parallel with 0B-1 and 0B-2.
+**Blocked until the institution's detailed `policy_profile` mappings are defined
+and approved.** This is a compliance-configuration task, not an engineering one,
+and it can proceed in parallel with 0B-1 and 0B-2. Approval of the *contract*
+in Phase 0A is not approval of the *mappings* — D2 is approved in principle with
+the detailed mapping still pending (§14.3).
 
 - **P-01** ownership coverage and unexplained residual
 - **P-05** PEP evidence requirement gap
 - **P-07** evidence–risk coupling
 
-Prerequisite configuration: `ubo_identification_threshold`,
-`ownership_reconciliation_tolerance`, `ownership_exemption_types`,
-`control_person_required`, `pep_evidence_requirements`,
-`factor_evidence_mapping`, `factor_materiality_threshold`.
+Prerequisite configuration — all eight keys in §3.3.3:
+`ubo_identification_threshold`, `ownership_reconciliation_tolerance`,
+`ownership_exemption_types`, `control_person_required`,
+`pep_evidence_requirements`, `factor_evidence_mapping`,
+`factor_materiality_threshold`, `manual_acceptance_roles`.
+
+`manual_acceptance_roles` mirrors the existing
+`document_reliance_gate.MANUAL_ACCEPTANCE_ROLES` constant. It is listed for
+completeness of the contract; where the institution has not overridden it, the
+gate's own value governs and no `F-28` finding arises.
 
 **Exit criterion:** each probe demonstrably emits `unavailable` /
 `policy_not_configured` plus an `F-28` finding when its keys are unset, and
@@ -1216,9 +1296,21 @@ correct findings when they are set. Both paths are fixture-tested.
 **Founder amendment (D3).** Moved ahead of UI delivery. See §11.3 for the
 capture triggers and immutability requirements.
 
+**A separate implementation with its own change control.** Unlike 0B-1 to 0B-3,
+this stage writes to the database and hooks decision-path events. It is
+therefore governed independently:
+
+| Requirement | Detail |
+|---|---|
+| **Separate change record** | Not covered by the Phase 0B authorisation for the probe stages. Requires its own approval before work begins |
+| **Regression validation** | Full test-suite pass, plus explicit evidence that the five capture triggers do not alter decision-path behaviour, latency, or transaction boundaries on approval, rejection, override, EDD completion or risk recomputation |
+| **Frozen-module clearance** | Capture hooks on the approval and decision paths touch the frozen Application Review surface and need founder sign-off |
+| **Write-path isolation** | Snapshot writes must not be able to fail a decision. A capture failure is logged and alerted, never propagated into the decision transaction |
+
 **Exit criterion:** snapshots are written on every trigger event, are immutable,
-versioned and hashed, and a snapshot can be re-loaded into the 0B-1 bundle
-assembler to reproduce the review that was current at capture time.
+versioned and hashed; a snapshot re-loads into the 0B-1 bundle assembler and
+reproduces the review current at capture time; and the regression evidence above
+is complete.
 
 ---
 
@@ -1570,6 +1662,7 @@ Applied in this revision.
 | **A7** | **Adverse-media default separated (D6)** | Classified as a distinct governed remediation with a three-state target. P-04 reports; the Supervisor implementation changes no scoring |
 | **A8** | **New taxonomy and schema members** | Category `F-28 policy_configuration`; availability status `policy_not_configured`; evidence type `policy_profile` |
 | **A9** | **Phase 0B staged** into 0B-1 … 0B-4 (§9.5) | Policy-independent probes separated from policy-dependent ones so engineering is not blocked on compliance configuration, and vice versa |
+| **A10** | **Implementation boundary on the policy contract** (§3.3.5) | The policy profile is an input contract, not authorisation for a policy-management subsystem. 0B-1 and 0B-2 may introduce only the minimum typed, versioned contract needed to represent policy availability — no administration UI, rule builder, approval workflow, scoring change, gate change or authoritative enforcement. Persistence and administration require separate founder approval. Eight consistency invariants recorded in §14.6 |
 
 ### 14.3 Founder decision register
 
@@ -1604,6 +1697,23 @@ Recorded here for traceability; **not** part of Phase 0B.
 | Decision | Added to the **product intake roadmap**. Not a Phase 0B dependency |
 | Reserved | Category `F-04 control` and the `control_person_required` policy key are defined now so the later probe requires no taxonomy or config version bump |
 
+### 14.6 Consistency invariants
+
+Eight invariants confirmed across this specification. Each names where it is
+stated and where it is enforced. Any future revision that breaks one of these is
+a governed change, not an editorial one.
+
+| # | Invariant | Stated in | Enforced by |
+|---|---|---|---|
+| **1** | **0B-1 and 0B-2 do not depend on an approved institution policy profile**, except for representing availability metadata | §9.5 stages 0B-1, 0B-2 ("Policy dependency: none"); §3.3.5 | The four 0B-2 probes read only versioned *platform* policy already in code (`risk_config_version`, `edd_routing_policy_v1`, `document_reliance_gate_v2`, `RISK_FREQUENCY_MONTHS`). No probe in either stage reads a `policy_profile` key for anything except availability |
+| **2** | **0B-3 remains blocked** until detailed policy mappings are approved | §9.5 stage 0B-3; §9.1; §9.3; D2 in §14.3 | Approval of the *contract* in Phase 0A is explicitly not approval of the *mappings*. D2 is recorded as approved in principle, detailed mapping pending |
+| **3** | **`policy_not_configured` never becomes `clear`** | §3.3.4; §6.2 status table | `policy_not_configured` is an `availability_status` attached to `status: unavailable`. §6.2 makes it a rendering obligation that `unavailable` is never rendered as, aggregated with, or counted as `clear`. Stage 0B-3's exit criterion fixture-tests the unconfigured path explicitly |
+| **4** | **Template values are never silently authoritative** | §3.3.2; §3.3.4; D1 in §14.3 | A template value is a proposal. A probe finding no approved configuration emits `unavailable` plus an `F-28` finding — it must not fall back to a template value, a RegMind default, or an inferred threshold |
+| **5** | **P-01 sub-check (a) — ownership exceeding 100% — remains policy-independent** | §9.2 P-01, sub-check table and availability note | Holdings summing above 100% is a data-integrity defect under any regime. It is the one sub-check that remains available when policy is unconfigured; (b)–(e) correctly go dark |
+| **6** | **P-05 and P-07 evaluate only active, approved institution policy** | §9.2 P-05 and P-07, closure conditions; F-14, F-16 in §5.2 | Both probes' severity, requirement sets and closure conditions derive from the approved `policy_version` in force. Neither has a fallback path to a fixed document list |
+| **7** | **No Phase 0B probe changes existing workflow, risk scoring, EDD routing, document gates, screening, approval, monitoring or decision authority** | §2.3 (exhaustive table); §1.3; §2.1; D5 and D6 in §14.3 | Guard test at stage 0B-2 asserting no write path exists to any authority in §2.3. Frozen-module guard tests must stay green throughout |
+| **8** | **The decision snapshot is a separate 0B-4 implementation** with its own change control and regression validation | §9.5 stage 0B-4; §11.3 | Requires a separate change record before work begins, full regression evidence that the five capture triggers do not alter decision-path behaviour, frozen-module clearance for the capture hooks, and write-path isolation so a capture failure can never fail a decision |
+
 ---
 
 ## 15. Final recommendation
@@ -1611,7 +1721,8 @@ Recorded here for traceability; **not** part of Phase 0B.
 ### **Proceed to Phase 0B, staged per §9.5 — subject to review of this amended specification.**
 
 Phase 0A is approved in principle. All seven founder decisions are resolved
-(§14.3) and nine amendments are applied (§14.2). Phase 0B code should not begin
+(§14.3), ten amendments are applied (§14.2), and eight consistency invariants
+are confirmed (§14.6). Phase 0B code should not begin
 until this amended specification has been reviewed.
 
 **Why proceed.** The determinism claim is well founded.
