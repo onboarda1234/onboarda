@@ -235,6 +235,22 @@ class BundleAssemblyError(RuntimeError):
     """The bundle could not be assembled from current state."""
 
 
+_REVIEWED_READ_ONLY_SELECTS = frozenset(
+    {
+        "SELECT * FROM applications WHERE id = ?",
+        "SELECT * FROM decision_records WHERE application_ref = ?",
+        "SELECT * FROM directors WHERE application_id = ?",
+        "SELECT * FROM documents WHERE application_id = ? "
+        "AND COALESCE(is_current, TRUE) = TRUE",
+        "SELECT * FROM edd_cases WHERE application_id = ?",
+        "SELECT * FROM intermediaries WHERE application_id = ?",
+        "SELECT * FROM periodic_reviews WHERE application_id = ?",
+        "SELECT * FROM screening_reviews WHERE application_id = ?",
+        "SELECT * FROM ubos WHERE application_id = ?",
+    }
+)
+
+
 # ── Row helpers ──────────────────────────────────────────────────────
 
 
@@ -257,11 +273,16 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 def _fetchall(db: Any, sql: str, params: Sequence[Any]) -> list[dict[str, Any]]:
     """Run a SELECT and return plain dicts.
 
-    Only ``SELECT`` reaches this function; the assertion is a tripwire for a
-    future edit rather than a runtime concern.
+    Only the exact reviewed single-statement reads reach the driver. This is a
+    runtime backstop as well as a review manifest: prefix checks alone would
+    accept a multi-statement ``SELECT ...; UPDATE ...`` payload.
     """
-    if not sql.lstrip().upper().startswith("SELECT"):
-        raise BundleAssemblyError(f"assembler issued a non-SELECT statement: {sql!r}")
+    normalized_sql = " ".join(str(sql).split())
+    if normalized_sql not in _REVIEWED_READ_ONLY_SELECTS:
+        raise BundleAssemblyError(
+            "assembler issued SQL outside the reviewed read-only manifest: "
+            f"{sql!r}"
+        )
     cursor = db.execute(sql, tuple(params))
     rows = cursor.fetchall() if cursor is not None else []
     return [_row_to_dict(row) for row in rows or []]

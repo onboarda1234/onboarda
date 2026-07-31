@@ -53,6 +53,15 @@ query evidence and mutation-path inventory.
   `supervisor_foundation/` modules/tests and updated an architecture document.
   It has zero file overlap with this PR; all nine PR commits remained
   patch-identical through the conflict-free rebase.
+- The combined test tree exposed two cross-PR guard assumptions. PR #912's
+  historical file-identity proof compared every future branch with
+  `origin/main`; it is now anchored to the immutable full PR #912 base and
+  final head, preserving all 18 paths in the original proof without rejecting
+  later work. Its `_fetchall` helper is now constrained at runtime to an exact
+  nine-query read-only manifest and remains one exact, counted exception in the
+  Monitoring SQL guard. Multi-statement, unknown, CTE, and non-manifest SQL is
+  rejected before reaching the driver, while the foundation's independent
+  no-write suite remains authoritative.
 - The sole overlapping file was `arie-backend/server.py`; the resulting file
   preserves main's strict `IMAGE_TAG` lookup without a `GIT_SHA` fallback.
 - Migrations 054–056 do not collide with main, whose latest migration is 053.
@@ -68,6 +77,7 @@ query evidence and mutation-path inventory.
 | PostgreSQL append-only grants | 5 passed |
 | Protected inventory contracts | 17 passed |
 | Static direct-write guard | 26 passed |
+| PR #912 foundation compatibility | 178 passed |
 | Release-control compatibility | 86 passed |
 | Independent final runtime focus | 210 passed; 3 PostgreSQL cases deselected and covered by the PostgreSQL-enabled root lanes |
 | Full repository suite | 8,661 passed; 3 expected skips; 4 expected xfails |

@@ -212,6 +212,10 @@ _APPROVED_UNRESOLVED_SQL = {
         "execute",
     ): ("Supervisor execution adapter around fixed agent SQL.", 1),
     ("supervisor/audit.py", "_scalar_count"): ("Read-only audit count helper.", 1),
+    (
+        "supervisor_foundation/bundle.py",
+        "_fetchall",
+    ): ("Read-only supervisor helper constrained to an exact SELECT manifest.", 1),
 }
 
 # Narrow SQL identifier grammar for the repository's PostgreSQL/SQLite

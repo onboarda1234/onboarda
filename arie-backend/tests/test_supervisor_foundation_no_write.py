@@ -23,6 +23,11 @@ import pytest
 
 import supervisor_foundation
 from supervisor_foundation import assemble_application_bundle, run_review
+from supervisor_foundation.bundle import (
+    BundleAssemblyError,
+    _fetchall,
+    _REVIEWED_READ_ONLY_SELECTS,
+)
 from supervisor_foundation_fixtures import AS_OF, SYNTHETIC_PROBES, complete_standard
 
 PACKAGE_ROOT = pathlib.Path(supervisor_foundation.__file__).parent
@@ -51,6 +56,18 @@ WRITE_STATEMENT = re.compile(
     r"^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|TRUNCATE|GRANT|VACUUM|PRAGMA)\b",
     re.IGNORECASE,
 )
+
+REVIEWED_READ_TABLES = {
+    "applications",
+    "decision_records",
+    "directors",
+    "documents",
+    "edd_cases",
+    "intermediaries",
+    "periodic_reviews",
+    "screening_reviews",
+    "ubos",
+}
 
 
 class WriteAttempted(AssertionError):
@@ -126,6 +143,34 @@ def test_proxy_actually_blocks_a_write(db):
         proxy.execute("UPDATE applications SET status = 'approved' WHERE id = 'x'")
     with pytest.raises(WriteAttempted):
         proxy.commit()
+
+
+def test_fetchall_manifest_contains_only_single_reviewed_selects():
+    """Every driver-reachable query is one SELECT over an audited table."""
+
+    assert len(_REVIEWED_READ_ONLY_SELECTS) == len(REVIEWED_READ_TABLES)
+    discovered_tables = set()
+    for query in _REVIEWED_READ_ONLY_SELECTS:
+        assert ";" not in query
+        assert query == " ".join(query.split())
+        match = re.match(r"^SELECT \* FROM ([a-z_]+) WHERE ", query)
+        assert match, query
+        discovered_tables.add(match.group(1))
+        assert not WRITE_STATEMENT.match(query)
+    assert discovered_tables == REVIEWED_READ_TABLES
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "SELECT 1",
+        "SELECT 1; UPDATE monitoring_alerts SET status = 'resolved'",
+        "WITH candidate AS (SELECT 1) SELECT * FROM candidate",
+    ),
+)
+def test_fetchall_rejects_unreviewed_or_multi_statement_sql(db, query):
+    with pytest.raises(BundleAssemblyError, match="reviewed read-only manifest"):
+        _fetchall(db, query, ())
 
 
 # ── 2. Whole-database mutation diff ──────────────────────────────────
