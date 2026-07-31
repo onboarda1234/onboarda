@@ -756,6 +756,60 @@ def _ownership_transparency_tier(ownership_structure):
     return "opaque" if _is_opaque_ownership(ownership_structure) else "clear"
 
 
+def _factor_evidence_ledgers(risk_dict):
+    """Yield every factor-evidence ledger reachable from a risk result.
+
+    ``compute_risk_score`` publishes one object under both ``dimensions`` and
+    the top level, so these are usually the same dict; a risk result rebuilt
+    from a stored row carries only the nested one.
+    """
+    seen = []
+    candidates = [risk_dict.get("factor_computation_evidence")]
+    dimensions = risk_dict.get("dimensions")
+    if isinstance(dimensions, dict):
+        candidates.append(dimensions.get("factor_computation_evidence"))
+    for ledger in candidates:
+        if isinstance(ledger, dict) and not any(ledger is item for item in seen):
+            seen.append(ledger)
+    return seen
+
+
+def _record_floor_in_factor_evidence(risk_dict, previous_score, new_score):
+    """Keep the factor-evidence ledger reconcilable after a policy floor.
+
+    ``build_authoritative_risk_report_evidence`` fails closed unless the stored
+    ledger reproduces the stored score:
+
+        sum(composite_contribution) + policy_adjustment == score
+        final_composite_score                          == score
+
+    A floor raises ``score`` to the band minimum (HIGH 55, VERY_HIGH 70) while
+    the per-dimension contributions legitimately still describe the pre-floor
+    computation. Without recording the floor as what it is — a policy
+    adjustment, which the ledger already has a field for — both identities
+    break and the whole Risk Assessment panel, PDF and CSV export fail closed
+    for exactly the HIGH/VERY_HIGH cases that most need explaining. Recomputing
+    cannot clear it either: the floor re-applies and the mismatch returns.
+
+    No score changes here. ``base_composite_score`` keeps the pre-policy value,
+    so the officer-facing "Original Score → Final Score" strip can state the
+    floor explicitly.
+    """
+    try:
+        delta = float(new_score) - float(previous_score)
+    except (TypeError, ValueError):
+        return
+    if not delta:
+        return
+    for ledger in _factor_evidence_ledgers(risk_dict):
+        try:
+            adjustment = float(ledger.get("policy_adjustment") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        ledger["policy_adjustment"] = round(adjustment + delta, 4)
+        ledger["final_composite_score"] = new_score
+
+
 def apply_risk_floor(risk_dict, minimum_level, reason_code, reason_text):
     """Mutate a risk result so the final displayed level cannot sit below a mandatory floor."""
     if not isinstance(risk_dict, dict):
@@ -789,6 +843,7 @@ def apply_risk_floor(risk_dict, minimum_level, reason_code, reason_text):
     risk_dict["level"] = minimum
     risk_dict["final_risk_level"] = minimum
     risk_dict["lane"] = RISK_LANE_MAP.get(minimum, "Standard Review")
+    _record_floor_in_factor_evidence(risk_dict, previous_score_num, risk_dict["score"])
 
     escalations = risk_dict.get("escalations")
     if not isinstance(escalations, list):

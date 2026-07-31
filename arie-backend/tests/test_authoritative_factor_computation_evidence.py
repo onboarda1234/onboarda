@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from risk_model_view import build_authoritative_risk_report_evidence
-from rule_engine import compute_risk_score
+from rule_engine import apply_risk_floor, compute_risk_score
 
 
 DIMENSIONS = [
@@ -132,3 +132,69 @@ def test_report_builder_returns_only_the_persisted_factor_ledger():
     assert evidence["available"] is True
     assert evidence["factor_evidence"] == result["dimensions"]["factor_computation_evidence"]["factors"]
     assert evidence["computation_evidence"]["final_composite_score"] == result["score"]
+
+
+@pytest.mark.parametrize(
+    "minimum_level,expected_score",
+    [("HIGH", 55.0), ("VERY_HIGH", 70.0)],
+)
+def test_policy_floor_keeps_the_ledger_reconcilable_and_reports_the_adjustment(
+    minimum_level, expected_score
+):
+    """A floor raises the stored score; the ledger must record it as a policy
+    adjustment or the whole panel/PDF/CSV fails closed.
+
+    Before this was recorded, an application floored up to HIGH or VERY_HIGH
+    kept a ledger describing the pre-floor computation, so both reconciliation
+    identities in build_authoritative_risk_report_evidence broke and the
+    officer saw "Authoritative risk evidence is missing, incomplete, or stale"
+    — on exactly the cases needing the most explanation, and permanently, since
+    recomputing re-applies the same floor.
+    """
+    config = _config()
+    result = compute_risk_score(_inputs(), config_override=config)
+    base_score = result["score"]
+    ledger = result["dimensions"]["factor_computation_evidence"]
+    base_composite = ledger["base_composite_score"]
+
+    apply_risk_floor(result, minimum_level, "floor_rule_test", "policy floor under test")
+
+    assert result["score"] == expected_score, "floor must raise the stored score"
+    # The pre-policy figure is untouched, so the officer-facing
+    # "Original Score -> Final Score" strip can state the floor explicitly.
+    assert ledger["base_composite_score"] == base_composite
+    assert ledger["final_composite_score"] == expected_score
+    assert ledger["policy_adjustment"] == pytest.approx(expected_score - base_score, abs=1e-4)
+
+    reproduced = (
+        sum(row["composite_contribution"] for row in ledger["dimensions"])
+        + ledger["policy_adjustment"]
+    )
+    assert reproduced == pytest.approx(result["score"], abs=1e-4)
+
+    # End to end through the real gate: the panel renders instead of blocking.
+    evidence = build_authoritative_risk_report_evidence({
+        "risk_score": result["score"], "risk_level": result["level"],
+        "risk_dimensions": result["dimensions"], "risk_escalations": result["escalations"],
+        "risk_computed_at": "2026-07-31T00:00:00Z", "risk_config_version": config["_config_version"],
+        "onboarding_lane": result["lane"],
+    }, config, approval_route={"route": "dual_control_required", "reasons": []})
+
+    assert evidence["available"] is True, evidence.get("reason_codes")
+    assert "composite_computation_mismatch" not in evidence.get("reason_codes", [])
+    assert "final_composite_evidence_mismatch" not in evidence.get("reason_codes", [])
+    assert evidence["computation_evidence"]["final_composite_score"] == result["score"]
+
+
+def test_medium_floor_preserves_the_raw_score_and_leaves_the_ledger_untouched():
+    """MEDIUM floors deliberately keep the raw score, so nothing to adjust."""
+    config = _config()
+    result = compute_risk_score(_inputs(), config_override=config)
+    ledger = result["dimensions"]["factor_computation_evidence"]
+    before = dict(ledger)
+
+    apply_risk_floor(result, "MEDIUM", "floor_rule_test", "medium floor")
+
+    assert result["score"] == before["final_composite_score"]
+    assert ledger["policy_adjustment"] == before["policy_adjustment"]
+    assert ledger["final_composite_score"] == before["final_composite_score"]
