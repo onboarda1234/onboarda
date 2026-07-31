@@ -34,7 +34,7 @@ def test_application_detail_tabs_include_periodic_reviews_and_alerts_in_required
         "alerts",
         "activity",
     ]
-    assert ">RegMind Periodic Reviews</button>" in tabs_html
+    assert ">Periodic Reviews</button>" in tabs_html
     assert ">Alerts</button>" in tabs_html
 
 
