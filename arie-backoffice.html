@@ -843,6 +843,8 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .document-review-issue-line.system { color:#1d4ed8; }
 .document-review-issue-line.ok { color:#475569; }
 .document-review-issue-text.clamped { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+.risk-primary-driver-value { display:block; }
+.risk-primary-driver-value.clamped { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
 .document-review-issue-more { width:max-content; }
 .document-review-issue-more > summary { cursor:pointer; list-style:none; color:var(--brand); font-size:11px; font-weight:750; }
 .document-review-issue-more > summary::-webkit-details-marker { display:none; }
@@ -11363,6 +11365,9 @@ function buildRiskExecutiveDrivers(evidence) {
   return priority.concat(remaining.slice(0, remainingLimit));
 }
 
+// Roughly two lines in a driver card at the card's width and font size.
+var RISK_DRIVER_VALUE_CLAMP_CHARS = 90;
+
 function renderRiskExecutiveDriverCards(drivers) {
   if (!drivers.length) {
     return '<div style="font-size:11px;color:#718096;">No elevated persisted risk factor is recorded.</div>';
@@ -11370,14 +11375,21 @@ function renderRiskExecutiveDriverCards(drivers) {
   return drivers.map(function(driver) {
     var factor = driver.factor;
     // Free-text factors (e.g. source of wealth) are unbounded and stretch one
-    // card far beyond its neighbours. Clamp to two lines and keep the full
-    // value on hover; the authoritative report and export are unchanged.
-    var driverValue = riskExecutiveDriverValue(factor.raw_value);
+    // card far beyond its neighbours. Clamp only when the value is actually
+    // long, and expose the rest through a keyboard-reachable Show more toggle
+    // rather than a hover-only tooltip (renderDocumentFindingSummaryHtml
+    // precedent). The value itself is rendered verbatim in both places.
+    var driverValue = riskReportFactorInputValue(factor.raw_value);
+    var driverClamped = driverValue.length > RISK_DRIVER_VALUE_CLAMP_CHARS;
     return '<div class="risk-primary-driver-card" style="min-width:0;padding:9px 10px;border:1px solid #dbe4f0;border-radius:10px;background:' +
       (driver.priority ? '#edf5ff' : '#f8fbff') + ';">' +
       '<strong style="display:block;font-size:11px;color:#102a43;">' + escapeHtml(factor.factor_label) + '</strong>' +
-      '<span title="' + escapeHtml(driverValue) + '" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-top:2px;font-size:10px;color:#52657a;overflow-wrap:anywhere;">' +
+      // display is set by the stylesheet, not inline: an inline display:block
+      // would out-specify the .clamped rule and silently defeat the clamp.
+      '<span class="risk-primary-driver-value' + (driverClamped ? ' clamped' : '') + '" style="margin-top:2px;font-size:10px;color:#52657a;overflow-wrap:anywhere;">' +
         escapeHtml(driverValue) + '</span>' +
+      (driverClamped ? '<details class="risk-primary-driver-more"><summary style="cursor:pointer;font-size:9px;color:#234e7d;font-weight:700;">Show more</summary>' +
+        '<div style="margin-top:3px;font-size:10px;color:#52657a;overflow-wrap:anywhere;">' + escapeHtml(driverValue) + '</div></details>' : '') +
       '<span style="display:block;margin-top:4px;font-size:9px;font-weight:800;color:#234e7d;">' +
         escapeHtml(riskReportRiskRating(factor.rule_score)) + '</span>' +
       (driver.reason ? '<small class="risk-primary-driver-reason" style="display:block;margin-top:3px;font-size:9px;color:#38536f;">' +
@@ -11436,23 +11448,6 @@ function riskExecutiveNumber(value) {
   return String(num);
 }
 
-// Repeated party attributes (e.g. two Mauritian UBOs) arrive as ['MU','MU'] and
-// read as a duplication bug when joined verbatim. Collapse to distinct values
-// while preserving the count, so the evidence is not weakened.
-function riskExecutiveDriverValue(value) {
-  if (!Array.isArray(value) || !value.length) return riskReportFactorInputValue(value);
-  var order = [];
-  var counts = Object.create(null);
-  value.forEach(function(item) {
-    var label = riskReportFactorInputValue(item);
-    if (counts[label] == null) { counts[label] = 0; order.push(label); }
-    counts[label] += 1;
-  });
-  return order.map(function(label) {
-    return counts[label] > 1 ? label + ' ×' + counts[label] : label;
-  }).join(', ');
-}
-
 function renderStoredRiskComputationHtml(app) {
   var evidence = getAuthoritativeRiskEvidence(app);
   if (!evidence) {
@@ -11469,12 +11464,16 @@ function renderStoredRiskComputationHtml(app) {
     }
     var drivers = buildRiskExecutiveDrivers(evidence);
     var driverHtml = renderRiskExecutiveDriverCards(drivers);
-    // Display-only scale for the contribution bars: the widest bar is the
-    // largest stored contribution. No score is derived — every figure shown
-    // remains the persisted value.
-    var contributionScale = Math.max.apply(null, [0].concat(dimensionEvidence.map(function(item) {
-      var value = Number(item && item.composite_contribution);
-      return Number.isFinite(value) ? Math.abs(value) : 0;
+    // Display-only scale for the contribution bars. It is a constant of the
+    // MODEL (the largest dimension weight), never of this application: a
+    // dimension's contribution maxes out at its own weight, so scaling by the
+    // largest weight keeps bar lengths absolute and comparable between cases.
+    // Scaling to the largest contribution *in this table* would give every
+    // application one full-width bar, so a LOW case would draw a more alarming
+    // column than a HIGH one. No score is derived — figures stay persisted.
+    var contributionScale = Math.max.apply(null, [0].concat(dimensions.map(function(row) {
+      var value = Number(row && row.weight);
+      return Number.isFinite(value) ? value : 0;
     })));
     var rowsHtml = dimensions.map(function(row) {
       var rowId = String(row && row.id != null ? row.id : '').trim();
