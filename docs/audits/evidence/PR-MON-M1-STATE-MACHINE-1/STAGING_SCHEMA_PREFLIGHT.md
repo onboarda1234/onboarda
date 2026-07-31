@@ -4,7 +4,7 @@ Captured: `2026-07-31T03:12:13.624740Z`
 Observed deployed SHA: `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`
 
 This is point-in-time read-only evidence captured before the branch's final
-rebase to `85c70431a2d2a2f4bd6dd3078257d5f22d92bad4`. The SHA is intentionally
+rebase to `2287a0ce2992f8941dbe0be49e86b23fe3272962`. The SHA is intentionally
 preserved as observed; current deployment and dataset compatibility must be
 reconfirmed through the fail-closed pre-merge/deployment gates.
 Mode: authenticated, read-only SQL executed in one healthy staging backend task
@@ -37,9 +37,10 @@ Result: the current regulated alert dataset and schema still satisfy the
 fail-closed assumptions for migrations 054–056. No row, schema object,
 service setting, or feature flag was changed.
 
-## Final pre-merge revalidation and inventory attribution
+## Latest captured pre-merge revalidation and inventory attribution
 
-Revalidated: `2026-07-31T11:40:19Z`
+Revalidated: `2026-07-31T11:40:19Z` (before the final rebase to
+`2287a0ce2992f8941dbe0be49e86b23fe3272962`)
 
 - staging served immutable main SHA
   `85c70431a2d2a2f4bd6dd3078257d5f22d92bad4`, digest
@@ -104,7 +105,7 @@ The first two point-in-time observations contained 19 Monitoring Alerts:
 All values are members of `monitoring_alert_state_machine_v1`. The status
 constraint precondition is therefore satisfied without rewriting alert data.
 The combined NULL, blank, and noncanonical-status offender count was `0`.
-The final pre-merge observation contained 22 alerts after the attributed
+The latest captured pre-merge observation contained 22 alerts after the attributed
 existing ingestion described above; its combined offender count was also `0`.
 
 ## Pending-review uniqueness preflight

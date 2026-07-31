@@ -1,7 +1,7 @@
 # PR-MON-M1-STATE-MACHINE-1 — validation report
 
 Date: 2026-07-31
-Base SHA: `85c70431a2d2a2f4bd6dd3078257d5f22d92bad4`
+Base SHA: `2287a0ce2992f8941dbe0be49e86b23fe3272962`
 State-machine version: `monitoring_alert_state_machine_v1`
 
 ## Pre-implementation reconciliation
@@ -14,7 +14,7 @@ State-machine version: `monitoring_alert_state_machine_v1`
   `307b0d7bfc6ab855837f1c9b01f6d182748b8f2a` reconfirmed the same 19-alert
   canonical inventory, empty review ledger, migration-053 schema, absent future
   constraint/columns, and all governed flags defaulting OFF.
-- A final read-only revalidation against current main SHA
+- The latest captured read-only revalidation against then-current main SHA
   `85c70431a2d2a2f4bd6dd3078257d5f22d92bad4` observed 22 alerts after
   attributable runtime ingestion. Two new canonical `open` rows came from the
   existing ComplyAdvantage historical subscription-seed backfill and one from
@@ -23,7 +23,7 @@ State-machine version: `monitoring_alert_state_machine_v1`
   update, plus one live create, with no failure, `ERROR`, or `CRITICAL` event
   in the creation window. These paths predate this PR and have no governed-flag
   consumer.
-- The current reconciled inventory is 22 Monitoring Alerts; all are canonical,
+- The latest reconciled inventory is 22 Monitoring Alerts; all are canonical,
   the review ledger remains empty, and schema version remains 053.
 - Every stored status is in the v1 vocabulary.
 - The review-control ledger contains zero rows and zero pending requests.
@@ -40,14 +40,19 @@ query evidence and mutation-path inventory.
 - The branch was first rebased from
   `9fa083c1ac185ea65bfa8515dff315eb254701a5` onto hardened main
   `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`, then cleanly rebased again
-  onto `7251bd7f24e6d4be87cc3d15566a219d3c1a12a4`, and finally onto current
-  main `85c70431a2d2a2f4bd6dd3078257d5f22d92bad4`.
-- `git range-diff` proved all four branch commits patch-identical across the
-  final rebase. The first intervening main set changed the Periodic Reviews
+  onto `7251bd7f24e6d4be87cc3d15566a219d3c1a12a4`, then onto
+  `85c70431a2d2a2f4bd6dd3078257d5f22d92bad4`, and finally onto current main
+  `2287a0ce2992f8941dbe0be49e86b23fe3272962`.
+- `git range-diff` proved all nine PR commits patch-identical across the final
+  rebase. The first intervening main set changed the Periodic Reviews
   back-office label/test and added architecture documents. The final three
   commits changed risk-presentation HTML and three focused tests. Neither set
   overlapped the state-machine patch; all main-side expectations are preserved
   and included in the post-rebase validation lane.
+- The final intervening PR #912 added only isolated
+  `supervisor_foundation/` modules/tests and updated an architecture document.
+  It has zero file overlap with this PR; all nine PR commits remained
+  patch-identical through the conflict-free rebase.
 - The sole overlapping file was `arie-backend/server.py`; the resulting file
   preserves main's strict `IMAGE_TAG` lookup without a `GIT_SHA` fallback.
 - Migrations 054–056 do not collide with main, whose latest migration is 053.

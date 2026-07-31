@@ -2,7 +2,7 @@
 
 Status: complete before implementation
 Original base: `9fa083c1ac185ea65bfa8515dff315eb254701a5`
-Revalidated code base: `85c70431a2d2a2f4bd6dd3078257d5f22d92bad4`
+Revalidated code base: `2287a0ce2992f8941dbe0be49e86b23fe3272962`
 
 The point-in-time staging data/schema preflight remains identified by its
 observed deployed SHA, `b5fb23276bacfc8aa543f5e31963e253c3ff8ab8`, in
@@ -25,7 +25,7 @@ first observations scanned 19 Monitoring Alerts and changed nothing.
 Alert `583` is already canonical at `routed_to_edd` with the PR #902
 hash-chained audit entry. The four governed Monitoring flags evaluated OFF.
 
-A final pre-merge read-only revalidation observed 22 alerts after existing
+The latest captured pre-merge read-only revalidation observed 22 alerts after existing
 ComplyAdvantage ingestion created three non-fixture canonical `open` rows (two
 historical subscription-seed backfill rows and one live-webhook row). The
 current status counts are `open=16`, `dismissed=3`, `resolved=1`,
