@@ -62,12 +62,13 @@ The inventory evolved from 19 to 22 after the earlier observation. A
 read-only attribution found three new non-fixture, canonical `open` alerts
 created by existing ComplyAdvantage ingestion: two through the historical
 subscription-seed backfill and one through the live webhook path. CloudWatch
-operational evidence for the creation window recorded two completed backfill
-runs with one inserted row each and one live `MonitoringAlertCreated` event;
-it recorded no `ERROR` or `CRITICAL` event in that window. Those paths predate
-this PR and do not reference any of the four governed Monitoring feature
-flags. No customer identifier, application identifier, or source reference is
-included in this evidence.
+operational evidence for the creation window recorded nine successful
+subscription-seed backfills that collectively reported two inserted rows and
+one updated row, plus one live `MonitoringAlertCreated` event. It recorded no
+backfill or live-write failure and no `ERROR` or `CRITICAL` event in that
+window. Those paths predate this PR and do not reference any of the four
+governed Monitoring feature flags. No customer identifier, application
+identifier, or source reference is included in this evidence.
 
 Result: the attributed runtime growth is compatible with migrations 054–056.
 It did not introduce a noncanonical status, review-ledger conflict, schema

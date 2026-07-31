@@ -18,9 +18,10 @@ State-machine version: `monitoring_alert_state_machine_v1`
   `85c70431a2d2a2f4bd6dd3078257d5f22d92bad4` observed 22 alerts after
   attributable runtime ingestion. Two new canonical `open` rows came from the
   existing ComplyAdvantage historical subscription-seed backfill and one from
-  the existing live webhook path. CloudWatch recorded the corresponding two
-  backfill inserts and one live create, with no `ERROR` or `CRITICAL` event in
-  the creation window. These paths predate this PR and have no governed-flag
+  the existing live webhook path. CloudWatch recorded nine successful
+  subscription-seed backfills collectively reporting two inserts and one
+  update, plus one live create, with no failure, `ERROR`, or `CRITICAL` event
+  in the creation window. These paths predate this PR and have no governed-flag
   consumer.
 - The current reconciled inventory is 22 Monitoring Alerts; all are canonical,
   the review ledger remains empty, and schema version remains 053.
