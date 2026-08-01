@@ -179,11 +179,12 @@ def test_canonical_owner_handoffs_suppress_transitive_profile_hydration_write():
         "ensureSubjectProfileHydration(app, selectedSubject)"
     )
     read_only_guard = panel_region.rfind(
-        "if (!currentCanonicalLinkageReadOnlyNavigation)",
+        "typeof currentCanonicalLinkageReadOnlyNavigation === 'undefined'",
         0,
         hydration_call,
     )
     assert read_only_guard >= 0
+    assert "!currentCanonicalLinkageReadOnlyNavigation" in panel_region
     assert "boApiCall('POST', '/screening/hydrate-profiles'" in html
 
 

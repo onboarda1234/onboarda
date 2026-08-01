@@ -19413,7 +19413,8 @@ function renderScreeningReviewPanel(app, focus) {
     focus = currentScreeningReviewFocus;
     // Phase G: single-flight, flag-gated on-demand hydration of the selected
     // subject's top hits. Inert (no call) when the flag is off.
-    if (!currentCanonicalLinkageReadOnlyNavigation) {
+    if (typeof currentCanonicalLinkageReadOnlyNavigation === 'undefined' ||
+        !currentCanonicalLinkageReadOnlyNavigation) {
       ensureSubjectProfileHydration(app, selectedSubject);
     }
   }
