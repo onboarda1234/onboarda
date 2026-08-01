@@ -276,16 +276,55 @@ wrong; it has no standing to.
 |-------|---------|-------|
 | **P-02** Risk factor resolution integrity | **SHIP** | Highest-value probe in the set. Found a real, previously invisible attributability gap on 9 of 41 reference cases. Signal-to-noise after the vocabulary fix is 9 hits / 34 clears — precise, not chatty. Every hit names a specific field and a specific action. |
 | **P-03** EDD routing divergence | **SHIP WITH LIMITATIONS** | Downgraded from SHIP in the closure review. The probe is sound *within the direction it can defend* (§2.4), and the under-routing check — the valuable one — is unaffected. But it cannot conclusively compare routes until the bundle carries `sector_label`, so one direction of its headline check reports `not_replayable` rather than an answer. It also cannot yet be credited with a caught defect: the reference corpus contains no divergence case. Ships because the under-routing check is genuinely free once a memo exists and nothing else in the product re-runs the policy; limited because a reviewer must understand that "not replayable" is a real state, not a failure. |
-| **P-04** Screening reliance defensibility | **SHIP, with a volume watch** | Per-subject machinery works against real `screening.py` output. Two rounds of noise reduction were needed to get from 4 findings per subject to 1. Recommend re-measuring volume on a deployment with live provider credentials before exposing it to officers: in this environment every subject is a hit for the same reason, and that pattern (many subjects, one root cause) is the one most likely to need a roll-up. |
+| **P-04** Screening reliance defensibility | **SHIP WITH LIMITATIONS** | Per-subject machinery works against real `screening.py` output. Two rounds of noise reduction were needed to get from 4 findings per subject to 1. Recommend re-measuring volume on a deployment with live provider credentials before exposing it to officers: in this environment every subject is a hit for the same reason, and that pattern (many subjects, one root cause) is the one most likely to need a roll-up. |
 | **P-06** Monitoring requirement not established | **SHIP** | 1 clear / 11 hit / 29 not_applicable — correct scoping (only approved cases carry the obligation) and a credible hit rate. Carries the sharpest clock-safety property in the set: it refuses `parse_review_date`, which would have read a corrupt review date as "scheduled today" and passed. Also refuses `normalize_risk_level`'s silent fallback to MEDIUM, which would have attributed a governed 24-month cycle to an ungoverned risk level. The closed-cycle defect (§2.5) is fixed and regression-tested; note that the corpus could not have caught it, so the fix rests on unit coverage plus a reading of `periodic_review_engine`. |
 
-**No probe is DROP. No probe is REVISE-before-ship.** The five defects — three
-from the corpus run, two from the closure review — are fixed and covered by
-regression tests that fail without the fix.
+**Final statuses: P-02 SHIP, P-03 SHIP WITH LIMITATIONS, P-04 SHIP WITH
+LIMITATIONS, P-06 SHIP.** No probe is DROP; no probe is REVISE-before-ship. The
+five defects — three from the corpus run, two from the pre-merge closure review
+— are fixed and covered by regression tests that fail without the fix.
 
-**What would move P-03 to a clean SHIP:** carrying `sector_label` in
-`edd.routing_facts`. That is a bundle-contract change requiring a schema version
-bump and founder authorisation, deliberately not taken in a closure review.
+### 5.1 P-03 — the exact limitation
+
+1. **The governed routing policy reads more inputs than `REQUIRED_FACT_KEYS`
+   declares.** `evaluate_edd_routing` reads ten fact keys;
+   `REQUIRED_FACT_KEYS` — the policy's *completeness* contract, and what
+   `bundle.EDD_ROUTING_FACT_KEYS` projects — names eight. Treating the second as
+   the first is the root error this limitation records.
+2. **Replay now includes `supervisor_mandatory_escalation_reasons`.** It is not
+   persisted in the stored contract but is recoverable from the
+   supervisor-verdict projection, and the probe supplies it. That alone closed
+   14 of the 15 trigger-set mismatches measured against the corpus.
+3. **Absent inputs cannot be used to prove conservative over-routing.** A
+   missing input can only *remove* a trigger, so a recomputed `standard` against
+   a stored `edd` is indistinguishable from an incomplete contract. That
+   comparison is reported `not_replayable`, never as divergence and never as
+   `clear`. The reverse direction — recomputed `edd` against a stored
+   `standard` — is safe, because no absent key can manufacture a trigger, and is
+   still reported as a HIGH-severity divergence.
+4. **The over-routing finding was removed.** It rested entirely on the unsafe
+   direction. Extra diligence is not a control failure, so a claim about it that
+   cannot be falsified is only noise.
+5. **Full symmetric comparison remains blocked** until a deliberate
+   bundle-schema change supplies the missing input, including `sector_label`.
+   That is a governed change requiring a `BUNDLE_SCHEMA_VERSION` bump and
+   founder authorisation; it was deliberately not taken in a closure review.
+   Until then P-03 answers one direction of its headline question and reports
+   the other honestly as unanswerable.
+
+### 5.2 P-06 — the correction
+
+1. **Only open (live) periodic-review cycles govern compliance.**
+   `_governing_review` selects the earliest readable `next_review_date` among
+   rows whose status is not terminal.
+2. **Completed and cancelled historical rows cannot satisfy the current
+   scheduling requirement.** Closing a review inserts the next cycle as a new
+   `pending` row, so closed rows keep a `next_review_date` in the past and would
+   always win an earliest-date contest — grading a finished cycle in place of
+   the live one.
+3. **An all-closed review history is treated as no live schedule** — the same
+   control gap as no review at all, reported with wording that tells the officer
+   which of the two they are looking at.
 
 ---
 
@@ -329,6 +368,8 @@ none.
 - Decide whether to carry `sector_label` (and any future policy input outside
   `REQUIRED_FACT_KEYS`) in a bundle v3, which would let P-03 compare routes in
   both directions and lift its SHIP WITH LIMITATIONS to SHIP.
+- Re-measure P-04 finding volume against live provider credentials, which is
+  what would lift its SHIP WITH LIMITATIONS to SHIP.
 - The `sub_factor_score_4` attributability gap in §4 is a finding *about the
   platform*, surfaced by the Supervisor. Whether `rule_engine` should record a
   reason for sub-factor elevations is a product decision for the founder, not a

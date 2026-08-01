@@ -51,18 +51,22 @@ PROTECTED_FILES = (
 PHASE_0B1_BASE = "85c70431a2d2a2f4bd6dd3078257d5f22d92bad4"
 PHASE_0B1_HEAD = "901265f9cbfb45bac62358da6a453e24c052078e"
 
-# Immutable historical bounds for PR #916 / Phase 0B-2, pinned at the close of
-# the pre-merge review. The base is the merge of PR #914 (bundle v2); the head is
-# the final content commit of the phase.
+# Immutable historical bounds for PR #916 / Phase 0B-2, pinned at final closure.
+# The base is the merge of PR #914 (bundle v2). The head is the founder-approved
+# head, the commit whose CI run gated the merge decision.
 #
-# The commit that writes this pin necessarily comes *after* the head it names —
-# a commit cannot contain its own hash. That commit touches this file and the
-# phase documentation only, and both ``arie-backend/tests/test_supervisor_``
-# and ``docs/`` are already in the allowlist
-# ``test_phase_0b2_adds_only_foundation_paths`` enforces. Nothing authoritative
-# can hide in the gap.
+# **The one-commit residual, stated rather than hidden.** A commit cannot contain
+# its own hash, so the commit that writes this pin necessarily comes after the
+# head it names. That residual is bounded two ways and is not a gap an
+# authoritative change could hide in:
+#
+# * ``test_phase_0b2_residual_commits_are_allowlisted`` below diffs
+#   ``PHASE_0B2_HEAD..HEAD`` while this branch is still ahead of the pinned head
+#   and holds it to the same allowlist, so the residual is proved, not assumed;
+# * that check is skipped once ``HEAD`` reaches the pinned head or the work has
+#   merged, at which point the pinned-range proof is the whole story.
 PHASE_0B2_BASE = "c667f95ff8ae892bcc8cafe27efa1151cc7d92f6"
-PHASE_0B2_HEAD = "d6d0de94f3c9a3e7e6d2aec419b102f4404f1b55"
+PHASE_0B2_HEAD = "3a4ac607f9605f8ad3f29f39eec01983f15cb818"
 
 
 def _git(*args: str) -> str:
@@ -183,20 +187,59 @@ def test_protected_files_unchanged_by_phase_0b2():
     assert not touched, f"Phase 0B-2 modified protected files: {touched}"
 
 
+#: Paths Phase 0B-2 was authorised to touch. Everything else is out of scope by
+#: construction, which is what makes "no workflow changed" a proof and not a
+#: claim.
+PHASE_0B2_ALLOWED_PREFIXES = (
+    "arie-backend/supervisor_foundation/",
+    "arie-backend/tests/supervisor_probe_fixtures.py",
+    "arie-backend/tests/probe_corpus_report.py",
+    "arie-backend/tests/test_supervisor_foundation_",
+    "arie-backend/tests/test_supervisor_probe_",
+    "docs/",
+)
+
+
 def test_phase_0b2_adds_only_foundation_paths():
     changed = _phase_0b2_changed_paths()
-    allowed_prefixes = (
-        "arie-backend/supervisor_foundation/",
-        "arie-backend/tests/supervisor_probe_fixtures.py",
-        "arie-backend/tests/probe_corpus_report.py",
-        "arie-backend/tests/test_supervisor_foundation_",
-        "arie-backend/tests/test_supervisor_probe_",
-        "docs/",
-    )
     unexpected = sorted(
-        path for path in changed if not path.startswith(allowed_prefixes)
+        path
+        for path in changed
+        if not path.startswith(PHASE_0B2_ALLOWED_PREFIXES)
     )
     assert not unexpected, f"unexpected paths changed in Phase 0B-2: {unexpected}"
+
+
+def test_phase_0b2_residual_commits_are_allowlisted():
+    """Close the one-commit residual the pin cannot cover.
+
+    ``PHASE_0B2_HEAD`` names the approved head; the commit that wrote that pin
+    comes after it. While this branch is still ahead of the pinned head, hold
+    everything past it to the same allowlist so the residual is proved rather
+    than argued. Once the branch is at or behind the pinned head — which is what
+    a descendant branch after merge looks like — there is no residual and the
+    pinned-range proof stands alone.
+    """
+    behind = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", "HEAD", PHASE_0B2_HEAD],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if behind.returncode == 0:
+        pytest.skip("HEAD is at or behind the pinned Phase 0B-2 head")
+
+    residual = _git("diff", "--name-only", PHASE_0B2_HEAD, "HEAD").split()
+    unexpected = sorted(
+        path
+        for path in residual
+        if not path.startswith(PHASE_0B2_ALLOWED_PREFIXES)
+    )
+    assert not unexpected, (
+        f"commits after the pinned Phase 0B-2 head touch {unexpected}, which "
+        "the phase was not authorised to change"
+    )
 
 
 def test_protected_files_unchanged_by_phase_0b1():
