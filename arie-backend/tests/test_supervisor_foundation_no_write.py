@@ -305,7 +305,13 @@ def test_foundation_imports_only_read_only_authoritative_helpers():
     #   ``RISK_FREQUENCY_MONTHS`` table and ``frequency_months_for_risk``; the
     #   module's ``parse_review_date`` reads a clock and is prohibited, which
     #   ``test_supervisor_probe_p06_monitoring_requirement`` asserts by AST.
+    #
+    # ``branding`` (added for the probe finding text): a declarative config
+    # module whose only import is ``os`` and which executes nothing beyond
+    # assignment. Read once at import for the platform name, per the project's
+    # rule that brand names are never hard-coded.
     permitted = {
+        "branding",
         "company_registry",
         "document_reliance_gate",
         "edd_routing_policy",

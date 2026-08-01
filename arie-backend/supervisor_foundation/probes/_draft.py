@@ -16,7 +16,13 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping, Sequence
 
+from branding import BRAND  # module-level config dict; no side effects
+
 from ..contracts import AvailabilityStatus, FindingStatus
+
+#: Read once at import. ``branding`` is a declarative config module — its only
+#: import is ``os`` and it executes no statements beyond assignment.
+_PLATFORM_NAME = str(BRAND.get("platform_name") or "The platform")
 
 #: Severity vocabulary, mirroring ``supervisor.schemas.Severity``.
 CRITICAL = "critical"
@@ -25,12 +31,21 @@ MEDIUM = "medium"
 LOW = "low"
 INFO = "info"
 
-#: Must appear in any finding that speaks about adverse media. RegMind reads
-#: adverse-media signals from the institution's configured screening source and
-#: makes no claim of universal media coverage; a finding that implied otherwise
-#: would overstate what the platform can evidence.
+#: Must appear in any finding that speaks about adverse media. The platform
+#: reads adverse-media signals from the institution's configured screening
+#: source and makes no claim of universal media coverage; a finding that implied
+#: otherwise would overstate what can be evidenced.
+#:
+#: The platform name comes from ``BRAND`` rather than a literal, per the
+#: project's branding rule: this text reaches an officer, and the deployment is
+#: white-label. One consequence is deliberate and worth naming — the note sits
+#: in ``why_it_matters``, which is hashed, so two deployments with different
+#: branding produce different ``review_hash`` values for identical evidence.
+#: That is correct: the hash identifies the artifact that was produced, and a
+#: differently branded artifact is a different artifact. Cross-deployment hash
+#: comparison was never meaningful anyway (§10.9.1).
 ADVERSE_MEDIA_COVERAGE_NOTE = (
-    "RegMind evaluates adverse-media evidence available through the "
+    f"{_PLATFORM_NAME} evaluates adverse-media evidence available through the "
     "institution's configured screening source. It does not establish "
     "universal media coverage."
 )
