@@ -125,7 +125,7 @@ def test_postgres_json_projection_and_plan_are_read_only_and_repeatable():
                 "VALUES ('app-pg-1','APP-PG-1','client-pg-1','PostgreSQL Contract')"
             )
             cursor.execute(
-                "INSERT INTO monitoring_alerts(id,application_id,alert_type," 
+                "INSERT INTO monitoring_alerts(id,application_id,alert_type,"
                 "source_reference,provider,case_identifier) "
                 "VALUES (71,'app-pg-1','media',%s,'complyadvantage','case-pg-1')",
                 (json.dumps(source, sort_keys=True),),
