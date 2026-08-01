@@ -911,6 +911,84 @@ def test_raw_verified_document_without_canonical_evidence_is_not_verified():
     assert result["owner"]["state"]["verification_method"] is None
 
 
+def test_manual_acceptance_is_not_projected_as_automated_verification():
+    conn = _db()
+    _document_alert(conn)
+    _document(conn, document_id="doc-1", is_current=0, superseded_by="doc-2")
+    _document(
+        conn,
+        document_id="doc-2",
+        is_current=1,
+        version=2,
+        verification="failed",
+        review="accepted",
+        expiry_date="2999-01-01",
+        reviewer_role="sco",
+        review_comment="Accepted after authoritative owner review.",
+        reviewed_by="officer-1",
+        reviewed_at="2026-08-01T00:00:00Z",
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 1)
+
+    assert result["owner"]["state"]["key"] == "manual_accepted"
+    assert result["owner"]["state"]["label"] == "Manually accepted"
+    assert result["owner"]["state"]["reliance_state"] == "manual_accepted"
+    assert result["owner"]["state"]["verification_method"] == "manual_acceptance"
+
+
+def test_accepted_request_preserves_manual_acceptance_projection():
+    conn = _db()
+    _document_alert(conn)
+    _document(
+        conn,
+        verification="failed",
+        review="accepted",
+        expiry_date="2999-01-01",
+        reviewer_role="admin",
+        review_comment="Accepted through the authoritative owner workflow.",
+        reviewed_by="officer-1",
+        reviewed_at="2026-08-01T00:00:00Z",
+    )
+    conn.execute(
+        """
+        INSERT INTO application_enhanced_requirements
+            (monitoring_alert_id, application_id, active, status,
+             monitoring_document_id, linked_document_id)
+        VALUES (1, 'app-1', 1, 'accepted', 'doc-1', 'doc-1')
+        """
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 1)
+
+    assert result["owner"]["state"]["key"] == "manual_accepted"
+    assert result["owner"]["state"]["reliance_state"] == "manual_accepted"
+
+
+def test_expired_manual_acceptance_does_not_hide_expiry():
+    conn = _db()
+    _document_alert(conn)
+    _document(conn, document_id="doc-1", is_current=0, superseded_by="doc-2")
+    _document(
+        conn,
+        document_id="doc-2",
+        is_current=1,
+        version=2,
+        verification="failed",
+        review="accepted",
+        expiry_date="2000-01-01",
+        reviewer_role="sco",
+        review_comment="Accepted through the authoritative owner workflow.",
+        reviewed_by="officer-1",
+        reviewed_at="2026-08-01T00:00:00Z",
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 1)
+
+    assert result["owner"]["state"]["key"] == "expired"
+    assert result["owner"]["state"]["reliance_state"] == "manual_accepted"
+
+
 def test_pending_replacement_is_received_not_verifying():
     conn = _db()
     _document_alert(conn)
@@ -1225,6 +1303,29 @@ def test_screening_owner_ui_name_collision_fails_closed(colliding_name):
 
     assert exc.value.code == "linkage_ambiguous"
     assert exc.value.reasons == ["screening_review_name_collision"]
+
+
+def test_screening_owner_missing_canonical_name_is_not_reported_as_collision():
+    conn = _db()
+    conn.execute(
+        "INSERT INTO directors(id, application_id, person_key, full_name) "
+        "VALUES ('dir-1','app-1','person-key-1',NULL)"
+    )
+    _screening_alert(
+        conn,
+        subject={
+            "kind": "director",
+            "scope": "person",
+            "person_key": "person-key-1",
+        },
+    )
+    _evidence(conn)
+
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 10)
+
+    assert exc.value.code == "linkage_missing"
+    assert exc.value.reasons == ["missing_screening_subject_name"]
 
 
 def test_screening_person_without_stable_key_requires_manual_review():
@@ -2362,6 +2463,8 @@ def test_dry_run_is_repeatable_and_makes_no_writes():
     assert screening_row["proposed_linkage"]["owner_module"] == "screening_review"
     assert screening_row["proposed_linkage"]["case_identifier"] == "case-1"
     assert screening_row["proposed_linkage"]["navigation"]["subject_id"] == "app-1"
+    assert screening_row["proposed_linkage"]["subject_person_key"] == ""
+    assert screening_row["proposed_linkage"]["navigation"]["subject_person_key"] == ""
     assert conn.total_changes == before
 
 

@@ -19334,6 +19334,28 @@ function renderScreeningReviewPanel(app, focus) {
   var queueRows = (SCREENING_QUEUE && SCREENING_QUEUE.rows ? SCREENING_QUEUE.rows : []).filter(function(row) {
     return row.application_ref === app.ref;
   });
+  var canonicalHandoffRows = [];
+  if (focus && focus.canonical_linkage === true && focus.canonical_context_row) {
+    canonicalHandoffRows = monitoringCanonicalScreeningContextRows(
+      app,
+      focus,
+      [focus.canonical_context_row]
+    );
+    if (canonicalHandoffRows.length === 1) {
+      var canonicalQueueIndex = queueRows.findIndex(function(candidate) {
+        return screeningQueueRowsMatch(candidate, canonicalHandoffRows[0]);
+      });
+      if (canonicalQueueIndex >= 0) {
+        queueRows[canonicalQueueIndex] = Object.assign(
+          {},
+          queueRows[canonicalQueueIndex],
+          canonicalHandoffRows[0]
+        );
+      } else {
+        queueRows = queueRows.concat(canonicalHandoffRows);
+      }
+    }
+  }
   // E-1: no EVIDENCE-MODE data for this application yet → hydrate once.
   // Summary queue rows (include_evidence=false, i.e. arriving via the
   // Screening Queue list) carry a truthy screening_evidence dict with no
@@ -19387,8 +19409,7 @@ function renderScreeningReviewPanel(app, focus) {
     '</div>';
   }
   if (focus && focus.canonical_linkage === true) {
-    var canonicalContextRows = monitoringCanonicalScreeningContextRows(app, focus, queueRows);
-    if (focus.context_proven === true && canonicalContextRows.length === 1) {
+    if (focus.context_proven === true && canonicalHandoffRows.length === 1) {
       html += '<div data-canonical-screening-context="true" data-canonical-provider="' + escapeHtml(String(focus.provider)) + '" data-canonical-case="' + escapeHtml(String(focus.case_identifier)) + '" style="margin:0 18px 12px;padding:10px 14px;background:rgba(43,47,143,0.05);border:1px solid rgba(43,47,143,0.25);border-radius:8px;font-size:12px;color:var(--text2);">' +
         '<strong style="color:var(--text1);">Monitoring owner handoff:</strong> exact ' + escapeHtml(String(focus.provider)) + ' case <span style="font-family:monospace;">' + escapeHtml(String(focus.case_identifier)) + '</span>' + (focus.provider_reference ? ' · alert <span style="font-family:monospace;">' + escapeHtml(String(focus.provider_reference)) + '</span>' : '') + '. Screening Review remains the authoritative decision surface.' +
       '</div>';
@@ -26824,47 +26845,84 @@ function monitoringCanonicalSubjectFromApp(app, nav) {
   };
 }
 
-function monitoringCanonicalExactStringList(value) {
-  if (!Array.isArray(value)) return [];
-  return value.filter(function(item) {
-    return item !== null && item !== undefined && String(item) !== '';
-  }).map(String);
-}
-
 function monitoringCanonicalScreeningContextRows(app, focus, rows) {
   if (!app || !focus || !focus.provider || !focus.case_identifier) return [];
   return (Array.isArray(rows) ? rows : []).filter(function(row) {
     if (!row || String(row.application_ref || '') !== String(app.ref || '')) return false;
     if (String(row.subject_type || '') !== String(focus.subject_type || '') ||
         String(row.subject_name || '') !== String(focus.subject_name || '')) return false;
-    var summary = row.evidence_summary || row.screening_evidence || {};
-    var providers = monitoringCanonicalExactStringList(summary.providers);
-    var rowProvider = String(row.provider || '');
-    var providerMatches = rowProvider === String(focus.provider) ||
-      providers.indexOf(String(focus.provider)) >= 0;
-    if (!providerMatches) return false;
-    var caseIds = monitoringCanonicalExactStringList(summary.provider_case_ids);
-    if (caseIds.indexOf(String(focus.case_identifier)) < 0) return false;
-    if (focus.provider_reference) {
-      var alertIds = monitoringCanonicalExactStringList(summary.provider_alert_ids);
-      if (alertIds.indexOf(String(focus.provider_reference)) < 0) return false;
+    var evidence = row.screening_evidence || {};
+    var items = Array.isArray(evidence.items) ? evidence.items : [];
+    var tupleMatches = items.filter(function(item) {
+      if (!item || String(item.provider || '') !== String(focus.provider)) return false;
+      if (String(item.provider_case_id || '') !== String(focus.case_identifier)) return false;
+      if (String(item.application_ref || '') !== String(app.ref || '')) return false;
+      if (String(item.subject_type || '') !== String(focus.subject_type || '') ||
+          String(item.subject_name || '') !== String(focus.subject_name || '')) return false;
+      return !focus.provider_reference ||
+        String(item.provider_alert_id || '') === String(focus.provider_reference);
+    });
+    if (!tupleMatches.length) return false;
+    if (!focus.provider_reference) {
+      var tupleAlertIds = tupleMatches.reduce(function(values, item) {
+        var alertId = String(item.provider_alert_id || '');
+        if (alertId && values.indexOf(alertId) < 0) values.push(alertId);
+        return values;
+      }, []);
+      if (tupleAlertIds.length > 1) return false;
     }
     return true;
   });
 }
 
 async function fetchMonitoringCanonicalScreeningContext(app, subject, nav) {
-  var params = [
-    'limit=100',
-    'offset=0',
-    'include_evidence=1',
-    'exact_application_ref=' + encodeURIComponent(String(app.ref || ''))
-  ];
-  var payload = await boApiCall('GET', '/screening/queue?' + params.join('&'), null, {
-    suppressAuthReset: true,
-    sessionId: getCurrentBoSessionId()
-  });
-  var rows = (payload && Array.isArray(payload.rows)) ? payload.rows : [];
+  var pageLimit = 100;
+  var maximumRows = 1000;
+  var offset = 0;
+  var expectedTotal = null;
+  var rows = [];
+  while (true) {
+    var params = [
+      'limit=' + pageLimit,
+      'offset=' + offset,
+      'include_evidence=1',
+      'exact_application_ref=' + encodeURIComponent(String(app.ref || ''))
+    ];
+    if (typeof showTestSmokeRecordsEnabled === 'function' && showTestSmokeRecordsEnabled()) {
+      params.push('show_fixtures=true');
+    }
+    var payload = await boApiCall('GET', '/screening/queue?' + params.join('&'), null, {
+      suppressAuthReset: true,
+      sessionId: getCurrentBoSessionId()
+    });
+    var pageRows = (payload && Array.isArray(payload.rows)) ? payload.rows : [];
+    var pagination = payload && payload.pagination;
+    if (!pagination ||
+        typeof pagination.offset !== 'number' ||
+        typeof pagination.returned !== 'number' ||
+        typeof pagination.total_rows !== 'number' ||
+        typeof pagination.has_next !== 'boolean' ||
+        pagination.offset !== offset ||
+        pagination.returned !== pageRows.length ||
+        pagination.total_rows < 0) {
+      throw new Error('Canonical screening pagination evidence is incomplete');
+    }
+    if (expectedTotal === null) expectedTotal = pagination.total_rows;
+    if (pagination.total_rows !== expectedTotal || expectedTotal > maximumRows) {
+      throw new Error('Canonical screening pagination changed or exceeds the safe read-only limit');
+    }
+    rows = rows.concat(pageRows);
+    if (!pagination.has_next) {
+      if (rows.length !== expectedTotal) {
+        throw new Error('Canonical screening pagination did not return the complete result');
+      }
+      break;
+    }
+    if (pageRows.length < 1 || rows.length >= expectedTotal) {
+      throw new Error('Canonical screening pagination did not advance safely');
+    }
+    offset += pageRows.length;
+  }
   var focus = {
     subject_type: subject.subject_type,
     subject_name: subject.subject_name,
@@ -26876,17 +26934,7 @@ async function fetchMonitoringCanonicalScreeningContext(app, subject, nav) {
   if (exact.length !== 1) {
     throw new Error('Canonical screening provider case is missing or ambiguous');
   }
-  if (!SCREENING_QUEUE || !Array.isArray(SCREENING_QUEUE.rows)) {
-    SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null, pagination:null, is_loading:false };
-  }
-  var existingIndex = SCREENING_QUEUE.rows.findIndex(function(candidate) {
-    return screeningQueueRowsMatch(candidate, exact[0]);
-  });
-  if (existingIndex >= 0) {
-    SCREENING_QUEUE.rows[existingIndex] = Object.assign({}, SCREENING_QUEUE.rows[existingIndex], exact[0]);
-  } else {
-    SCREENING_QUEUE.rows.push(exact[0]);
-  }
+  focus.canonical_context_row = exact[0];
   return focus;
 }
 
@@ -26946,6 +26994,7 @@ async function openMonitoringCanonicalOwner() {
         case_identifier: screeningContext.case_identifier,
         provider_reference: screeningContext.provider_reference,
         normalized_snapshot_id: String(nav.normalized_snapshot_id || ''),
+        canonical_context_row: screeningContext.canonical_context_row,
         context_proven: true
       }
     });
@@ -26971,6 +27020,12 @@ function renderMonitoringCanonicalOwnerSection(alert) {
   ];
   if (kind === 'document_expiry' && linked) {
     var doc = linkage.document || {};
+    var documentPersonLabel = '';
+    if (doc.person_id && doc.person_type) {
+      documentPersonLabel = doc.person_type + ' · ' + doc.person_id;
+    } else if (!doc.person_id && !doc.person_type) {
+      documentPersonLabel = 'Application entity';
+    }
     rows = rows.concat([
       ['Document type', monitoringTextValue(doc.document_type, 'Not available')],
       ['Triggered document', monitoringTextValue(doc.trigger_document_id, 'Not available')],
@@ -26978,13 +27033,16 @@ function renderMonitoringCanonicalOwnerSection(alert) {
       ['Current document', monitoringTextValue(doc.canonical_document_id, 'Not available')],
       ['Current version', monitoringTextValue(doc.current_document_version, 'Not available')],
       ['Current expiry', monitoringTextValue(doc.current_expiry_date, 'Not available')],
-      ['Person / entity', monitoringTextValue(doc.person_id ? (doc.person_type + ' · ' + doc.person_id) : 'Application entity', 'Application entity')]
+      ['Person / entity', monitoringTextValue(documentPersonLabel, 'Not available')]
     ]);
   } else if (kind === 'screening_hit' && linked) {
     var subject = linkage.subject || {};
     var screeningCase = linkage.screening_case || {};
+    var screeningSubjectLabel = subject.type && subject.id
+      ? subject.type + ' · ' + subject.id
+      : '';
     rows = rows.concat([
-      ['Subject', monitoringTextValue(subject.type + ' · ' + subject.id, 'Not available')],
+      ['Subject', monitoringTextValue(screeningSubjectLabel, 'Not available')],
       ['Provider', monitoringTextValue(screeningCase.provider, 'Not available')],
       ['Provider case', monitoringTextValue(screeningCase.case_identifier, 'Not available')],
       ['Evidence snapshot', monitoringTextValue(screeningCase.snapshot_role, 'Unavailable')],

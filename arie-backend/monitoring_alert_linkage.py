@@ -506,6 +506,16 @@ def _document_owner_state(
             return "request_not_started"
         return "verified"
 
+    def relied_or_expiry_failure() -> str:
+        expiry_state = verified_or_expiry_failure()
+        if expiry_state != "verified":
+            return expiry_state
+        if reliance["reliance_state"] == "manual_accepted":
+            return "manual_accepted"
+        if reliance["reliance_state"] == "verified":
+            return "verified"
+        return "unavailable"
+
     if request and request_status not in {
         "generated",
         "requested",
@@ -523,7 +533,7 @@ def _document_owner_state(
         key = "unavailable"
     elif request_status == "accepted" and source_is_current:
         key = (
-            verified_or_expiry_failure()
+            relied_or_expiry_failure()
             if reliance["allowed"]
             else "officer_review_required"
         )
@@ -532,7 +542,7 @@ def _document_owner_state(
 
     elif not source_is_current:
         if reliance["allowed"]:
-            key = verified_or_expiry_failure()
+            key = relied_or_expiry_failure()
         elif verification == "in_progress":
             key = "verifying"
         elif verification == "pending":
@@ -581,6 +591,7 @@ def _document_owner_state(
         "replacement_received": "Replacement received",
         "verifying": "Verifying",
         "officer_review_required": "Officer review required",
+        "manual_accepted": "Manually accepted",
         "verified": "Verified",
         "stale": "Stale",
         "unavailable": "Unavailable",
@@ -906,6 +917,14 @@ def _party_subject(
 
     resolved_join = owner_join_name(resolved.get("subject_name"))
     resolved_tokens = owner_token_name(resolved.get("subject_name"))
+    if not resolved_join and not resolved_tokens:
+        raise LinkageError(
+            "linkage_missing",
+            "The screening subject lacks a canonical name.",
+            linkage_type="screening_hit",
+            owner_module="screening_review",
+            reasons=["missing_screening_subject_name"],
+        )
     owner_ui_matches = [
         row
         for row in owner_subject_rows
@@ -2182,7 +2201,7 @@ def _safe_plan_row(db: Any, alert: Mapping[str, Any]) -> Dict[str, Any]:
             "owner_state": resolved["owner"]["state"]["key"],
             "four_eyes_status": resolved["owner"]["state"]["four_eyes_status"],
             "subject_id": subject["id"],
-            "subject_person_key": subject.get("person_key"),
+            "subject_person_key": str(subject.get("person_key") or ""),
             "subject_type": subject["type"],
             "provider": screening["provider"],
             "case_identifier": screening["case_identifier"],

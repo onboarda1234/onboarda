@@ -95,6 +95,7 @@ positive integer and increase strictly toward the current terminal document.
 | `replacement_received` | Exact request is `uploaded`, or the current replacement is pending verification |
 | `verifying` | Exact request is `under_review`, or current replacement verification is in progress |
 | `officer_review_required` | Canonical document verification/review requires officer action |
+| `manual_accepted` | An authorised KYC & Documents reviewer explicitly accepted the current document with the owner module's required rationale and audit evidence; this is not automated verification |
 | `verified` | Current replacement is verified and accepted, has canonical expiry evidence, and no longer satisfies the source alert's expiry predicate |
 | `stale` | The exact source alert predicate no longer holds, but no exact verified replacement/request state proves closure |
 | `unavailable` | Owner state cannot be proven |
@@ -102,8 +103,10 @@ positive integer and increase strictly toward the current terminal document.
 These values are read-time projections only. Monitoring cannot request,
 upload, verify, accept, reject, or waive a document through this contract.
 Expiry evidence uses the exact Document Health precedence and UTC
-normalization. A verified replacement that is expired, lacks canonical expiry,
-or remains inside an `expiring_soon` window never projects `verified`.
+normalization. A verified or manually accepted replacement that is expired,
+lacks canonical expiry, or remains inside an `expiring_soon` window never
+projects a successful reliance state. Manual acceptance remains visibly
+distinct from automated verification.
 
 ### Protected legacy document-write limitation
 

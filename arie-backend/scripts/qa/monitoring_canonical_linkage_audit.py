@@ -219,6 +219,17 @@ def _governed_flags(environment_name: str) -> dict[str, Any]:
     }
 
 
+def _assert_no_apply_path(plan: Mapping[str, Any]) -> None:
+    if (
+        plan.get("apply_supported") is not False
+        or int(plan.get("counts", {}).get("data_changes_planned", -1)) != 0
+        or any(row.get("data_change_required") for row in plan.get("rows", []))
+    ):
+        raise RuntimeError(
+            "Canonical linkage audit unexpectedly exposed a mutation plan."
+        )
+
+
 def collect_read_only_snapshot(
     connection: Any,
     cursor_factory: Any,
@@ -250,6 +261,7 @@ def collect_read_only_snapshot(
         raise RuntimeError("Source fingerprint drifted during the read-only audit.")
     if plan_without_timestamp(first) != plan_without_timestamp(second):
         raise RuntimeError("Canonical linkage plan was not repeatable.")
+    _assert_no_apply_path(first)
 
     flags = _governed_flags(environment_name)
     return {
@@ -276,6 +288,7 @@ def collect_read_only_snapshot(
 def _markdown_table(snapshot: Mapping[str, Any]) -> str:
     plan = snapshot["plan"]
     counts = plan["counts"]
+    governed_features = snapshot["feature_governance"]["features"]
     lines = [
         "# PR-MON-CANONICAL-LINKAGE-1 — Linkage Audit Report",
         "",
@@ -284,10 +297,10 @@ def _markdown_table(snapshot: Mapping[str, Any]) -> str:
         f"- Deployed SHA: `{snapshot.get('deployed_sha') or 'not recorded'}`",
         f"- Plan fingerprint: `{plan['fingerprint']}`",
         "- Database transaction: `READ ONLY`, `REPEATABLE READ`, completed by `ROLLBACK`",
-        "- Collector-side governed-flag evaluation: all four `OFF` "
-        "(not deployed-runtime evidence)",
-        "- Apply support: `false`",
-        "- Data changes planned: `0`",
+        f"- Collector-side governed-flag evaluation: all {len(governed_features)} "
+        "`OFF` (not deployed-runtime evidence)",
+        f"- Apply support: `{str(bool(plan['apply_supported'])).lower()}`",
+        f"- Data changes planned: `{counts['data_changes_planned']}`",
         "",
         "## Statistics",
         "",
@@ -346,9 +359,9 @@ def _dry_run_markdown(snapshot: Mapping[str, Any]) -> str:
             f"- Correctly linked: `{plan['counts']['linked_correctly']}`",
             f"- Manual review required: `{plan['counts']['manual_review_required']}`",
             f"- Duplicate linkage groups: `{plan['counts']['duplicate_linkage_groups']}`",
-            "- Safely backfillable: `0`",
-            "- Apply supported: `false`",
-            "- Data changes planned: `0`",
+            f"- Safely backfillable: `{plan['counts']['safely_backfillable']}`",
+            f"- Apply supported: `{str(bool(plan['apply_supported'])).lower()}`",
+            f"- Data changes planned: `{plan['counts']['data_changes_planned']}`",
             "- Founder staging mutation gate: `not triggered`",
             "",
             "Every proposed linkage field in the JSON inventory is a read-time "
@@ -412,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
     import psycopg2
     from psycopg2.extras import RealDictCursor
 
-    connection = psycopg2.connect(database_url)
+    connection = psycopg2.connect(database_url, connect_timeout=10)
     try:
         snapshot = collect_read_only_snapshot(
             connection,
