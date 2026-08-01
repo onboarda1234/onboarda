@@ -231,6 +231,7 @@ from document_scope_policy import (
 import monitoring_status as _monitoring_status
 import monitoring_dismissal_control as _mdc
 import monitoring_alert_state_machine as _monitoring_state_machine
+import monitoring_alert_linkage as _monitoring_linkage
 import monitoring_sla as _monitoring_sla
 import monitoring_followups as _monitoring_followups
 from monitoring_enrollment import (
@@ -38053,6 +38054,75 @@ def _monitoring_alert_provider_evidence(db, alert_id):
     return evidence
 
 
+def _monitoring_linkage_safe_envelope(db, alert_id):
+    try:
+        return _monitoring_linkage.resolve_alert_linkage_envelope(db, alert_id)
+    except Exception:
+        logger.exception(
+            "monitoring_linkage_resolution_failed alert_id=%s request_id=%s",
+            alert_id,
+            (_obs_get_request_id() or ""),
+        )
+        return {
+            "contract_version": _monitoring_linkage.CONTRACT_VERSION,
+            "read_only": True,
+            "mutation_controls": False,
+            "error": {
+                "code": "linkage_unavailable",
+                "message": "Canonical linkage is temporarily unavailable.",
+                "alert_id": alert_id,
+                "linkage_status": "manual_review_required",
+                "reasons": ["linkage_resolution_failed"],
+            },
+        }
+
+
+class MonitoringAlertLinkageHandler(BaseHandler):
+    """Authenticated GET-only canonical owner-linkage projection."""
+
+    def get(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        db = get_db()
+        try:
+            result = _monitoring_linkage.resolve_alert_linkage(db, alert_id)
+            self.success(result)
+        except _monitoring_linkage.LinkageError as exc:
+            payload = exc.payload(alert_id)
+            linkage_error = payload.pop("error")
+            payload["error"] = linkage_error["message"]
+            payload["linkage_error"] = linkage_error
+            self.set_status(exc.http_status)
+            self.write(json.dumps(payload, default=str))
+        except Exception:
+            logger.exception(
+                "monitoring_linkage_api_failed alert_id=%s request_id=%s",
+                alert_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.set_status(500)
+            self.write(
+                json.dumps(
+                    {
+                        "contract_version": _monitoring_linkage.CONTRACT_VERSION,
+                        "read_only": True,
+                        "mutation_controls": False,
+                        "error": "Canonical linkage is temporarily unavailable.",
+                        "linkage_error": {
+                            "code": "linkage_unavailable",
+                            "message": "Canonical linkage is temporarily unavailable.",
+                            "alert_id": alert_id,
+                            "linkage_status": "manual_review_required",
+                            "reasons": ["linkage_resolution_failed"],
+                        },
+                    }
+                )
+            )
+        finally:
+            db.close()
+
+
 class MonitoringAlertDetailHandler(BaseHandler):
     """GET/PATCH /api/monitoring/alerts/:id — Get alert detail and update status"""
     def get(self, alert_id):
@@ -38105,6 +38175,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
             result["followups"] = []
             result["followups_summary"] = {"open_count": 0, "next_due_at": None}
         result["overdue_escalations"] = _monitoring_alert_overdue_escalations(db, alert_id)
+        result["canonical_linkage"] = _monitoring_linkage_safe_envelope(db, alert_id)
         db.close()
         self.success(result)
 
@@ -45347,6 +45418,7 @@ def make_app():
         (r"/api/monitoring/alerts/([^/]+)/escalate-overdue", MonitoringAlertOverdueEscalationHandler),
         (r"/api/monitoring/alerts/([^/]+)/followups/([0-9]+)/resolve", MonitoringAlertFollowupResolveHandler),
         (r"/api/monitoring/alerts/([^/]+)/followups", MonitoringAlertFollowupHandler),
+        (r"/api/monitoring/alerts/([0-9]+)/linkage", MonitoringAlertLinkageHandler),
         (r"/api/monitoring/alerts/([^/]+)", MonitoringAlertDetailHandler),
         (r"/api/monitoring/alerts", MonitoringAlertCreateHandler),
         # Agents
