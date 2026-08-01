@@ -78,7 +78,7 @@ PHASE_0B1_HEAD = "901265f9cbfb45bac62358da6a453e24c052078e"
 # silently pass, which is the one thing worse. This pull request must be landed
 # with a merge commit.
 PHASE_0B2_BASE = "c667f95ff8ae892bcc8cafe27efa1151cc7d92f6"
-PHASE_0B2_HEAD = "5fd784dea606ba3d24e959f320fb34db67c65704"
+PHASE_0B2_HEAD = "13c1093616958f552c776068969e5de1034c318e"
 
 
 def _git(*args: str) -> str:
