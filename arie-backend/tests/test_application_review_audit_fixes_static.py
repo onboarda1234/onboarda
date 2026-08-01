@@ -30,7 +30,7 @@ def _read(path):
 
 
 def _func_body(html, signature):
-    start = html.index(signature)
+    start = html.rindex(signature)
     after = html[start + len(signature):]
     match = re.search(r"\n(?:async function |function )", after)
     end = match.start() if match else len(after)
@@ -42,11 +42,9 @@ def _func_body(html, signature):
 def test_memo_mutations_use_shared_api_wrapper():
     html = _read("arie-backoffice.html")
     assert "boApiCall('POST', '/applications/' + app.ref + '/memo')" in html
-    assert "boApiCall('POST', '/applications/' + app.ref + '/memo/validate')" in html
-    assert (
-        "boApiCall('POST', '/applications/' + app.ref + '/memo/approve', memoApproveBody)"
-        in html
-    )
+    assert "boApiCall('PATCH', '/applications/' + app.ref + '/memo'" in html
+    approve_body = _func_body(html, "async function approveMemo(")
+    assert "boApiCall('POST', '/applications/' + app.ref + '/memo/approve'" in approve_body
 
 
 def test_memo_mutations_drop_raw_fetch_that_ignored_response_status():
@@ -73,7 +71,6 @@ def test_each_memo_mutation_refreshes_authoritative_detail():
     html = _read("arie-backoffice.html")
     for signature in (
         "async function generateComplianceMemo(",
-        "async function revalidateMemo(",
         "async function approveMemo(",
     ):
         body = _func_body(html, signature)
@@ -92,7 +89,7 @@ def test_memo_approval_blockers_include_officer_signoff():
 def test_officer_signoff_checkbox_revalidates_approve_button():
     html = _read("arie-backoffice.html")
     assert (
-        'id="memo-officer-signoff" onchange="refreshMemoApprovalReasonState()"' in html
+        'id="memo-officer-signoff" onchange="syncMemoWorkspaceActions()"' in html
     )
 
 

@@ -8153,6 +8153,173 @@ def test_h1_live_memo_route_is_deterministic(api_server, monkeypatch):
     assert persisted["metadata"]["ai_source"] == "deterministic"
 
 
+def _seed_compliance_memo_workspace_history():
+    """Seed two canonical memo versions without invoking unrelated generation gates."""
+    from db import get_db
+
+    suffix = uuid.uuid4().hex[:10]
+    app_id = f"app_memo_workspace_{suffix}"
+    app_ref = f"ARF-WS-{suffix.upper()}"
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO applications (
+            id, ref, company_name, country, sector, entity_type, status,
+            risk_level, risk_score, inputs_updated_at
+        ) VALUES (?, ?, ?, 'Mauritius', 'Technology', 'SME', 'in_review',
+                  'MEDIUM', 50, '2026-07-31T10:01:00+00:00')
+        """,
+        (app_id, app_ref, "Memo Workspace API Ltd"),
+    )
+
+    def memo_payload(version, generated_at):
+        return json.dumps({
+            "application_ref": app_ref,
+            "memo_generated": generated_at,
+            "sections": {
+                "executive_summary": {"content": "Decision rationale."},
+                "compliance_decision": {"decision": "APPROVE", "content": "Approve."},
+            },
+            "metadata": {
+                "memo_version": version,
+                "memo_generated_at": generated_at,
+                "application_snapshot_timestamp": "2026-07-31T10:01:00+00:00",
+                "canonical_risk": {"available": True, "level": "MEDIUM", "score": 50},
+                "risk_rating": "MEDIUM",
+                "risk_score": 50,
+                "canonical_screening_current_summary": {
+                    "has_adverse_media_hit": False,
+                    "current_risk_count": 0,
+                    "current_unresolved_risk_count": 0,
+                    "evidence_quality": "unavailable",
+                },
+            },
+            "supervisor": {"verdict": "CONSISTENT", "can_approve": True},
+        })
+
+    db.execute(
+        """
+        INSERT INTO compliance_memos (
+            application_id, version, memo_data, generated_by, ai_recommendation,
+            review_status, quality_score, validation_status, memo_version,
+            supervisor_status, rule_engine_status, blocked, is_stale,
+            approved_by, approved_at, approval_reason, created_at
+        ) VALUES (?, 1, ?, 'admin001', 'APPROVE', 'approved', 9.0, 'pass',
+                  'v1', 'CONSISTENT', 'pass', 0, 0, 'admin001',
+                  '2026-07-31T09:30:00+00:00', 'Earlier rationale',
+                  '2026-07-31T09:00:00+00:00')
+        """,
+        (app_id, memo_payload("v1", "2026-07-31T09:00:00+00:00")),
+    )
+    db.execute(
+        """
+        INSERT INTO compliance_memos (
+            application_id, version, memo_data, generated_by, ai_recommendation,
+            review_status, quality_score, validation_status, memo_version,
+            supervisor_status, rule_engine_status, blocked, is_stale, created_at
+        ) VALUES (?, 2, ?, 'admin001', 'APPROVE', 'draft', 9.0, 'pass',
+                  'v2', 'CONSISTENT', 'pass', 0, 0,
+                  '2026-07-31T10:02:00+00:00')
+        """,
+        (app_id, memo_payload("v2", "2026-07-31T10:02:00+00:00")),
+    )
+    db.commit()
+    db.close()
+    return app_id, app_ref
+
+
+class TestComplianceMemoWorkspaceAPI:
+    def test_history_projects_current_superseded_and_timestamp_stale_states(self, api_server):
+        from auth import create_token
+        from db import get_db
+
+        app_id, app_ref = _seed_compliance_memo_workspace_history()
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        response = http_requests.get(
+            f"{api_server}/api/applications/{app_ref}/memo",
+            headers=headers,
+            timeout=5,
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["lifecycle_status"] == "AWAITING_OFFICER_SIGNOFF"
+        assert payload["version_count"] == 2
+        assert [item["memo_version"] for item in payload["versions"]] == ["v2", "v1"]
+        assert payload["versions"][1]["lifecycle_status"] == "SUPERSEDED"
+        assert all("officer_rationale" not in item for item in payload["versions"])
+
+        db = get_db()
+        db.execute(
+            "UPDATE applications SET inputs_updated_at='2026-07-31T10:03:00+00:00' WHERE id=?",
+            (app_id,),
+        )
+        db.commit()
+        db.close()
+
+        stale = http_requests.get(
+            f"{api_server}/api/applications/{app_ref}/memo",
+            headers=headers,
+            timeout=5,
+        )
+        assert stale.status_code == 200, stale.text
+        stale_payload = stale.json()
+        assert stale_payload["lifecycle_status"] == "STALE"
+        assert stale_payload["current"]["is_stale"] is True
+        assert stale_payload["current"]["stale_trigger"] == "application_inputs_changed_after_memo"
+
+    def test_draft_rationale_saves_to_existing_columns_and_final_is_locked(self, api_server):
+        from auth import create_token
+        from db import get_db
+
+        app_id, app_ref = _seed_compliance_memo_workspace_history()
+        token = create_token("co001", "co", "Test Officer", "officer")
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        rationale = "The recorded evidence supports the recommendation."
+
+        response = http_requests.patch(
+            f"{api_server}/api/applications/{app_ref}/memo",
+            headers=headers,
+            json={"officer_rationale": rationale},
+            timeout=5,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["officer_rationale"] == rationale
+
+        db = get_db()
+        row = db.execute(
+            "SELECT id, review_notes, reviewed_by FROM compliance_memos "
+            "WHERE application_id=? ORDER BY version DESC LIMIT 1",
+            (app_id,),
+        ).fetchone()
+        audit = db.execute(
+            "SELECT detail FROM audit_log WHERE application_id=? "
+            "AND action='Save Memo Officer Rationale' ORDER BY id DESC LIMIT 1",
+            (app_id,),
+        ).fetchone()
+        assert row["review_notes"] == rationale
+        assert row["reviewed_by"] == "co001"
+        assert rationale not in audit["detail"]
+        assert "rationale_sha256" in audit["detail"]
+
+        db.execute(
+            "UPDATE compliance_memos SET review_status='approved', approved_by='admin001', "
+            "approved_at='2026-07-31T10:04:00+00:00' WHERE id=?",
+            (row["id"],),
+        )
+        db.commit()
+        db.close()
+
+        locked = http_requests.patch(
+            f"{api_server}/api/applications/{app_ref}/memo",
+            headers=headers,
+            json={"officer_rationale": "Attempted edit"},
+            timeout=5,
+        )
+        assert locked.status_code == 409
+
+
 class TestScreeningHitDisposition:
     """Per-hit screening decision persistence (SRP per-hit redesign).
 

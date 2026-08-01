@@ -37,7 +37,7 @@ templates.
 | Marketing JSX source (`onboarda-website.jsx`) | Onboarda visible copy and contact links | Update visible content only; retain the internal filename and component identifier |
 | Central brand configuration (`arie-backend/branding.py`) | Onboarda portal/platform/PDF/email defaults and domains | Make RegMind the tenant-independent presentation default while retaining cookie/metric compatibility identifiers |
 | Transactional email (`arie-backend/server.py`) | Onboarda password-reset sender fallback, subject, and body | Use **RegMind** / **RegMind Portal** |
-| Generated compliance outputs | Onboarda PDF header and composite-risk-engine attribution | Use **RegMind Compliance Report** and RegMind model attribution without changing memo logic |
+| Generated compliance outputs | Onboarda PDF header and composite-risk-engine attribution | Use **RegMind Compliance Memorandum** and RegMind model attribution without changing memo logic |
 | Decision correspondence templates | Onboarda product/legal identity embedded in generic approve/reject/EDD messages | Use institution-neutral correspondence and **Sent via RegMind** attribution |
 | Public repository overview (`README.md`) | Describes the current product as two Onboarda/RegMind brands | Describe one RegMind product and explicitly document retained technical paths |
 | Customer-visible branding tests | Existing tests assert Onboarda defaults | Replace with semantic RegMind and legacy-absence assertions |

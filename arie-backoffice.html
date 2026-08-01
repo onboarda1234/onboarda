@@ -622,6 +622,54 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .memo-action-btn.download { background:var(--brand); color:white; }
 .memo-action-btn.generate { background:var(--green); color:white; }
 
+/* Compliance Memo document workspace */
+.memo-workspace { overflow:hidden; }
+.memo-workspace-header { padding:18px 20px 14px; border-bottom:1px solid var(--border1); background:linear-gradient(180deg,var(--surface),var(--surface2)); }
+.memo-workspace-title { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+.memo-workspace-title h3 { margin:0; font-size:16px; color:var(--text1); }
+.memo-meta-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:8px; }
+.memo-meta-item { min-width:0; padding:9px 10px; border:1px solid var(--border1); border-radius:8px; background:var(--surface); }
+.memo-meta-label { display:block; margin-bottom:4px; color:var(--text3); font-size:9px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+.memo-meta-value { display:block; overflow:hidden; color:var(--text1); font-size:11px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }
+.memo-toolbar { display:flex; flex-wrap:wrap; gap:8px; padding:12px 20px; border-bottom:1px solid var(--border1); background:var(--surface); }
+.memo-toolbar .btn { min-height:34px; }
+.memo-toolbar .btn-primary { background:var(--brand); border-color:var(--brand); color:#fff; }
+.memo-toolbar .btn-success { background:#166534; border-color:#166534; color:#fff; }
+.memo-workspace-notice { display:none; margin:14px 20px 0; padding:10px 12px; border:1px solid var(--border1); border-radius:8px; font-size:12px; line-height:1.5; }
+.memo-workspace-notice.stale { display:block; border-color:#f59e0b; background:#fffbeb; color:#92400e; }
+.memo-workspace-notice.final { display:block; border-color:#86efac; background:#f0fdf4; color:#166534; }
+.memo-workspace-notice.draft { display:block; border-color:#bfdbfe; background:#eff6ff; color:#1e40af; }
+.memo-preview-shell { margin:14px 20px 0; min-height:560px; overflow:hidden; border:1px solid var(--border1); border-radius:10px; background:#eef2f6; }
+.memo-preview-empty { display:flex; min-height:560px; align-items:center; justify-content:center; padding:30px; color:var(--text3); font-size:12px; text-align:center; }
+.memo-pdf-frame { display:none; width:100%; height:680px; border:0; background:#fff; }
+.memo-rationale-panel { margin:14px 20px 20px; padding:14px; border:1px solid var(--border1); border-radius:10px; background:var(--surface); }
+.memo-rationale-panel label { display:block; margin-bottom:6px; color:var(--text1); font-size:12px; font-weight:800; }
+.memo-rationale-help { margin-top:6px; color:var(--text3); font-size:10px; line-height:1.45; }
+.memo-signoff-row { display:flex; align-items:flex-start; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border1); font-size:11px; line-height:1.45; color:var(--text2); }
+.memo-signoff-row input { margin-top:2px; accent-color:var(--brand); }
+.memo-history-panel { display:none; margin:14px 20px 20px; border:1px solid var(--border1); border-radius:10px; background:var(--surface); }
+.memo-history-panel.open { display:block; }
+.memo-history-header { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 14px; border-bottom:1px solid var(--border1); }
+.memo-history-table-wrap { overflow-x:auto; }
+.memo-history-table { width:100%; border-collapse:collapse; font-size:11px; }
+.memo-history-table th,.memo-history-table td { padding:9px 12px; border-bottom:1px solid var(--border1); text-align:left; vertical-align:top; }
+.memo-history-table th { color:var(--text3); font-size:9px; letter-spacing:.05em; text-transform:uppercase; }
+.memo-history-table tr:last-child td { border-bottom:0; }
+.memo-lifecycle-badge { display:inline-flex; align-items:center; padding:3px 8px; border-radius:999px; background:#e2e8f0; color:#334155; font-size:9px; font-weight:800; letter-spacing:.03em; }
+.memo-lifecycle-badge.final { background:#dcfce7; color:#166534; }
+.memo-lifecycle-badge.stale { background:#fef3c7; color:#92400e; }
+.memo-lifecycle-badge.awaiting { background:#dbeafe; color:#1e40af; }
+.memo-lifecycle-badge.superseded { background:#f1f5f9; color:#64748b; }
+@media (max-width:1100px) { .memo-meta-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media (max-width:760px) {
+  .memo-meta-grid { grid-template-columns:1fr 1fr; }
+  .memo-toolbar { padding:10px 14px; }
+  .memo-toolbar .btn { flex:1 1 calc(50% - 8px); justify-content:center; }
+  .memo-preview-shell,.memo-rationale-panel,.memo-history-panel,.memo-workspace-notice { margin-left:14px; margin-right:14px; }
+  .memo-preview-shell,.memo-preview-empty { min-height:440px; }
+  .memo-pdf-frame { height:560px; }
+}
+
 /* ── EX-11: AI Advisory Labels ── */
 .ai-advisory-banner { display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:6px; background:linear-gradient(135deg,#ede9fe,#e0e7ff); border:1.5px solid #7c3aed; margin-bottom:12px; }
 .ai-advisory-banner .ai-adv-icon { font-size:16px; flex-shrink:0; }
@@ -1653,70 +1701,55 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         <div id="detail-score-breakdown"></div>
       </div>
 
-      <!-- Compliance Memo -->
-      <div class="memo-card">
-        <div class="memo-header">
-          <span style="font-size:18px;">📝</span>
-          <span style="font-weight:700;">Compliance Onboarding Memo</span>
-          <span class="ai-advisory-badge">🤖 System-Generated — Advisory Only</span>
-          <span class="badge approved" id="memo-status-badge">Auto-Generated</span>
-          <button class="memo-generate-btn" id="btn-generate-memo" onclick="generateComplianceMemo()" title="Regenerate memo from server">🔄 Generate Memo</button>
-          <button class="memo-download-btn" id="btn-download-memo" onclick="downloadMemoPDF()" title="Download as PDF">📥 Download Memo (PDF)</button>
-        </div>
-        <div id="memo-governance-summary" style="margin:16px 20px 0;"></div>
-        <div class="memo-body" id="detail-memo"></div>
-
-        <!-- Validation Panel -->
-        <div class="memo-validation-panel" id="memo-validation-panel" style="display:none;">
-          <div class="memo-validation-header">
-            <span style="font-size:16px;">🛡️</span>
-            <span class="val-title">Memo Quality Validation</span>
-            <span class="ai-advisory-badge">🤖 System-Generated — Advisory Only</span>
-            <span class="memo-val-status pending" id="memo-val-status-badge">PENDING</span>
+      <!-- Compliance Memo document workspace -->
+      <section class="memo-card memo-workspace" id="compliance-memo-workspace" aria-labelledby="memo-workspace-heading">
+        <header class="memo-workspace-header">
+          <div class="memo-workspace-title">
+            <span aria-hidden="true" style="font-size:20px;">📄</span>
+            <h3 id="memo-workspace-heading">Compliance Memo</h3>
+            <span class="memo-lifecycle-badge" id="memo-status-badge">NOT GENERATED</span>
           </div>
-          <div class="memo-validation-body">
-            <!-- Quality Score Gauge -->
-            <div class="memo-quality-score">
-              <div class="memo-quality-gauge pending" id="memo-quality-gauge" style="background:#94a3b8;">—</div>
-              <div class="memo-quality-details">
-                <div class="label">Quality Score</div>
-                <div class="score-text" id="memo-quality-score-text">Not yet validated</div>
-                <div style="font-size:11px;color:var(--text3);margin-top:2px;" id="memo-quality-version"></div>
-              </div>
-            </div>
-
-            <!-- Issues List -->
-            <div class="memo-val-issues" id="memo-val-issues"></div>
-
-            <!-- Category Scores Breakdown -->
-            <div class="memo-val-scores" id="memo-val-scores"></div>
-
-            <div id="memo-approval-blockers" style="display:none;margin:12px 0;padding:12px 14px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
-
-            <!-- Action Buttons -->
-            <div id="memo-approval-reason-panel" style="display:none;margin:12px 0;padding:12px 14px;border-radius:8px;border:1px solid var(--border1);background:var(--surface);">
-              <label for="memo-approval-reason" style="display:block;font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Approval reason required</label>
-              <textarea id="memo-approval-reason" rows="3" class="form-input" oninput="refreshMemoApprovalReasonState()" placeholder="Record the officer rationale for relying on this canonical memo. This is persisted in audit and evidence exports." style="resize:vertical;"></textarea>
-              <div style="font-size:11px;color:var(--text3);margin-top:6px;">Required for every memo approval. Do not include secrets, tokens, or raw provider payloads.</div>
-            </div>
-            <div class="officer-signoff-gate" id="memo-officer-signoff-gate">
-              <label>
-                <input type="checkbox" id="memo-officer-signoff" onchange="refreshMemoApprovalReasonState()" />
-                <div>
-                  <div class="signoff-text">Officer Sign-Off Required</div>
-                  <div class="signoff-sub">I confirm I have reviewed all system-generated advisory content above and accept responsibility for this compliance decision. AI outputs are advisory only and do not constitute authoritative determinations.</div>
-                </div>
-              </label>
-            </div>
-            <div class="memo-action-bar">
-              <button class="memo-action-btn generate" onclick="generateComplianceMemo()">🔄 Generate Memo</button>
-              <button class="memo-action-btn validate" id="btn-revalidate-memo" onclick="revalidateMemo()">🛡️ Validate Memo</button>
-              <button class="memo-action-btn approve" id="btn-approve-memo" onclick="approveMemo()" disabled>✅ Approve Memo</button>
-              <button class="memo-action-btn download" onclick="downloadMemoPDF()">📥 Download PDF</button>
-            </div>
+          <div class="memo-meta-grid" aria-label="Memo document control">
+            <div class="memo-meta-item"><span class="memo-meta-label">Memo Version</span><span class="memo-meta-value" id="memo-meta-version">—</span></div>
+            <div class="memo-meta-item"><span class="memo-meta-label">Memo Status</span><span class="memo-meta-value" id="memo-meta-status">NOT_GENERATED</span></div>
+            <div class="memo-meta-item"><span class="memo-meta-label">Recommendation</span><span class="memo-meta-value" id="memo-meta-recommendation">—</span></div>
+            <div class="memo-meta-item"><span class="memo-meta-label">Generated Timestamp</span><span class="memo-meta-value" id="memo-meta-generated">—</span></div>
+            <div class="memo-meta-item"><span class="memo-meta-label">Application Snapshot Timestamp</span><span class="memo-meta-value" id="memo-meta-snapshot">—</span></div>
           </div>
+        </header>
+
+        <div class="memo-toolbar" aria-label="Memo actions">
+          <button class="btn btn-primary btn-sm" id="btn-generate-memo" onclick="generateComplianceMemo()">Generate Memo</button>
+          <button class="btn btn-outline btn-sm" id="btn-preview-memo" onclick="previewMemoPDF()" disabled>Preview PDF</button>
+          <button class="btn btn-outline btn-sm" id="btn-regenerate-memo" onclick="generateComplianceMemo()" style="display:none;" disabled>Regenerate Memo</button>
+          <button class="btn btn-outline btn-sm" id="btn-save-memo-rationale" onclick="saveMemoOfficerRationale()" disabled>Save Officer Rationale</button>
+          <button class="btn btn-success btn-sm" id="btn-approve-memo" onclick="approveMemo()" disabled>Approve &amp; Lock</button>
+          <button class="btn btn-outline btn-sm" id="btn-download-memo" onclick="downloadMemoPDF()" disabled>Download Final PDF</button>
+          <button class="btn btn-outline btn-sm" id="btn-memo-history" onclick="toggleMemoVersionHistory()" disabled>Version History</button>
         </div>
-      </div>
+
+        <div class="memo-workspace-notice" id="memo-workspace-notice" role="status"></div>
+
+        <div class="memo-preview-shell" id="detail-memo">
+          <div class="memo-preview-empty" id="memo-preview-empty">Generate a memo to create the PDF artefact.</div>
+          <iframe class="memo-pdf-frame" id="memo-pdf-preview" title="Generated compliance memo PDF preview"></iframe>
+        </div>
+
+        <div class="memo-rationale-panel">
+          <label for="memo-approval-reason">Officer rationale</label>
+          <textarea id="memo-approval-reason" rows="4" class="form-input" oninput="syncMemoWorkspaceActions()" placeholder="Record the officer rationale for the memo recommendation and decision." style="resize:vertical;"></textarea>
+          <div class="memo-rationale-help">Saved against this memo version and carried into the existing approval audit record. Do not include secrets, tokens, or raw provider payloads.</div>
+          <label class="memo-signoff-row" id="memo-officer-signoff-gate">
+            <input type="checkbox" id="memo-officer-signoff" onchange="syncMemoWorkspaceActions()" />
+            <span>I confirm that I reviewed the generated PDF and accept responsibility for the officer decision and sign-off.</span>
+          </label>
+        </div>
+
+        <div class="memo-history-panel" id="memo-version-history-panel">
+          <div class="memo-history-header"><strong>Memo Version History</strong><button class="btn btn-outline btn-sm" onclick="toggleMemoVersionHistory(false)">Close</button></div>
+          <div class="memo-history-table-wrap" id="memo-version-history-content"></div>
+        </div>
+      </section>
 
   </div><!-- /detail-tab-overview -->
 
@@ -11882,6 +11915,7 @@ async function fetchApplicationDetail(ref) {
     memoRequiresRegeneration: !!detail.memo_requires_regeneration,
     supervisorRequiresRerun: !!detail.supervisor_requires_rerun,
     updated_at: detail.updated_at || '',
+    inputsUpdatedAt: detail.inputs_updated_at || '',
     last_document_upload: detail.last_document_upload || '',
     screening_updated_at: detail.screening_updated_at || ''
   };
@@ -12746,40 +12780,7 @@ function renderAuthoritativeAppDetail(app, options) {
   renderExplainabilityPanel(app, screeningSummary);
   updateExplainabilityPanelState(app, screeningSummary);
 
-  var memoEl = document.getElementById('detail-memo');
-  if (app.latestMemo && app.latestMemo.sections) {
-    window._currentMemoData = app.latestMemo;
-    renderMemoGovernanceSummary(app, app.latestMemo || {});
-    setMemoDownloadState(true);
-    var staleBanner = '';
-    if (app.memoIsStale) {
-      var staleReason = escapeHtml(app.memoStaleReason || 'Application data changed after this memo was generated.');
-      staleBanner = '<div style="margin-bottom:12px;padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;font-size:12px;color:#92400e;font-weight:600;">⚠️ This compliance memo is stale — ' + staleReason + ' Regenerate the memo before approval.</div>';
-    }
-    if (app.memoRequiresRegeneration || app.supervisorRequiresRerun) {
-      staleBanner += '<div style="margin-bottom:12px;padding:10px 14px;background:#fef2f2;border:1px solid #dc2626;border-radius:8px;font-size:12px;color:#991b1b;font-weight:600;">🚫 Officer corrections require memo regeneration' +
-        (app.supervisorRequiresRerun ? ' and supervisor rerun' : '') +
-        ' before approval can proceed.</div>';
-    }
-    memoEl.innerHTML = staleBanner + renderMemoSections(app.latestMemo);
-    showValidationPanelIfMemoExists();
-    if ((app.latestMemo.review_status || '').toLowerCase() === 'approved') {
-      setMemoStatusBadge('Approved', 'approved');
-    } else if ((app.latestMemo.validation_status || '').toLowerCase() === 'pass') {
-      setMemoStatusBadge('Validated', 'approved');
-    } else if ((app.latestMemo.validation_status || '').toLowerCase() === 'pass_with_fixes') {
-      setMemoStatusBadge('Validated With Fixes', 'pending');
-    } else {
-      setMemoStatusBadge('Generated', 'pending');
-    }
-  } else {
-    window._currentMemoData = null;
-    renderMemoGovernanceSummary(app, {});
-    setMemoDownloadState(false, 'No compliance memo exists yet. Generate the memo before downloading a PDF.');
-    document.getElementById('memo-validation-panel').style.display = 'none';
-    setMemoStatusBadge('Not Generated', 'pending');
-    memoEl.innerHTML = '<div style="padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No compliance memo has been generated for this application yet.</div>';
-  }
+  renderMemoWorkspace(app);
 
   var docsHtml = renderStandardKycDocumentTaxonomy(app);
   document.getElementById('detail-documents').innerHTML = renderStandardKycDocumentTaxonomy(app, { includeIdv:false });
@@ -35188,904 +35189,487 @@ function currentMemoApprovalReason() {
   return el ? String(el.value || '').trim() : '';
 }
 
-function memoApprovalAlreadyApproved(app, validationResult) {
-  var memoData = (app && app.latestMemo) || window._currentMemoData || {};
-  var memoMeta = (app && app.latestMemoMeta) || {};
-  return String((validationResult && validationResult.review_status) || memoData.review_status || memoMeta.review_status || '').toLowerCase() === 'approved';
+// ── Compliance Memo document workspace (PDF is the only memo presentation) ──
+window._memoPdfCache = null;
+window._memoWorkspaceAppId = null;
+
+function memoWorkspaceTimestamp(value) {
+  if (!value) return '—';
+  return String(value).substring(0, 19).replace('T', ' ');
 }
 
-function syncMemoApprovalReasonPanel(validationResult) {
-  var panel = document.getElementById('memo-approval-reason-panel');
-  if (!panel) return;
+function memoWorkspaceLifecycle(app, memo) {
+  app = app || {};
+  memo = memo || null;
+  if (!memo || !memo.sections) return 'NOT_GENERATED';
+  if (app.memoIsStale || memo.is_stale) return 'STALE';
+  var projected = String(memo.lifecycle_status || '').toUpperCase();
+  if (projected) return projected;
+  if (String(memo.review_status || '').toLowerCase() === 'approved') return 'FINAL';
+  var validation = String(memo.validation_status || '').toLowerCase();
+  if ((validation === 'pass' || validation === 'pass_with_fixes') && !(memo.metadata || {}).blocked) {
+    return 'AWAITING_OFFICER_SIGNOFF';
+  }
+  return 'DRAFT';
+}
+
+function memoWorkspaceRecommendation(memo) {
+  memo = memo || {};
+  var meta = memo.metadata || {};
+  var decision = (memo.sections && memo.sections.compliance_decision) || {};
+  return String(decision.decision || meta.approval_recommendation || 'REVIEW').replace(/_/g, ' ');
+}
+
+function memoWorkspaceVersion(memo) {
+  memo = memo || {};
+  return memo.memo_version || (memo.metadata || {}).memo_version || '—';
+}
+
+function memoWorkspaceMemoId(memo) {
+  memo = memo || {};
+  return memo.memo_id || memo.canonical_memo_id || ((memo.metadata || {}).memo_id) || memoWorkspaceVersion(memo);
+}
+
+function memoWorkspaceBadgeClass(lifecycle) {
+  lifecycle = String(lifecycle || '').toUpperCase();
+  if (lifecycle === 'FINAL') return 'final';
+  if (lifecycle === 'STALE') return 'stale';
+  if (lifecycle === 'AWAITING_OFFICER_SIGNOFF') return 'awaiting';
+  if (lifecycle === 'SUPERSEDED') return 'superseded';
+  return '';
+}
+
+function setMemoStatusBadge(label) {
+  var badge = document.getElementById('memo-status-badge');
+  if (!badge) return;
+  var lifecycle = String(label || 'NOT_GENERATED').toUpperCase();
+  badge.textContent = lifecycle.replace(/_/g, ' ');
+  badge.className = 'memo-lifecycle-badge ' + memoWorkspaceBadgeClass(lifecycle);
+}
+
+function releaseMemoPdfCache() {
+  if (window._memoPdfCache && window._memoPdfCache.url) {
+    URL.revokeObjectURL(window._memoPdfCache.url);
+  }
+  window._memoPdfCache = null;
+}
+
+function memoWorkspacePdfKey(app, memo) {
+  return [
+    app && app.id,
+    memoWorkspaceMemoId(memo),
+    memoWorkspaceVersion(memo),
+    memoWorkspaceLifecycle(app, memo),
+    memo && memo.approved_at
+  ].join(':');
+}
+
+function setMemoPreviewEmpty(message) {
+  var empty = document.getElementById('memo-preview-empty');
+  var frame = document.getElementById('memo-pdf-preview');
+  if (empty) {
+    empty.textContent = message || 'Generate a memo to create the PDF artefact.';
+    empty.style.display = 'flex';
+  }
+  if (frame) {
+    frame.style.display = 'none';
+    frame.removeAttribute('src');
+  }
+}
+
+function canEditMemoRationale() {
+  return ['admin', 'sco', 'co'].indexOf(String(currentUserRole() || '').toLowerCase()) >= 0;
+}
+
+function renderMemoWorkspace(app) {
+  app = app || {};
+  var memo = app.latestMemo && app.latestMemo.sections ? app.latestMemo : null;
+  var appIdentity = String(app.id || app.ref || '');
+  if (window._memoWorkspaceAppId !== appIdentity) {
+    releaseMemoPdfCache();
+    window._memoWorkspaceAppId = appIdentity;
+    var historyPanel = document.getElementById('memo-version-history-panel');
+    if (historyPanel) historyPanel.classList.remove('open');
+  }
+  window._currentMemoData = memo;
+
+  var lifecycle = memoWorkspaceLifecycle(app, memo);
+  var hasMemo = !!memo;
+  var isFinal = lifecycle === 'FINAL';
+  var isStale = lifecycle === 'STALE';
+  setMemoStatusBadge(lifecycle);
+
+  var versionEl = document.getElementById('memo-meta-version');
+  var statusEl = document.getElementById('memo-meta-status');
+  var recommendationEl = document.getElementById('memo-meta-recommendation');
+  var generatedEl = document.getElementById('memo-meta-generated');
+  var snapshotEl = document.getElementById('memo-meta-snapshot');
+  if (versionEl) versionEl.textContent = hasMemo ? memoWorkspaceVersion(memo) : '—';
+  if (statusEl) statusEl.textContent = lifecycle;
+  if (recommendationEl) recommendationEl.textContent = hasMemo ? memoWorkspaceRecommendation(memo) : '—';
+  if (generatedEl) generatedEl.textContent = hasMemo ? memoWorkspaceTimestamp(memo.memo_generated || (memo.metadata || {}).memo_generated_at) : '—';
+  if (snapshotEl) snapshotEl.textContent = memoWorkspaceTimestamp((memo && memo.application_snapshot_timestamp) || app.inputsUpdatedAt || app.updated_at);
+
+  var generateBtn = document.getElementById('btn-generate-memo');
+  var previewBtn = document.getElementById('btn-preview-memo');
+  var regenerateBtn = document.getElementById('btn-regenerate-memo');
+  var saveBtn = document.getElementById('btn-save-memo-rationale');
+  var downloadBtn = document.getElementById('btn-download-memo');
+  var historyBtn = document.getElementById('btn-memo-history');
+  if (generateBtn) {
+    generateBtn.style.display = hasMemo ? 'none' : '';
+    generateBtn.disabled = hasMemo;
+  }
+  if (regenerateBtn) {
+    regenerateBtn.style.display = hasMemo ? '' : 'none';
+    regenerateBtn.disabled = !hasMemo;
+  }
+  if (previewBtn) previewBtn.disabled = !hasMemo || isStale;
+  if (saveBtn) saveBtn.disabled = !hasMemo || isFinal || isStale || !canEditMemoRationale();
+  if (downloadBtn) downloadBtn.disabled = !isFinal;
+  if (historyBtn) historyBtn.disabled = !hasMemo;
+
+  var rationale = document.getElementById('memo-approval-reason');
+  var signoff = document.getElementById('memo-officer-signoff');
+  var signoffGate = document.getElementById('memo-officer-signoff-gate');
+  var memoId = hasMemo ? String(memoWorkspaceMemoId(memo)) : '';
+  if (rationale) {
+    if (rationale.dataset.memoId !== memoId) {
+      rationale.value = hasMemo ? String(memo.officer_rationale || memo.approval_reason || '') : '';
+      rationale.dataset.memoId = memoId;
+    }
+    rationale.readOnly = !hasMemo || isFinal || isStale || !canEditMemoRationale();
+  }
+  if (signoff) {
+    if (signoff.dataset.memoId !== memoId) {
+      signoff.checked = isFinal;
+      signoff.dataset.memoId = memoId;
+    }
+    signoff.disabled = !hasMemo || isFinal || isStale || !canApproveMemo();
+  }
+  if (signoffGate) signoffGate.style.display = hasMemo ? 'flex' : 'none';
+
+  var notice = document.getElementById('memo-workspace-notice');
+  if (notice) {
+    notice.className = 'memo-workspace-notice';
+    if (isStale) {
+      notice.classList.add('stale');
+      notice.textContent = 'This memo is STALE. ' + (app.memoStaleReason || memo.stale_reason || 'Application evidence changed after generation.') + ' Regenerate before approval.';
+    } else if (isFinal) {
+      notice.classList.add('final');
+      notice.textContent = 'This memo is FINAL, approved and locked. Any later evidence change requires a new memo version.';
+    } else if (hasMemo) {
+      notice.classList.add('draft');
+      notice.textContent = lifecycle === 'AWAITING_OFFICER_SIGNOFF' ?
+        'Review the generated PDF, save the officer rationale, then complete officer sign-off.' :
+        'This memo remains a draft. Review the generated PDF and resolve any backend generation controls before sign-off.';
+    } else {
+      notice.classList.add('draft');
+      notice.textContent = 'No memo has been generated. Generate Memo creates the first versioned PDF artefact.';
+    }
+  }
+
+  if (!hasMemo) {
+    releaseMemoPdfCache();
+    setMemoPreviewEmpty('Generate a memo to create the PDF artefact.');
+  } else if (isStale) {
+    releaseMemoPdfCache();
+    setMemoPreviewEmpty('This memo is stale. Regenerate it before previewing or approving.');
+  } else {
+    var expectedKey = memoWorkspacePdfKey(app, memo);
+    if (window._memoPdfCache && window._memoPdfCache.key === expectedKey) {
+      var frame = document.getElementById('memo-pdf-preview');
+      var empty = document.getElementById('memo-preview-empty');
+      if (frame) { frame.src = window._memoPdfCache.url; frame.style.display = 'block'; }
+      if (empty) empty.style.display = 'none';
+    } else {
+      setMemoPreviewEmpty('Loading the generated PDF preview…');
+      setTimeout(function() { previewMemoPDF({ silent:true }); }, 0);
+    }
+  }
+  syncMemoWorkspaceActions();
+}
+
+function syncMemoWorkspaceActions() {
   var app = window._currentDetailApp || {};
-  var memoData = window._currentMemoData || app.latestMemo || null;
-  var approved = memoApprovalAlreadyApproved(app, validationResult || {});
-  panel.style.display = memoData && memoData.sections && !approved ? 'block' : 'none';
+  var memo = window._currentMemoData;
+  var lifecycle = memoWorkspaceLifecycle(app, memo);
+  var rationale = currentMemoApprovalReason();
+  var signoff = document.getElementById('memo-officer-signoff');
+  var saveBtn = document.getElementById('btn-save-memo-rationale');
+  var approveBtn = document.getElementById('btn-approve-memo');
+  if (saveBtn) {
+    saveBtn.disabled = !memo || lifecycle === 'FINAL' || lifecycle === 'STALE' || !canEditMemoRationale();
+  }
+  if (approveBtn) {
+    var eligible = lifecycle === 'AWAITING_OFFICER_SIGNOFF' && canApproveMemo() && !!rationale && !!(signoff && signoff.checked);
+    approveBtn.disabled = !eligible;
+    approveBtn.title = eligible ? 'Approve the canonical memo and lock this version.' : 'PDF review, saved rationale, required controls and officer sign-off must be complete.';
+  }
+}
+
+function currentMemoApprovalReason() {
+  var el = document.getElementById('memo-approval-reason');
+  return el ? String(el.value || '').trim() : '';
 }
 
 function refreshMemoApprovalReasonState() {
-  renderValidationPanel(window._lastMemoValidationResult || {
-    validation_status: (window._currentMemoData && window._currentMemoData.validation_status) || 'pending',
-    review_status: (window._currentMemoData && window._currentMemoData.review_status) || ''
-  });
+  syncMemoWorkspaceActions();
 }
 
-function memoGovernanceStatus(app, validationResult) {
-  app = app || {};
-  var memoData = window._currentMemoData || app.latestMemo || null;
-  var memoMeta = app.latestMemoMeta || {};
-  var result = validationResult || {};
-  if (!memoData || !memoData.sections) {
-    return { status:'NEEDS GENERATION', ready:false, primary:'Compliance memo has not been generated.', next:'Generate memo' };
+function renderMemoSections() {
+  return '';
+}
+
+function renderMemoGovernanceSummary() {
+  return null;
+}
+
+function setMemoDownloadState() {
+  syncMemoWorkspaceActions();
+}
+
+async function installMemoPdfResponse(response) {
+  var blob = await response.blob();
+  if (!blob || blob.size < 5 || (blob.type && blob.type.indexOf('application/pdf') < 0)) {
+    throw new Error('The memo endpoint did not return a valid PDF.');
   }
-  var blockers = getMemoApprovalBlockers(app, result);
-  var validation = String(result.validation_status || memoData.validation_status || memoMeta.validation_status || 'pending').toLowerCase();
-  var review = String(result.review_status || memoData.review_status || memoMeta.review_status || '').toLowerCase();
-  var supervisor = String((memoData.supervisor && memoData.supervisor.verdict) || memoMeta.supervisor_status || '').toUpperCase();
-  var supervisorExcluded = typeof memoAiSupervisorExcludedFromPilot === 'function' &&
-    memoAiSupervisorExcludedFromPilot(memoData);
-  if (app.memoIsStale || app.memoRequiresRegeneration) {
-    return { status:'NEEDS REGENERATION', ready:false, primary:app.memoStaleReason || 'Application data changed after this memo was generated.', next:'Regenerate memo' };
-  }
-  if (validation === 'pending') {
-    return { status:'NEEDS VALIDATION', ready:false, primary:'Memo validation has not been run.', next:'Validate memo' };
-  }
-  if (validation === 'fail') {
-    return { status:'BLOCKED', ready:false, primary:'Memo validation failed.', next:'Resolve validation issues and re-validate' };
-  }
-  if (supervisorExcluded) {
-    if (review === 'approved') {
-      return { status:'APPROVED', ready:true, primary:'Memo approval is recorded. AI Supervisor is excluded from this controlled pilot.', next:'Continue application decision workflow' };
-    }
-    return { status:'AI SUPERVISOR EXCLUDED', ready:false, primary:'AI Supervisor is excluded from the controlled pilot; retained synthetic evidence is not an active workflow result.', next:'Use only approved controlled-pilot workflows' };
-  }
-  if (!supervisor || supervisor === 'PENDING') {
-    return { status:'NEEDS SUPERVISOR CHECK', ready:false, primary:'Supervisor review has not been completed.', next:'Run supervisor check' };
-  }
-  if (supervisor !== 'CONSISTENT' && supervisor !== 'CONSISTENT_WITH_WARNINGS') {
-    return { status:'BLOCKED', ready:false, primary:'Supervisor review blocks approval.', next:'Resolve supervisor findings' };
-  }
-  if (review === 'approved') {
-    return { status:'APPROVED', ready:true, primary:'Memo approval is recorded.', next:'Continue application decision workflow' };
-  }
-  var canonicalBlockers = memoCanonicalBlockers(memoData);
-  if (canonicalBlockers.length) {
-    return { status:'BLOCKED', ready:false, primary:canonicalBlockers[0], next:'Resolve listed memo blockers and regenerate/revalidate if needed' };
-  }
-  if (!currentMemoApprovalReason()) {
-    return { status:'NEEDS APPROVAL REASON', ready:false, primary:'Approval reason is required before memo approval.', next:'Enter approval reason' };
-  }
-  return {
-    status: blockers.length ? 'BLOCKED' : 'APPROVAL READY',
-    ready: blockers.length === 0,
-    primary: blockers[0] || 'Canonical memo is ready for officer approval.',
-    next: blockers.length ? 'Resolve memo blocker' : 'Submit approval'
+  var app = window._currentDetailApp || {};
+  var memo = window._currentMemoData || {};
+  releaseMemoPdfCache();
+  var url = URL.createObjectURL(blob);
+  var disposition = response.headers.get('Content-Disposition') || '';
+  var filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+  window._memoPdfCache = {
+    key: memoWorkspacePdfKey(app, memo),
+    url: url,
+    blob: blob,
+    filename: filenameMatch && filenameMatch[1] ? filenameMatch[1] : ('compliance_memo_' + String(app.ref || 'application').replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf'),
+    sha256: response.headers.get('X-PDF-SHA256') || '',
+    memoId: response.headers.get('X-Memo-Id') || memoWorkspaceMemoId(memo),
+    memoVersion: response.headers.get('X-Memo-Version') || memoWorkspaceVersion(memo),
+    lifecycle: response.headers.get('X-Memo-Lifecycle') || memoWorkspaceLifecycle(app, memo)
   };
+  var frame = document.getElementById('memo-pdf-preview');
+  var empty = document.getElementById('memo-preview-empty');
+  if (frame) { frame.src = url; frame.style.display = 'block'; }
+  if (empty) empty.style.display = 'none';
+  return window._memoPdfCache;
 }
 
-function renderMemoGovernanceSummary(app, validationResult) {
-  var el = document.getElementById('memo-governance-summary');
-  if (!el) return;
-  var status = memoGovernanceStatus(app || window._currentDetailApp, validationResult || {});
-  var badgeBg = status.ready ? '#dcfce7' : (status.status === 'BLOCKED' ? '#fee2e2' : '#fef3c7');
-  var badgeColor = status.ready ? '#166534' : (status.status === 'BLOCKED' ? '#991b1b' : '#92400e');
-  el.innerHTML =
-    '<div style="border:1px solid var(--border1);border-radius:8px;background:var(--surface);padding:12px 14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;font-size:12px;">' +
-      '<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);">Memo status</div><span style="display:inline-block;margin-top:4px;padding:3px 8px;border-radius:4px;background:' + badgeBg + ';color:' + badgeColor + ';font-weight:800;font-size:11px;">' + escapeHtml(status.status) + '</span></div>' +
-      '<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);">Approval readiness</div><div style="margin-top:6px;font-weight:700;color:' + (status.ready ? '#166534' : '#92400e') + ';">' + (status.ready ? 'Ready' : 'Blocked') + '</div></div>' +
-      '<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);">Primary blocker</div><div style="margin-top:6px;color:var(--text2);">' + escapeHtml(status.primary || 'None') + '</div></div>' +
-      '<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);">Next action</div><div style="margin-top:6px;color:var(--text1);font-weight:700;">' + escapeHtml(status.next || 'Review memo') + '</div></div>' +
-    '</div>';
+async function fetchMemoPdfResponse(preview) {
+  var app = window._currentDetailApp;
+  if (!app) throw new Error('No application selected.');
+  var suffix = preview ? '?preview=1' : '';
+  var response = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo/pdf' + suffix, {
+    headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
+  });
+  if (!response.ok) {
+    var message = preview ? 'Memo PDF preview failed.' : 'Memo PDF download failed.';
+    try {
+      var body = await response.json();
+      message = body.message || body.error || message;
+    } catch (ignored) {}
+    throw new Error(message);
+  }
+  return installMemoPdfResponse(response);
 }
 
-function renderMemoDecisionSnapshot(data) {
-  var meta = (data && data.metadata) || {};
-  var sections = (data && data.sections) || {};
-  var summary = (sections.executive_summary && sections.executive_summary.content) || meta.executive_summary || 'Executive summary not recorded.';
-  var decision = meta.approval_recommendation || meta.recommended_decision || 'REVIEW';
-  var risks = [];
-  if (sections.risk_assessment && sections.risk_assessment.content) risks.push(sections.risk_assessment.content);
-  if (sections.red_flags_and_mitigants && Array.isArray(sections.red_flags_and_mitigants.red_flags)) {
-    risks = risks.concat(sections.red_flags_and_mitigants.red_flags);
+async function previewMemoPDF(options) {
+  options = options || {};
+  var app = window._currentDetailApp || {};
+  var memo = window._currentMemoData;
+  var lifecycle = memoWorkspaceLifecycle(app, memo);
+  if (!memo) {
+    if (!options.silent) showToast('Generate a compliance memo before previewing the PDF.', 'warn');
+    return null;
   }
-  var blockers = [];
-  memoCanonicalBlockers(data).forEach(function(blocker) {
-    appendMemoCanonicalBlocker(blockers, blocker);
-  });
-  if (meta.blocked) blockers.push(meta.block_reason || 'Memo controls blocked approval.');
-  if (meta.is_stale) blockers.push(meta.stale_reason || 'Memo is stale.');
-  var riskRatingLabel = String(meta.risk_rating || 'UNKNOWN');
-  var riskRatingClass = memoRiskBadgeClass(riskRatingLabel);
-  return '<div class="memo-section">' +
-    '<div class="memo-section-title">Decision Summary</div>' +
-    '<div class="memo-text">' + escapeHtml(String(summary)).slice(0, 1200) + '</div>' +
-    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">' +
-      '<span style="font-size:11px;color:var(--text3);">Recommended decision</span><span class="memo-risk-badge medium">' + escapeHtml(String(decision).replace(/_/g, ' ')) + '</span>' +
-      '<span style="font-size:11px;color:var(--text3);">Risk</span><span class="memo-risk-badge ' + riskRatingClass + '">' + escapeHtml(riskRatingLabel) + '</span>' +
-    '</div>' +
-    '<div style="margin-top:12px;font-size:12px;color:var(--text2);"><strong>Key risks:</strong> ' + escapeHtml(risks.length ? risks.join(' ') : 'No key risk summary recorded.').slice(0, 900) + '</div>' +
-    '<div style="margin-top:8px;font-size:12px;color:' + (blockers.length ? '#991b1b' : '#166534') + ';"><strong>Open blockers:</strong> ' + escapeHtml(blockers.length ? blockers.join('; ') : 'None recorded in memo metadata.') + '</div>' +
-  '</div>';
+  if (lifecycle === 'STALE') {
+    if (!options.silent) showToast('Regenerate the stale memo before previewing it.', 'warn');
+    return null;
+  }
+  var key = memoWorkspacePdfKey(app, memo);
+  if (window._memoPdfCache && window._memoPdfCache.key === key) return window._memoPdfCache;
+  var btn = document.getElementById('btn-preview-memo');
+  var original = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading PDF…'; }
+  try {
+    return await fetchMemoPdfResponse(true);
+  } catch (error) {
+    setMemoPreviewEmpty(error.message || 'PDF preview unavailable.');
+    if (!options.silent) showToast(error.message || 'PDF preview failed.', 'error');
+    return null;
+  } finally {
+    if (btn) { btn.textContent = original || 'Preview PDF'; btn.disabled = false; }
+  }
 }
 
-function renderMemoSections(data) {
-  if (!data || !data.sections) return '<div class="memo-text" style="color:var(--text3);text-align:center;padding:40px;">No memo data available. Click "Generate Memo" to create one.</div>';
-  var s = data.sections;
-  var sectionOrder = ['executive_summary','client_overview','ownership_and_control','risk_assessment','screening_results','document_verification','enhanced_review_edd','ai_explainability','red_flags_and_mitigants','compliance_decision','ongoing_monitoring','audit_and_governance'];
-  var html = '';
-
-  // ── EX-11: AI ADVISORY BANNER (always shown) ──
-  html += '<div class="ai-advisory-banner"><span class="ai-adv-icon">🤖</span><div><div class="ai-adv-text">System-Generated — Advisory Only</div><div class="ai-adv-sub">This compliance memo is system-generated and advisory only. Officer review and sign-off is required before this content can inform any compliance decision.</div></div></div>';
-
-  // ── FALLBACK / AI SOURCE TRANSPARENCY BANNER ──
-  var meta = data.metadata || {};
-  var isFallback = meta.is_fallback === true;
-  var aiSource = meta.ai_source || '';
-  var fallbackReason = meta.fallback_reason || '';
-  var memoSource = meta.memo_source || '';
-
-  // ── EX-11: AI source tag (human-readable) ──
-  var aiSourceTag = '';
-  if (isFallback || memoSource === 'fallback') {
-    aiSourceTag = '<span class="ai-source-tag fallback">Source: Fallback Template</span>';
-  } else if (aiSource === 'mock') {
-    aiSourceTag = '<span class="ai-source-tag mock">Source: Mock / Simulated</span>';
-  } else if (aiSource === 'deterministic') {
-    aiSourceTag = '<span class="ai-source-tag deterministic">Source: Deterministic (Rule-Based)</span>';
-  } else if (aiSource === 'demo') {
-    aiSourceTag = '<span class="ai-source-tag demo">Source: Demo Mode</span>';
-  } else if (aiSource === 'live') {
-    aiSourceTag = '<span class="ai-source-tag live">Source: Live AI</span>';
-  } else if (aiSource) {
-    aiSourceTag = '<span class="ai-source-tag" style="background:rgba(107,114,128,0.1);color:#4b5563;border:1px solid rgba(107,114,128,0.3);">Source: ' + escapeHtml(aiSource) + '</span>';
+async function downloadMemoPDF() {
+  var app = window._currentDetailApp || {};
+  var lifecycle = memoWorkspaceLifecycle(app, window._currentMemoData);
+  if (lifecycle !== 'FINAL') {
+    showToast('Final PDF download is available only after officer approval.', 'warn');
+    return;
   }
-  if (aiSourceTag) {
-    html += '<div style="margin-bottom:10px;">' + aiSourceTag + '</div>';
+  var btn = document.getElementById('btn-download-memo');
+  var original = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Preparing final PDF…'; }
+  try {
+    var cached = await fetchMemoPdfResponse(false);
+    var link = document.createElement('a');
+    link.href = cached.url;
+    link.download = cached.filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    showToast('Final memo PDF downloaded.');
+  } catch (error) {
+    showToast(error.message || 'Final PDF download failed.', 'error');
+  } finally {
+    if (btn) { btn.textContent = original || 'Download Final PDF'; btn.disabled = false; }
   }
-
-  if (isFallback) {
-    html += '<div class="ai-simulated-banner" style="border-color:#dc2626;background:#fef2f2;"><span class="ai-sim-icon">⚠️</span><div><div class="ai-sim-text" style="color:#dc2626;">Simulated — Not From Live AI</div><div class="ai-sim-sub" style="color:#991b1b;">This memo was generated by a template fallback, not by live AI analysis. ' + (fallbackReason ? 'Reason: ' + escapeHtml(fallbackReason) + '. ' : '') + 'Manual compliance review is required before any decision.</div></div></div>';
-  } else if (aiSource === 'mock') {
-    html += '<div class="ai-simulated-banner"><span class="ai-sim-icon">🧪</span><div><div class="ai-sim-text">Simulated — Not From Live AI</div><div class="ai-sim-sub">This output is mock/simulated and was not generated by live AI analysis. Do not rely on this content for compliance decisions.</div></div></div>';
-  } else if (aiSource === 'demo') {
-    html += '<div class="ai-simulated-banner" style="border-color:#7c3aed;background:#f5f3ff;"><span class="ai-sim-icon">🎭</span><div><div class="ai-sim-text" style="color:#5b21b6;">Simulated — Demo Mode Output</div><div class="ai-sim-sub" style="color:#6d28d9;">This output was generated in demo mode and is simulated. Not suitable for production compliance decisions.</div></div></div>';
-  } else if (aiSource && aiSource !== 'live' && aiSource !== 'deterministic') {
-    var srcColor = '#6b7280';
-    html += '<div class="ai-simulated-banner" style="border-color:' + srcColor + ';background:#f9fafb;"><span class="ai-sim-icon">ℹ️</span><div><div class="ai-sim-text" style="color:' + srcColor + ';">AI Source: ' + escapeHtml(aiSource.toUpperCase()) + '</div><div class="ai-sim-sub" style="color:' + srcColor + ';">This output was not generated by live AI. Verify findings independently.</div></div></div>';
-  } else if (aiSource === 'deterministic') {
-    html += '<div style="font-size:11px;color:var(--text3);margin-bottom:10px;">Source: Deterministic (Rule-Based). Technical rule-engine diagnostics are available in Full Memo / Diagnostics.</div>';
-  } else if (memoSource === 'fallback') {
-    html += '<div class="ai-simulated-banner" style="border-color:#d97706;"><span class="ai-sim-icon">⚠️</span><div><div class="ai-sim-text">Simulated — Fallback Source</div><div class="ai-sim-sub">The memo builder encountered an error and used a fallback template. Results may be incomplete. Not from live AI.</div></div></div>';
-  }
-
-  // Risk badge at top
-  var memoMeta = data.metadata || {};
-  var memoRiskState = buildRiskDisplayState({
-    risk_level: memoMeta.risk_rating,
-    risk_score: memoMeta.risk_score,
-    has_authoritative_risk: memoMeta.has_authoritative_risk,
-    risk_integrity_warnings: memoMeta.risk_integrity_warnings,
-    status: (window._currentDetailApp || {}).statusRaw || ''
-  });
-  var dec = (data.metadata||{}).approval_recommendation || 'REVIEW';
-  dec = String(dec || 'REVIEW');
-  html += '<div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">';
-  if (memoRiskState.hasRisk) {
-    html += '<span style="font-size:11px;color:var(--text3);">Risk Rating:</span><span class="memo-risk-badge ' + memoRiskBadgeClass(memoRiskState.level) + '">' + escapeHtml(String(memoRiskState.level || '').replace('_',' ')) + ' (' + escapeHtml(memoRiskState.score.toFixed(1)) + '/100)</span>';
-  } else {
-    html += '<span style="font-size:11px;color:var(--text3);">Risk Rating:</span><span class="memo-risk-badge medium" style="background:#fee2e2;color:#991b1b;">' + escapeHtml(RISK_UNAVAILABLE_TEXT) + '</span>';
-  }
-  html += '<span style="font-size:11px;color:var(--text3);margin-left:12px;">Decision:</span><span class="memo-risk-badge ' + memoDecisionBadgeClass(dec) + '">' + escapeHtml(dec.replace(/_/g,' ')) + '</span>';
-  var conf = (data.metadata||{}).confidence_level;
-  if (conf) { html += '<span style="font-size:11px;color:var(--text3);margin-left:12px;">Confidence:</span><span style="font-size:11px;font-weight:600;color:' + (conf>=0.8?'var(--green)':conf>=0.6?'var(--amber)':'var(--red)') + ';">' + Math.round(conf*100) + '%</span>'; }
-  html += '<span style="font-size:10px;color:var(--text3);margin-left:auto;">Ref: ' + escapeHtml(data.application_ref || '') + ' | Generated: ' + escapeHtml(String(data.memo_generated || '').substring(0,19).replace('T',' ')) + '</span>';
-  html += '</div>';
-
-  html += renderMemoDecisionSnapshot(data);
-  html += '<details class="memo-full-details" style="border:1px solid var(--border1);border-radius:8px;padding:12px;margin-top:12px;background:var(--surface);">';
-  html += '<summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--text1);">Full Memo / Diagnostics</summary>';
-  html += '<div style="margin-top:12px;">';
-
-  sectionOrder.forEach(function(key, idx) {
-    var sec = s[key];
-    if (!sec) return;
-    html += '<div class="memo-section">';
-    html += '<div class="memo-section-title"><span class="section-num">' + (idx+1) + '</span>' + escapeHtml(sec.title || key.replace(/_/g,' ')) + '</div>';
-
-    // Risk Assessment has sub-sections
-    if (key === 'risk_assessment' && sec.sub_sections) {
-      if (sec.content) html += '<div class="memo-text">' + escapeHtml(sec.content) + '</div>';
-      var subOrder = ['jurisdiction_risk','business_risk','transaction_risk','ownership_risk','financial_crime_risk'];
-      subOrder.forEach(function(sk) {
-        var sub = sec.sub_sections[sk];
-        if (!sub) return;
-        html += '<div class="memo-sub-section">';
-        html += '<div class="memo-sub-title">' + escapeHtml(sub.title || sk.replace(/_/g,' ')) + ' <span class="memo-risk-badge ' + memoRiskBadgeClass(sub.rating || 'medium') + '" style="margin-left:6px;">' + escapeHtml(sub.rating || 'N/A') + '</span></div>';
-        html += '<div class="memo-text">' + escapeHtml(sub.content || 'Information not provided') + '</div>';
-        html += '</div>';
-      });
-    }
-    // Red Flags & Mitigants
-    else if (key === 'red_flags_and_mitigants') {
-      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
-      html += '<div><div style="font-size:10px;font-weight:700;color:var(--red);margin-bottom:6px;">⚠️ RED FLAGS</div>';
-      (sec.red_flags||['No red flags identified']).forEach(function(f) { html += '<div class="memo-red-flag">• ' + escapeHtml(f) + '</div>'; });
-      html += '</div>';
-      html += '<div><div style="font-size:10px;font-weight:700;color:var(--green);margin-bottom:6px;">✅ MITIGANTS</div>';
-      (sec.mitigants||['None identified']).forEach(function(m) { html += '<div class="memo-mitigant">• ' + escapeHtml(m) + '</div>'; });
-      html += '</div></div>';
-    }
-    // Onboarding Enhanced Review — deterministic lifecycle summary
-    else if (key === 'enhanced_review_edd') {
-      var er = sec.summary || {};
-      var erOutstanding = (er.outstanding || []).length;
-      html += '<div class="memo-text">' + escapeHtml(sec.content || 'Information not provided') + '</div>';
-      if (er.triggered) {
-        html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:10px 0;">';
-        [
-          ['Total', er.total_requirements || 0],
-          ['Client-facing', er.client_facing_count || 0],
-          ['Back-office', er.backoffice_only_count || 0],
-          ['Outstanding', erOutstanding],
-          ['Mandatory Open', er.mandatory_outstanding_count || 0],
-          ['Waived', er.waiver_count || 0]
-        ].forEach(function(card) {
-          html += '<div style="border:1px solid var(--border1);border-radius:6px;padding:8px;background:var(--surface2);">';
-          html += '<div style="font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">' + escapeHtml(card[0]) + '</div>';
-          html += '<div style="font-size:18px;font-weight:700;color:var(--text1);">' + escapeHtml(card[1]) + '</div>';
-          html += '</div>';
-        });
-        html += '</div>';
-        (er.by_trigger || []).forEach(function(group) {
-          html += '<div style="border:1px solid var(--border1);border-radius:6px;padding:10px;margin:8px 0;background:var(--surface1);">';
-          html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">';
-          html += '<span style="font-size:11px;font-weight:700;color:var(--text1);">' + escapeHtml(group.trigger_label || group.trigger_key || 'Trigger') + '</span>';
-          html += '<span style="font-size:10px;color:var(--text3);">' + escapeHtml(group.total || 0) + ' requirement(s)</span>';
-          html += '</div>';
-          (group.requirements || []).slice(0, 10).forEach(function(item) {
-            html += '<div style="display:flex;gap:8px;align-items:flex-start;border-top:1px solid var(--border1);padding-top:6px;margin-top:6px;">';
-            html += '<span class="badge ' + existingBadgeClass(item.status || item.memo_status || 'generated') + '">' + escapeHtml(item.memo_status || item.status || 'Status not recorded') + '</span>';
-            html += '<div style="font-size:11px;color:var(--text1);line-height:1.45;">';
-            html += '<strong>' + escapeHtml(item.requirement_label || item.requirement_key || 'Requirement') + '</strong>';
-            html += '<div style="font-size:10px;color:var(--text3);">Audience: ' + escapeHtml(item.audience || 'not recorded') + ' | Type: ' + escapeHtml(item.requirement_type || 'not recorded') + ' | Scope: ' + escapeHtml(item.subject_scope || 'not recorded') + '</div>';
-            html += '</div></div>';
-          });
-          html += '</div>';
-        });
-      }
-    }
-    // Compliance Decision — highlighted box
-    else if (key === 'compliance_decision') {
-      var d = String(sec.decision || 'REVIEW');
-      var dClass = memoDecisionBoxClass(d);
-      html += '<div class="memo-decision-box ' + dClass + '">' + escapeHtml(d.replace(/_/g,' ')) + '</div>';
-      html += '<div class="memo-text">' + escapeHtml(sec.content || 'Information not provided') + '</div>';
-    }
-    // Ownership & Control — with structure complexity and control statement
-    else if (key === 'ownership_and_control') {
-      if (sec.structure_complexity || sec.control_statement) {
-        html += '<div style="display:flex;gap:12px;margin-bottom:10px;flex-wrap:wrap;">';
-        if (sec.structure_complexity) {
-          var scClass = sec.structure_complexity==='Simple'?'low':sec.structure_complexity==='Layered'?'medium':'high';
-          html += '<span style="font-size:10px;color:var(--text3);">Structure:</span><span class="memo-risk-badge ' + scClass + '">' + escapeHtml(sec.structure_complexity) + '</span>';
-        }
-        if (sec.control_statement) {
-          html += '<span style="font-size:10px;color:var(--text3);margin-left:8px;">Control:</span><span style="font-size:11px;font-weight:600;color:var(--text1);">' + escapeHtml(sec.control_statement) + '</span>';
-        }
-        html += '</div>';
-      }
-      html += '<div class="memo-text">' + escapeHtml(sec.content || 'Information not provided') + '</div>';
-    }
-    // AI Explainability — structured factor display
-    else if (key === 'ai_explainability') {
-      // Model info
-      var aiContent = sec.content || '';
-      var modelInfo = aiContent.split('Risk-increasing factors:')[0] || aiContent;
-      if (modelInfo && modelInfo.length < aiContent.length) {
-        html += '<div class="memo-text">' + escapeHtml(modelInfo.trim()) + '</div>';
-      }
-      // Risk-increasing factors
-      var incFactors = sec.risk_increasing_factors || [];
-      if (incFactors.length > 0) {
-        html += '<div style="margin:8px 0;"><div style="font-size:10px;font-weight:700;color:var(--red);margin-bottom:4px;">RISK-INCREASING FACTORS</div>';
-        incFactors.forEach(function(f) {
-          html += '<div style="font-size:11px;color:#dc2626;padding:3px 0 3px 16px;border-left:3px solid #dc2626;margin:3px 0;">+ ' + escapeHtml(f) + '</div>';
-        });
-        html += '</div>';
-      }
-      // Risk-decreasing factors
-      var decFactors = sec.risk_decreasing_factors || [];
-      if (decFactors.length > 0) {
-        html += '<div style="margin:8px 0;"><div style="font-size:10px;font-weight:700;color:var(--green);margin-bottom:4px;">RISK-DECREASING FACTORS</div>';
-        decFactors.forEach(function(f) {
-          html += '<div style="font-size:11px;color:#16a34a;padding:3px 0 3px 16px;border-left:3px solid #16a34a;margin:3px 0;">- ' + escapeHtml(f) + '</div>';
-        });
-        html += '</div>';
-      }
-      // Fallback to full content if no structured factors
-      if (incFactors.length === 0 && decFactors.length === 0) {
-        html += '<div class="memo-text">' + escapeHtml(aiContent) + '</div>';
-      }
-      // Decision pathway
-      var pathIdx = aiContent.indexOf('Decision pathway:');
-      if (pathIdx > -1) {
-        html += '<div class="memo-text" style="margin-top:6px;font-size:10px;color:var(--text3);">' + escapeHtml(aiContent.substring(pathIdx)) + '</div>';
-      }
-    }
-    // Standard sections
-    else {
-      html += '<div class="memo-text">' + escapeHtml(sec.content || 'Information not provided') + '</div>';
-    }
-
-    html += '</div>';
-  });
-
-  // ── SUPERVISOR VERDICT PANEL ──
-  var supervisorAdvisoryBadgeHtml = '<span class="ai-advisory-badge">🤖 System-Generated — Advisory Only</span>';
-  var sv = data.supervisor;
-  var supervisorExcluded = typeof memoAiSupervisorExcludedFromPilot === 'function' &&
-    memoAiSupervisorExcludedFromPilot(data);
-  if (supervisorExcluded) {
-    html += '<div data-ai-supervisor-pilot-scope="excluded" style="border:1px solid #94a3b8;border-radius:8px;padding:14px 16px;margin-top:16px;background:#f8fafc;">';
-    html += '<div style="font-size:13px;font-weight:800;color:#334155;">AI Supervisor excluded from controlled pilot</div>';
-    html += '<div style="font-size:11px;color:#475569;line-height:1.55;margin-top:5px;">Any stored synthetic supervisor evidence is retained for future development and testing. It is not a validated active workflow result and no supervisor action is enabled for this pilot.</div>';
-    html += '</div>';
-  } else if (sv && sv.verdict) {
-    var svColor = sv.verdict === 'CONSISTENT' ? '#16a34a' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? '#d97706' : '#dc2626';
-    var svBg = sv.verdict === 'CONSISTENT' ? '#f0fdf4' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? '#fffbeb' : '#fef2f2';
-    var svVerdictLabel = String(sv.verdict || '').replace(/_/g, ' ');
-    html += '<div style="border:2px solid ' + svColor + ';border-radius:8px;padding:16px;margin-top:16px;background:' + svBg + ';">';
-    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">';
-    html += '<span style="font-size:13px;font-weight:700;color:' + svColor + ';">SUPERVISOR VERDICT</span>';
-    html += supervisorAdvisoryBadgeHtml;
-    html += '<span style="background:' + svColor + ';color:#fff;padding:2px 10px;border-radius:4px;font-size:11px;font-weight:700;">' + escapeHtml(svVerdictLabel) + '</span>';
-    html += '<span style="font-size:11px;color:var(--text3);margin-left:auto;">Confidence: ' + Math.round((sv.supervisor_confidence || 0) * 100) + '%</span>';
-    html += '</div>';
-    html += '<div style="font-size:11px;color:var(--text1);margin-bottom:8px;">' + escapeHtml(sv.recommendation || '') + '</div>';
-    // Contradictions
-    if (sv.contradictions && sv.contradictions.length > 0) {
-      html += '<div style="font-size:10px;font-weight:700;color:#dc2626;margin:6px 0 4px;">Contradictions (' + sv.contradictions.length + '):</div>';
-      sv.contradictions.forEach(function(c) {
-        html += '<div style="font-size:10px;padding:4px 8px;margin:2px 0;background:rgba(220,38,38,0.08);border-radius:4px;border-left:3px solid #dc2626;">';
-        html += '<strong>[' + escapeHtml(String(c.severity || '').toUpperCase()) + ']</strong> ' + escapeHtml(c.description || '');
-        if (c.section_a && c.section_b) html += ' <span style="color:var(--text3);">(' + escapeHtml(c.section_a) + ' vs ' + escapeHtml(c.section_b) + ')</span>';
-        html += '</div>';
-      });
-    }
-    // Warnings
-    if (sv.warnings && sv.warnings.length > 0) {
-      html += '<div style="font-size:10px;font-weight:700;color:#d97706;margin:6px 0 4px;">Warnings (' + sv.warnings.length + '):</div>';
-      sv.warnings.forEach(function(w) {
-        html += '<div style="font-size:10px;padding:4px 8px;margin:2px 0;background:rgba(217,119,6,0.08);border-radius:4px;border-left:3px solid #d97706;">';
-        html += '<strong>[' + escapeHtml(String(w.severity || '').toUpperCase()) + ']</strong> ' + escapeHtml(w.description || '');
-        html += '</div>';
-      });
-    }
-    html += '</div>';
-  }
-
-  // ── RULE ENGINE PANEL ──
-  var re = (data.metadata || {}).rule_engine;
-  if (re && re.engine_status) {
-    var reColor = re.engine_status === 'CLEAN' ? '#16a34a' : re.engine_status === 'ENFORCED' ? '#d97706' : '#dc2626';
-    var reBg = re.engine_status === 'CLEAN' ? '#f0fdf4' : re.engine_status === 'ENFORCED' ? '#fffbeb' : '#fef2f2';
-    var reStatus = String(re.engine_status || '');
-    html += '<div style="border:2px solid ' + reColor + ';border-radius:8px;padding:16px;margin-top:12px;background:' + reBg + ';">';
-    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">';
-    html += '<span style="font-size:13px;font-weight:700;color:' + reColor + ';">PRE-GENERATION RULE ENGINE</span>';
-    html += '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;background:rgba(22,163,74,0.1);color:#166534;border:1px solid rgba(22,163,74,0.3);">⚙️ Deterministic — Rule-Based</span>';
-    html += '<span style="background:' + reColor + ';color:#fff;padding:2px 10px;border-radius:4px;font-size:11px;font-weight:700;">' + escapeHtml(reStatus) + '</span>';
-    html += '<span style="font-size:10px;color:var(--text3);margin-left:auto;">Rules: ' + (re.rules_checked || []).length + ' | Enforcements: ' + (re.total_enforcements || 0) + ' | Violations: ' + (re.total_violations || 0) + '</span>';
-    html += '</div>';
-    // Enforcements
-    if (re.enforcements && re.enforcements.length > 0) {
-      html += '<div style="font-size:10px;font-weight:700;color:#d97706;margin:6px 0 4px;">Enforcements Applied (' + re.enforcements.length + '):</div>';
-      re.enforcements.forEach(function(e) {
-        html += '<div style="font-size:10px;padding:4px 8px;margin:2px 0;background:rgba(217,119,6,0.08);border-radius:4px;border-left:3px solid #d97706;">';
-        html += '<strong>[' + escapeHtml(e.rule || '') + ']</strong> ' + escapeHtml(e.reason || '');
-        if (e.original && e.enforced) html += ' <span style="color:var(--text3);">(was: ' + escapeHtml(e.original) + ' -> now: ' + escapeHtml(e.enforced) + ')</span>';
-        if (e.original_decision && e.enforced_decision) html += ' <span style="color:var(--text3);">(was: ' + escapeHtml(e.original_decision) + ' -> now: ' + escapeHtml(e.enforced_decision) + ')</span>';
-        html += '</div>';
-      });
-    }
-    // Violations
-    if (re.violations && re.violations.length > 0) {
-      html += '<div style="font-size:10px;font-weight:700;color:#dc2626;margin:6px 0 4px;">Rule Violations (' + re.violations.length + '):</div>';
-      re.violations.forEach(function(v) {
-        html += '<div style="font-size:10px;padding:4px 8px;margin:2px 0;background:rgba(220,38,38,0.08);border-radius:4px;border-left:3px solid #dc2626;">';
-        html += '<strong>[' + escapeHtml(v.rule || '') + ' / ' + escapeHtml(String(v.severity || '').toUpperCase()) + ']</strong> ' + escapeHtml(v.detail || '');
-        if (v.action) html += ' <span style="color:var(--text3);">Action: ' + escapeHtml(v.action) + '</span>';
-        html += '</div>';
-      });
-    }
-    html += '</div>';
-  }
-
-  // ── BLOCKED MEMO BANNER ──
-  if (data.metadata && data.metadata.blocked) {
-    html += '<div style="border:3px solid #dc2626;border-radius:8px;padding:16px;margin-top:12px;background:#fef2f2;text-align:center;">';
-    html += '<div style="font-size:16px;font-weight:700;color:#dc2626;margin-bottom:6px;">MEMO BLOCKED</div>';
-    html += '<div style="font-size:12px;color:#991b1b;">' + escapeHtml(data.metadata.block_reason || 'Blocked by Rule Engine + Supervisor. Manual review required.') + '</div>';
-    html += '</div>';
-  }
-
-  html += '</div></details>';
-  return html;
 }
 
 async function generateComplianceMemo() {
   var app = window._currentDetailApp;
   if (!app) { alert('No application selected.'); return; }
   if (!assertPermission('view_compliance_memo')) return;
-  var btn = document.getElementById('btn-generate-memo');
-  btn.innerHTML = '⏳ Generating...'; btn.disabled = true;
+  var buttons = [document.getElementById('btn-generate-memo'), document.getElementById('btn-regenerate-memo')].filter(Boolean);
+  buttons.forEach(function(button) { button.disabled = true; button.dataset.label = button.textContent; button.textContent = 'Generating…'; });
   try {
     var data = await boApiCall('POST', '/applications/' + app.ref + '/memo');
     var memoData = (data.data && data.data.sections) ? data.data : (data.sections ? data : null);
-    if (memoData) {
-      window._currentMemoData = memoData;
-      setMemoDownloadState(true);
-      document.getElementById('detail-memo').innerHTML = renderMemoSections(memoData);
-      document.getElementById('memo-status-badge').textContent = 'Generated';
-      document.getElementById('memo-status-badge').className = 'badge pending';
-      await showValidationPanelIfMemoExists();
-      // Show supervisor status in badge if available
-      var sv = memoData.supervisor;
-      if (sv && sv.verdict) {
-        var svBadge = document.getElementById('memo-status-badge');
-        if (svBadge) {
-          var svLabel = sv.verdict === 'CONSISTENT' ? 'Supervisor: Consistent' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? 'Supervisor: Warnings' : 'Supervisor: Inconsistent';
-          svBadge.textContent = svLabel;
-          svBadge.className = 'badge ' + (sv.verdict === 'CONSISTENT' ? 'approved' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? 'pending' : 'rejected');
-        }
-      }
-      await refreshCurrentAppDetailPreservingTab();
-    } else {
-      alert('Memo generation returned unexpected format.');
-    }
-  } catch (e) {
-    alert('Failed to generate memo: ' + e.message);
+    if (!memoData) throw new Error('Memo generation returned an unexpected format.');
+    releaseMemoPdfCache();
+    showToast('Memo generated. Loading the canonical PDF preview…');
+    await refreshCurrentAppDetailPreservingTab();
+  } catch (error) {
+    showToast(error.message || 'Memo generation failed.', 'error');
+  } finally {
+    buttons.forEach(function(button) { button.textContent = button.dataset.label || 'Generate Memo'; button.disabled = false; });
   }
-  btn.innerHTML = '🔄 Generate Memo'; btn.disabled = false;
 }
 
-async function downloadMemoPDF() {
+async function saveMemoOfficerRationale() {
   var app = window._currentDetailApp;
-  if (!app) { alert('No application selected.'); return; }
-  if (!window._currentMemoData && !(app.latestMemo && app.latestMemo.sections)) {
-    showToast('Generate a compliance memo before downloading the PDF.', 'warn');
-    setMemoDownloadState(false, 'No compliance memo exists yet. Generate the memo before downloading a PDF.');
+  if (!app || !window._currentMemoData) {
+    showToast('Generate a memo before saving officer rationale.', 'warn');
     return;
   }
-  var btn = document.getElementById('btn-download-memo');
-  var originalLabel = btn ? btn.innerHTML : '';
-  if (btn) {
-    btn.innerHTML = '⏳ Downloading...';
-    btn.disabled = true;
-  }
+  var button = document.getElementById('btn-save-memo-rationale');
+  var original = button ? button.textContent : '';
+  if (button) { button.disabled = true; button.textContent = 'Saving…'; }
   try {
-    var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo/pdf', {
-      headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
+    var response = await boApiCall('PATCH', '/applications/' + app.ref + '/memo', {
+      officer_rationale: currentMemoApprovalReason()
     });
-    if (!res.ok) {
-      var errorText = 'Memo PDF download failed.';
-      try {
-        var errorData = await res.json();
-        errorText = errorData.message || errorData.error || errorText;
-      } catch (parseError) {}
-      throw new Error(errorText);
-    }
-    var blob = await res.blob();
-    var url = window.URL.createObjectURL(blob);
-    var link = document.createElement('a');
-    var disposition = res.headers.get('Content-Disposition') || '';
-    var match = disposition.match(/filename=\"?([^\";]+)\"?/i);
-    link.href = url;
-    link.download = match && match[1] ? match[1] : ('compliance_memo_' + String(app.ref || 'application').replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(url);
-    showToast('Memo PDF downloaded from server.');
-  } catch (e) {
-    alert('Failed to download memo PDF: ' + e.message);
-  }
-  if (btn) {
-    btn.innerHTML = originalLabel || '📥 Download Memo (PDF)';
-    btn.disabled = false;
+    var saved = response.data || response;
+    window._currentMemoData.officer_rationale = saved.officer_rationale || '';
+    if (app.latestMemo) app.latestMemo.officer_rationale = saved.officer_rationale || '';
+    showToast('Officer rationale saved against memo ' + memoWorkspaceVersion(window._currentMemoData) + '.');
+    syncMemoWorkspaceActions();
+  } catch (error) {
+    showToast(error.message || 'Officer rationale could not be saved.', 'error');
+  } finally {
+    if (button) { button.textContent = original || 'Save Officer Rationale'; syncMemoWorkspaceActions(); }
   }
 }
 
-async function downloadScreeningReportPDF() {
+function memoHistoryStatusCell(item) {
+  var lifecycle = String(item.lifecycle_status || 'DRAFT').toUpperCase();
+  return '<span class="memo-lifecycle-badge ' + memoWorkspaceBadgeClass(lifecycle) + '">' + escapeHtml(lifecycle.replace(/_/g, ' ')) + '</span>';
+}
+
+async function loadMemoVersionHistory() {
   var app = window._currentDetailApp;
-  if (!app) { alert('No application selected.'); return; }
-  var ref = app.ref || app.id;
+  var target = document.getElementById('memo-version-history-content');
+  if (!app || !target) return;
+  target.innerHTML = '<div style="padding:16px;color:var(--text3);font-size:12px;">Loading version history…</div>';
   try {
-    var res = await fetch(BO_API_BASE + '/applications/' + ref + '/screening/pdf', {
-      headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
-    });
-    if (!res.ok) {
-      var errorText = 'Screening report download failed.';
-      try {
-        var errorData = await res.json();
-        errorText = errorData.message || errorData.error || errorText;
-      } catch (parseError) {}
-      throw new Error(errorText);
+    var response = await boApiCall('GET', '/applications/' + app.ref + '/memo');
+    var payload = response.data || response;
+    var versions = Array.isArray(payload.versions) ? payload.versions : [];
+    if (!versions.length) {
+      target.innerHTML = '<div style="padding:16px;color:var(--text3);font-size:12px;">No memo versions exist for this application.</div>';
+      return;
     }
-    var blob = await res.blob();
-    var url = window.URL.createObjectURL(blob);
-    var link = document.createElement('a');
-    var disposition = res.headers.get('Content-Disposition') || '';
-    var match = disposition.match(/filename=\"?([^\";]+)\"?/i);
-    link.href = url;
-    link.download = match && match[1] ? match[1] : ('screening_report_' + String(ref || 'application').replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(url);
-    showToast('Screening report PDF downloaded from server.');
-  } catch (e) {
-    alert('Failed to download screening report PDF: ' + e.message);
+    target.innerHTML = '<table class="memo-history-table"><thead><tr><th>Version</th><th>Status</th><th>Recommendation</th><th>Generated</th><th>Officer / Approval</th></tr></thead><tbody>' +
+      versions.map(function(item) {
+        var officer = item.approved_by || item.reviewed_by || '—';
+        var approval = item.approved_at ? '<div style="margin-top:3px;color:var(--text3);">' + escapeHtml(memoWorkspaceTimestamp(item.approved_at)) + '</div>' : '';
+        return '<tr><td><strong>' + escapeHtml(item.memo_version || item.version || '—') + '</strong>' + (item.is_current ? '<div style="margin-top:3px;color:var(--brand);font-size:9px;font-weight:800;">CURRENT</div>' : '') + '</td>' +
+          '<td>' + memoHistoryStatusCell(item) + (item.is_stale && item.stale_reason ? '<div style="margin-top:4px;color:#92400e;max-width:260px;">' + escapeHtml(item.stale_reason) + '</div>' : '') + '</td>' +
+          '<td>' + escapeHtml(String(item.recommendation || 'REVIEW').replace(/_/g, ' ')) + '</td>' +
+          '<td>' + escapeHtml(memoWorkspaceTimestamp(item.generated_at)) + '</td>' +
+          '<td>' + escapeHtml(officer) + approval + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  } catch (error) {
+    target.innerHTML = '<div style="padding:16px;color:var(--red);font-size:12px;">' + escapeHtml(error.message || 'Version history could not be loaded.') + '</div>';
   }
 }
 
-// ══════════════════════════════════════════════════════════
-// MEMO VALIDATION & APPROVAL
-// ══════════════════════════════════════════════════════════
-
-function getMemoValidationIssues(result) {
-  var rawIssues = result && result.issues !== undefined ? result.issues : result && result.validation_issues !== undefined ? result.validation_issues : [];
-  try {
-    return typeof rawIssues === 'string' ? JSON.parse(rawIssues) : (rawIssues || []);
-  } catch (e) {
-    return [];
-  }
-}
-
-function hasMemoQualityScore(result) {
-  return !!result && result.quality_score !== undefined && result.quality_score !== null && result.quality_score !== '';
-}
-
-function memoQualityGaugeClass(status, score) {
-  if (status === 'fail') return 'poor';
-  if (status === 'pass_with_fixes') return 'fair';
-  if (status !== 'pass') return 'pending';
-  return score >= 8 ? 'excellent' : score >= 6 ? 'good' : score >= 4 ? 'fair' : 'poor';
-}
-
-function memoQualityScoreLabel(status, score) {
-  var prefix = score.toFixed(1) + ' / 10 — ';
-  if (status === 'fail') return prefix + 'Validation failed; remediation required';
-  if (status === 'pass_with_fixes') return prefix + 'Needs fixes before approval';
-  if (status !== 'pass') return 'Run validation to see server-calculated memo quality results';
-  var scoreLabel = score >= 8 ? 'Excellent' : score >= 6 ? 'Good' : score >= 4 ? 'Fair — manual review recommended' : 'Poor — significant issues found';
-  return prefix + scoreLabel;
-}
-
-function setMemoStatusBadge(label, variant) {
-  var badge = document.getElementById('memo-status-badge');
-  if (!badge) return;
-  badge.textContent = label;
-  badge.className = 'badge ' + (variant || 'pending');
-}
-
-async function revalidateMemo() {
-  var app = window._currentDetailApp;
-  if (!app) { alert('No application selected.'); return; }
-  var btn = document.getElementById('btn-revalidate-memo');
-  btn.innerHTML = '⏳ Validating...'; btn.disabled = true;
-  try {
-    var data = await boApiCall('POST', '/applications/' + app.ref + '/memo/validate');
-    if (data.success !== false) {
-      var result = data.data || data;
-      renderValidationPanel(result);
-      showToast('Validation complete — score: ' + (result.quality_score || 0).toFixed(1) + '/10');
-      await refreshCurrentAppDetailPreservingTab();
-    } else {
-      alert('Validation failed: ' + (data.message || 'Unknown error'));
-    }
-  } catch (e) {
-    alert('Validation request failed: ' + e.message);
-  }
-  btn.innerHTML = '🛡️ Validate Memo'; btn.disabled = false;
+function toggleMemoVersionHistory(forceOpen) {
+  var panel = document.getElementById('memo-version-history-panel');
+  if (!panel) return;
+  var open = forceOpen === true || (forceOpen !== false && !panel.classList.contains('open'));
+  panel.classList.toggle('open', open);
+  if (open) loadMemoVersionHistory();
 }
 
 async function approveMemo() {
   var app = window._currentDetailApp;
   if (!app) { alert('No application selected.'); return; }
-  if (!assertPermission('approve_low_medium')) return;
-  var btn = document.getElementById('btn-approve-memo');
-  var memoData = window._currentMemoData;
-
-  // ── EX-11 GATE: Officer sign-off for AI advisory acknowledgment (FAIL-CLOSED) ──
-  var memoSignoff = document.getElementById('memo-officer-signoff');
-  if (!memoSignoff || !memoSignoff.checked) {
-    alert('Officer Sign-Off Required\n\nYou must check the Officer Sign-Off box to confirm you have reviewed the system-generated advisory content before approving this memo.');
+  if (!assertPermission('approve_low_medium') || !canApproveMemo()) return;
+  var memoData = window._currentMemoData || {};
+  var signoff = document.getElementById('memo-officer-signoff');
+  if (!signoff || !signoff.checked) {
+    alert('Officer Sign-Off Required\n\nConfirm that you reviewed the generated PDF before approving this memo.');
+    return;
+  }
+  if (memoWorkspaceLifecycle(app, memoData) === 'STALE') {
+    alert('Cannot approve a stale memo. Regenerate it before approval.');
+    return;
+  }
+  if ((memoData.metadata || {}).blocked) {
+    alert('This memo is blocked and cannot be approved. Resolve the recorded controls and regenerate it.');
+    return;
+  }
+  var consistency = memoData.supervisor || ((memoData.metadata || {}).supervisor) || {};
+  if (consistency.verdict === 'INCONSISTENT' || consistency.can_approve === false || consistency.mandatory_escalation) {
+    alert('This memo is not eligible for approval. Resolve the recorded generation controls and regenerate it.');
+    return;
+  }
+  if (consistency.requires_sco_review && !confirm('This memo requires senior compliance review. Confirm that you are completing that review.')) return;
+  var ruleEngine = (memoData.metadata || {}).rule_engine || {};
+  if (ruleEngine.total_violations > 0 && !confirm('Deterministic controls recorded ' + ruleEngine.total_violations + ' violation(s). Confirm that you reviewed them before approval.')) return;
+  var validationStatus = String(memoData.validation_status || (window._lastMemoValidationResult || {}).validation_status || 'pending').toLowerCase();
+  if (validationStatus === 'fail' || validationStatus === 'pending') {
+    alert('This memo is not eligible for approval until the existing backend validation controls pass.');
+    return;
+  }
+  if (validationStatus === 'pass_with_fixes' && !confirm('This memo passed with recorded findings. Confirm that the findings and rationale support approval.')) return;
+  var rationale = currentMemoApprovalReason();
+  if (!rationale) {
+    alert('Officer rationale is required before approval.');
     return;
   }
 
-  // ── GATE 1: Check if memo is blocked by Rule Engine + Supervisor ──
-  if (memoData && memoData.metadata && memoData.metadata.blocked) {
-    alert('BLOCKED: This memo cannot be approved.\n\n' + (memoData.metadata.block_reason || 'Rule Engine violations detected with INCONSISTENT supervisor verdict. Manual review required.'));
-    return;
-  }
-
-  // ── GATE 2: Check supervisor verdict ──
-  if (memoData && memoData.supervisor && memoData.supervisor.verdict === 'INCONSISTENT') {
-    alert('Cannot approve memo with INCONSISTENT supervisor verdict.\n\nResolve contradictions and regenerate before approval.');
-    return;
-  }
-  if (memoData && memoData.supervisor && !memoData.supervisor.can_approve) {
-    alert('Supervisor has flagged this memo as not approvable.\n\n' + (memoData.supervisor.recommendation || 'Review required.'));
-    return;
-  }
-
-  // ── GATE 3: Check supervisor requires SCO review ──
-  if (memoData && memoData.supervisor && memoData.supervisor.requires_sco_review) {
-    if (!confirm('This memo requires Senior Compliance Officer review due to rule violations.\n\nAre you a Senior Compliance Officer confirming this review?')) return;
-  }
-
-  // ── GATE 4: Check rule engine violations ──
-  var ruleEngine = memoData && memoData.metadata ? memoData.metadata.rule_engine : null;
-  if (ruleEngine && ruleEngine.total_violations > 0) {
-    if (!confirm('Rule Engine detected ' + ruleEngine.total_violations + ' violation(s).\n\nThese should be reviewed before approval. Continue?')) return;
-  }
-
-  // ── GATE 5: Check validation status ──
-  var valStatus = (document.getElementById('memo-val-status-badge').textContent || '').trim().toUpperCase();
-  if (valStatus === 'FAIL') {
-    alert('Cannot approve memo with FAIL validation status. Please fix issues and re-validate first.');
-    return;
-  }
-  if (valStatus === 'PASS_WITH_FIXES' || valStatus === 'PASS WITH FIXES') {
-    if (!confirm('This memo has validation issues that should be reviewed. Are you sure you want to approve?')) return;
-  }
-  var approvalReason = currentMemoApprovalReason();
-  if (!approvalReason) {
-    alert('Approval reason required\n\nRecord the officer rationale for relying on this canonical memo before approval.');
-    var reasonInput = document.getElementById('memo-approval-reason');
-    if (reasonInput) reasonInput.focus();
-    refreshMemoApprovalReasonState();
-    return;
-  }
-
-  btn.innerHTML = '⏳ Approving...'; btn.disabled = true;
+  var button = document.getElementById('btn-approve-memo');
+  var original = button ? button.textContent : '';
+  if (button) { button.disabled = true; button.textContent = 'Approving & Locking…'; }
   try {
-    var memoApproveBody = {
-      approval_reason: approvalReason,
-      officer_signoff: { acknowledged: !!memoSignoff.checked, scope: 'memo', source_context: 'ai_advisory' }
-    };
-    var data = await boApiCall('POST', '/applications/' + app.ref + '/memo/approve', memoApproveBody);
-    if (data.success !== false) {
-      var approval = data.data || data || {};
-      if (window._currentMemoData) {
-        window._currentMemoData.review_status = 'approved';
-        window._currentMemoData.approved_by = approval.approved_by || window._currentMemoData.approved_by;
-        window._currentMemoData.approved_at = approval.approved_at || window._currentMemoData.approved_at;
-        window._currentMemoData.approval_reason = approval.approval_reason || approvalReason;
-      }
-      setMemoStatusBadge('Approved', 'approved');
-      await fetchValidationResults();
-      showToast('Memo approved successfully.');
-      await refreshCurrentAppDetailPreservingTab();
-    } else {
-      alert('Approval failed: ' + (data.message || 'Unknown error'));
-    }
-  } catch (e) {
-    alert('Approval request failed: ' + e.message);
-  }
-  btn.innerHTML = '✅ Approve Memo'; btn.disabled = false;
-}
-
-async function fetchValidationResults() {
-  var app = window._currentDetailApp;
-  if (!app) return null;
-  try {
-    var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo/validation', {
-      headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
+    var data = await boApiCall('POST', '/applications/' + app.ref + '/memo/approve', {
+      approval_reason: rationale,
+      officer_signoff: { acknowledged: true, scope: 'memo', source_context: 'ai_advisory' }
     });
-    // FEO-004: same outcome as before for every real response, but a non-JSON
-    // body now returns null through the normal path instead of throwing a
-    // SyntaxError into the silent catch below.
-    if (!res.ok) return null;
-    var data = await readApiResponseBody(res);
-    if (data.success !== false && (data.data || data.quality_score !== undefined)) {
-      var result = data.data || data;
-      renderValidationPanel(result);
-      return result;
-    }
-  } catch (e) {
-    // silently fail — validation may not exist yet
-  }
-  return null;
-}
-
-function renderValidationPanel(result) {
-  result = result || {};
-  window._lastMemoValidationResult = result;
-  syncMemoApprovalReasonPanel(result);
-  renderMemoGovernanceSummary(window._currentDetailApp || {}, result);
-  var panel = document.getElementById('memo-validation-panel');
-  panel.style.display = '';
-
-  // Quality score gauge
-  var isApproved = (result.review_status || '').toLowerCase() === 'approved';
-  var status = String(result.validation_status || 'pending').toLowerCase();
-  var score = parseFloat(result.quality_score);
-  if (isNaN(score)) score = 0;
-  var hasQualityScore = hasMemoQualityScore(result);
-  var gauge = document.getElementById('memo-quality-gauge');
-  if (status === 'pending' && !hasQualityScore && !isApproved) {
-    gauge.textContent = '—';
-    gauge.className = 'memo-quality-gauge pending';
-    gauge.style.background = '#94a3b8';
-  } else {
-    gauge.textContent = score.toFixed(1);
-    gauge.className = 'memo-quality-gauge ' + memoQualityGaugeClass(status, score);
-    gauge.style.background = '';
-  }
-
-  // Score text
-  var scoreText = document.getElementById('memo-quality-score-text');
-  if (status === 'pending' && !hasQualityScore && !isApproved) {
-    scoreText.textContent = 'Run validation to see server-calculated memo quality results';
-  } else {
-    scoreText.textContent = memoQualityScoreLabel(status, score);
-  }
-
-  // Version
-  var versionEl = document.getElementById('memo-quality-version');
-  var versionParts = [];
-  if (result.memo_version) versionParts.push('Memo v' + result.memo_version);
-  if (result.validated_at) versionParts.push('Validated: ' + String(result.validated_at).substring(0,19).replace('T',' '));
-  else if (result.validation_run_at) versionParts.push('Validated: ' + String(result.validation_run_at).substring(0,19).replace('T',' '));
-  if (isApproved && result.approved_at) versionParts.push('Approved: ' + String(result.approved_at).substring(0,19).replace('T',' '));
-  if (isApproved && result.approved_by) versionParts.push('Approver: ' + result.approved_by);
-  versionEl.textContent = versionParts.join(' | ');
-
-  // Validation status badge
-  var sBadge = document.getElementById('memo-val-status-badge');
-  sBadge.textContent = isApproved ? 'APPROVED' : status.replace(/_/g, ' ').toUpperCase();
-  sBadge.className = 'memo-val-status ' + (isApproved ? 'pass' : status);
-
-  // Issues list
-  var issuesContainer = document.getElementById('memo-val-issues');
-  var issues = getMemoValidationIssues(result);
-  var validationApprovalBlockers = getMemoApprovalBlockers(window._currentDetailApp, result || {});
-
-  var issuesHtml = '';
-  if (status === 'pending' && !issues.length && !isApproved) {
-    issuesHtml = '<div style="text-align:center;padding:10px;color:var(--text3);font-size:12px;font-weight:600;">Run validation to check memo quality, issue flags, and approval readiness.</div>';
-  } else if (issues.length > 0) {
-    issuesHtml += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;color:var(--text3);margin-bottom:8px;">Issues Found (' + issues.length + ')</div>';
-    issues.forEach(function(issue) {
-      var sev = (issue.severity || 'info').toLowerCase();
-      var icon = sev === 'critical' ? '🔴' : sev === 'warning' ? '🟡' : 'ℹ️';
-      issuesHtml += '<div class="memo-val-issue ' + sev + '">';
-      issuesHtml += '<span class="issue-icon">' + icon + '</span>';
-      var fixText = issue.fix || issue.fix_suggestion || '';
-      issuesHtml += '<div><strong>' + (issue.category || 'General').replace(/_/g, ' ') + ':</strong> ' + (issue.message || issue.description || 'No details') + (fixText ? '<br><span style="color:var(--brand);font-size:11px;font-weight:600;">💡 Fix: ' + fixText + '</span>' : '') + '</div>';
-      issuesHtml += '</div>';
-    });
-  } else if (status === 'fail') {
-    issuesHtml = '<div style="text-align:center;padding:10px;color:var(--red);font-size:12px;font-weight:600;">Validation failed, but no issue detail was returned. Re-run validation or inspect memo diagnostics before approval.</div>';
-  } else if (status === 'pass_with_fixes') {
-    issuesHtml = '<div style="text-align:center;padding:10px;color:#92400e;font-size:12px;font-weight:600;">Fixes required before approval. Review memo blockers, record the approval reason, and retain senior review evidence before approval.</div>';
-  } else if (status && status !== 'pass') {
-    issuesHtml = '<div style="text-align:center;padding:10px;color:var(--amber);font-size:12px;font-weight:600;">Validation status is ' + escapeHtml(status.replace(/_/g, ' ')) + '; memo is not cleanly passed.</div>';
-  } else if (validationApprovalBlockers.length) {
-    issuesHtml = '<div style="text-align:center;padding:10px;color:#92400e;font-size:12px;font-weight:600;">Validation passed, but approval remains blocked: ' + escapeHtml(validationApprovalBlockers.slice(0, 3).join('; ')) + '</div>';
-  } else {
-    issuesHtml = '<div style="text-align:center;padding:10px;color:var(--green);font-size:12px;font-weight:600;">✅ No issues found — memo meets quality standards</div>';
-  }
-  issuesContainer.innerHTML = issuesHtml;
-
-  // Category scores breakdown
-  var scoresContainer = document.getElementById('memo-val-scores');
-  var scores = result.category_scores || result.scores || {};
-  var scoresHtml = '';
-  var categoryNames = {
-    structural_completeness: 'Structural Completeness',
-    risk_consistency: 'Risk Consistency',
-    decision_alignment: 'Decision Alignment',
-    ownership_quality: 'Ownership Analysis',
-    screening_defensibility: 'Screening Defensibility',
-    document_verification: 'Document Verification',
-    red_flags_mitigants: 'Red Flags & Mitigants',
-    confidence_explainability: 'Confidence & Explainability',
-    missing_data_handling: 'Missing Data Handling'
-  };
-  Object.keys(scores).forEach(function(cat) {
-    var val = scores[cat];
-    var pct = typeof val === 'number' ? val * 100 : parseFloat(val) || 0;
-    if (pct > 1 && pct <= 10) pct = pct * 10; // handle 0-10 scale
-    var barColor = pct >= 80 ? '#22c55e' : pct >= 60 ? '#34d399' : pct >= 40 ? '#fbbf24' : '#ef4444';
-    scoresHtml += '<div class="memo-val-score-card">';
-    scoresHtml += '<div class="sc-name">' + (categoryNames[cat] || cat.replace(/_/g, ' ')) + '</div>';
-    scoresHtml += '<div class="sc-bar"><div class="sc-fill" style="width:' + Math.min(pct, 100) + '%;background:' + barColor + ';"></div></div>';
-    scoresHtml += '<div class="sc-value">' + (typeof val === 'number' ? val.toFixed(1) : val) + '</div>';
-    scoresHtml += '</div>';
-  });
-  if (!scoresHtml && status === 'pending' && !isApproved) {
-    scoresHtml = '<div style="font-size:11px;color:var(--text3);">Category scoring will appear after a successful server validation run.</div>';
-  }
-  scoresContainer.innerHTML = scoresHtml;
-
-  // Enable/disable approve button based on validation status + rule engine + supervisor
-  var approveBtn = document.getElementById('btn-approve-memo');
-  var memoD = window._currentMemoData;
-  var memoApprovalBlockers = renderMemoApprovalBlockers(result);
-  var isBlocked = memoD && memoD.metadata && memoD.metadata.blocked;
-  var svInconsistent = memoD && memoD.supervisor && memoD.supervisor.verdict === 'INCONSISTENT';
-  var svCannotApprove = memoD && memoD.supervisor && memoD.supervisor.can_approve === false;
-
-  if (isBlocked) {
-    approveBtn.disabled = true;
-    approveBtn.title = 'BLOCKED: Memo blocked by Rule Engine + Supervisor. Cannot approve.';
-    approveBtn.style.background = '#7f1d1d';
-    approveBtn.innerHTML = '🚫 Blocked';
-    setMemoStatusBadge('Blocked', 'rejected');
-  } else if (svInconsistent || svCannotApprove) {
-    approveBtn.disabled = true;
-    approveBtn.title = 'Cannot approve — supervisor verdict is INCONSISTENT. Resolve contradictions first.';
-    approveBtn.style.background = '#991b1b';
-    approveBtn.innerHTML = '❌ Supervisor Block';
-    setMemoStatusBadge('Supervisor Block', 'rejected');
-  } else if (isApproved) {
-    approveBtn.disabled = true;
-    approveBtn.title = 'Memo has already been approved on the server.';
-    approveBtn.style.background = '#166534';
-    approveBtn.innerHTML = '✅ Approved';
-    setMemoStatusBadge('Approved', 'approved');
-  } else if (status === 'fail') {
-    approveBtn.disabled = true;
-    approveBtn.title = 'Cannot approve — memo failed validation. Fix issues and re-validate.';
-    approveBtn.style.background = '';
-    approveBtn.innerHTML = '✅ Approve Memo';
-    setMemoStatusBadge('Validation Failed', 'rejected');
-  } else if (status === 'pass_with_fixes') {
-    approveBtn.disabled = memoApprovalBlockers.length > 0;
-    approveBtn.title = memoApprovalBlockers.length ? memoApprovalBlockers.join(' ') : 'PASS WITH FIXES requires documented approval reason and senior review before approval.';
-    approveBtn.style.background = '#92400e';
-    approveBtn.innerHTML = '✅ Approve Memo';
-    setMemoStatusBadge('Validated With Fixes', 'pending');
-  } else if (status === 'pass') {
-    approveBtn.disabled = memoApprovalBlockers.length > 0;
-    approveBtn.title = memoApprovalBlockers.length ? memoApprovalBlockers.join(' ') : 'Memo passed validation — ready for approval.';
-    approveBtn.style.background = '#166534';
-    approveBtn.innerHTML = '✅ Approve Memo';
-    setMemoStatusBadge('Validated', 'approved');
-  } else {
-    approveBtn.disabled = true;
-    approveBtn.title = 'Run validation first.';
-    approveBtn.style.background = '';
-    approveBtn.innerHTML = '✅ Approve Memo';
-    setMemoStatusBadge('Generated', 'pending');
-  }
-
-  // PR-APPROVAL-UX-GATES-1: memo approval is Admin/SCO only on the backend.
-  // Override the enable decision so an Onboarding Officer never sees an actionable
-  // Approve Memo button (it would 403). Validation/supervisor badges are unchanged.
-  if (!canApproveMemo()) {
-    approveBtn.disabled = true;
-    approveBtn.title = 'Memo approval requires Senior Compliance Officer or Admin.';
-  }
-}
-
-// Show validation panel when memo is generated and auto-fetch existing validation
-async function showValidationPanelIfMemoExists() {
-  if (window._currentMemoData && window._currentMemoData.sections) {
-    document.getElementById('memo-validation-panel').style.display = '';
-    var result = await fetchValidationResults();
-    if (!result) {
-      renderValidationPanel({
-        memo_version: window._currentMemoData.memo_version,
-        validation_status: 'pending',
-        review_status: window._currentMemoData.review_status,
-        approved_by: window._currentMemoData.approved_by,
-        approved_at: window._currentMemoData.approved_at
-      });
-    }
+    if (data.success === false) throw new Error(data.message || 'Approval failed.');
+    releaseMemoPdfCache();
+    showToast('Memo approved and locked. Loading the final PDF…');
+    await refreshCurrentAppDetailPreservingTab();
+  } catch (error) {
+    showToast(error.message || 'Memo approval failed.', 'error');
+  } finally {
+    if (button) { button.textContent = original || 'Approve & Lock'; syncMemoWorkspaceActions(); }
   }
 }
 

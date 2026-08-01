@@ -164,9 +164,9 @@ def test_memo_approve_is_senior_only_in_ui():
     # canApproveMemo restricts to admin/SCO (matches backend MemoApproveHandler).
     fn = html.split("function canApproveMemo(", 1)[1].split("function approveBackendBlockReason(", 1)[0]
     assert "'admin'" in fn and "'sco'" in fn
-    # The validation panel disables the memo-approve button for non-senior roles.
-    assert "if (!canApproveMemo()) {" in html
-    assert "Memo approval requires Senior Compliance Officer or Admin." in html
+    # The document workspace disables the action unless the senior-role gate passes.
+    assert "lifecycle === 'AWAITING_OFFICER_SIGNOFF' && canApproveMemo()" in html
+    assert "if (!assertPermission('approve_low_medium') || !canApproveMemo()) return;" in html
 
 
 def test_approve_click_handler_has_defensive_guard():

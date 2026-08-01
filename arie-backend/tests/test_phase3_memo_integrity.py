@@ -273,10 +273,11 @@ def test_pdf_generator_uses_authoritative_application_risk_over_legacy_memo(monk
     )
 
     assert pdf == b"%PDF-fake"
-    assert "Authoritative Case Risk Score" in captured["html"]
+    assert "Risk Classification" in captured["html"]
+    assert "Authoritative Risk Score" in captured["html"]
     assert "70/100" in captured["html"]
-    assert "2026-06-09T08:00:00Z" in captured["html"]
-    assert "VERY_HIGH" in captured["html"]
+    assert "2026-06-09 08:00 UTC" in captured["html"]
+    assert "Very High" in captured["html"]
     assert "50/100" not in captured["html"]
 
 
@@ -325,7 +326,7 @@ def test_pdf_generator_fails_closed_when_no_authoritative_risk_exists(monkeypatc
     )
 
     assert pdf == b"%PDF-fake"
-    assert "NOT YET RATED" in captured["html"]
+    assert "Not Yet Rated" in captured["html"]
     assert "Not yet scored" in captured["html"]
 
 

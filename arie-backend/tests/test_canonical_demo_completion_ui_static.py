@@ -98,91 +98,29 @@ process.stdout.write(JSON.stringify({{canonical, otherFixture, unmarked}}));
     assert result["unmarked"]["isFixture"] is False
 
 
-def test_ai_supervisor_scope_marker_is_display_only_and_preserves_unmarked_governance():
+def test_memo_workspace_is_isolated_from_supervisor_scope_markers():
     html = _html()
-    scope_helper = _region(
-        html,
-        "function memoAiSupervisorExcludedFromPilot",
-        "function memoSupervisorBlock",
-    )
-    governance = _region(
-        html,
-        "function memoGovernanceStatus",
-        "function renderMemoGovernanceSummary",
-    )
-    script = f"""
-const window = {{_currentMemoData:null}};
-function getMemoApprovalBlockers() {{ return []; }}
-function memoCanonicalBlockers() {{ return []; }}
-function currentMemoApprovalReason() {{ return ''; }}
-{scope_helper}
-{governance}
-const excludedMeta = {{ai_supervisor_scope:'excluded_from_controlled_pilot', application_ref:'RM-PILOT-040'}};
-const canonicalIdentity = {{synthetic:true, non_production:true, dataset:'Pilot Canonical Dataset', application_ref:'RM-PILOT-040'}};
-const approvedMemo = {{...canonicalIdentity, sections:{{}}, metadata:excludedMeta, validation_status:'pass', review_status:'approved'}};
-window._currentMemoData = approvedMemo;
-const approved = memoGovernanceStatus({{}}, {{}});
-const draftMemo = {{...canonicalIdentity, sections:{{}}, metadata:excludedMeta, validation_status:'pass', review_status:'draft'}};
-window._currentMemoData = draftMemo;
-const excluded = memoGovernanceStatus({{}}, {{}});
-const markerOnlyMemo = {{sections:{{}}, metadata:excludedMeta, validation_status:'pass', review_status:'draft'}};
-window._currentMemoData = markerOnlyMemo;
-const markerOnly = memoGovernanceStatus({{}}, {{}});
-const normalMemo = {{sections:{{}}, metadata:{{}}, validation_status:'pass', review_status:'draft'}};
-window._currentMemoData = normalMemo;
-const normal = memoGovernanceStatus({{}}, {{}});
-process.stdout.write(JSON.stringify({{approved, excluded, markerOnly, normal}}));
-"""
-    result = _run_node(script)
-    assert result["approved"]["status"] == "APPROVED"
-    assert result["approved"]["ready"] is True
-    assert result["excluded"]["status"] == "AI SUPERVISOR EXCLUDED"
-    assert result["excluded"]["ready"] is False
-    assert "Run supervisor" not in result["excluded"]["next"]
-    assert result["markerOnly"]["status"] == "NEEDS SUPERVISOR CHECK"
-    assert result["normal"]["status"] == "NEEDS SUPERVISOR CHECK"
+    start = html.index("id=\"compliance-memo-workspace\"")
+    end = html.index("</section>", start)
+    workspace = html[start:end]
+
+    assert "memo-pdf-preview" in workspace
+    assert "Supervisor" not in workspace
+    assert "memoAiSupervisorExcludedFromPilot" not in workspace
+    assert "memoGovernanceStatus" not in workspace
 
 
-def test_canonical_memo_hides_active_supervisor_verdict_but_retains_normal_renderer():
+def test_canonical_memo_uses_pdf_only_renderer():
     html = _html()
-    scope_helper = _region(
-        html,
-        "function memoAiSupervisorExcludedFromPilot",
-        "function memoSupervisorBlock",
-    )
     renderer = _region(
         html,
-        "function renderMemoSections(data)",
-        "async function generateComplianceMemo",
+        "function renderMemoSections()",
+        "function renderMemoGovernanceSummary",
     )
-    script = f"""
-const window = {{_currentDetailApp:{{}}}};
-const RISK_UNAVAILABLE_TEXT = 'Risk unavailable';
-function escapeHtml(value) {{ return String(value == null ? '' : value); }}
-function buildRiskDisplayState() {{ return {{hasRisk:false, level:'', score:0}}; }}
-function memoRiskBadgeClass() {{ return 'medium'; }}
-function memoDecisionBadgeClass() {{ return 'medium'; }}
-function renderMemoDecisionSnapshot() {{ return ''; }}
-function existingBadgeClass() {{ return 'draft'; }}
-{scope_helper}
-{renderer}
-const supervisor = {{
-  verdict:'CONSISTENT', supervisor_confidence:0.9,
-  recommendation:'SHOULD_NOT_RENDER', contradictions:[], warnings:[]
-}};
-const excludedHtml = renderMemoSections({{
-  synthetic:true, non_production:true, dataset:'Pilot Canonical Dataset', application_ref:'RM-PILOT-040',
-  sections:{{}}, metadata:{{ai_supervisor_scope:'excluded_from_controlled_pilot', application_ref:'RM-PILOT-040'}}, supervisor
-}});
-const normalHtml = renderMemoSections({{sections:{{}}, metadata:{{}}, supervisor}});
-process.stdout.write(JSON.stringify({{excludedHtml, normalHtml}}));
-"""
-    result = _run_node(script)
-    assert "AI Supervisor excluded from controlled pilot" in result["excludedHtml"]
-    assert "SUPERVISOR VERDICT" not in result["excludedHtml"]
-    assert "SHOULD_NOT_RENDER" not in result["excludedHtml"]
-    assert "SUPERVISOR VERDICT" in result["normalHtml"]
-    assert "SHOULD_NOT_RENDER" in result["normalHtml"]
+
+    assert "return '';" in renderer
+    assert "SUPERVISOR VERDICT" not in renderer
+    assert "enhanced_review_edd" not in renderer
 
 
 def test_memo_renderer_normalizes_legacy_wrapped_detail_projection():

@@ -278,10 +278,7 @@ class TestParseOrderIsPinned:
         json_at = READER.index("res.json()")
         assert content_type_at < json_at
 
-    def test_frozen_memo_validation_checks_status_before_parsing(self):
-        match = re.search(
-            r"^async function fetchValidationResults\(.*?^}", HTML, re.S | re.M)
-        assert match
-        body = match.group(0)
-        assert "if (!res.ok) return null;" in body
-        assert "await res.json()" not in body
+    def test_memo_workspace_does_not_fetch_removed_validation_panel(self):
+        assert "function fetchValidationResults" not in HTML
+        assert "function renderValidationPanel" not in HTML
+        assert "/memo/validation" not in HTML

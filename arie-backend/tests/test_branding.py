@@ -40,7 +40,7 @@ class TestBrandDictionary:
 
     def test_pdf_header_default(self):
         from branding import BRAND
-        assert BRAND["pdf_header"] == "RegMind Compliance Report"
+        assert BRAND["pdf_header"] == "RegMind Compliance Memorandum"
 
     def test_pdf_footer_default(self):
         from branding import BRAND
@@ -114,7 +114,7 @@ class TestConvenienceAccessors:
 
     def test_pdf_header(self):
         from branding import pdf_header
-        assert pdf_header() == "RegMind Compliance Report"
+        assert pdf_header() == "RegMind Compliance Memorandum"
 
     def test_pdf_footer(self):
         from branding import pdf_footer
