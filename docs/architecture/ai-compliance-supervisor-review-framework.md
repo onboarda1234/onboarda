@@ -3,9 +3,9 @@
 **Status:** Design only. No production code, schema, routes, flags or UI.
 **Phase:** 0A — product and control architecture
 **Revision:** amended per founder review — approved in principle subject to the
-eleven amendments in §14.2, with eight consistency invariants confirmed in
+twelve amendments in §14.2, with eight consistency invariants confirmed in
 §14.6. All seven decisions D1–D7 resolved (§14.3). **Corrected in the Phase
-0B-1 closure pass (A11)** so the determinism, `as_of` and privacy sections match
+0B-1 closure pass (A11) and extended for bundle v2 (A12)** so the determinism, `as_of` and privacy sections match
 the delivered implementation.
 **Supersedes in part:** [`challenge-mode-spec.md`](./challenge-mode-spec.md) (see §14.1)
 **Audience:** founder review of the amended specification, prior to Phase 0B build authorisation
@@ -1368,13 +1368,13 @@ convention.
 | `parties` | `directors[]`, `ubos[]`, `intermediaries[]` — **direct identifiers excluded** (names, DOB, addresses, profile URLs), replaced by stable IDs and non-sensitive scalars (`ownership_pct`, `nationality`, `is_pep`). The retained IDs are pseudonymous and linkable, so the bundle remains personal data — see §10.9 |
 | `documents` | Active document rows (`is_current = TRUE`) with `doc_type`, `slot_key`, `verification_status`, `expiry_date`, `version`, `file_sha256` |
 | `document_gate` | Output of `evaluate_document_reliance_gate()` with `generated_at` **stripped** |
-| `screening` | Output of `build_screening_truth_summary()` |
-| `risk` | `factor_computation_evidence`, `controlled_mapping_evidence`, `risk_config_version`, `final_risk_level`, `escalations`, `elevation_reason_text` |
-| `edd` | The `REQUIRED_FACT_KEYS` fact dict; `edd_cases` rows |
+| `screening` | Stored report projection, officer dispositions, and **(v2)** `subjects[]` — per-subject provider mode, screening state, match state, disposition linkage and raw validity timestamps. Never `build_screening_truth_summary()` (§10.4.1), and never the raw match payload |
+| `risk` | `factor_computation_evidence`, `risk_config_version`, `final_risk_level`, `escalations`, `elevation_reason_text`, and **(v2)** `dimension_scores` — the stored D1–D5 composites. Nothing recomputed; no derived tier added |
+| `edd` | `edd_cases` rows, stored routing metadata, and **(v2)** `routing_facts` — the stored `agent5_input_contract` projected to `REQUIRED_FACT_KEYS`. A memo-time snapshot, labelled as such; missing keys are reported absent, never defaulted to `false` |
 | `memo` | Latest memo `metadata` and section keys, `version`, `raw_output_hash`, `validation_status` |
 | `supervisor_verdict` | `run_memo_supervisor()` output with `checked_at` **stripped** |
 | `decision` | `decision_records` rows; `applications.decided_at`, `decision_by` |
-| `monitoring` | `periodic_reviews` rows for the subject |
+| `monitoring` | `periodic_reviews` rows for the subject, including **(v2)** `policy_version` |
 | `availability` | Per-dependency availability flags: registry credentials, gated modules, provider configuration |
 
 ### 10.3 Canonical JSON rules
@@ -1420,6 +1420,7 @@ Two distinct severities matter here, and conflating them is the trap:
 | `build_screening_truth_summary()` | **Material** | Reaches a clock transitively via `screening_state._timestamp_is_past`, which compares `screening_valid_until` against `datetime.now(timezone.utc)`. This feeds **`freshness`, `stale` and `approval_blocking`** | **Do not call.** Assemble the stored screening report and officer dispositions; derive freshness from `as_of` |
 | `evaluate_edd_routing()` | Cosmetic (but out of scope) | Emits `evaluated_at` | Not called in Phase 0B — re-running the policy is probe P-03 |
 | `run_memo_supervisor()` | Cosmetic | Emits `"checked_at": datetime.now().isoformat()` | Call behind a stripping adapter; strip before hashing |
+| `periodic_review_policy.parse_review_date()` | **Material — silent** | Falls back to `datetime.now(timezone.utc).date()` on malformed or missing input, and `add_months()` / `_interval_days()` inherit it | **Do not call on unvalidated input.** Parse dates in the probe; report malformed or missing dates explicitly. See §10.4.3 |
 | `Finding.created_at` | Cosmetic | Would make every run unique | Set from the injected `as_of`, never wall-clock |
 
 #### 10.4.1 `build_screening_truth_summary()` — recorded in Phase 0B-1
@@ -1496,6 +1497,43 @@ would make two reviews at different instants collide, which would be worse. The
 current implementation matches the merged architecture; this section documents
 its semantics rather than changing them.
 
+#### 10.4.3 `parse_review_date()` — recorded in Phase 0B-2 preparation
+
+The most dangerous of the five, because it fails **silently and plausibly**.
+
+```python
+def parse_review_date(value: Any) -> date:
+    ...
+    return datetime.now(timezone.utc).date()   # ← fallback on malformed/missing
+```
+
+Every other hazard in this register announces itself: a timestamp field appears
+in the output and can be stripped. This one does not. Handed a null, an empty
+string or an unparseable value, it silently substitutes **today** and returns a
+perfectly ordinary-looking date. `add_months()` and `_interval_days()` both call
+it and inherit the behaviour.
+
+The failure mode for a monitoring probe is specific and bad: a periodic review
+whose `next_review_date` is missing or corrupt would be treated as *scheduled
+for today* — that is, compliant — so the probe would report `clear` on exactly
+the record most likely to be defective. A missing date would be laundered into a
+passing check.
+
+Binding on all Supervisor code:
+
+1. **Do not call `parse_review_date()`, `add_months()` or `_interval_days()` on
+   unvalidated input.** Parse dates in the probe, deterministically.
+2. **Compute all date arithmetic from the injected `as_of`.**
+3. **Report a malformed or missing date explicitly** — `unavailable` with the
+   applicable `availability_status`, never `clear`.
+4. **Never substitute the current date for a bad one.**
+
+`RISK_FREQUENCY_MONTHS`, `ENHANCED_REVIEW_FLOOR_MONTHS` and
+`frequency_months_for_risk()` are clock-free and may be used directly.
+
+`periodic_review_policy.py` is **not** modified. Reading the current clock is
+correct for its own runtime purpose; the constraint belongs to the Supervisor.
+
 ### 10.5 Missing data
 
 Absent data is a **first-class state**, never a default. A probe that cannot
@@ -1557,7 +1595,32 @@ two *separately created* fixture cases legitimately differ. Determinism means
 cases collide. Cross-process tests must pin those columns before comparing, or
 they measure the fixture rather than the assembler.
 
-### 10.9 Hash comparability across environments
+### 10.9 Hash comparability across schema versions and environments
+
+#### 10.9.1 Across bundle schema versions
+
+`supervisor-bundle-v2` adds four projections (§10.2). A v2 bundle therefore
+hashes differently from a v1 bundle **for identical stored evidence**.
+
+That is intended and is not a determinism regression. The hash identifies *the
+set of inputs a review consumed*; v2 consumes a different, larger set. Four
+rules follow:
+
+| Rule | Reason |
+|---|---|
+| A v1 hash remains valid **as a v1 hash** | It correctly identifies what a v1 review consumed |
+| **No equality is expected or meaningful across versions** | Comparing a v1 hash to a v2 hash answers no question |
+| A v1 artifact must **never** be silently reinterpreted as v2 | Its evidence set is genuinely smaller; treating it as v2 would assert coverage it never had |
+| Consumers must read `meta.bundle_schema_version` and **refuse** a version they do not understand | The field exists for exactly this |
+
+Within a version the invariant is unchanged: identical bundle + identical policy
+version ⇒ identical findings and review hash.
+
+`probe_set_version` and `BUNDLE_SCHEMA_VERSION` are **separate contracts** and
+move independently. v2 pairs with `probe-set-0b2-empty` — the bundle contract
+changed; the probe set is still empty.
+
+#### 10.9.2 Across environments
 
 `input_bundle_hash` is **not** comparable between databases. Surrogate keys —
 `screening_reviews.id`, `edd_cases.id`, `periodic_reviews.id`,
@@ -1794,6 +1857,7 @@ Applied in this revision.
 | **A7** | **Adverse-media default separated (D6)** | Classified as a distinct governed remediation with a three-state target. P-04 reports; the Supervisor implementation changes no scoring |
 | **A8** | **New taxonomy and schema members** | Category `F-28 policy_configuration`; availability status `policy_not_configured`; evidence type `policy_profile` |
 | **A9** | **Phase 0B staged** into 0B-1 … 0B-4 (§9.5) | Policy-independent probes separated from policy-dependent ones so engineering is not blocked on compliance configuration, and vice versa |
+| **A12** | **Bundle schema v1 → v2** (Phase 0B-2 preparation) | Four authorised read-only additions required by the approved 0B-2 probes: `screening.subjects[]` (per-subject provider mode, terminality, match state and disposition linkage, carrying conclusions rather than raw match payload), `risk.dimension_scores` (stored D1–D5, no derived tiers), `edd.routing_facts` (the stored `agent5_input_contract` projected to `REQUIRED_FACT_KEYS`), and `monitoring.periodic_reviews[].policy_version`. Adds §10.4.3 (`parse_review_date` clock hazard) and §10.9.1 (cross-version hash semantics). No probes implemented |
 | **A11** | **Phase 0B-1 closure-pass corrections** | Four alignments made after implementation. (a) `build_screening_truth_summary()` recorded as a **material** clock hazard (§10.4.1) — found during implementation, absent from the original list. (b) Clock hazards now classified *cosmetic* vs *material*, since stripping a timestamp is sufficient for one and not the other. (c) `as_of` hash semantics documented (§10.4.2), including the three divergence causes review history must distinguish. (d) Privacy language corrected throughout (§7.5): the bundle is PII-minimised, not anonymous — retained IDs and name fingerprints are pseudonymous and linkable, so it is personal data. Also adds §10.9 on hash comparability across environments |
 | **A10** | **Implementation boundary on the policy contract** (§3.3.5) | The policy profile is an input contract, not authorisation for a policy-management subsystem. 0B-1 and 0B-2 may introduce only the minimum typed, versioned contract needed to represent policy availability — no administration UI, rule builder, approval workflow, scoring change, gate change or authoritative enforcement. Persistence and administration require separate founder approval. Eight consistency invariants recorded in §14.6 |
 
@@ -1854,7 +1918,7 @@ a governed change, not an editorial one.
 ### **Proceed to Phase 0B, staged per §9.5 — subject to review of this amended specification.**
 
 Phase 0A is approved in principle. All seven founder decisions are resolved
-(§14.3), eleven amendments are applied (§14.2), and eight consistency invariants
+(§14.3), twelve amendments are applied (§14.2), and eight consistency invariants
 are confirmed (§14.6). Phase 0B code should not begin
 until this amended specification has been reviewed.
 

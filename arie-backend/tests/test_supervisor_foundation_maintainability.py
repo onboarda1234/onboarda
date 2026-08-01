@@ -87,12 +87,19 @@ VERIFIABLE_ORDERINGS = {
     "monitoring.periodic_reviews": (lambda b: b["monitoring"]["periodic_reviews"],),
     "risk.factors": (lambda b: b["risk"]["factors"],),
     "risk.dimensions": (lambda b: b["risk"]["dimensions"],),
+    "screening.subjects": (lambda b: b["screening"]["subjects"],),
 }
 
 UNVERIFIABLE_ORDERINGS = {
     "documents.active[].checks": "nested per-document; covered by its own test",
     "memo.section_keys": "a list of strings, not of records",
     "*.absent_fields": "wildcard path; covered by its own recursive test",
+    "edd.routing_facts.facts.edd_trigger_flags": (
+        "a list of strings, not of records; sortedness asserted in the v2 tests"
+    ),
+    "risk.dimension_scores": (
+        "a mapping, not a list; key order is handled by canonical JSON"
+    ),
 }
 
 

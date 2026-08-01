@@ -12,13 +12,30 @@ from enum import Enum
 # ── Version constants ────────────────────────────────────────────────
 # Bumping any of these changes review_hash for every subject.
 
-BUNDLE_SCHEMA_VERSION = "supervisor-bundle-v1"
+#: Canonical bundle contract version.
+#:
+#: **v1 → v2 (Phase 0B-2 preparation).** v2 adds four read-only projections that
+#: the approved 0B-2 probes require: per-subject screening evidence, stored D1–D5
+#: dimension scores, the stored EDD routing fact contract, and the periodic
+#: review policy version. See ``bundle.SCHEMA_V2_ADDITIONS``.
+#:
+#: **Hash semantics across versions.** v2 bundles hash differently from v1 for
+#: the same stored evidence. That is intended, not a regression: the bundle
+#: contract itself changed, so the hash identifies a different set of inputs.
+#: A v1 hash remains valid *as a v1 hash*. No equality is expected or meaningful
+#: across schema versions, and a v1 artifact must never be reinterpreted as v2 —
+#: ``meta.bundle_schema_version`` is carried in every bundle precisely so a
+#: consumer can refuse a version it does not understand.
+BUNDLE_SCHEMA_VERSION = "supervisor-bundle-v2"
+
 REVIEW_SCHEMA_VERSION = "supervisor-review-v1"
 POLICY_CONTRACT_VERSION = "policy-contract-v1"
 
-# Phase 0B-1 ships no probes. The probe set version is part of review_hash so
-# that adding the first real probe in 0B-2 produces a visibly different hash.
-PROBE_SET_VERSION = "probe-set-0b1-empty"
+#: Phase 0B-2 still ships **no probes** — this PR is a bundle-contract change
+#: only. The version is bumped solely to represent "the empty probe set running
+#: against a v2 bundle", so a review computed now is distinguishable from one
+#: computed against v1. The first real probes will bump it again.
+PROBE_SET_VERSION = "probe-set-0b2-empty"
 
 
 class SubjectType(str, Enum):

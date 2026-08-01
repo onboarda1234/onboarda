@@ -320,7 +320,7 @@ def _draft(**overrides):
 def test_phase_0b1_default_runs_no_probes():
     review = run_review(_bundle())
     assert review["finding_count"] == 0
-    assert review["probe_set_version"] == "probe-set-0b1-empty"
+    assert review["probe_set_version"] == "probe-set-0b2-empty"
     assert review["review_completeness"]["probes_run"] == 0
 
 

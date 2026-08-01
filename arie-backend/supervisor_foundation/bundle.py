@@ -173,12 +173,88 @@ PERIODIC_REVIEW_FIELDS = (
     "last_review_date",
     "new_risk_level",
     "next_review_date",
+    # v2: the governed policy edition the schedule was created under. Present in
+    # the table since the periodic-review engine was introduced; a null value
+    # and an absent column stay distinguishable via ``absent_fields``.
+    "policy_version",
     "previous_risk_level",
     "review_type",
     "risk_level",
     "status",
     "trigger_type",
 )
+
+# ── v2 additions ─────────────────────────────────────────────────────
+
+#: The four projections added in ``supervisor-bundle-v2``. Recorded here so the
+#: diff between contract versions is readable from the code, not only the
+#: changelog.
+SCHEMA_V2_ADDITIONS = (
+    "screening.subjects[]",
+    "risk.dimension_scores",
+    "edd.routing_facts",
+    "monitoring.periodic_reviews[].policy_version",
+)
+
+#: Per-subject screening evidence. Deliberately excludes ``results`` — the raw
+#: match content — carrying only the authoritative *conclusions* drawn from it
+#: by clock-free governed functions, plus a count.
+SCREENING_SUBJECT_FIELDS = (
+    "api_status",
+    "has_granular_material_fields",
+    "has_material_hit",
+    "matched",
+    "provider",
+    "provider_mode",
+    "required",
+    "result_count",
+    "review_id",
+    "screened_at",
+    "screening_state",
+    "screening_valid_until",
+    "subject_key",
+    "subject_name_fingerprint",
+    "subject_type",
+)
+
+#: The stored EDD fact contract, projected to exactly the keys
+#: ``edd_routing_policy.REQUIRED_FACT_KEYS`` declares. ``memo_handler`` persists
+#: this as ``metadata.agent5_input_contract`` and feeds the identical dict to
+#: the routing policy, so a probe re-running the policy is measuring the same
+#: inputs the decision path used — not a reconstruction of them.
+#:
+#: ``supervisor_mandatory_escalation`` is absent from the stored contract and is
+#: sourced from the supervisor verdict section instead.
+EDD_ROUTING_FACT_KEYS = (
+    "declared_pep_present",
+    "edd_trigger_flags",
+    "final_risk_level",
+    "jurisdiction_risk_tier",
+    "ownership_transparency_status",
+    "screening_terminality_summary",
+    "sector_risk_tier",
+)
+
+#: Keys lifted from the stored contract's ``screening_terminality_summary``.
+#: Restricted to what ``evaluate_edd_routing`` actually reads plus the states a
+#: screening probe needs, so provider payload detail cannot leak in through it.
+EDD_SCREENING_SUMMARY_KEYS = (
+    "approval_blocking",
+    "canonical_state",
+    "defensible_clear",
+    "has_formally_cleared_match",
+    "has_non_terminal",
+    "has_sandbox",
+    "has_simulated",
+    "has_terminal_match",
+    "has_uncleared_completed_match",
+    "provider_mode",
+    "screening_result",
+    "terminal",
+)
+
+#: D1–D5 composite dimension scores as stored by ``compute_risk_score``.
+RISK_DIMENSION_SCORE_KEYS = ("d1", "d2", "d3", "d4", "d5")
 
 RISK_FACTOR_FIELDS = (
     "dimension_id",
@@ -221,6 +297,9 @@ ORDERING_RULES = {
     "documents.active[].checks": "(check_id)",
     "document_gate.expectations": "(doc_type, person_type, person_id)",
     "screening.reviews": "(subject_type, subject_name_fingerprint, id)",
+    "screening.subjects": "(subject_key)",
+    "edd.routing_facts.facts.edd_trigger_flags": "(flag)",
+    "risk.dimension_scores": "(dimension_key)",
     "edd.cases": "(id)",
     "decision.records": "(timestamp, id)",
     "monitoring.periodic_reviews": "(id)",
@@ -519,6 +598,124 @@ def _document_gate_section(db: Any, app_row: Mapping[str, Any]) -> dict[str, Any
     }
 
 
+def _screening_subjects(
+    report: Mapping[str, Any] | None, reviews: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """Per-subject screening evidence (v2).
+
+    The aggregate ``report_summary`` cannot answer the questions a screening
+    probe must ask — was *this* subject screened against a live provider, did it
+    complete, did it match, was the match dispositioned. This carries that
+    per-subject state.
+
+    **Every authoritative helper called here is clock-free**, verified against
+    ``screening_state``: the module's only two wall-clock call sites are
+    ``derive_screening_truth`` and ``build_screening_truth_summary``, neither of
+    which is used. ``derive_screening_state`` therefore yields the provider
+    state *excluding staleness* — staleness lives in the wrappers — so the raw
+    ``screened_at`` and ``screening_valid_until`` are carried alongside for a
+    probe to evaluate against the injected ``as_of``.
+
+    **Privacy.** ``results`` — the raw match payload — is never carried. Only
+    the authoritative conclusions drawn from it (``has_material_hit``,
+    ``has_granular_material_fields``) and a count. Subjects are addressed by a
+    stable ``subject_key`` and the existing pseudonymous name fingerprint.
+
+    **Two references, two stability scopes.** ``subject_key`` is positional
+    within the stored report (``director_screening_0``, …) and is stable for
+    that report; a re-screen returning subjects in a different order would
+    reassign it. ``subject_name_fingerprint`` follows the person across reports.
+    A probe tracking one individual over time must key on the fingerprint; one
+    citing evidence inside a single report should cite ``subject_key``.
+    """
+    if not isinstance(report, Mapping) or not report:
+        return []
+
+    from screening_state import (  # local: authoritative, clock-free helpers
+        _entry_has_granular_material_fields,
+        _entry_has_material_hit,
+        derive_screening_state,
+        provider_mode_from_record,
+    )
+
+    review_by_subject: dict[tuple[str, str], Any] = {}
+    for review in reviews:
+        key = (
+            str(review.get("subject_type") or ""),
+            str(review.get("subject_name_fingerprint") or ""),
+        )
+        # Lowest id wins so a re-reviewed subject resolves deterministically.
+        existing = review_by_subject.get(key)
+        if existing is None or str(review.get("id") or "") < str(existing.get("id") or ""):
+            review_by_subject[key] = review
+
+    def build(subject_key: str, subject_type: str, entry: Mapping[str, Any],
+              name: Any, required: bool) -> dict[str, Any]:
+        screening = entry.get("screening")
+        screening = screening if isinstance(screening, Mapping) else {}
+        # A company entry is itself the screening record; a person entry nests it.
+        record = screening or entry
+        results = screening.get("results")
+        fingerprint = _fingerprint(name)
+        review = review_by_subject.get((subject_type, str(fingerprint or "")))
+        return {
+            "api_status": record.get("api_status"),
+            "has_granular_material_fields": bool(
+                _entry_has_granular_material_fields(dict(entry))
+            ),
+            "has_material_hit": bool(_entry_has_material_hit(dict(entry))),
+            "matched": _as_bool(record.get("matched")),
+            "provider": record.get("provider") or record.get("source"),
+            "provider_mode": provider_mode_from_record(dict(record)),
+            "required": required,
+            "result_count": len(results) if isinstance(results, list) else 0,
+            "review_id": (review or {}).get("id"),
+            "screened_at": record.get("screened_at"),
+            "screening_state": derive_screening_state(dict(record)),
+            "screening_valid_until": record.get("screening_valid_until"),
+            "subject_key": subject_key,
+            "subject_name_fingerprint": fingerprint,
+            "subject_type": subject_type,
+        }
+
+    subjects: list[dict[str, Any]] = []
+
+    company = report.get("company_screening")
+    if isinstance(company, Mapping) and company:
+        subjects.append(
+            build(
+                "company_screening",
+                "company",
+                {"screening": company},
+                company.get("company_name"),
+                True,
+            )
+        )
+
+    for collection, subject_type in (
+        ("director_screenings", "director"),
+        ("ubo_screenings", "ubo"),
+    ):
+        rows = report.get(collection)
+        if not isinstance(rows, list):
+            continue
+        for index, entry in enumerate(rows):
+            if not isinstance(entry, Mapping):
+                continue
+            subjects.append(
+                build(
+                    f"{subject_type}_screening_{index}",
+                    subject_type,
+                    entry,
+                    entry.get("person_name") or entry.get("name"),
+                    True,
+                )
+            )
+
+    subjects.sort(key=lambda item: str(item.get("subject_key") or ""))
+    return subjects
+
+
 def _screening_section(
     db: Any, application_id: str, prescreening: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -552,6 +749,8 @@ def _screening_section(
         )
     )
 
+    subjects = _screening_subjects(report, reviews)
+
     report_summary: dict[str, Any] | None = None
     if report is not None:
         report_summary = {
@@ -572,6 +771,8 @@ def _screening_section(
         "screening_valid_until": prescreening.get("screening_valid_until"),
         "reviews": reviews,
         "review_count": len(reviews),
+        "subjects": subjects,
+        "subject_count": len(subjects),
         "absent_fields": sorted(absent),
         "truth_summary_included": False,
         "truth_summary_exclusion_reason": (
@@ -620,9 +821,24 @@ def _risk_section(row: Mapping[str, Any]) -> dict[str, Any]:
         dimensions.append(values)
     dimensions.sort(key=lambda item: str(item.get("dimension_id") or ""))
 
+    # v2: the stored D1–D5 composite scores. A pure projection of what
+    # compute_risk_score already persisted — nothing is recomputed, and no
+    # derived tier is added. A probe needing `sector_risk_tier` or
+    # `jurisdiction_risk_tier` takes them from `edd.routing_facts`, where they
+    # are stored as governed outputs rather than re-derived here.
+    dimension_scores: dict[str, Any] = {}
+    dimension_scores_absent: list[str] = []
+    for key in RISK_DIMENSION_SCORE_KEYS:
+        if isinstance(dimensions_blob, dict) and key in dimensions_blob:
+            dimension_scores[key] = _scalar(dimensions_blob[key])
+        else:
+            dimension_scores_absent.append(key)
+
     return {
         "risk_score": row.get("risk_score"),
         "risk_level": row.get("risk_level"),
+        "dimension_scores": dimension_scores,
+        "dimension_scores_absent": sorted(dimension_scores_absent),
         "base_risk_level": row.get("base_risk_level"),
         "final_risk_level": row.get("final_risk_level"),
         "risk_config_version": row.get("risk_config_version"),
@@ -675,7 +891,70 @@ def _edd_section(
         "case_count": len(cases),
         "absent_fields": sorted(absent),
         "stored_routing": routing_projection,
+        "routing_facts": _edd_routing_facts(memo_metadata),
         "policy_reevaluated": False,
+    }
+
+
+def _edd_routing_facts(memo_metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """The stored EDD fact contract, projected to the policy's declared keys (v2).
+
+    ``memo_handler`` persists this as ``metadata.agent5_input_contract`` and
+    feeds the identical dict to ``evaluate_edd_routing``. Carrying it means a
+    probe re-running the policy measures **the same inputs the decision path
+    used**, rather than a reconstruction assembled from five other places — no
+    duplicated governed derivation, and no risk of the two drifting.
+
+    ``screening_terminality_summary`` inside the contract was computed with a
+    wall clock at memo-generation time. That is safe here because it is *stored
+    state* being read, not a clock being called: the value is fixed and will not
+    move. It is a point-in-time record, labelled as such, and must not be read
+    as current screening state — ``screening.subjects`` carries that.
+
+    Missing is preserved distinctly from false: an absent key is reported in
+    ``absent_fact_keys`` rather than defaulted, because ``evaluate_edd_routing``
+    treats a missing key as ``incomplete_contract``, which is a materially
+    different routing outcome from a present ``False``.
+    """
+    contract = memo_metadata.get("agent5_input_contract")
+    if not isinstance(contract, Mapping) or not contract:
+        return {
+            "present": False,
+            "facts": {},
+            "absent_fact_keys": sorted(EDD_ROUTING_FACT_KEYS),
+            "availability_status": AvailabilityStatus.DATA_ABSENT.value,
+            "recorded_at_memo_generation": True,
+        }
+
+    facts: dict[str, Any] = {}
+    absent: list[str] = []
+    for key in EDD_ROUTING_FACT_KEYS:
+        if key not in contract:
+            absent.append(key)
+            continue
+        value = contract[key]
+        if key == "screening_terminality_summary":
+            summary = value if isinstance(value, Mapping) else {}
+            facts[key] = {
+                inner: summary[inner]
+                for inner in EDD_SCREENING_SUMMARY_KEYS
+                if inner in summary
+            }
+        elif key == "edd_trigger_flags":
+            facts[key] = sorted(str(flag) for flag in (value or []))
+        else:
+            facts[key] = _scalar(value)
+
+    return {
+        "present": True,
+        "facts": facts,
+        "absent_fact_keys": sorted(absent),
+        "availability_status": (
+            AvailabilityStatus.AVAILABLE.value
+            if not absent
+            else AvailabilityStatus.SNAPSHOT_INCOMPLETE.value
+        ),
+        "recorded_at_memo_generation": True,
     }
 
 

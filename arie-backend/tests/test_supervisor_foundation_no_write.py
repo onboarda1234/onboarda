@@ -239,11 +239,23 @@ def test_foundation_imports_only_read_only_authoritative_helpers():
     Widening this set is a deliberate act: each addition must be re-audited for
     clock use and side effects.
     """
+    # Each entry was audited for wall-clock use and side effects before being
+    # admitted. Widening this set is a deliberate act requiring the same audit.
+    #
+    # ``screening_state`` (added for bundle v2): the module has exactly two
+    # wall-clock call sites, ``derive_screening_truth`` and
+    # ``build_screening_truth_summary``, and the assembler calls neither. The
+    # four helpers it does use — ``provider_mode_from_record``,
+    # ``derive_screening_state``, ``_entry_has_material_hit`` and
+    # ``_entry_has_granular_material_fields`` — are clock-free and side-effect
+    # free, which ``test_supervisor_foundation_bundle_v2`` re-asserts by AST
+    # scan rather than by assertion here.
     permitted = {
         "company_registry",
         "document_reliance_gate",
         "environment",
         "memo_governance",
+        "screening_state",
         "supervisor_engine",
     }
     seen: set[str] = set()
