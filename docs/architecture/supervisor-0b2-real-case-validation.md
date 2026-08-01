@@ -192,9 +192,18 @@ findings on one busy case collapsed onto **two identifiers**. Probes now declare
 | P-02  | 34    | 9   | 0           | 0              |
 | P-03  | 0     | 0   | 41          | 0              |
 | P-04  | 0     | 0   | 41          | 0              |
-| P-06  | 3     | 9   | 0           | 29             |
+| P-06  | 1     | 11  | 0           | 29             |
 
-Totals: 166 findings, 18 hits, 82 unevaluable.
+Totals: 166 findings, 20 hits, 82 unevaluable.
+
+Two of P-06's eleven hits (`RM-PILOT-005`, `RM-PILOT-041`) appeared only after
+the closed-cycle fix in §2.5: both are approved customers whose only periodic
+review is `completed`, with no open successor. The finding is factually correct
+about the stored state and is exactly what the probe is named for. Note however
+that the canonical dataset writes monitoring rows directly rather than through
+`periodic_review_engine`, which would have created the successor — so these two
+are a property of how the fixture is authored, not evidence that the production
+path leaves customers unscheduled.
 
 Every case produced exactly 4–5 findings — one per probe, plus a second where a
 probe fired on two independent defects. No case produced a wall of noise.
@@ -213,7 +222,7 @@ is never a check that passed.
 | P-02  | 7     | 1   | 0           | 0              |
 | P-03  | 6     | 1   | 1           | 0              |
 | P-04  | 0     | 16  | 0           | 0              |
-| P-06  | 2     | 3   | 0           | 3              |
+| P-06  | 1     | 4   | 0           | 3              |
 
 P-03 evaluates cleanly against memos produced by `memo_handler`: it re-runs
 `evaluate_edd_routing` on the stored fact contract and reproduces the stored
@@ -268,7 +277,7 @@ wrong; it has no standing to.
 | **P-02** Risk factor resolution integrity | **SHIP** | Highest-value probe in the set. Found a real, previously invisible attributability gap on 9 of 41 reference cases. Signal-to-noise after the vocabulary fix is 9 hits / 34 clears — precise, not chatty. Every hit names a specific field and a specific action. |
 | **P-03** EDD routing divergence | **SHIP WITH LIMITATIONS** | Downgraded from SHIP in the closure review. The probe is sound *within the direction it can defend* (§2.4), and the under-routing check — the valuable one — is unaffected. But it cannot conclusively compare routes until the bundle carries `sector_label`, so one direction of its headline check reports `not_replayable` rather than an answer. It also cannot yet be credited with a caught defect: the reference corpus contains no divergence case. Ships because the under-routing check is genuinely free once a memo exists and nothing else in the product re-runs the policy; limited because a reviewer must understand that "not replayable" is a real state, not a failure. |
 | **P-04** Screening reliance defensibility | **SHIP, with a volume watch** | Per-subject machinery works against real `screening.py` output. Two rounds of noise reduction were needed to get from 4 findings per subject to 1. Recommend re-measuring volume on a deployment with live provider credentials before exposing it to officers: in this environment every subject is a hit for the same reason, and that pattern (many subjects, one root cause) is the one most likely to need a roll-up. |
-| **P-06** Monitoring requirement not established | **SHIP** | 3 clear / 9 hit / 29 not_applicable — correct scoping (only approved cases carry the obligation) and a credible hit rate. Carries the sharpest clock-safety property in the set: it refuses `parse_review_date`, which would have read a corrupt review date as "scheduled today" and passed. Also refuses `normalize_risk_level`'s silent fallback to MEDIUM, which would have attributed a governed 24-month cycle to an ungoverned risk level. The closed-cycle defect (§2.5) is fixed and regression-tested; note that the corpus could not have caught it, so the fix rests on unit coverage plus a reading of `periodic_review_engine`. |
+| **P-06** Monitoring requirement not established | **SHIP** | 1 clear / 11 hit / 29 not_applicable — correct scoping (only approved cases carry the obligation) and a credible hit rate. Carries the sharpest clock-safety property in the set: it refuses `parse_review_date`, which would have read a corrupt review date as "scheduled today" and passed. Also refuses `normalize_risk_level`'s silent fallback to MEDIUM, which would have attributed a governed 24-month cycle to an ungoverned risk level. The closed-cycle defect (§2.5) is fixed and regression-tested; note that the corpus could not have caught it, so the fix rests on unit coverage plus a reading of `periodic_review_engine`. |
 
 **No probe is DROP. No probe is REVISE-before-ship.** The five defects — three
 from the corpus run, two from the closure review — are fixed and covered by

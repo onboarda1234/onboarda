@@ -51,11 +51,18 @@ PROTECTED_FILES = (
 PHASE_0B1_BASE = "85c70431a2d2a2f4bd6dd3078257d5f22d92bad4"
 PHASE_0B1_HEAD = "901265f9cbfb45bac62358da6a453e24c052078e"
 
-#: Base of Phase 0B-2 (the probe set): the merge of PR #914, bundle v2. The head
-#: is ``HEAD`` rather than a pinned SHA because the phase is still open. When
-#: 0B-2 merges, pin its final head here the way 0B-1 is pinned above, so the
-#: proof survives on descendant branches instead of quietly becoming vacuous.
+# Immutable historical bounds for PR #916 / Phase 0B-2, pinned at the close of
+# the pre-merge review. The base is the merge of PR #914 (bundle v2); the head is
+# the final content commit of the phase.
+#
+# The commit that writes this pin necessarily comes *after* the head it names —
+# a commit cannot contain its own hash. That commit touches this file and the
+# phase documentation only, and both ``arie-backend/tests/test_supervisor_``
+# and ``docs/`` are already in the allowlist
+# ``test_phase_0b2_adds_only_foundation_paths`` enforces. Nothing authoritative
+# can hide in the gap.
 PHASE_0B2_BASE = "c667f95ff8ae892bcc8cafe27efa1151cc7d92f6"
+PHASE_0B2_HEAD = "d6d0de94f3c9a3e7e6d2aec419b102f4404f1b55"
 
 
 def _git(*args: str) -> str:
@@ -124,26 +131,44 @@ def _phase_0b1_changed_paths() -> list[str]:
 
 
 def _phase_0b2_changed_paths() -> list[str]:
-    """Files changed by Phase 0B-2, or ``None`` when the phase is not in history.
+    """Return the complete file set changed by PR #916 / Phase 0B-2.
 
-    Returns ``None`` rather than failing on a branch that predates the bundle v2
-    merge: this guard is about the probe set, and a branch without it has
-    nothing to prove.
+    Both bounds are pinned, for the reason the 0B-1 proof pins both: once the
+    phase merges, ``origin/main...HEAD`` describes some later pull request and
+    the historical claim would silently evaporate. Pinned bounds keep the proof
+    meaningful on every descendant branch.
+
+    Missing history is a hard failure rather than a skip. A guard that quietly
+    passes when it cannot run is worse than no guard.
     """
-    try:
-        _git("cat-file", "-e", f"{PHASE_0B2_BASE}^{{commit}}")
-    except subprocess.CalledProcessError:
-        return None
+    for commit in (PHASE_0B2_BASE, PHASE_0B2_HEAD):
+        try:
+            _git("cat-file", "-e", f"{commit}^{{commit}}")
+        except subprocess.CalledProcessError as exc:  # pragma: no cover - CI guard
+            pytest.fail(
+                "Phase 0B-2 history is unavailable; checkout must use "
+                f"fetch-depth: 0 before this proof can run. git error: "
+                f"{exc.stderr.strip()}"
+            )
+
     ancestor = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", PHASE_0B2_BASE, "HEAD"],
+        ["git", "merge-base", "--is-ancestor", PHASE_0B2_HEAD, "HEAD"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
+    if ancestor.returncode == 1:
+        pytest.fail(
+            f"HEAD does not descend from Phase 0B-2 head {PHASE_0B2_HEAD}; "
+            "the historical proof does not apply to this branch."
+        )
     if ancestor.returncode != 0:
-        return None
-    return _git("diff", "--name-only", PHASE_0B2_BASE, "HEAD").split()
+        pytest.fail(
+            "Phase 0B-2 ancestry could not be verified; git merge-base failed "
+            f"with exit {ancestor.returncode}: {ancestor.stderr.strip()}"
+        )
+    return _git("diff", "--name-only", PHASE_0B2_BASE, PHASE_0B2_HEAD).split()
 
 
 def test_protected_files_unchanged_by_phase_0b2():
@@ -154,16 +179,12 @@ def test_protected_files_unchanged_by_phase_0b2():
     ``rule_engine`` edited to work would have crossed the line Phase 0A drew.
     """
     changed = _phase_0b2_changed_paths()
-    if changed is None:
-        pytest.skip("Phase 0B-2 base is not in this branch's history")
     touched = sorted(set(changed) & set(PROTECTED_FILES))
     assert not touched, f"Phase 0B-2 modified protected files: {touched}"
 
 
 def test_phase_0b2_adds_only_foundation_paths():
     changed = _phase_0b2_changed_paths()
-    if changed is None:
-        pytest.skip("Phase 0B-2 base is not in this branch's history")
     allowed_prefixes = (
         "arie-backend/supervisor_foundation/",
         "arie-backend/tests/supervisor_probe_fixtures.py",
