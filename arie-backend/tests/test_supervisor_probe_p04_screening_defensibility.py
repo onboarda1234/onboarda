@@ -548,3 +548,224 @@ def test_probe_calls_no_clock_bearing_screening_helper():
     body = source.split('"""', 2)[-1]
     assert "build_screening_truth_summary(" not in body
     assert "derive_screening_truth(" not in body
+
+
+# ── Fail-closed: unreadable review instant ───────────────────────────
+# An earlier build skipped freshness when `as_of` would not parse and then
+# reported subjects "within their validity period" — asserting the very thing
+# it had not checked.
+
+
+def test_unreadable_as_of_never_produces_clear(db):
+    app_id = seed_application(db)
+    add_screening(
+        db, app_id,
+        company=screening_record(valid_until="2020-01-01T00:00:00"),
+        screening_valid_until="2020-01-01T00:00:00",
+    )
+    bundle = bundle_for(db, app_id)
+    bundle = {**bundle, "meta": {**bundle["meta"], "as_of": "not-a-timestamp"}}
+    findings = run_probe(bundle, PROBE)
+
+    assert all(f["status"] != "clear" for f in findings)
+    assert "within their validity period" not in claims(findings)
+
+    unreadable = next(f for f in findings if "not a readable timestamp" in f["claim"])
+    assert unreadable["status"] == "unavailable"
+    assert unreadable["availability_status"] == "data_absent"
+
+
+@pytest.mark.parametrize("bad_as_of", ["", None, "not-a-timestamp", "2026-13-45"])
+def test_every_unreadable_as_of_shape_fails_closed(db, bad_as_of):
+    app_id = seed_application(db)
+    add_screening(db, app_id, company=screening_record())
+    bundle = bundle_for(db, app_id)
+    bundle = {**bundle, "meta": {**bundle["meta"], "as_of": bad_as_of}}
+    findings = run_probe(bundle, PROBE)
+    assert all(f["status"] != "clear" for f in findings)
+
+
+def test_a_readable_as_of_still_reaches_clear(db):
+    """The fail-closed path must not swallow the healthy case."""
+    app_id = seed_application(db)
+    add_screening(db, app_id, company=screening_record())
+    assert only(_findings_for(db, app_id))["status"] == "clear"
+
+
+# ── Fail-closed: unknown provider mode ───────────────────────────────
+
+
+@pytest.mark.parametrize("mode", [
+    "quantum_provider",          # a value screening_state does not produce today
+    "live provider",             # right words, wrong separator
+    "  ",                        # whitespace only
+    "",                          # empty
+    None,                        # null
+])
+def test_unknown_provider_mode_is_never_defensible(db, mode):
+    """Only the exact live-provider mode may reach `clear`.
+
+    ``provider_mode_from_record`` returns six known values and falls back to
+    ``pending``, so these are unreachable through the authoritative helper — but
+    the default has to be closed. A mode added upstream tomorrow must not walk
+    a subject to `clear` because the probe did not recognise it.
+    """
+    app_id = seed_application(db)
+    add_screening(db, app_id, company=screening_record())
+    bundle = bundle_for(db, app_id)
+    subject = dict(bundle["screening"]["subjects"][0])
+    subject["provider_mode"] = mode
+    bundle = {**bundle, "screening": {**bundle["screening"], "subjects": [subject]}}
+
+    findings = run_probe(bundle, PROBE)
+    assert all(f["status"] != "clear" for f in findings)
+    provider = next(f for f in findings if "Screening provider state" in f["claim"])
+    assert provider["status"] == "unavailable"
+
+
+def test_provider_mode_case_and_padding_are_normalised_not_rejected(db):
+    """Leniency where leniency is right.
+
+    A stored value differing only in case or surrounding whitespace is the same
+    mode. Failing closed on that would report a defensible live screening as
+    unestablished — a false positive dressed as caution.
+    """
+    app_id = seed_application(db)
+    add_screening(db, app_id, company=screening_record())
+    bundle = bundle_for(db, app_id)
+    subject = dict(bundle["screening"]["subjects"][0], provider_mode="  LIVE_PROVIDER ")
+    bundle = {**bundle, "screening": {**bundle["screening"], "subjects": [subject]}}
+    assert only(run_probe(bundle, PROBE))["status"] == "clear"
+
+
+def test_an_unrecognised_mode_says_it_is_unrecognised(db):
+    app_id = seed_application(db)
+    add_screening(db, app_id, company=screening_record())
+    bundle = bundle_for(db, app_id)
+    subject = dict(bundle["screening"]["subjects"][0], provider_mode="quantum_provider")
+    bundle = {**bundle, "screening": {**bundle["screening"], "subjects": [subject]}}
+    claim = only(run_probe(bundle, PROBE))["claim"]
+    assert "not a provider mode this platform is known to record" in claim
+
+
+def test_only_live_provider_reaches_the_defensible_path():
+    """Asserted against the authoritative vocabulary, not a private list."""
+    from screening_state import (
+        FAILED, LIVE_PROVIDER, NOT_CONFIGURED, PENDING, SANDBOX_PROVIDER,
+        SIMULATED_FALLBACK,
+    )
+
+    every_mode = {
+        LIVE_PROVIDER, SANDBOX_PROVIDER, SIMULATED_FALLBACK, PENDING,
+        NOT_CONFIGURED, FAILED,
+    }
+    handled = (
+        set(screening_defensibility.UNDEFENSIBLE_MODES)
+        | set(screening_defensibility.UNAVAILABLE_MODES)
+        | {screening_defensibility.LIVE_PROVIDER_MODE}
+    )
+    assert every_mode <= handled, f"unhandled provider modes: {every_mode - handled}"
+    assert screening_defensibility.LIVE_PROVIDER_MODE == LIVE_PROVIDER
+
+
+# ── Disposition integrity ────────────────────────────────────────────
+
+
+def _matched_director(db, app_id, **review):
+    add_screening(
+        db, app_id,
+        directors=[
+            person_entry(
+                "Zara Late",
+                screening_record(matched=True, results=[{"match_id": "m1"}]),
+                has_pep_hit=True,
+            )
+        ],
+    )
+    if review:
+        add_screening_review(db, app_id, subject_name="Zara Late", **review)
+
+
+def test_disposition_vocabulary_matches_the_governed_codes():
+    """Mirrored from ``server``, asserted against it, never imported by the probe."""
+    import ast
+    import pathlib
+
+    source = pathlib.Path(__file__).resolve().parents[1] / "server.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    governed = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            getattr(t, "id", "") == "_SCREENING_DISPOSITION_CODES" for t in node.targets
+        ):
+            governed = {
+                item.value
+                for bucket in node.value.values
+                for item in bucket.elts
+                if isinstance(item, ast.Constant)
+            }
+            break
+
+    assert governed, "could not locate _SCREENING_DISPOSITION_CODES in server.py"
+    assert screening_defensibility.GOVERNED_DISPOSITION_CODES == frozenset(governed), (
+        "the probe's disposition vocabulary has drifted from server.py"
+    )
+
+
+@pytest.mark.parametrize("code", ["false_positive", "confirmed_match",
+                                  "needs_more_information"])
+def test_a_governed_disposition_closes_the_match(db, code):
+    app_id = seed_application(db)
+    _matched_director(db, app_id, disposition_code=code)
+    assert not [f for f in _findings_for(db, app_id) if f["category"] == "sanctions"]
+
+
+@pytest.mark.parametrize("code,expected_phrase", [
+    ("", "records no disposition code"),
+    ("   ", "records no disposition code"),
+    (None, "records no disposition code"),
+    ("looks_fine_to_me", "not one of the governed screening dispositions"),
+])
+def test_a_malformed_disposition_does_not_close_the_match(db, code, expected_phrase):
+    """A review row is not a disposition.
+
+    ``screening_reviews.disposition_code`` is nullable and unconstrained, so a
+    row can exist carrying nothing. Its mere presence must not close a material
+    match.
+    """
+    app_id = seed_application(db)
+    _matched_director(db, app_id, disposition_code=code)
+    finding = next(
+        f for f in _findings_for(db, app_id) if f["category"] == "sanctions"
+    )
+    assert finding["status"] == "hit"
+    assert expected_phrase in finding["claim"]
+
+
+def test_disposition_case_and_padding_are_normalised_not_rejected(db):
+    """Same leniency, same reason: a padded governed code is a governed code."""
+    app_id = seed_application(db)
+    _matched_director(db, app_id, disposition_code="  FALSE_POSITIVE ")
+    assert not [f for f in _findings_for(db, app_id) if f["category"] == "sanctions"]
+
+
+def test_a_malformed_disposition_on_an_approved_case_is_critical(db):
+    app_id = seed_application(db)
+    _matched_director(db, app_id, disposition_code="")
+    approve(db, app_id)
+    finding = next(
+        f for f in _findings_for(db, app_id) if f["category"] == "sanctions"
+    )
+    assert finding["severity"] == "critical"
+    assert "approved on this review" in finding["claim"]
+
+
+def test_four_eyes_is_still_enforced_on_a_governed_disposition(db):
+    """The new validation must run before, not instead of, the sign-off check."""
+    app_id = seed_application(db)
+    _matched_director(db, app_id, disposition_code="false_positive",
+                      requires_four_eyes=True, second_reviewer_id=None)
+    finding = next(
+        f for f in _findings_for(db, app_id) if f["category"] == "sanctions"
+    )
+    assert "no second reviewer is recorded" in finding["claim"]

@@ -51,6 +51,12 @@ from ._draft import (
 PROBE_ID = "P-04"
 PROBE_VERSION = "p04-v1"
 
+#: The probe's primary category from the governed register (§5.2).
+#: Used when the runner has to report that this probe could not run at
+#: all, so that failure lands in a governed category rather than
+#: inventing one.
+PROBE_CATEGORY = "screening"
+
 SOURCE_MODULES = (
     "screening_state.provider_mode_from_record",
     "screening_state.derive_screening_state",
@@ -78,6 +84,26 @@ TERMINAL_STATES = frozenset({"completed_clear", "completed_match"})
 
 #: The one provider mode that constitutes a defensible answer.
 LIVE_PROVIDER_MODE = "live_provider"
+
+#: Every governed screening disposition code, flattened from the three outcome
+#: buckets ``server._SCREENING_DISPOSITION_CODES`` defines. Mirrored here rather
+#: than imported: importing ``server`` builds the route table, which the
+#: read-only foundation must never do. A test asserts the two sets agree.
+#:
+#: Anything outside this set — including an empty or whitespace-only value, which
+#: the column permits — is not a disposition. Treating it as one would let a
+#: blank field close a material match.
+GOVERNED_DISPOSITION_CODES = frozenset({
+    "false_positive_cleared", "false_positive", "identity_mismatch",
+    "provider_no_relevant_match", "duplicate_or_irrelevant",
+    "low_risk_context_accepted",
+    "confirmed_match", "true_match", "material_concern", "escalated_to_edd",
+    "potential_sanctions_match", "potential_pep_match", "adverse_media_match",
+    "director_ubo_sensitive_hit", "high_risk_jurisdiction", "provider_unresolved",
+    "needs_more_information", "client_clarification_required",
+    "missing_identity_data", "provider_pending_or_unavailable",
+    "documentation_required",
+})
 
 #: `rule_engine` scores adverse media 1 when it has nothing to read. That is an
 #: absence, not a clearance — which is the whole point of check 5.
@@ -178,7 +204,26 @@ def _provider_findings(
             )
         ]
 
-    if mode in UNAVAILABLE_MODES or not mode:
+    # Everything that is not an explicitly recognised defensible answer.
+    # ``provider_mode_from_record`` returns six known values today and falls
+    # back to ``pending``, so an unrecognised mode is unreachable through the
+    # authoritative helper — but the default must still be closed. A mode added
+    # upstream tomorrow would otherwise fall through here as defensible and
+    # carry the subject all the way to ``clear``.
+    if mode != LIVE_PROVIDER_MODE:
+        if mode == "not_configured":
+            availability = AvailabilityStatus.CREDENTIALS_ABSENT
+        else:
+            availability = AvailabilityStatus.DATA_ABSENT
+        recognised = mode in UNAVAILABLE_MODES or not mode
+        detail = (
+            f"is '{mode or 'unrecorded'}'"
+            if recognised
+            else (
+                f"is '{mode}', which is not a provider mode this platform is "
+                "known to record"
+            )
+        )
         return [
             finding_draft(
                 probe_id=PROBE_ID,
@@ -186,17 +231,13 @@ def _provider_findings(
                 category="screening",
                 severity=MEDIUM,
                 status=FindingStatus.UNAVAILABLE,
-                availability_status=(
-                    AvailabilityStatus.CREDENTIALS_ABSENT
-                    if mode == "not_configured"
-                    else AvailabilityStatus.DATA_ABSENT
-                ),
+                availability_status=availability,
                 confidence=1.0,
                 claim=(
-                    f"Screening provider state for subject '{key}' is "
-                    f"'{mode or 'unrecorded'}' and its screening state is "
-                    f"'{state or 'unrecorded'}', so whether this subject was "
-                    "screened against a live provider cannot be established."
+                    f"Screening provider state for subject '{key}' {detail} and "
+                    f"its screening state is '{state or 'unrecorded'}', so "
+                    "whether this subject was screened against a live provider "
+                    "cannot be established."
                 ),
                 evidence_refs=refs,
                 primary_evidence_ref=anchor,
@@ -221,6 +262,9 @@ def _provider_findings(
             )
         ]
 
+    # Reached only for ``live_provider``: the one mode that constitutes a
+    # defensible answer, and the only one that lets the subject proceed to the
+    # freshness and disposition checks.
     return []
 
 
@@ -292,7 +336,66 @@ def _disposition_findings(
 
     requires_four_eyes = bool(review.get("requires_four_eyes"))
     second_reviewer = review.get("second_reviewer_id")
-    disposition_code = str(review.get("disposition_code") or "").strip().lower()
+    raw_code = review.get("disposition_code")
+    disposition_code = str(raw_code or "").strip().lower()
+
+    # A review row is not a disposition. ``screening_reviews.disposition_code``
+    # is nullable and unconstrained, so a row can exist carrying nothing, blank
+    # space, or a value no workflow produces — and the presence of that row
+    # would otherwise close the material match.
+    if disposition_code not in GOVERNED_DISPOSITION_CODES:
+        blank = not str(raw_code or "").strip()
+        detail = (
+            "records no disposition code"
+            if blank
+            else (
+                f"records disposition code {str(raw_code)!r}, which is not one "
+                "of the governed screening dispositions"
+            )
+        )
+        return [
+            finding_draft(
+                probe_id=PROBE_ID,
+                probe_version=PROBE_VERSION,
+                category="sanctions",
+                severity=severity_by_reliance(bundle, approved=CRITICAL, pending=HIGH),
+                status=FindingStatus.HIT,
+                availability_status=AvailabilityStatus.AVAILABLE,
+                confidence=1.0,
+                claim=(
+                    f"Screening subject '{key}' carries a material match and a "
+                    f"screening review exists against it, but that review "
+                    f"{detail}. The match is not dispositioned."
+                    + (
+                        " The application was approved on this review."
+                        if is_approved(bundle)
+                        else ""
+                    )
+                ),
+                evidence_refs=refs,
+                primary_evidence_ref=anchor,
+                source_modules=list(SOURCE_MODULES),
+                why_it_matters=(
+                    "An open review row reads as an assessment on every surface "
+                    "that counts rows. Without a governed disposition there is "
+                    "no recorded conclusion — nothing states whether the match "
+                    "was cleared, escalated or is still being worked."
+                ),
+                regulatory_or_policy_basis="internal_policy_only",
+                officer_question=(
+                    f"What conclusion was reached on the match for subject "
+                    f"'{key}'?"
+                ),
+                required_action=(
+                    "Record a governed disposition on this screening review "
+                    "through the existing workflow."
+                ),
+                close_condition=(
+                    "The screening review records a disposition code drawn from "
+                    "the governed screening disposition vocabulary."
+                ),
+            )
+        ]
 
     if requires_four_eyes and not second_reviewer:
         return [
@@ -605,7 +708,52 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
         )
         return drafts
 
-    as_of_dt = _parse_timestamp((bundle.get("meta") or {}).get("as_of"))
+    # ── Freshness needs a readable review instant, or it cannot run ──
+    # Skipping the check silently and then reporting subjects "within their
+    # validity period" would assert something never established — the exact
+    # failure this probe set exists to prevent. One application-level finding is
+    # emitted instead, which also keeps the `clear` fallback below unreachable.
+    raw_as_of = (bundle.get("meta") or {}).get("as_of")
+    as_of_dt = _parse_timestamp(raw_as_of)
+    if as_of_dt is None:
+        drafts.append(
+            finding_draft(
+                probe_id=PROBE_ID,
+                probe_version=PROBE_VERSION,
+                category="screening",
+                severity=MEDIUM,
+                status=FindingStatus.UNAVAILABLE,
+                availability_status=AvailabilityStatus.DATA_ABSENT,
+                confidence=1.0,
+                claim=(
+                    f"The review instant {raw_as_of!r} is not a readable "
+                    "timestamp, so screening currency cannot be evaluated for "
+                    "any subject on this application."
+                ),
+                evidence_refs=unique_refs([f"{subject}#as_of"]),
+                primary_evidence_ref=f"{subject}#as_of",
+                source_modules=list(SOURCE_MODULES),
+                why_it_matters=(
+                    "Freshness is the one check that compares stored evidence "
+                    "against a point in time. Without a readable instant it did "
+                    "not run, and a screening result that has not been checked "
+                    "for currency must never be reported as current."
+                ),
+                regulatory_or_policy_basis="internal_policy_only",
+                officer_question=(
+                    "What review instant should this application be assessed "
+                    "against?"
+                ),
+                required_action=(
+                    "Re-run the review with a valid ISO-8601 as_of instant."
+                ),
+                close_condition=(
+                    "The review is assembled with a readable as_of and the "
+                    "freshness check evaluates."
+                ),
+            )
+        )
+
     reviews_by_id = {
         review.get("id"): review
         for review in (screening.get("reviews") or [])

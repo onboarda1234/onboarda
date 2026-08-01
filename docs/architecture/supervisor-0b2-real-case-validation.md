@@ -49,9 +49,10 @@ python -m pytest tests/probe_corpus_report.py::production_path \
 
 ## 2. What the corpus run changed
 
-Three implementation defects were found by running against the corpus that no
-unit test had caught, and two more in the pre-merge closure review. Each is now
-covered by a regression test that fails without the fix.
+Ten implementation defects were found before merge: three by running against the
+corpus, two in the pre-merge closure review, and five more by external review of
+the non-draft pull request. Each is covered by a regression test verified to fail
+when the fix is reverted.
 
 ### 2.1 P-02 accepted only one of two spellings of "resolved" — 253 false positives
 
@@ -182,6 +183,44 @@ findings on one busy case collapsed onto **two identifiers**. Probes now declare
 `primary_evidence_ref` explicitly, naming the field the check examined.
 
 ---
+
+### 2.7 Five defects found by external review, after the closure pass
+
+An automated review of the non-draft pull request raised fifteen threads. Five
+were correctness defects in probe code, none reachable through the corpus —
+which is why the corpus run, the closure review and the full suite all missed
+them, and why the corpus figures in §3 are unchanged by their repair.
+
+| # | Defect | Why the corpus could not catch it |
+|---|---|---|
+| P-02 direction | Any inequality between `base_risk_level` and `final_risk_level` counted as an elevation, so a HIGH → LOW **de-escalation** was reported as *"a risk elevation was applied"* | No corpus case de-escalates |
+| P-04 `as_of` | An unreadable `as_of` silently skipped freshness and the probe still reported `clear`, claiming subjects were *"within their validity period"* | The assembler validates `as_of`, so it is unreachable through `assemble_application_bundle` |
+| P-03 malformed routing | `stored_routing: None` raised `AttributeError`, and a truthy non-mapping (`"edd"`, `42`) got past an `or {}` guard | Every corpus memo carries a well-formed routing structure |
+| P-04 unknown provider mode | Any mode outside the two known-bad sets fell through as defensible and reached `clear` | `provider_mode_from_record` returns six known values, so it is unreachable today |
+| P-04 disposition integrity | `disposition_code` is nullable and unconstrained; an empty or unrecognised value closed a material match because the review row existed | No corpus review carries a blank code |
+
+Direction is now taken from the governed risk ladder by rank, never from
+inequality. An unreadable `as_of` produces an application-level `unavailable`
+finding that also makes the `clear` fallback unreachable. Every stored structure
+P-03 reads passes through one `_as_mapping` helper. Only the exact
+`live_provider` mode is defensible. Disposition codes are validated against the
+governed vocabulary mirrored from `server._SCREENING_DISPOSITION_CODES`, with a
+test asserting the two agree.
+
+**The runner now contains probe exceptions.** A probe that raises used to abort
+the entire review and silence three unrelated probes. It now yields a finding
+recording that the probe could not run — carrying the exception *type* but never
+its message, which can contain record content. `ProbeContractError` is
+deliberately still raised: a malformed draft is a defect in a probe's own code
+and must stay loud in development rather than degrade into a runtime-looking
+"could not run".
+
+Each of the five has a regression test verified to fail when the fix is reverted.
+One of those verifications mattered: the first version of the malformed-routing
+test asserted only "does not raise", which the new exception containment
+satisfied trivially — a passing test over a broken probe. It now asserts the
+probe answers the question itself and never reaches the runner's safety net,
+and that stronger form immediately exposed the truthy-non-mapping hole above.
 
 ## 3. Results
 
@@ -344,32 +383,31 @@ none.
    stored route disagrees with the policy, so P-03's headline check is covered
    by unit tests only. One direction of that check is additionally limited by
    the `sector_label` gap and reports `not_replayable` (§2.4).
-6. **P-04's disposition link is name-based.** The bundle matches a screening
+4. **No officer feedback.** Whether these findings are *acted on* — the real
+   commercial test — cannot be answered from a corpus run. That belongs to
+   pilot usage.
+5. **P-04's disposition link is name-based.** The bundle matches a screening
    review to a subject on `(subject_type, sha256(name.strip().lower()))`. A
    spelling or spacing difference between the screening report and
    `screening_reviews.subject_name` breaks the link, and P-04 would report an
    undispositioned match that was in fact dispositioned. No instance was seen in
    the corpus, but the matching is exact and this is a real false-positive path
    inherited from the bundle, not from the probe.
-4. **No officer feedback.** Whether these findings are *acted on* — the real
-   commercial test — cannot be answered from a corpus run. That belongs to
-   pilot usage.
-5. **P-06 tests structured scheduling only.** Monitoring commitments made only
+6. **P-06 tests structured scheduling only.** Monitoring commitments made only
    in generated memo prose are outside its reach, and every P-06 finding says so.
 
 ---
 
 ## 7. Follow-ups (not authorised in this phase)
 
-- Re-measure P-04 finding volume against a deployment with live screening
-  credentials; decide then whether a per-application roll-up is warranted.
 - Construct a routing-divergence case for P-03 in a QA fixture set, so its
   headline check has corpus coverage rather than unit coverage alone.
 - Decide whether to carry `sector_label` (and any future policy input outside
   `REQUIRED_FACT_KEYS`) in a bundle v3, which would let P-03 compare routes in
   both directions and lift its SHIP WITH LIMITATIONS to SHIP.
-- Re-measure P-04 finding volume against live provider credentials, which is
-  what would lift its SHIP WITH LIMITATIONS to SHIP.
+- Re-measure P-04 finding volume against a deployment with live screening
+  credentials, and decide then whether a per-application roll-up is warranted.
+  That measurement is what would lift its SHIP WITH LIMITATIONS to SHIP.
 - The `sub_factor_score_4` attributability gap in §4 is a finding *about the
   platform*, surfaced by the Supervisor. Whether `rule_engine` should record a
   reason for sub-factor elevations is a product decision for the founder, not a

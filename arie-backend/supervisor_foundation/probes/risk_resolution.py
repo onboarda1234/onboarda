@@ -33,6 +33,12 @@ from ._draft import (
 PROBE_ID = "P-02"
 PROBE_VERSION = "p02-v1"
 
+#: The probe's primary category from the governed register (§5.2).
+#: Used when the runner has to report that this probe could not run at
+#: all, so that failure lands in a governed category rather than
+#: inventing one.
+PROBE_CATEGORY = "risk"
+
 SOURCE_MODULES = (
     "rule_engine.compute_risk_score",
     "rule_engine._is_valid_risk_config_version",
@@ -80,6 +86,27 @@ JURISDICTION_FACTORS = frozenset(
 )
 PRODUCT_FACTORS = frozenset({"service_type"})
 
+#: The governed risk ladder, lowest to highest. Comparing levels by *rank*
+#: rather than by inequality is what keeps a de-escalation from being described
+#: as an elevation — ``base != final`` is true in both directions, and an
+#: earlier draft reported HIGH → LOW as "a risk elevation was applied".
+#:
+#: Mirrors ``periodic_review_policy.RISK_FREQUENCY_MONTHS``; a test asserts the
+#: two vocabularies agree.
+RISK_LADDER = ("LOW", "MEDIUM", "HIGH", "VERY_HIGH")
+
+
+def _rank(level: Any) -> int | None:
+    """Position on the governed ladder, or ``None`` for anything ungoverned.
+
+    ``None`` for an unknown level is deliberate: the direction of a move to or
+    from an ungoverned value cannot be established, and guessing it is how a
+    finding ends up asserting the opposite of what happened.
+    """
+    text = str(level or "").strip().upper()
+    return RISK_LADDER.index(text) if text in RISK_LADDER else None
+
+
 #: At or above this rule score a factor is materially shaping the assessment,
 #: so an unresolved input there is a higher-severity provenance defect. Below
 #: it, the defect is real but its influence on the outcome is smaller.
@@ -103,7 +130,12 @@ def _config_version_findings(risk: Mapping[str, Any], subject: str) -> list[dict
     )
 
     version = risk.get("risk_config_version")
-    refs = unique_refs([f"{subject}#risk_config_version", "risk_config:" + str(version)])
+    # Only cite a configuration edition when one exists, and never double the
+    # prefix: stored values already carry ``risk_config:``, so concatenating it
+    # produced ``risk_config:risk_config:...`` for real versions and
+    # ``risk_config:None`` for absent ones — two references naming nothing.
+    text = str(version).strip() if version is not None else ""
+    refs = unique_refs([f"{subject}#risk_config_version", text])
 
     sentinels = {
         RISK_CONFIG_VERSION_RECOMPUTE_FAILED: (
@@ -291,8 +323,9 @@ def _unresolved_factor_findings(
                     "existing authoritative path."
                 ),
                 close_condition=(
-                    f"The {factor_key} factor records resolution status "
-                    "'resolved' under a valid risk configuration version."
+                    f"The {factor_key} factor records a resolved status "
+                    f"({' or '.join(repr(value) for value in sorted(RESOLVED_STATUSES))}) "
+                    "under a valid risk configuration version."
                 ),
             )
         )
@@ -302,21 +335,50 @@ def _unresolved_factor_findings(
 def _elevation_reason_findings(
     risk: Mapping[str, Any], subject: str
 ) -> list[dict[str, Any]]:
-    """Check 3 — an elevation or floor was applied with no reason recorded."""
+    """Check 3 — an *upward* movement or escalation with no reason recorded.
+
+    **Direction is established, never assumed.** Three movements are possible
+    and only one of them is an elevation:
+
+    * **elevation** — final ranks above base. An unexplained uplift is the
+      finding: a reviewer asked "why was this customer uplifted?" has nothing to
+      point to.
+    * **de-escalation** — final ranks below base. Out of scope here. It is a
+      different question with a different owner, and describing it as an
+      elevation would state the opposite of what happened.
+    * **unchanged** — no movement at all.
+
+    An authoritative escalation event is independently sufficient: ``rule_engine``
+    records floor rules and elevation rules in ``risk_escalations``, and those are
+    upward by construction even where the level ends up unchanged because it was
+    already at the floor.
+
+    Movement to or from an ungoverned level yields no direction and therefore no
+    movement-based finding; a recorded escalation on such a case still counts.
+    """
     escalations = [str(item) for item in (risk.get("escalations") or []) if str(item)]
     base_level = str(risk.get("base_risk_level") or "").strip()
     final_level = str(risk.get("final_risk_level") or "").strip()
-    level_moved = bool(base_level and final_level and base_level != final_level)
 
-    if not escalations and not level_moved:
+    base_rank, final_rank = _rank(base_level), _rank(final_level)
+    elevated = (
+        base_rank is not None and final_rank is not None and final_rank > base_rank
+    )
+
+    if not escalations and not elevated:
         return []
     if str(risk.get("elevation_reason_text") or "").strip():
         return []
 
-    if escalations:
+    if escalations and elevated:
+        trigger = (
+            f"escalations {sorted(escalations)} are recorded and the level was "
+            f"raised from {base_level} to {final_level}"
+        )
+    elif escalations:
         trigger = f"escalations {sorted(escalations)} are recorded"
     else:
-        trigger = f"the level moved from {base_level} to {final_level}"
+        trigger = f"the level was raised from {base_level} to {final_level}"
 
     return [
         finding_draft(

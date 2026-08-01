@@ -450,13 +450,24 @@ def test_running_every_probe_writes_nothing(defective_case, db):
 def test_probes_cannot_write_through_a_read_only_connection(defective_case, db, tmp_path):
     """Belt and braces: the review runs against a connection that would raise."""
     source = db.execute("PRAGMA database_list").fetchall()[0]["file"]
+    # An in-memory database reports an empty path, and `file:?mode=ro` would
+    # then open a *different*, empty database: the probes would find nothing,
+    # write nothing, and the test would pass having proved nothing.
+    assert source, (
+        "the db fixture is in-memory, so this read-only proof would be vacuous"
+    )
     uri = f"file:{source}?mode=ro"
     read_only = sqlite3.connect(uri, uri=True)
     read_only.row_factory = sqlite3.Row
     try:
         bundle = assemble_application_bundle(read_only, defective_case, as_of=AS_OF)
         review = run_review(bundle, policy=unconfigured_policy(), probes=PROBES)
+        # Non-vacuous on two counts: the connection really is read-only, and the
+        # review really did read the seeded rows rather than an empty database.
+        with pytest.raises(sqlite3.OperationalError):
+            read_only.execute("CREATE TABLE probe_write_check (x INTEGER)")
         assert review["findings"]
+        assert any(f["status"] == "hit" for f in review["findings"])
     finally:
         read_only.close()
 
@@ -629,3 +640,127 @@ def test_probes_run_against_a_fully_unconfigured_policy(defective_case, db):
     review = _review(db, defective_case)
     assert review["findings"]
     assert review["policy_version"] == unconfigured_policy().policy_version
+
+
+# ── Finding-quality invariants ───────────────────────────────────────
+# Five properties the whole set must hold, each written because a real defect
+# violated it. They run over every probe against a matrix of damaged bundles, so
+# a probe added later inherits them.
+
+
+#: Phrases that assert which way a risk level moved. Matched as phrases, not as
+#: bare words: `elevated_jurisdiction` is a trigger identifier and asserts no
+#: direction, so a word-level scan flags P-03 for quoting its own trigger list.
+#:
+#: P-02 once reported a HIGH → LOW de-escalation as "a risk elevation was
+#: applied", which is why any of these has to be backed by the level fields.
+DIRECTIONAL_PHRASES = (
+    "elevation was applied", "was raised from", "was lowered from",
+    "was uplifted", "was downgraded", "level increased", "level decreased",
+)
+
+
+def _damaged_bundles(db, app_id):
+    """One healthy bundle plus the ways a stored record can be malformed."""
+    base = assemble_application_bundle(db, app_id, as_of=AS_OF)
+    yield "healthy", base
+    yield "unreadable as_of", {**base, "meta": {**base["meta"], "as_of": "nope"}}
+    yield "null risk", {**base, "risk": {}}
+    yield "string edd", {**base, "edd": "not a section"}
+    yield "null screening", {**base, "screening": {}}
+    yield "null monitoring", {**base, "monitoring": {}}
+    yield "null decision", {**base, "decision": {}}
+    yield "scalar sections", {
+        **base, "risk": 1, "edd": 2, "screening": 3, "monitoring": 4,
+    }
+
+
+def test_no_directional_claim_is_made_without_supporting_evidence(
+    defective_case, clean_case, db
+):
+    """A claim that names a direction must cite the fields establishing it."""
+    for app_id in (defective_case, clean_case):
+        for finding in _review(db, app_id)["findings"]:
+            claim = str(finding["claim"]).lower()
+            if not any(phrase in claim for phrase in DIRECTIONAL_PHRASES):
+                continue
+            refs = " ".join(finding["evidence_refs"])
+            assert "risk_level" in refs or "escalation" in refs, (
+                f"{finding['probe_id']} claims a direction without citing the "
+                f"fields that establish it: {finding['claim']}"
+            )
+
+
+def test_unavailable_never_becomes_clear_under_any_damage(defective_case, db):
+    """The core invariant, swept across every malformed section shape."""
+    for label, bundle in _damaged_bundles(db, defective_case):
+        review = run_review(bundle, policy=unconfigured_policy(), probes=PROBES)
+        for finding in review["findings"]:
+            if finding["status"] == "clear":
+                assert finding["availability_status"] == "available", (
+                    f"{label}: {finding['probe_id']} reported clear with "
+                    f"availability {finding['availability_status']}"
+                )
+
+
+def test_malformed_evidence_never_crashes_the_review(defective_case, db):
+    """Every probe still reports, whatever shape the bundle arrives in."""
+    for label, bundle in _damaged_bundles(db, defective_case):
+        review = run_review(bundle, policy=unconfigured_policy(), probes=PROBES)
+        reported = {finding["probe_id"] for finding in review["findings"]}
+        assert set(PROBE_IDS) <= reported, (
+            f"{label}: probes silenced — missing {sorted(set(PROBE_IDS) - reported)}"
+        )
+
+
+def test_unknown_states_fail_closed(defective_case, db):
+    """An unrecognised stored value must never walk a subject to `clear`."""
+    base = assemble_application_bundle(db, defective_case, as_of=AS_OF)
+    mutations = [
+        ("provider mode", {**base, "screening": {
+            **base["screening"],
+            "subjects": [
+                {**s, "provider_mode": "mode_from_the_future"}
+                for s in base["screening"]["subjects"]
+            ],
+        }}),
+        ("risk level", {**base, "risk": {
+            **base["risk"], "final_risk_level": "CATACLYSMIC",
+        }}),
+        ("resolution status", {**base, "risk": {
+            **base["risk"],
+            "factors": [
+                {**f, "resolution_status": "status_from_the_future"}
+                for f in base["risk"]["factors"]
+            ],
+        }}),
+    ]
+    for label, bundle in mutations:
+        review = run_review(bundle, policy=unconfigured_policy(), probes=PROBES)
+        assert review["findings"], label
+        for finding in review["findings"]:
+            if finding["status"] != "clear":
+                continue
+            claim = str(finding["claim"]).lower()
+            assert "from_the_future" not in claim and "cataclysmic" not in claim, (
+                f"{label}: an unknown value reached a clear finding — {claim}"
+            )
+
+
+def test_every_claim_names_the_subject_or_field_it_is_about(defective_case, db):
+    """Specificity, mechanically. A claim naming nothing cannot be acted on."""
+    for finding in _review(db, defective_case)["findings"]:
+        claim = str(finding["claim"])
+        anchor = str(finding["primary_evidence_ref"]).rsplit("#", 1)[-1]
+        subject_named = (
+            anchor.replace("_", " ") in claim.lower()
+            or anchor in claim
+            or any(
+                token in claim
+                for token in ("subject", "factor", "review", "application", "route")
+            )
+        )
+        assert subject_named, (
+            f"{finding['probe_id']} claim names neither its subject nor its "
+            f"field: {claim}"
+        )

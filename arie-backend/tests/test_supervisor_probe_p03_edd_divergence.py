@@ -8,6 +8,8 @@ defensible rather than a second opinion.
 
 from __future__ import annotations
 
+import pytest
+
 from supervisor_foundation.probes import edd_divergence
 from supervisor_probe_fixtures import (
     AS_OF,
@@ -413,7 +415,136 @@ def test_probe_reproduces_the_route_a_real_memo_was_routed_on(db):
     at_review_time = evaluate_edd_routing(reconstructed)
 
     assert at_review_time["route"] == at_memo_time["route"]
-    # Triggers may be a strict subset only for the declared gap; nothing the
-    # probe reconstructs may ever add a trigger memo time did not have.
-    assert set(at_review_time["triggers"]) <= set(at_memo_time["triggers"])
-    assert set(at_memo_time["triggers"]) - set(at_review_time["triggers"]) == set()
+
+    # Two distinct claims, not one restated. The probe may never *invent* a
+    # trigger — that would be a false statement about policy. It may *lack* one,
+    # but only for the declared `sector_label` gap, so anything else missing is
+    # a new gap that has to be accounted for.
+    invented = set(at_review_time["triggers"]) - set(at_memo_time["triggers"])
+    assert not invented, f"the probe invented triggers memo time never had: {invented}"
+
+    missing = set(at_memo_time["triggers"]) - set(at_review_time["triggers"])
+    assert missing <= {"crypto_or_virtual_asset_sector", "high_risk_sector"}, (
+        f"triggers lost for a reason other than the declared sector_label gap: "
+        f"{sorted(missing)}"
+    )
+
+
+# ── Malformed routing must be reported, never raised ─────────────────
+# A probe that throws aborts the whole review and takes three unrelated probes
+# with it, so a section of the wrong shape has to become a finding.
+
+
+@pytest.mark.parametrize("stored_routing", [None, {}, "edd", 42, []])
+def test_malformed_stored_routing_is_handled_by_the_probe_itself(db, stored_routing):
+    """`stored_routing: None` used to raise AttributeError and abort the review.
+
+    Asserting "does not raise" is not enough now that the runner contains probe
+    exceptions: a crash would still yield a finding, and the test would pass
+    while the probe was in fact broken. The real claim is that P-03 answers the
+    question itself and never reaches the runner's safety net.
+    """
+    app_id = seed_application(db)
+    add_memo(db, app_id, facts=routing_facts(), stored_route="standard")
+    bundle = bundle_for(db, app_id)
+    bundle = {**bundle, "edd": {**bundle["edd"], "stored_routing": stored_routing}}
+
+    findings = run_probe(bundle, PROBE)
+    assert findings
+    assert not [f for f in findings if "could not run" in f["claim"]], (
+        "P-03 raised and was caught by the runner instead of handling the "
+        "malformed value itself"
+    )
+
+
+@pytest.mark.parametrize("routing_facts_value", [None, "malformed", 7, []])
+def test_malformed_routing_facts_are_reported_honestly(db, routing_facts_value):
+    app_id = seed_application(db)
+    add_memo(db, app_id, facts=routing_facts(), stored_route="standard")
+    bundle = bundle_for(db, app_id)
+    bundle = {**bundle, "edd": {**bundle["edd"], "routing_facts": routing_facts_value}}
+
+    finding = only(run_probe(bundle, PROBE))
+    assert finding["status"] in {"unavailable", "not_replayable"}
+    assert finding["status"] != "clear"
+    assert "could not run" not in finding["claim"], (
+        "the probe raised rather than reporting the malformed shape"
+    )
+
+
+def test_one_probe_failing_does_not_silence_the_others(db):
+    """The isolation boundary, exercised end to end.
+
+    P-03 is handed a bundle whose ``edd`` section is not a mapping at all — a
+    shape no guard inside the probe anticipates — and the other three probes
+    must still produce their findings.
+    """
+    from supervisor_foundation import run_review
+    from supervisor_foundation.policy import unconfigured_policy
+    from supervisor_foundation.probes import PROBES
+
+    app_id = seed_application(db)
+    add_memo(db, app_id, facts=routing_facts(), stored_route="standard")
+    bundle = bundle_for(db, app_id)
+    bundle = {**bundle, "edd": "this is not a section"}
+
+    review = run_review(bundle, policy=unconfigured_policy(), probes=PROBES)
+    reported = {f["probe_id"] for f in review["findings"]}
+    expected = {"P-02", "P-03", "P-04", "P-06"}
+    assert expected <= reported, (
+        f"a malformed section silenced probes: missing {sorted(expected - reported)}"
+    )
+    assert all(f["status"] != "clear" for f in review["findings"]
+               if f["probe_id"] == "P-03")
+
+
+def test_a_raising_probe_becomes_a_finding_not_a_crash(db):
+    """A probe that throws has answered nothing, and must say so."""
+    from supervisor_foundation import run_review
+    from supervisor_foundation.policy import unconfigured_policy
+    from supervisor_foundation.probes import PROBES
+
+    def exploding(bundle, policy):
+        raise RuntimeError("sensitive record detail that must not travel")
+
+    app_id = seed_application(db)
+    bundle = bundle_for(db, app_id)
+    review = run_review(
+        bundle, policy=unconfigured_policy(), probes=(*PROBES, exploding)
+    )
+
+    failure = next(f for f in review["findings"] if "could not run" in f["claim"])
+    assert failure["status"] == "unavailable"
+    assert failure["availability_status"] == "snapshot_incomplete"
+    assert "RuntimeError" in failure["claim"]
+    # The exception *message* can carry record content and must not travel with
+    # the review; the exception type is enough to diagnose.
+    assert "sensitive record detail" not in repr(review)
+    assert {"P-02", "P-03", "P-04", "P-06"} <= {
+        finding["probe_id"] for finding in review["findings"]
+    }
+
+
+def test_a_probe_cannot_contribute_a_partial_finding_set(db):
+    """Findings commit per probe, so a mid-list failure discards that probe only."""
+    from supervisor_foundation import run_review
+    from supervisor_foundation.policy import unconfigured_policy
+
+    def half_broken(bundle, policy):
+        yield {
+            "probe_id": "P-XX", "probe_version": "v1", "category": "risk",
+            "severity": "info", "status": "clear", "availability_status": "available",
+            "confidence": 1.0, "claim": "this draft is fine",
+            "evidence_refs": ["x"], "source_modules": ["m"],
+            "why_it_matters": "w", "regulatory_or_policy_basis": "internal_policy_only",
+            "officer_question": "q", "required_action": "a", "close_condition": "c",
+        }
+        raise RuntimeError("failed after the first draft")
+
+    app_id = seed_application(db)
+    review = run_review(
+        bundle_for(db, app_id), policy=unconfigured_policy(), probes=(half_broken,)
+    )
+    claims_seen = [f["claim"] for f in review["findings"]]
+    assert not any("this draft is fine" in c for c in claims_seen)
+    assert any("could not run" in c for c in claims_seen)

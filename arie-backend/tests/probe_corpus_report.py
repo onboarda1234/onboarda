@@ -9,7 +9,7 @@ gate (SHIP / REVISE / DROP per probe).
 Run it with::
 
     python -m pytest tests/probe_corpus_report.py::report -s -q \
-        -o python_files=probe_corpus_report.py
+        -o python_files=probe_corpus_report.py -o python_functions=report
 
 The findings it prints describe fixture data, not real customers. Every subject
 is addressed by its pseudonymous bundle key; no direct identifier is emitted.
@@ -192,11 +192,16 @@ def production_path(temp_db, monkeypatch, sample=8):
         memo, _rules, _supervisor, _validation = build_compliance_memo(
             app, directors, ubos, documents
         )
-        connection.execute(
+        updated = connection.execute(
             "UPDATE compliance_memos SET memo_data = ? WHERE application_id = ?",
             (json.dumps(memo, default=str), app["id"]),
-        )
+        ).rowcount
         connection.commit()
+        if not updated:
+            # Without this the harness would report P-03 as unavailable and the
+            # output would read as a probe result rather than a seeding gap.
+            print(f"  !! {row['ref']}: no compliance_memos row to update — "
+                  "P-03 output for this case reflects setup, not the probe")
 
         bundle = assemble_application_bundle(connection, app["id"], as_of=AS_OF)
         review = run_review(bundle, policy=unconfigured_policy(), probes=PROBES)

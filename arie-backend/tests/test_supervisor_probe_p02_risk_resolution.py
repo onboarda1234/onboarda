@@ -366,10 +366,10 @@ def test_escalations_without_a_reason_are_a_hit(db):
     assert "elevated_jurisdiction" in finding["claim"]
 
 
-def test_level_movement_without_a_reason_is_a_hit(db):
+def test_upward_level_movement_without_a_reason_is_a_hit(db):
     findings = _run(db, base_risk_level="MEDIUM", final_risk_level="HIGH",
                     elevation_reason_text=None)
-    assert "the level moved from MEDIUM to HIGH" in only(findings)["claim"]
+    assert "the level was raised from MEDIUM to HIGH" in only(findings)["claim"]
 
 
 def test_recorded_elevation_reason_clears_the_check(db):
@@ -481,3 +481,114 @@ def test_as_of_does_not_affect_the_outcome(db):
     early = run_probe(bundle_for(db, app_id, as_of="2020-01-01T00:00:00Z"), PROBE)
     late = run_probe(bundle_for(db, app_id, as_of=AS_OF), PROBE)
     assert [f["claim"] for f in early] == [f["claim"] for f in late]
+
+
+# ── Risk-movement direction ──────────────────────────────────────────
+# An earlier build set "elevated" on any inequality between base and final, so
+# a de-escalation was reported as "A risk elevation was applied". Direction is
+# now established from the governed ladder, never from inequality.
+
+
+def test_risk_ladder_matches_the_governed_levels():
+    from periodic_review_policy import RISK_FREQUENCY_MONTHS
+
+    assert set(risk_resolution.RISK_LADDER) == set(RISK_FREQUENCY_MONTHS)
+
+
+@pytest.mark.parametrize(
+    "base,final,expect_finding",
+    [
+        ("LOW", "HIGH", True),
+        ("MEDIUM", "HIGH", True),
+        ("LOW", "VERY_HIGH", True),
+        ("HIGH", "LOW", False),
+        ("VERY_HIGH", "MEDIUM", False),
+        ("HIGH", "HIGH", False),
+        ("LOW", "LOW", False),
+    ],
+)
+def test_only_upward_movement_is_an_elevation(db, base, final, expect_finding):
+    findings = _run(db, base_risk_level=base, final_risk_level=final,
+                    elevation_reason_text=None)
+    movement = [f for f in findings if "level was raised" in f["claim"]]
+    assert bool(movement) is expect_finding, (
+        f"{base} -> {final} produced {len(movement)} movement findings"
+    )
+
+
+def test_a_de_escalation_is_never_described_as_an_elevation(db):
+    """The defect verbatim: HIGH → LOW must not read as an uplift."""
+    findings = _run(db, base_risk_level="HIGH", final_risk_level="LOW",
+                    elevation_reason_text=None)
+    text = claims(findings).lower()
+    assert "elevation was applied" not in text
+    assert "raised from high to low" not in text
+    assert only(findings)["status"] == "clear"
+
+
+@pytest.mark.parametrize("base,final", [
+    ("CRITICAL", "HIGH"), ("HIGH", "CRITICAL"), ("", "HIGH"), ("HIGH", ""),
+    ("high", "very_high"),
+])
+def test_ungoverned_levels_never_manufacture_a_direction(db, base, final):
+    """No direction can be established, so no movement claim is made.
+
+    Lower-case governed levels are the exception — they normalise and are a
+    genuine elevation, which is why ``high`` → ``very_high`` is included.
+    """
+    findings = _run(db, base_risk_level=base, final_risk_level=final,
+                    elevation_reason_text=None)
+    movement = [f for f in findings if "level was raised" in f["claim"]]
+    if (base.upper(), final.upper()) == ("HIGH", "VERY_HIGH"):
+        assert movement
+    else:
+        assert not movement, f"{base!r} -> {final!r} invented a direction"
+
+
+def test_a_recorded_escalation_stands_without_level_movement(db):
+    """A floor rule is upward by construction even when the level is unchanged."""
+    import json
+
+    findings = _run(
+        db,
+        base_risk_level="HIGH", final_risk_level="HIGH",
+        risk_escalations=json.dumps(["floor_rule_declared_pep"]),
+        elevation_reason_text=None,
+    )
+    finding = only(findings)
+    assert finding["status"] == "hit"
+    assert "floor_rule_declared_pep" in finding["claim"]
+
+
+def test_escalation_and_upward_movement_are_reported_together(db):
+    import json
+
+    findings = _run(
+        db,
+        base_risk_level="LOW", final_risk_level="HIGH",
+        risk_escalations=json.dumps(["floor_rule_declared_pep"]),
+        elevation_reason_text=None,
+    )
+    claim = only(findings)["claim"]
+    assert "floor_rule_declared_pep" in claim
+    assert "raised from LOW to HIGH" in claim
+
+
+def test_close_condition_names_every_authoritative_success_state(db):
+    """An officer must not read the finding as rejecting a `mapped` factor."""
+    findings = _run(
+        db,
+        risk_dimensions=risk_dimensions(
+            [factor("service_type", resolution_status="unresolved")]
+        ),
+    )
+    condition = only(findings)["close_condition"]
+    for value in risk_resolution.RESOLVED_STATUSES:
+        assert repr(value) in condition
+
+
+def test_absent_configuration_version_cites_no_phantom_edition(db):
+    findings = _run(db, risk_config_version=None)
+    refs = only(findings)["evidence_refs"]
+    assert "risk_config:None" not in refs
+    assert not any(ref.startswith("risk_config:risk_config:") for ref in refs)

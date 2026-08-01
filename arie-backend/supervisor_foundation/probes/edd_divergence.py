@@ -45,6 +45,12 @@ from ._draft import (
 PROBE_ID = "P-03"
 PROBE_VERSION = "p03-v1"
 
+#: The probe's primary category from the governed register (§5.2).
+#: Used when the runner has to report that this probe could not run at
+#: all, so that failure lands in a governed category rather than
+#: inventing one.
+PROBE_CATEGORY = "edd"
+
 SOURCE_MODULES = (
     "edd_routing_policy.evaluate_edd_routing",
     "memo_handler.agent5_input_contract",
@@ -87,20 +93,31 @@ UNREPLAYABLE_POLICY_KEYS = ("sector_label",)
 #: probe can, is whether the *route itself* follows from the recorded facts.
 
 
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    """A mapping, whatever arrived.
+
+    ``or {}`` is not enough: it rescues ``None`` and ``{}`` but passes a truthy
+    non-mapping — a bare string, an int, a list — straight through to ``.get``,
+    which raises. A probe that raises aborts the whole review, so every stored
+    structure this module reads goes through here.
+    """
+    return value if isinstance(value, Mapping) else {}
+
+
 def _comparable(routing: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in routing.items() if key not in COSMETIC_KEYS}
 
 
 def _base_refs(bundle: Mapping[str, Any], routing_facts: Mapping[str, Any]) -> list[str]:
     subject = subject_ref(bundle)
-    facts = routing_facts.get("facts") or {}
+    facts = _as_mapping(routing_facts.get("facts"))
     refs = [
         f"{subject}#edd_routing_facts",
-        f"edd_policy:{(bundle.get('edd') or {}).get('stored_routing', {}).get('policy_version')}",
+        f"edd_policy:{_as_mapping(_as_mapping(bundle.get('edd')).get('stored_routing')).get('policy_version')}",
     ]
     for trigger in facts.get("edd_trigger_flags") or []:
         refs.append(f"edd_policy:trigger:{trigger}")
-    for case in (bundle.get("edd") or {}).get("cases") or []:
+    for case in _as_mapping(bundle.get("edd")).get("cases") or []:
         if isinstance(case, Mapping):
             refs.append(f"edd_case:{case.get('id')}")
     refs.extend(approval_refs(bundle))
@@ -109,9 +126,51 @@ def _base_refs(bundle: Mapping[str, Any], routing_facts: Mapping[str, Any]) -> l
 
 def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]:
     """Run P-03 over a bundle. Pure; no clock, no database, no provider."""
-    edd = bundle.get("edd") or {}
-    routing_facts = edd.get("routing_facts") or {}
+    edd = _as_mapping(bundle.get("edd"))
+    routing_facts = edd.get("routing_facts")
     subject = subject_ref(bundle)
+
+    # Malformed structure is reported, never raised. A probe that throws aborts
+    # the whole review and takes three unrelated probes down with it, so a
+    # section of the wrong shape has to become a finding rather than a crash.
+    if not isinstance(routing_facts, Mapping):
+        return [
+            finding_draft(
+                probe_id=PROBE_ID,
+                probe_version=PROBE_VERSION,
+                category="edd",
+                severity=MEDIUM,
+                status=FindingStatus.NOT_REPLAYABLE,
+                availability_status=AvailabilityStatus.SNAPSHOT_INCOMPLETE,
+                confidence=1.0,
+                claim=(
+                    "The stored EDD routing fact contract is not a structured "
+                    f"record — it is held as {type(routing_facts).__name__} — so "
+                    "the routing decision cannot be re-evaluated."
+                ),
+                evidence_refs=unique_refs([f"{subject}#edd_routing_facts"]),
+                primary_evidence_ref=f"{subject}#edd_routing_facts",
+                source_modules=list(SOURCE_MODULES),
+                why_it_matters=(
+                    "A malformed contract is not an absent one and not a "
+                    "matching one. Reported so the shape defect is visible "
+                    "rather than read as either agreement or absence."
+                ),
+                regulatory_or_policy_basis="internal_policy_only",
+                officer_question=(
+                    "Why is the stored routing contract for this application "
+                    "malformed?"
+                ),
+                required_action=(
+                    "Regenerate the compliance memo so a structured fact "
+                    "contract is recorded."
+                ),
+                close_condition=(
+                    "edd.routing_facts is a structured record and the route can "
+                    "be re-evaluated."
+                ),
+            )
+        ]
 
     # Identity anchors, one per aspect examined. Route disagreement and a
     # missing case can fire together, and both would otherwise share the same
@@ -221,7 +280,7 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
     # gap accounted for 14 of 15 trigger-set mismatches against the canonical
     # corpus before it was closed.
     verdict = (bundle.get("supervisor_verdict") or {}).get("verdict") or {}
-    facts = dict(routing_facts.get("facts") or {})
+    facts = dict(_as_mapping(routing_facts.get("facts")))
     facts["supervisor_mandatory_escalation"] = bool(
         verdict.get("mandatory_escalation")
     )
@@ -231,7 +290,7 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
     recomputed = _comparable(evaluate_edd_routing(facts))
     recomputed_route = str(recomputed.get("route") or "").strip().lower()
 
-    stored_routing = edd.get("stored_routing") or {}
+    stored_routing = _as_mapping(edd.get("stored_routing"))
     stored_route = str(stored_routing.get("route") or "").strip().lower()
 
     cases = [case for case in (edd.get("cases") or []) if isinstance(case, Mapping)]

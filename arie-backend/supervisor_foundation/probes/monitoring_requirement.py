@@ -44,6 +44,12 @@ from ._draft import (
 PROBE_ID = "P-06"
 PROBE_VERSION = "p06-v1"
 
+#: The probe's primary category from the governed register (§5.2).
+#: Used when the runner has to report that this probe could not run at
+#: all, so that failure lands in a governed category rather than
+#: inventing one.
+PROBE_CATEGORY = "monitoring"
+
 SOURCE_MODULES = (
     "periodic_review_policy.RISK_FREQUENCY_MONTHS",
     "periodic_review_policy.frequency_months_for_risk",

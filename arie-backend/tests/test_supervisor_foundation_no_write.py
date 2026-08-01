@@ -328,7 +328,7 @@ def test_foundation_imports_only_read_only_authoritative_helpers():
 
     stdlib = {
         "__future__", "ast", "calendar", "dataclasses", "datetime", "decimal",
-        "enum", "hashlib", "json", "math", "pathlib", "types", "typing",
+        "enum", "hashlib", "json", "math", "pathlib", "sys", "types", "typing",
     }
     authoritative = seen - stdlib - {"supervisor_foundation"}
     unexpected = sorted(authoritative - permitted)
