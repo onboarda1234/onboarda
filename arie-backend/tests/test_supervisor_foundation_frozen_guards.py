@@ -1,8 +1,8 @@
-"""Proof that Phase 0B-1 changed no authoritative output.
+"""Proof that the Supervisor changed no authoritative output.
 
-The foundation is additive: a new package and new tests, no edit to any
-authoritative module. These guards assert that positively rather than relying
-on review of the diff.
+The foundation and the probe set are additive: new packages and new tests, no
+edit to any authoritative module. These guards assert that positively rather
+than relying on review of the diff.
 
 Two kinds of evidence:
 
@@ -50,6 +50,12 @@ PROTECTED_FILES = (
 # commit would omit three test/document paths from the proof.
 PHASE_0B1_BASE = "85c70431a2d2a2f4bd6dd3078257d5f22d92bad4"
 PHASE_0B1_HEAD = "901265f9cbfb45bac62358da6a453e24c052078e"
+
+#: Base of Phase 0B-2 (the probe set): the merge of PR #914, bundle v2. The head
+#: is ``HEAD`` rather than a pinned SHA because the phase is still open. When
+#: 0B-2 merges, pin its final head here the way 0B-1 is pinned above, so the
+#: proof survives on descendant branches instead of quietly becoming vacuous.
+PHASE_0B2_BASE = "c667f95ff8ae892bcc8cafe27efa1151cc7d92f6"
 
 
 def _git(*args: str) -> str:
@@ -115,6 +121,61 @@ def _phase_0b1_changed_paths() -> list[str]:
 
 
 # ── File identity ────────────────────────────────────────────────────
+
+
+def _phase_0b2_changed_paths() -> list[str]:
+    """Files changed by Phase 0B-2, or ``None`` when the phase is not in history.
+
+    Returns ``None`` rather than failing on a branch that predates the bundle v2
+    merge: this guard is about the probe set, and a branch without it has
+    nothing to prove.
+    """
+    try:
+        _git("cat-file", "-e", f"{PHASE_0B2_BASE}^{{commit}}")
+    except subprocess.CalledProcessError:
+        return None
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", PHASE_0B2_BASE, "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if ancestor.returncode != 0:
+        return None
+    return _git("diff", "--name-only", PHASE_0B2_BASE, "HEAD").split()
+
+
+def test_protected_files_unchanged_by_phase_0b2():
+    """The probe set changed no authoritative or frozen file.
+
+    The load-bearing claim of the whole Supervisor: it observes the platform and
+    the platform does not change to accommodate it. A probe that needed
+    ``rule_engine`` edited to work would have crossed the line Phase 0A drew.
+    """
+    changed = _phase_0b2_changed_paths()
+    if changed is None:
+        pytest.skip("Phase 0B-2 base is not in this branch's history")
+    touched = sorted(set(changed) & set(PROTECTED_FILES))
+    assert not touched, f"Phase 0B-2 modified protected files: {touched}"
+
+
+def test_phase_0b2_adds_only_foundation_paths():
+    changed = _phase_0b2_changed_paths()
+    if changed is None:
+        pytest.skip("Phase 0B-2 base is not in this branch's history")
+    allowed_prefixes = (
+        "arie-backend/supervisor_foundation/",
+        "arie-backend/tests/supervisor_probe_fixtures.py",
+        "arie-backend/tests/probe_corpus_report.py",
+        "arie-backend/tests/test_supervisor_foundation_",
+        "arie-backend/tests/test_supervisor_probe_",
+        "docs/",
+    )
+    unexpected = sorted(
+        path for path in changed if not path.startswith(allowed_prefixes)
+    )
+    assert not unexpected, f"unexpected paths changed in Phase 0B-2: {unexpected}"
 
 
 def test_protected_files_unchanged_by_phase_0b1():
