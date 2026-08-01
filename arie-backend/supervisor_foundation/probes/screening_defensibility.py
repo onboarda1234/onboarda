@@ -24,8 +24,10 @@ Freshness is derived here from the stored ``screening_valid_until`` and the
 injected ``as_of``.
 
 **Coverage honesty.** Every adverse-media finding carries
-``ADVERSE_MEDIA_COVERAGE_NOTE``; the platform reads what its configured
-screening source provides and claims no universal media coverage.
+``ADVERSE_MEDIA_COVERAGE_NOTE``: adverse-media signals are whatever the
+institution's configured screening source returns, and no universal media
+coverage is claimed. The note is product-neutral because finding text is
+hashed and branding is not part of the canonical review input.
 """
 
 from __future__ import annotations

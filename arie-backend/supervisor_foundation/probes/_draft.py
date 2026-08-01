@@ -16,13 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping, Sequence
 
-from branding import BRAND  # module-level config dict; no side effects
-
 from ..contracts import AvailabilityStatus, FindingStatus
-
-#: Read once at import. ``branding`` is a declarative config module — its only
-#: import is ``os`` and it executes no statements beyond assignment.
-_PLATFORM_NAME = str(BRAND.get("platform_name") or "The platform")
 
 #: Severity vocabulary, mirroring ``supervisor.schemas.Severity``.
 CRITICAL = "critical"
@@ -31,23 +25,24 @@ MEDIUM = "medium"
 LOW = "low"
 INFO = "info"
 
-#: Must appear in any finding that speaks about adverse media. The platform
-#: reads adverse-media signals from the institution's configured screening
-#: source and makes no claim of universal media coverage; a finding that implied
-#: otherwise would overstate what can be evidenced.
+#: Must appear in any finding that speaks about adverse media. Adverse-media
+#: signals come from the institution's configured screening source and carry no
+#: claim of universal media coverage; a finding that implied otherwise would
+#: overstate what can be evidenced.
 #:
-#: The platform name comes from ``BRAND`` rather than a literal, per the
-#: project's branding rule: this text reaches an officer, and the deployment is
-#: white-label. One consequence is deliberate and worth naming — the note sits
-#: in ``why_it_matters``, which is hashed, so two deployments with different
-#: branding produce different ``review_hash`` values for identical evidence.
-#: That is correct: the hash identifies the artifact that was produced, and a
-#: differently branded artifact is a different artifact. Cross-deployment hash
-#: comparison was never meaningful anyway (§10.9.1).
+#: Deliberately product-neutral, and no product name is read from ``branding``
+#: either. Every field of a finding is hashed into ``review_hash``, and the
+#: governing invariant is that an identical canonical bundle under an identical
+#: policy version yields identical findings and an identical hash. Branding is
+#: deployment configuration, not review input: were it interpolated here, the
+#: same evidence would hash differently on two deployments, and the invariant
+#: would hold only by accident of configuration. Naming the *screening source*
+#: rather than the platform also says the more useful thing — the limit is the
+#: source's coverage, not the reader's product.
 ADVERSE_MEDIA_COVERAGE_NOTE = (
-    f"{_PLATFORM_NAME} evaluates adverse-media evidence available through the "
-    "institution's configured screening source. It does not establish "
-    "universal media coverage."
+    "Adverse-media evidence is limited to what the institution's configured "
+    "screening source returns. The configured screening source does not "
+    "establish universal adverse-media coverage."
 )
 
 #: Phrases that would make a finding unfalsifiable. Rejected at construction so

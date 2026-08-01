@@ -1689,8 +1689,10 @@ Within a version the invariant is unchanged: identical bundle + identical policy
 version ⇒ identical findings and review hash.
 
 `probe_set_version` and `BUNDLE_SCHEMA_VERSION` are **separate contracts** and
-move independently. v2 pairs with `probe-set-0b2-empty` — the bundle contract
-changed; the probe set is still empty.
+move independently. v2 was introduced alongside `probe-set-0b2-empty` — the
+bundle contract changed while the probe set was still empty — and Phase 0B-2
+moved the probe set to `probe-set-0b2-v1` against an unchanged v2 bundle. Each
+version moves when its own contract does.
 
 #### 10.9.2 Across environments
 
@@ -1705,6 +1707,40 @@ system of record*, and `screening_review:{id}` is a pointer to a specific
 persisted record, not a content descriptor. It is stated here because the
 tempting misuse — comparing a staging hash against a production hash to assert
 "same case" — would silently always report a difference.
+
+#### 10.9.3 Deployment configuration is never review input
+
+The two subsections above describe hashes that legitimately differ. This one
+describes a difference that would be a defect.
+
+Every field of a finding is hashed. **No finding field may derive from
+deployment configuration** — not the brand (`branding.BRAND`), not an
+environment variable, not a hostname, not a locale. Within a bundle schema
+version the invariant is absolute:
+
+> identical canonical bundle + identical policy version
+> ⇒ identical findings + identical `review_hash`
+
+Configuration is not part of the canonical input contract, so a finding that
+reads it makes the hash a function of something the bundle does not record. Two
+deployments would then disagree on the hash for the same evidence, and a single
+deployment would change its own historical hashes by renaming itself — with
+nothing in the artifact to explain why.
+
+This is recorded because the violation arrived disguised as a fix. Phase 0B-2's
+adverse-media coverage note hard-coded a product name; correcting it to read
+`BRAND["platform_name"]` satisfied the project's branding rule and broke this
+one. Officer-facing finding text is therefore **product-neutral by design**, and
+the neutral wording is also the more accurate one — the limit it describes
+belongs to the configured screening source, not to the platform reading it.
+Enforced by `test_supervisor_probe_determinism_under_branding.py` and by the
+absence of `branding` from the foundation's audited import allowlist.
+
+Where the deployment's capability genuinely *is* review input — whether a
+provider is configured, whether a gated package would serve — it is recorded in
+the bundle's `availability` section and hashed as part of the bundle. That is the
+supported path: such facts become canonical input, rather than leaking into
+finding text downstream of it.
 
 ---
 

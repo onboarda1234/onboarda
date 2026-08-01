@@ -37,13 +37,21 @@ production actually stores.
 
 Both stages are reproducible:
 
-```
+```bash
 cd arie-backend
 python -m pytest tests/probe_corpus_report.py::report \
     -s -q -o python_files=probe_corpus_report.py -o python_functions=report
 python -m pytest tests/probe_corpus_report.py::production_path \
     -s -q -o python_files=probe_corpus_report.py -o python_functions=production_path
 ```
+
+Stage 2 seeds `random` before it runs. Without provider credentials
+`run_full_screening` falls back to a simulated provider that draws an 8% hit
+rate, so the *evidence* differed between runs and the reported P-04 count drifted
+between 16 and 17 over the same eight cases. The probes are deterministic given a
+bundle — proven separately by byte-identical re-review — and it was the fixture
+that moved. The seed pins the evidence so the figures below are reproducible; the
+figures are a property of that seed, not a law about the corpus.
 
 ---
 
@@ -103,7 +111,9 @@ defensible. Disposition still runs regardless, because an undispositioned
 material match is a failure of officer process that survives a re-screen.
 
 Stage 2 volume: **33 → 16 findings**, one per subject, each with a distinct
-action.
+action. Both figures were measured before stage 2 seeded its simulated screening
+provider (§1); under the pinned seed the same run reports 18. The ratio is the
+point — one finding per subject rather than two or three — and it is unaffected.
 
 ### 2.4 P-03 re-ran the policy on an incomplete input set
 
@@ -222,6 +232,45 @@ satisfied trivially — a passing test over a broken probe. It now asserts the
 probe answers the question itself and never reaches the runner's safety net,
 and that stronger form immediately exposed the truthy-non-mapping hole above.
 
+### 2.8 A branding fix that was a determinism defect
+
+The adverse-media coverage note hard-coded `"RegMind"` in officer-facing text on
+a white-label platform. The repair took the name from `BRAND["platform_name"]`,
+which satisfies the project's branding rule and broke a stronger one.
+
+Every field of a finding is hashed into `review_hash`. The governing invariant is
+
+> identical canonical bundle + identical policy version
+> = identical findings + identical `review_hash`
+
+Branding is deployment configuration, not review input. Interpolated into
+`why_it_matters`, it made the hash a function of configuration: two deployments
+would disagree on the hash for the same evidence, and a deployment would change
+its own historical hashes by renaming itself. The note now says the more useful
+thing anyway, naming the *screening source* rather than the platform:
+
+> Adverse-media evidence is limited to what the institution's configured
+> screening source returns. The configured screening source does not establish
+> universal adverse-media coverage.
+
+`branding` was removed from the foundation's audited import allowlist, and its
+absence is now enforced with the reason recorded, rather than being incidental.
+`test_supervisor_probe_determinism_under_branding.py` rebrands the deployment —
+`BRAND` values *and* the `BRAND_*` environment variables — reloads the probe
+package so an import-time capture is caught as surely as a call-time read, and
+asserts the findings and the `review_hash` are byte-identical to a baseline taken
+beforehand. Two static tests close the door behind it: no probe module may import
+`branding` or read the environment, and the note must be assembled from literals
+with no interpolation.
+
+The order of that test matters and is the reason it works. Written as a fixture,
+the rebrand applies before the test body, and because `importlib.reload` mutates
+a module in place, the probe functions imported at collection time read the
+reloaded globals too — both sides of the comparison show the new brand and agree.
+The first draft did exactly that and passed against the defective code it was
+written to catch. The baseline has to be taken before the rebrand, which is why
+it is a context manager.
+
 ## 3. Results
 
 ### 3.1 Stage 1 — stored fixture evidence (41 cases)
@@ -260,14 +309,14 @@ is never a check that passed.
 |-------|------:|----:|------------:|---------------:|
 | P-02  | 7     | 1   | 0           | 0              |
 | P-03  | 6     | 1   | 1           | 0              |
-| P-04  | 0     | 16  | 0           | 0              |
+| P-04  | 0     | 18  | 0           | 0              |
 | P-06  | 1     | 4   | 0           | 3              |
 
 P-03 evaluates cleanly against memos produced by `memo_handler`: it re-runs
 `evaluate_edd_routing` on the stored fact contract and reproduces the stored
 route on 6 of 8 cases. P-04 produces exactly one finding per screening subject.
 
-All 16 P-04 hits report the same true fact: this environment has no screening
+All 18 P-04 hits report the same true fact: this environment has no screening
 provider credentials, so `run_full_screening` returned simulated-fallback
 records, and the probe says so. On a deployment with live credentials these
 would clear. The value of the run is that the per-subject machinery works

@@ -134,8 +134,19 @@ def report(temp_db, monkeypatch, capsys=None):
 
 
 def production_path(temp_db, monkeypatch, sample=8):
+    import random
+
     from memo_handler import build_compliance_memo
     from screening import run_full_screening
+
+    # With no provider credentials the screening path falls back to a simulated
+    # provider that draws an 8% hit rate from ``random`` (``screening.py``).
+    # Unseeded, the *evidence* differs between runs and the reported P-04 count
+    # drifts — 16 or 17 hits over the same eight cases, observed. The probes are
+    # deterministic given a bundle; it is the fixture that moves. Seeding pins
+    # the evidence so the figures quoted in the validation document are
+    # reproducible. Any seed would do; this one is arbitrary and fixed.
+    random.seed(20260801)
 
     _enable_tier0_contract(monkeypatch)
     seed_pilot_canonical_dataset(dry_run=False)
