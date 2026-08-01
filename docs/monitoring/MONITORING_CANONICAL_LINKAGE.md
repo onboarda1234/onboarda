@@ -51,6 +51,16 @@ missing, broken, cross-application, or ambiguous identity fails closed. Public
 errors contain controlled codes and reasons, not raw provider payloads, names,
 credentials, SQL, or stack traces.
 
+The runtime resolver also rejects an exact duplicate Monitoring-to-owner
+identity as `linkage_duplicate`; it never returns either duplicate alert as an
+authoritatively linked record. Document duplicate identity includes the exact
+alert predicate because `expiring_soon` and `expired` are distinct producer
+signals for one document. Exact duplicate comparison uses the canonical
+lifecycle predicate and applies only to unresolved/current alerts; terminal
+history never blocks a later valid recurrence. The inventory planner retains
+all historical rows and marks only an active exact duplicate group for manual
+review.
+
 ## Document-expiry contract
 
 The alert must store `source_reference=document:<document-id>`, where the
@@ -72,7 +82,8 @@ The resolver proves:
 The response distinguishes the trigger (expired) version from the current
 replacement version and includes document type and expiry dates. A broken
 chain, multiple current documents, multiple active requests, or owner drift is
-never guessed.
+never guessed. Every persisted version in a replacement chain must be a valid
+positive integer and increase strictly toward the current terminal document.
 
 ### Document owner-state projection
 
@@ -84,11 +95,15 @@ never guessed.
 | `replacement_received` | Exact request is `uploaded`, or the current replacement is pending verification |
 | `verifying` | Exact request is `under_review`, or current replacement verification is in progress |
 | `officer_review_required` | Canonical document verification/review requires officer action |
-| `verified` | Current replacement is verified and accepted |
+| `verified` | Current replacement is verified and accepted, has canonical expiry evidence, and no longer satisfies the source alert's expiry predicate |
+| `stale` | The exact source alert predicate no longer holds, but no exact verified replacement/request state proves closure |
 | `unavailable` | Owner state cannot be proven |
 
 These values are read-time projections only. Monitoring cannot request,
 upload, verify, accept, reject, or waive a document through this contract.
+Expiry evidence uses the exact Document Health precedence and UTC
+normalization. A verified replacement that is expired, lacks canonical expiry,
+or remains inside an `expiring_soon` window never projects `verified`.
 
 ### Protected legacy document-write limitation
 
@@ -110,8 +125,14 @@ The alert must provide exact, mutually agreeing provider and case identifiers
 in both its canonical columns and structured source reference. The structured
 reference must also contain one stable subject contract:
 
-- entity: `kind=entity`, `scope=entity`, no person key; or
+- application entity: `kind=entity`, `scope=entity`, no person key;
+- intermediary entity: `kind=intermediary`, `scope=entity`, and exact
+  intermediary `person_key`; or
 - person: an approved person kind, `scope=person`, and exact `person_key`.
+
+When both nested and top-level subject fields exist in a source reference or
+normalized snapshot, they must agree exactly. Conflicting parallel identities
+fail closed; nested-field precedence is never used to hide disagreement.
 
 For a person, the stable key must resolve to exactly one same-application
 canonical party row. For an entity, the application ID is the stable subject
@@ -119,7 +140,9 @@ ID. The resolved subject name is used only to dereference the legacy
 subject-level Screening Review roll-up after stable identity is proven; it is
 never accepted as the alert-to-subject or alert-to-case linkage. A duplicate
 name in the applicable owner table makes the roll-up ambiguous and fails
-closed.
+closed. The resolver also rejects same-type names that collide under the
+protected Screening Review UI's case/whitespace or token normalization, so a
+stable-ID handoff cannot display another subject's queue or review evidence.
 
 The provider case is proven by exact same-application Monitoring evidence or
 an exact normalized snapshot. Evidence rows must agree on application,
@@ -135,6 +158,13 @@ provider case, provider alert reference where present, subject, disposition,
 and review timestamp. Without that corroboration the projection is
 `unavailable`; name-only state projection is prohibited.
 
+The protected Screening Review audit stores rationale text at its documented
+1,000-character boundary while the owner row retains the complete rationale.
+Corroboration deliberately compares that exact persisted audit form and uses
+the audit detail's typed event timestamp. PostgreSQL transaction-start
+timestamps are precision-normalized only for chronology; they are not treated
+as the review event clock.
+
 ### Screening owner-state projection
 
 | Projection | Authoritative basis |
@@ -143,12 +173,20 @@ and review timestamp. Without that corroboration the projection is
 | `pending_second_review` | Exact audited review requires four eyes and the second decision is incomplete |
 | `escalated` | Exact audited Screening Review disposition is escalated |
 | `resolved_in_screening_review` | Exact audited false-positive clearance is complete, including four-eyes controls where required |
-| `stale` | Exact evidence is newer than the corroborated review |
+| `stale` | Exact evidence or owner mutation is newer than, or not provably older than, the corroborated review |
 | `unavailable` | Evidence failed, is incomplete, or the review/case/state cannot be proven |
 
 Pending, failed, stale, unaudited, or incomplete four-eyes evidence never
 projects a clear or resolved state. Monitoring cannot clear, disposition,
 escalate, or provide a second review through this contract.
+
+A protected per-hit disposition or undo recorded after, in the same timestamp
+precision window as, or without chronology provably older than the
+corroborated subject-level review makes that projection `stale`. Unattributable
+same-application owner audits fail closed as well. The resolver fingerprints
+both current per-hit rows and append-only Screening owner audits, so a later or
+unorderable hit decision can never leave an older subject clearance displayed
+as current.
 
 ## Navigation contract
 
@@ -163,10 +201,22 @@ Screening targets include application, customer/entity, stable subject ID,
 subject person key/type, and provider case. The back office re-fetches the
 authoritative application, proves the same stable subject again, and then
 opens Screening Review. The display name is derived only after this proof.
+The canonical handoff uses an additive server-side `exact_application_ref`
+filter before Screening evidence hydration; the protected queue's existing
+fuzzy `application_ref` search remains unchanged.
 
-No Monitoring decision control is rendered for an alert in either exact type
-family, including when canonical linkage is unavailable. Assignment of the
-Monitoring signal remains separate from downstream decision ownership.
+The new canonical owner card renders no new decision control and invokes no
+legacy write API, including when canonical linkage is unavailable. Existing
+protected Monitoring Officer Action controls remain separately rendered as the
+explicit legacy limitation above; this PR neither removes nor extends them.
+Assignment of the Monitoring signal remains separate from downstream decision
+ownership.
+
+Both canonical owner handoffs enter an explicit read-only navigation mode.
+That mode survives asynchronous panel re-renders and suppresses the existing
+optional Screening profile-hydration POST, including when a document handoff
+renders the background Screening panel. Ordinary Application and Screening
+navigation retains its protected hydration behavior.
 
 ## API contract
 
@@ -189,11 +239,12 @@ The versioned dry-run planner is read-only and deterministic. It reports
 scope, linkage classification, review disposition, duplicate membership,
 proposed read-time fields, and whether a data change would be required.
 Duplicate detection is a separate dimension and uses exact canonical keys.
-For screening alerts that identity includes the exact provider case, stable
-subject identity, and provider alert/reference. Distinct provider alerts
-within the same subject and case are therefore not classified as duplicate
-linkage. When no provider alert/reference is supplied, the planner does not
-infer duplicate identity from the case and subject alone.
+For screening alerts that identity is the exact application, provider case,
+and resolved canonical subject. This matches the authoritative producer's
+one-row-per-provider-case storage contract. A provider alert/reference, when
+present, remains corroborating case evidence; it does not split one canonical
+owner linkage into multiple identities, and its absence does not disable exact
+duplicate detection.
 
 The staging collector:
 
@@ -201,10 +252,17 @@ The staging collector:
 - permits only `SELECT`, `WITH`, and `SHOW` statements;
 - fingerprints all source relations used by the resolvers before and after
   planning, including document-verification `agent_executions` evidence and
-  the active reviewer-role records used for four-eyes corroboration;
+  the active reviewer-role records used for four-eyes corroboration, current
+  `screening_hit_dispositions`, and Screening Review/per-hit owner audits;
 - builds the plan twice and requires identical deterministic output;
 - explicitly rolls back and has no commit or apply path;
 - sanitizes generated evidence.
+
+The collector also evaluates the four governed flags in its own process using
+the requested environment's defaults. That result is labelled collector-side
+evidence and is not proof of the deployed ECS runtime configuration. Release
+validation must separately prove runtime values through the authenticated
+environment endpoint and deployed task definitions.
 
 If future reconciliation requires stored alert changes, it must be a separate
 approved migration with its own founder approval gate. This PR does not offer

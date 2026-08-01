@@ -6910,6 +6910,10 @@ var BO_DOC_UPLOAD_IN_FLIGHT = false;
 var BO_DOC_UPLOAD_PHASE = 'idle';
 var BO_DOC_UPLOAD_RUN_ID = 0;
 var currentScreeningReviewFocus = null;
+// Canonical Monitoring owner handoffs are navigation-only. Keep this mode
+// across asynchronous panel re-renders until another ordinary application
+// detail navigation explicitly resets it.
+var currentCanonicalLinkageReadOnlyNavigation = false;
 var detailLifecycleSummaryOverview = null;
 
 function applyAgent1PolicyPayload(payload) {
@@ -12591,6 +12595,7 @@ function applyOfficerCorrectionLockedContext() {
 }
 
 function renderAuthoritativeAppDetail(app, options) {
+  options = options || {};
   var psData = app.prescreeningData || {};
   var documentReadiness = computeDocumentReadinessSummary(app);
   if (currentApp && currentApp.id && currentApp.id !== app.id) {
@@ -12601,6 +12606,7 @@ function renderAuthoritativeAppDetail(app, options) {
   decisionRecordsLoadedFor = null;
   window._currentDetailApp = app;
   currentScreeningReviewFocus = options.screeningFocus || null;
+  currentCanonicalLinkageReadOnlyNavigation = options.canonicalLinkageHandoff === true;
 
   var detailCompanyName = document.getElementById('detail-company-name');
   if (detailCompanyName) detailCompanyName.textContent = app.company;
@@ -19407,7 +19413,9 @@ function renderScreeningReviewPanel(app, focus) {
     focus = currentScreeningReviewFocus;
     // Phase G: single-flight, flag-gated on-demand hydration of the selected
     // subject's top hits. Inert (no call) when the flag is off.
-    ensureSubjectProfileHydration(app, selectedSubject);
+    if (!currentCanonicalLinkageReadOnlyNavigation) {
+      ensureSubjectProfileHydration(app, selectedSubject);
+    }
   }
 
   html += '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;">';
@@ -26609,9 +26617,6 @@ function renderMonitoringDocumentDecisionSection(alert) {
 }
 
 function renderMonitoringDecisionSection(alert) {
-  if (monitoringCanonicalLinkageKind(alert)) {
-    return renderMonitoringCanonicalOwnerSection(alert);
-  }
   if (alert && (alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh')) {
     return renderMonitoringDocumentDecisionSection(alert);
   }
@@ -26852,7 +26857,7 @@ async function fetchMonitoringCanonicalScreeningContext(app, subject, nav) {
     'limit=100',
     'offset=0',
     'include_evidence=1',
-    'application_ref=' + encodeURIComponent(String(app.ref || ''))
+    'exact_application_ref=' + encodeURIComponent(String(app.ref || ''))
   ];
   var payload = await boApiCall('GET', '/screening/queue?' + params.join('&'), null, {
     suppressAuthReset: true,
@@ -26901,7 +26906,10 @@ async function openMonitoringCanonicalOwner() {
       throw new Error('Application identity mismatch');
     }
     if (kind === 'document_expiry') {
-      renderAuthoritativeAppDetail(app, { initialTab: 'kyc-docs' });
+      renderAuthoritativeAppDetail(app, {
+        initialTab: 'kyc-docs',
+        canonicalLinkageHandoff: true
+      });
       window.setTimeout(function() {
         var details = document.getElementById('detail-kyc-documents-details');
         if (details) details.open = true;
@@ -26926,6 +26934,7 @@ async function openMonitoringCanonicalOwner() {
     var screeningContext = await fetchMonitoringCanonicalScreeningContext(app, subject, nav);
     renderAuthoritativeAppDetail(app, {
       initialTab: 'screening',
+      canonicalLinkageHandoff: true,
       screeningFocus: {
         canonical_linkage: true,
         subject_type: subject.subject_type,
@@ -27110,6 +27119,7 @@ function renderMonitoringAlertDetailView() {
   if (alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh') {
     body.innerHTML = fixtureBanner +
       renderMonitoringDocumentExpiryCard(alert, statusBadge, severityBadge) +
+      renderMonitoringCanonicalOwnerSection(alert) +
       renderMonitoringDecisionSection(alert) +
       renderMonitoringOverdueEscalationSummary(alert) +
       renderMonitoringAuditHistory(alert, state.auditHistory || []) +
@@ -27133,6 +27143,7 @@ function renderMonitoringAlertDetailView() {
       ['Source / provider', monitoringTextValue(monitoringProviderLabel(raw, parseMonitoringSourceReference(raw.source_reference)), 'Not available')]
     ]) + renderMonitoringDownstreamLinks(alert) + renderMonitoringAssignmentSection(alert)) +
     monitoringDetailCard('Issue / Evidence', monitoringAlertEvidenceHtml(alert)) +
+    renderMonitoringCanonicalOwnerSection(alert) +
     renderMonitoringDecisionSection(alert) +
     renderMonitoringOverdueEscalationSummary(alert) +
     renderMonitoringAuditHistory(alert, state.auditHistory || []) +

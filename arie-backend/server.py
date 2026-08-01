@@ -24723,10 +24723,13 @@ def _filter_screening_queue_rows(rows, filters):
     provider_filter = _screening_queue_filter_value(filters.get("provider"))
     pep_filter = _screening_queue_filter_value(filters.get("pep"))
     app_ref_filter = _screening_queue_filter_value(filters.get("application_ref"))
+    exact_app_ref = str(filters.get("exact_application_ref") or "").strip()
     universal_terms = [token for token in (search, app_ref_filter) if token]
 
     filtered = []
     for row in rows:
+        if exact_app_ref and str(row.get("application_ref") or "") != exact_app_ref:
+            continue
         blob = _screening_queue_search_blob(row)
         if any(term not in blob for term in universal_terms):
             continue
@@ -24970,8 +24973,15 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         fx_excl, fx_params = fixture_app_exclude_clause(table_alias="", include_text_patterns=True)
         query += f" AND {fx_excl}"
         params.extend(fx_params)
+    exact_app_ref = str(filters.get("exact_application_ref") or "").strip()
     app_ref_filter = _screening_queue_filter_value(filters.get("application_ref"))
-    if app_ref_filter:
+    if exact_app_ref:
+        # Additive canonical-linkage handoff filter. Existing queue search
+        # remains fuzzy, while this exact stable reference is enforced before
+        # any cross-application evidence is loaded into the response.
+        query += " AND ref = ?"
+        params.append(exact_app_ref)
+    elif app_ref_filter:
         query += " AND lower(ref) LIKE ?"
         params.append(f"%{app_ref_filter}%")
     query += f" ORDER BY created_at DESC LIMIT {_SCREENING_QUEUE_APPLICATION_SCAN_CAP}"
@@ -25619,6 +25629,9 @@ class ScreeningQueueHandler(BaseHandler):
             "provider": self.get_argument("provider", "").strip(),
             "pep": self.get_argument("pep", "").strip(),
             "application_ref": self.get_argument("application_ref", "").strip(),
+            "exact_application_ref": self.get_argument(
+                "exact_application_ref", ""
+            ).strip(),
         }
         _queue_started = time.monotonic()
         db = get_db()

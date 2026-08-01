@@ -1,6 +1,6 @@
 {
   "audit_id": "PR-MON-CANONICAL-LINKAGE-1",
-  "captured_at": "2026-08-01T13:07:42+00:00",
+  "captured_at": "2026-08-01T17:46:05+00:00",
   "contract_version": "monitoring_alert_linkage_v1",
   "database_safety": {
     "commit_path": false,
@@ -9,11 +9,13 @@
     "transaction_isolation": "repeatable read",
     "transaction_read_only": "on"
   },
-  "deployed_sha": "cfb3412ae3f6dae67f44eeb60a25145117785581",
+  "deployed_sha": "33f4ce8bbfe880430bd998770ee024672a4cb3be",
   "environment": "staging",
   "feature_governance": {
     "activation_controls": false,
     "all_monitoring_flags_off": true,
+    "deployed_runtime_observed": false,
+    "evaluation_source": "collector_environment_with_staging_defaults",
     "features": {
       "ENABLE_AGENT1_REFRESH_VERIFICATION": "OFF",
       "ENABLE_DOCUMENT_RENEWAL_AUTOMATION": "OFF",
@@ -44,7 +46,7 @@
     },
     "duplicate_groups": [],
     "fingerprint": "aa62f673da249827c5c6de11bf59549428398d9ca7c923ab0af60551ae72c2ad",
-    "generated_at": "2026-08-01T13:07:21+00:00",
+    "generated_at": "2026-08-01T17:43:23+00:00",
     "read_only": true,
     "rows": [
       {
@@ -772,14 +774,19 @@
       "row_count": 22
     },
     {
+      "digest": "0f9186aeee1fc7dd1613a72723859e1a",
+      "relation": "screening_hit_dispositions",
+      "row_count": 528
+    },
+    {
+      "digest": "042d04c43a0a3447fd661a7d43d50626",
+      "relation": "screening_owner_audit",
+      "row_count": 365
+    },
+    {
       "digest": "41fa588061e479369ca3094b9566b9df",
       "relation": "screening_reports_normalized",
       "row_count": 40
-    },
-    {
-      "digest": "77ccb1c3accc59ca9c0aa493c52c31d7",
-      "relation": "screening_review_audit",
-      "row_count": 194
     },
     {
       "digest": "8f9614e24f64701cd56c2a0511bab606",
@@ -792,7 +799,7 @@
       "row_count": 62
     },
     {
-      "digest": "d52d17ad36c6aa19c0924234d0a4f177",
+      "digest": "5d0b6032b9e85f6105a37f8f96111d0b",
       "relation": "users",
       "row_count": 170
     }

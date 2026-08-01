@@ -63,7 +63,7 @@ def test_linkage_contract_has_no_mutation_surface_or_future_owner_type():
         assert future_owner not in source
 
 
-def test_backoffice_hides_decision_controls_for_exact_supported_types():
+def test_backoffice_adds_owner_card_without_removing_protected_decision_controls():
     html = (REPO_ROOT / "arie-backoffice.html").read_text(encoding="utf-8")
     kind_region = _function_region(
         html,
@@ -80,11 +80,23 @@ def test_backoffice_hides_decision_controls_for_exact_supported_types():
         "function renderMonitoringDecisionSection",
         "function renderMonitoringPendingReviewSection",
     )
-    guard = decision_region.index("monitoringCanonicalLinkageKind(alert)")
     legacy_document = decision_region.index("renderMonitoringDocumentDecisionSection")
     generic_outcome = decision_region.index("monitoringOutcomeOptions")
-    assert guard < legacy_document < generic_outcome
-    assert "return renderMonitoringCanonicalOwnerSection(alert);" in decision_region
+    assert legacy_document < generic_outcome
+    assert "monitoringCanonicalLinkageKind(alert)" not in decision_region
+    assert "renderMonitoringCanonicalOwnerSection(alert)" not in decision_region
+
+    detail_region = _function_region(
+        html,
+        "function renderMonitoringAlertDetailView",
+        "async function openMonitoringAlertDetail",
+    )
+    assert detail_region.count("renderMonitoringCanonicalOwnerSection(alert)") == 2
+    assert detail_region.count("renderMonitoringDecisionSection(alert)") == 2
+    assert (
+        detail_region.index("renderMonitoringCanonicalOwnerSection(alert)")
+        < detail_region.index("renderMonitoringDecisionSection(alert)")
+    )
 
 
 def test_backoffice_navigation_uses_stable_ids_without_name_fallback():
@@ -128,6 +140,8 @@ def test_screening_owner_handoff_proves_exact_case_with_read_only_get():
     assert "summary.provider_alert_ids" in proof_region
     assert "exact.length !== 1" in proof_region
     assert "boApiCall('GET', '/screening/queue?" in proof_region
+    assert "exact_application_ref=" in proof_region
+    assert "'application_ref=' +" not in proof_region
     for mutation in ("boApiCall('POST'", "boApiCall('PUT'", "boApiCall('PATCH'", "boApiCall('DELETE'"):
         assert mutation not in proof_region
 
@@ -139,6 +153,38 @@ def test_screening_owner_handoff_proves_exact_case_with_read_only_get():
     assert "monitoringCanonicalScreeningContextRows" in panel_region
     assert "canonicalContextRows.length === 1" in panel_region
     assert "data-canonical-screening-context-error" in panel_region
+
+
+def test_canonical_owner_handoffs_suppress_transitive_profile_hydration_write():
+    html = (REPO_ROOT / "arie-backoffice.html").read_text(encoding="utf-8")
+    open_region = _function_region(
+        html,
+        "async function openMonitoringCanonicalOwner",
+        "function renderMonitoringCanonicalOwnerSection",
+    )
+    detail_region = _function_region(
+        html,
+        "function renderAuthoritativeAppDetail",
+        "async function openAppDetail",
+    )
+    panel_region = _function_region(
+        html,
+        "function renderScreeningReviewPanel",
+        "function screeningQueueRowHasFullEvidence",
+    )
+
+    assert open_region.count("canonicalLinkageHandoff: true") == 2
+    assert "currentCanonicalLinkageReadOnlyNavigation = options.canonicalLinkageHandoff === true" in detail_region
+    hydration_call = panel_region.index(
+        "ensureSubjectProfileHydration(app, selectedSubject)"
+    )
+    read_only_guard = panel_region.rfind(
+        "if (!currentCanonicalLinkageReadOnlyNavigation)",
+        0,
+        hydration_call,
+    )
+    assert read_only_guard >= 0
+    assert "boApiCall('POST', '/screening/hydrate-profiles'" in html
 
 
 @pytest.mark.parametrize(
@@ -213,6 +259,8 @@ def test_audit_evidence_shape_is_sanitised_and_has_no_apply_path(tmp_path):
             "features": {name: "OFF" for name in audit.MONITORING_FEATURE_FLAGS},
             "all_monitoring_flags_off": True,
             "activation_controls": False,
+            "evaluation_source": "collector_environment_with_staging_defaults",
+            "deployed_runtime_observed": False,
         },
         "source_fingerprints": [],
         "plan": plan,
@@ -224,6 +272,14 @@ def test_audit_evidence_shape_is_sanitised_and_has_no_apply_path(tmp_path):
     parsed = json.loads((tmp_path / "canonical_linkage_inventory.json").read_text())
     assert parsed["plan"]["apply_supported"] is False
     assert parsed["no_monitoring_or_downstream_data_modified"] is True
+    assert parsed["feature_governance"]["deployed_runtime_observed"] is False
+    assert (
+        parsed["feature_governance"]["evaluation_source"]
+        == "collector_environment_with_staging_defaults"
+    )
+    assert "not deployed-runtime evidence" in (
+        tmp_path / "LINKAGE_AUDIT_REPORT.md"
+    ).read_text(encoding="utf-8")
     for forbidden in (
         "company_name",
         "subject_name",

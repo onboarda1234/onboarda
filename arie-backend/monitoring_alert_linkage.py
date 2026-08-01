@@ -14,7 +14,9 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional, TypedDict
 
+import document_health_monitor as _document_health
 import document_reliance_gate as _document_reliance
+import monitoring_routing as _monitoring_routing
 
 
 CONTRACT_VERSION = "monitoring_alert_linkage_v1"
@@ -39,13 +41,20 @@ SCREENING_HIT_ALERT_TYPES = frozenset(
 )
 
 _DOCUMENT_REFERENCE_RE = re.compile(r"^document:([A-Za-z0-9_-]{1,200})$")
+_READ_ONLY_SQL_PREFIX_RE = re.compile(r"^\s*(?:SELECT|WITH|SHOW)\b", re.IGNORECASE)
+_MUTATING_SQL_TOKEN_RE = re.compile(
+    r"\b(?:INSERT|UPDATE|DELETE|MERGE|ALTER|DROP|CREATE|TRUNCATE|GRANT|"
+    r"REVOKE|CALL|DO|COPY|VACUUM|ANALYZE|REFRESH|REINDEX|CLUSTER|COMMENT|"
+    r"LOCK|SET)\b",
+    re.IGNORECASE,
+)
 _PARTY_TABLES = {
     "director": ("directors", "full_name"),
     "ubo": ("ubos", "full_name"),
     "intermediary": ("intermediaries", "entity_name"),
 }
 _ENTITY_KINDS = frozenset({"entity"})
-_PERSON_KINDS = frozenset({"director", "ubo", "intermediary", "subject"})
+_PERSON_KINDS = frozenset({"director", "ubo", "subject"})
 
 
 class NavigationContract(TypedDict, total=False):
@@ -140,6 +149,13 @@ def _row_dict(row: Any) -> Optional[Dict[str, Any]]:
 
 
 def _rows(db: Any, sql: str, params: tuple = ()) -> List[Dict[str, Any]]:
+    if (
+        not isinstance(sql, str)
+        or not _READ_ONLY_SQL_PREFIX_RE.match(sql)
+        or ";" in sql
+        or _MUTATING_SQL_TOKEN_RE.search(sql)
+    ):
+        raise ValueError("Canonical linkage query helper permits read-only SQL only.")
     return [dict(row) for row in db.execute(sql, params).fetchall()]
 
 
@@ -179,7 +195,9 @@ def _timestamp(value: Any) -> Optional[datetime]:
             return None
     else:
         return None
-    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _alert_context(db: Any, alert_id: Any) -> Dict[str, Any]:
@@ -289,6 +307,10 @@ def _document_chain_reaches(
     if str(source.get("id")) == str(current.get("id")):
         return True
     application_id = source.get("application_id")
+    previous_version = _canonical_document_version(
+        source.get("version"),
+        reason="invalid_trigger_document_version",
+    )
     seen = {str(source.get("id"))}
     next_id = str(source.get("superseded_by_document_id") or "").strip()
     for _ in range(100):
@@ -298,7 +320,7 @@ def _document_chain_reaches(
         row = db.execute(
             """
             SELECT id, application_id, person_id, person_type, doc_type, slot_key,
-                   superseded_by_document_id
+                   version, superseded_by_document_id
               FROM documents
              WHERE id = ?
             """,
@@ -316,8 +338,15 @@ def _document_chain_reaches(
             )
         ):
             return False
+        item_version = _canonical_document_version(
+            item.get("version"),
+            reason="invalid_document_chain_version",
+        )
+        if item_version <= previous_version:
+            return False
         if str(item.get("id")) == str(current.get("id")):
             return True
+        previous_version = item_version
         next_id = str(item.get("superseded_by_document_id") or "").strip()
     return False
 
@@ -432,22 +461,20 @@ def _document_reliance_projection(
 
 
 def _canonical_document_expiry(document: Mapping[str, Any]) -> Optional[datetime]:
-    """Read the same canonical expiry evidence used by document health.
-
-    Persisted date columns take precedence. Verification evidence is accepted
-    only as an exact structured field; an unparseable or absent value remains
-    unavailable rather than making a stale Monitoring signal authoritative.
-    """
-    for value in (document.get("expiry_date"), document.get("valid_until")):
-        parsed = _timestamp(value)
-        if parsed is not None:
-            return parsed
-    verification = _load_json_object(document.get("verification_results")) or {}
-    for key in ("expiry_date", "expiry", "validity_to", "valid_until"):
-        parsed = _timestamp(verification.get(key))
-        if parsed is not None:
-            return parsed
-    return None
+    """Use the KYC & Documents owner module's canonical expiry extraction."""
+    try:
+        dates = _document_health._extract_document_expiry(document)
+        if not isinstance(dates, Mapping):
+            raise TypeError("document expiry result is not an object")
+        return dates.get("expiry_date") or dates.get("valid_until")
+    except Exception as exc:
+        raise LinkageError(
+            "linkage_broken",
+            "The linked document has invalid canonical expiry evidence.",
+            linkage_type="document_expiry",
+            owner_module="kyc_documents",
+            reasons=["invalid_document_expiry_evidence"],
+        ) from exc
 
 
 def _document_owner_state(
@@ -465,6 +492,20 @@ def _document_owner_state(
     expiry_at = _canonical_document_expiry(current)
     today = datetime.now(timezone.utc).date()
 
+    def verified_or_expiry_failure() -> str:
+        """Never present an expired replacement as successful remediation."""
+        if expiry_at is None:
+            return "unavailable"
+        if expiry_at.date() < today:
+            return "expired"
+        if (
+            str(alert.get("alert_type")) == "document_expiring_soon"
+            and expiry_at.date()
+            <= today + timedelta(days=_document_health.DOCUMENT_EXPIRING_SOON_DAYS)
+        ):
+            return "request_not_started"
+        return "verified"
+
     if request and request_status not in {
         "generated",
         "requested",
@@ -481,13 +522,17 @@ def _document_owner_state(
         # projection vocabulary. Do not reinterpret them as verified/resolved.
         key = "unavailable"
     elif request_status == "accepted" and source_is_current:
-        key = "verified" if reliance["allowed"] else "officer_review_required"
+        key = (
+            verified_or_expiry_failure()
+            if reliance["allowed"]
+            else "officer_review_required"
+        )
     elif request_status == "generated" and source_is_current:
         key = "request_not_started"
 
     elif not source_is_current:
         if reliance["allowed"]:
-            key = "verified"
+            key = verified_or_expiry_failure()
         elif verification == "in_progress":
             key = "verifying"
         elif verification == "pending":
@@ -518,7 +563,9 @@ def _document_owner_state(
             key = "unavailable"
         elif expiry_at.date() < today:
             key = "expired"
-        elif expiry_at.date() <= today + timedelta(days=30):
+        elif expiry_at.date() <= today + timedelta(
+            days=_document_health.DOCUMENT_EXPIRING_SOON_DAYS
+        ):
             key = "request_not_started"
         else:
             key = "stale"
@@ -639,14 +686,6 @@ def resolve_document_linkage(db: Any, alert: Mapping[str, Any]) -> LinkageEnvelo
             owner_module="kyc_documents",
             reasons=["document_version_owner_drift"],
         )
-    if not _document_chain_reaches(db, source, current):
-        raise LinkageError(
-            "linkage_integrity_error",
-            "The document version chain is incomplete or stale.",
-            linkage_type="document_expiry",
-            owner_module="kyc_documents",
-            reasons=["document_version_chain_broken"],
-        )
     source_version = _canonical_document_version(
         source.get("version"),
         reason="invalid_trigger_document_version",
@@ -655,6 +694,14 @@ def resolve_document_linkage(db: Any, alert: Mapping[str, Any]) -> LinkageEnvelo
         current.get("version"),
         reason="invalid_current_document_version",
     )
+    if not _document_chain_reaches(db, source, current):
+        raise LinkageError(
+            "linkage_integrity_error",
+            "The document version chain is incomplete or stale.",
+            linkage_type="document_expiry",
+            owner_module="kyc_documents",
+            reasons=["document_version_chain_broken"],
+        )
     request = _document_request(
         db,
         alert.get("id"),
@@ -663,8 +710,8 @@ def resolve_document_linkage(db: Any, alert: Mapping[str, Any]) -> LinkageEnvelo
         current.get("id"),
     )
     state = _document_owner_state(db, alert, source, current, request)
-    source_expiry = source.get("expiry_date") or source.get("valid_until")
-    current_expiry = current.get("expiry_date") or current.get("valid_until")
+    source_expiry = _canonical_document_expiry(source)
+    current_expiry = _canonical_document_expiry(current)
     return {
         "contract_version": CONTRACT_VERSION,
         "alert_id": alert.get("id"),
@@ -744,11 +791,55 @@ def _screening_source(alert: Mapping[str, Any]) -> Dict[str, Any]:
 def _subject_contract(source: Mapping[str, Any]) -> Dict[str, str]:
     nested = source.get("screening_subject")
     nested = dict(nested) if isinstance(nested, Mapping) else {}
-    kind = str(nested.get("kind") or source.get("subject_kind") or "").strip()
-    scope = str(nested.get("scope") or source.get("subject_scope") or "").strip()
-    person_key = str(nested.get("person_key") or "").strip()
+    nested_kind = str(nested.get("kind") or "").strip()
+    nested_scope = str(nested.get("scope") or "").strip()
+    nested_person_key = str(nested.get("person_key") or "").strip()
+    top_kind_values = {
+        str(source.get(key) or "").strip()
+        for key in ("subject_kind", "screening_subject_kind")
+        if str(source.get(key) or "").strip()
+    }
+    top_person_key_values = {
+        str(source.get(key) or "").strip()
+        for key in (
+            "person_key",
+            "subject_person_key",
+            "screening_subject_person_key",
+        )
+        if str(source.get(key) or "").strip()
+    }
+    if len(top_kind_values) > 1 or len(top_person_key_values) > 1:
+        raise LinkageError(
+            "linkage_integrity_error",
+            "The screening source contains conflicting subject identities.",
+            linkage_type="screening_hit",
+            owner_module="screening_review",
+            reasons=["screening_source_subject_identity_conflict"],
+        )
+    top_kind = next(iter(top_kind_values), "")
+    top_scope = str(source.get("subject_scope") or "").strip()
+    top_person_key = next(iter(top_person_key_values), "")
+    if (nested_kind and top_kind and nested_kind != top_kind) or (
+        nested_scope and top_scope and nested_scope != top_scope
+    ) or (
+        nested_person_key
+        and top_person_key
+        and nested_person_key != top_person_key
+    ):
+        raise LinkageError(
+            "linkage_integrity_error",
+            "The screening source contains conflicting subject identities.",
+            linkage_type="screening_hit",
+            owner_module="screening_review",
+            reasons=["screening_source_subject_identity_conflict"],
+        )
+    kind = nested_kind or top_kind
+    scope = nested_scope or top_scope
+    person_key = nested_person_key or top_person_key
     if kind in _ENTITY_KINDS and scope == "entity" and not person_key:
         return {"kind": "entity", "scope": "entity", "person_key": ""}
+    if kind == "intermediary" and scope == "entity" and person_key:
+        return {"kind": kind, "scope": scope, "person_key": person_key}
     if kind in _PERSON_KINDS and scope == "person" and person_key:
         return {"kind": kind, "scope": "person", "person_key": person_key}
     raise LinkageError(
@@ -769,7 +860,7 @@ def _party_subject(
     kinds = (
         [subject["kind"]]
         if subject["kind"] in _PARTY_TABLES
-        else list(_PARTY_TABLES)
+        else ["director", "ubo"]
     )
     matches: List[Dict[str, Any]] = []
     for kind in kinds:
@@ -796,19 +887,41 @@ def _party_subject(
             ],
         )
     resolved = matches[0]
-    duplicate_names = _rows(
+    owner_subject_rows = _rows(
         db,
         f"""
-        SELECT id FROM {_PARTY_TABLES[resolved['subject_type']][0]}
+        SELECT id, {_PARTY_TABLES[resolved['subject_type']][1]} AS subject_name
+          FROM {_PARTY_TABLES[resolved['subject_type']][0]}
          WHERE application_id = ?
-           AND {_PARTY_TABLES[resolved['subject_type']][1]} = ?
         """,
-        (application_id, resolved.get("subject_name")),
+        (application_id,),
     )
-    if len(duplicate_names) != 1:
+
+    def owner_join_name(value: Any) -> str:
+        return " ".join(str(value or "").strip().lower().split())
+
+    def owner_token_name(value: Any) -> str:
+        normalized = re.sub(r"[^a-z0-9 ]+", " ", str(value or "").lower())
+        return " ".join(sorted(normalized.split()))
+
+    resolved_join = owner_join_name(resolved.get("subject_name"))
+    resolved_tokens = owner_token_name(resolved.get("subject_name"))
+    owner_ui_matches = [
+        row
+        for row in owner_subject_rows
+        if (
+            resolved_join
+            and owner_join_name(row.get("subject_name")) == resolved_join
+        )
+        or (
+            resolved_tokens
+            and owner_token_name(row.get("subject_name")) == resolved_tokens
+        )
+    ]
+    if len(owner_ui_matches) != 1:
         raise LinkageError(
             "linkage_ambiguous",
-            "Screening Review cannot distinguish duplicate subject names.",
+            "Screening Review cannot distinguish colliding subject names.",
             linkage_type="screening_hit",
             owner_module="screening_review",
             reasons=["screening_review_name_collision"],
@@ -821,7 +934,7 @@ def _screening_subject(
     alert: Mapping[str, Any],
     subject: Mapping[str, str],
 ) -> Dict[str, Any]:
-    if subject["scope"] == "entity":
+    if subject["kind"] == "entity" and subject["scope"] == "entity":
         return {
             "id": str(alert.get("application_id")),
             "person_key": "",
@@ -835,7 +948,7 @@ def _screening_subject(
         "person_key": resolved.get("person_key"),
         "subject_type": resolved.get("subject_type"),
         "subject_name": resolved.get("subject_name"),
-        "scope": "person",
+        "scope": subject["scope"],
     }
 
 
@@ -944,12 +1057,13 @@ def _screening_review(
     return rows[0] if rows else None
 
 
-def _screening_review_audit_confirmed(
+def _screening_review_audit_evidence(
     db: Any,
     alert: Mapping[str, Any],
     review: Mapping[str, Any],
-) -> bool:
+) -> Optional[Dict[str, Any]]:
     disposition_code = str(review.get("disposition_code") or "").strip()
+    disposition = str(review.get("disposition") or "").strip()
     subject_name = str(review.get("subject_name") or "")
     subject_type = str(review.get("subject_type") or "").strip()
     first_reviewer_id = str(review.get("reviewer_id") or "").strip()
@@ -961,7 +1075,7 @@ def _screening_review_audit_confirmed(
         or not subject_type
         or not first_reviewer_id
     ):
-        return False
+        return None
     reviewer_ids = [first_reviewer_id]
     if second_reviewer_id and second_reviewer_id not in reviewer_ids:
         reviewer_ids.append(second_reviewer_id)
@@ -973,50 +1087,97 @@ def _screening_review_audit_confirmed(
             tuple(reviewer_ids),
         )
     except Exception:
-        return False
+        return None
     reviewer_roles = {
         str(row.get("id")): str(row.get("role") or "").strip().lower()
         for row in reviewer_rows
         if str(row.get("status") or "").strip().lower() == "active"
     }
-    if reviewer_roles.get(first_reviewer_id) not in {"admin", "sco", "co"}:
-        return False
+    first_reviewer_roles = (
+        {"admin", "sco", "co"}
+        if disposition == "cleared" or disposition_code == "false_positive_cleared"
+        else {"admin", "sco", "co", "analyst"}
+    )
+    if reviewer_roles.get(first_reviewer_id) not in first_reviewer_roles:
+        return None
 
+    expected_audits: List[Dict[str, Any]]
     if requires_four_eyes and second_reviewer_id:
+        first_reviewed_at = _timestamp(review.get("created_at"))
+        current_review_updated_at = _timestamp(review.get("updated_at"))
+        second_reviewed_at = _timestamp(review.get("second_reviewed_at"))
+        first_rationale = str(review.get("rationale") or "").strip()
+        second_rationale = str(review.get("second_rationale") or "").strip()
         if (
             second_reviewer_id == first_reviewer_id
             or reviewer_roles.get(second_reviewer_id) not in {"admin", "sco"}
             or str(review.get("second_disposition_code") or "").strip()
             != disposition_code
-            or not str(review.get("second_rationale") or "").strip()
-            or _timestamp(review.get("second_reviewed_at")) is None
+            or not first_rationale
+            or not second_rationale
+            or first_reviewed_at is None
+            or current_review_updated_at is None
+            or second_reviewed_at is None
+            or second_reviewed_at < first_reviewed_at.replace(microsecond=0)
+            or current_review_updated_at.replace(microsecond=0)
+            > second_reviewed_at
         ):
-            return False
-        expected_actor_id = second_reviewer_id
-        expected_actor_role = reviewer_roles[second_reviewer_id]
-        expected_rationale = str(review.get("second_rationale") or "").strip()
-        expected_four_eyes_status = "second_review_complete"
-        expected_audit_at = _timestamp(review.get("second_reviewed_at"))
+            return None
+        expected_audits = [
+            {
+                "actor_id": first_reviewer_id,
+                "actor_role": reviewer_roles[first_reviewer_id],
+                # The protected Screening Review audit contract intentionally
+                # stores the first 1,000 characters while the owner row retains
+                # the complete rationale. Match that exact persisted contract;
+                # do not treat a valid long rationale as unaudited.
+                "rationale": first_rationale[:1000],
+                "four_eyes_status": "second_review_required",
+                "not_before": first_reviewed_at,
+                "not_after": second_reviewed_at,
+            },
+            {
+                "actor_id": second_reviewer_id,
+                "actor_role": reviewer_roles[second_reviewer_id],
+                "rationale": second_rationale[:1000],
+                "four_eyes_status": "second_review_complete",
+                "not_before": second_reviewed_at,
+                "not_after": None,
+            },
+        ]
     elif requires_four_eyes:
-        expected_actor_id = first_reviewer_id
-        expected_actor_role = reviewer_roles[first_reviewer_id]
-        expected_rationale = str(review.get("rationale") or "").strip()
-        expected_four_eyes_status = "second_review_required"
-        expected_audit_at = _timestamp(
-            review.get("updated_at") or review.get("created_at")
-        )
+        expected_audits = [
+            {
+                "actor_id": first_reviewer_id,
+                "actor_role": reviewer_roles[first_reviewer_id],
+                "rationale": str(review.get("rationale") or "").strip()[:1000],
+                "four_eyes_status": "second_review_required",
+                "not_before": _timestamp(
+                    review.get("created_at") or review.get("updated_at")
+                ),
+                "not_after": None,
+            }
+        ]
     else:
         if second_reviewer_id:
-            return False
-        expected_actor_id = first_reviewer_id
-        expected_actor_role = reviewer_roles[first_reviewer_id]
-        expected_rationale = str(review.get("rationale") or "").strip()
-        expected_four_eyes_status = "complete"
-        expected_audit_at = _timestamp(
-            review.get("updated_at") or review.get("created_at")
-        )
-    if not expected_rationale or expected_audit_at is None:
-        return False
+            return None
+        expected_audits = [
+            {
+                "actor_id": first_reviewer_id,
+                "actor_role": reviewer_roles[first_reviewer_id],
+                "rationale": str(review.get("rationale") or "").strip()[:1000],
+                "four_eyes_status": "complete",
+                "not_before": _timestamp(
+                    review.get("updated_at") or review.get("created_at")
+                ),
+                "not_after": None,
+            }
+        ]
+    if any(
+        not expectation["rationale"] or expectation["not_before"] is None
+        for expectation in expected_audits
+    ):
+        return None
 
     targets = []
     for candidate in (alert.get("application_ref"), alert.get("application_id")):
@@ -1024,12 +1185,12 @@ def _screening_review_audit_confirmed(
         if value and value not in targets:
             targets.append(value)
     if not targets:
-        return False
+        return None
     placeholders = ",".join("?" for _ in targets)
     rows = _rows(
         db,
         f"""
-        SELECT timestamp, detail
+        SELECT id, timestamp, detail
           FROM audit_log
          WHERE action = 'Screening Review'
            AND target IN ({placeholders})
@@ -1037,6 +1198,7 @@ def _screening_review_audit_confirmed(
         """,
         tuple(targets),
     )
+    matched_audits: Dict[int, Dict[str, Any]] = {}
     for row in rows:
         detail = _load_json_object(row.get("detail"))
         if not detail:
@@ -1094,7 +1256,8 @@ def _screening_review_audit_confirmed(
         source = _load_json_object(alert.get("source_reference")) or {}
         expected_alert = str(source.get("alert_identifier") or "").strip()
         audit_at = _timestamp(row.get("timestamp"))
-        if (
+        event_at = _timestamp(detail.get("timestamp"))
+        common_match = (
             payload_subject == subject_name
             and payload_subject_type == subject_type
             and payload_code == disposition_code
@@ -1102,14 +1265,195 @@ def _screening_review_audit_confirmed(
             and (not expected_alert or expected_alert in audit_alert_ids)
             and payload_provider == str(alert.get("provider") or "").strip()
             and payload_application == str(alert.get("application_id") or "")
-            and payload_actor_id == expected_actor_id
-            and payload_actor_role == expected_actor_role
-            and payload_rationale == expected_rationale
             and _truthy(detail.get("requires_four_eyes")) == requires_four_eyes
-            and payload_four_eyes_status == expected_four_eyes_status
             and audit_at is not None
-            and audit_at >= expected_audit_at
+            and event_at is not None
+            # PostgreSQL CURRENT_TIMESTAMP is the transaction-start time, so
+            # the audit row timestamp may legitimately predate the Python event
+            # timestamp recorded in the typed detail. The typed timestamp is
+            # the review event clock used for chronology below.
+            and audit_at.replace(microsecond=0) <= event_at
+        )
+        if not common_match:
+            continue
+        for index, expectation in enumerate(expected_audits):
+            not_after = expectation["not_after"]
+            if (
+                payload_actor_id == expectation["actor_id"]
+                and payload_actor_role == expectation["actor_role"]
+                and payload_rationale == expectation["rationale"]
+                and payload_four_eyes_status == expectation["four_eyes_status"]
+                and event_at >= expectation["not_before"].replace(microsecond=0)
+                and (
+                    not_after is None
+                    or event_at <= not_after.replace(microsecond=0)
+                )
+            ):
+                if index not in matched_audits:
+                    matched_audits[index] = {
+                        "audit_id": row.get("id"),
+                        "event_at": event_at,
+                    }
+    if len(matched_audits) != len(expected_audits):
+        return None
+    final = matched_audits[len(expected_audits) - 1]
+    return {
+        "confirmed": True,
+        "audit_ids": [
+            matched_audits[index]["audit_id"]
+            for index in range(len(expected_audits))
+        ],
+        "final_audit_id": final["audit_id"],
+        "final_event_at": final["event_at"],
+    }
+
+
+def _screening_hit_mutation_candidates(
+    db: Any,
+    alert: Mapping[str, Any],
+    review: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    targets = []
+    for candidate in (alert.get("application_ref"), alert.get("application_id")):
+        value = str(candidate or "").strip()
+        if value and value not in targets:
+            targets.append(value)
+    if not targets:
+        return []
+    placeholders = ",".join("?" for _ in targets)
+    rows = _rows(
+        db,
+        f"""
+        SELECT id, timestamp, detail
+          FROM audit_log
+         WHERE action = 'Screening Hit Disposition'
+           AND target IN ({placeholders})
+         ORDER BY id DESC
+        """,
+        tuple(targets),
+    )
+    candidates: List[Dict[str, Any]] = []
+    for row in rows:
+        detail = _load_json_object(row.get("detail"))
+        if not detail:
+            candidates.append(
+                {
+                    "audit_id": row.get("id"),
+                    "event_at": None,
+                    "identity_unproven": True,
+                }
+            )
+            continue
+        payload_identity = {
+            "application_id": str(detail.get("application_id") or ""),
+            "subject_type": str(detail.get("subject_type") or "").strip(),
+            "subject_name": str(detail.get("subject_name") or ""),
+        }
+        expected_identity = {
+            "application_id": str(alert.get("application_id") or ""),
+            "subject_type": str(review.get("subject_type") or "").strip(),
+            "subject_name": str(review.get("subject_name") or ""),
+        }
+        if not all(payload_identity.values()):
+            candidates.append(
+                {
+                    "audit_id": row.get("id"),
+                    "event_at": None,
+                    "identity_unproven": True,
+                }
+            )
+            continue
+        if payload_identity != expected_identity:
+            continue
+        event_at = _timestamp(detail.get("timestamp"))
+        audit_at = _timestamp(row.get("timestamp"))
+        if (
+            event_at is None
+            or audit_at is None
+            or audit_at.replace(microsecond=0) > event_at
         ):
+            # This is the newest exact-subject mutation record. Once identity
+            # matches, malformed or impossible chronology is itself material:
+            # a deleted/undone per-hit row may leave only this audit evidence.
+            candidates.append(
+                {
+                    "audit_id": row.get("id"),
+                    "event_at": None,
+                    "identity_unproven": False,
+                }
+            )
+            continue
+        candidates.append(
+            {
+                "audit_id": row.get("id"),
+                "event_at": event_at,
+                "identity_unproven": False,
+            }
+        )
+    return candidates
+
+
+def _screening_hit_state_changed_after_review(
+    db: Any,
+    alert: Mapping[str, Any],
+    review: Mapping[str, Any],
+    review_audit: Optional[Mapping[str, Any]],
+    *,
+    require_all_cleared: bool,
+) -> bool:
+    if not review_audit:
+        return False
+    mutations = _screening_hit_mutation_candidates(db, alert, review)
+    final_event_at = review_audit.get("final_event_at")
+    if not isinstance(final_event_at, datetime):
+        return True
+    for mutation in mutations:
+        # Without typed subject identity or chronology, sequence allocation
+        # cannot prove this same-target owner mutation committed before the
+        # review. Preserve no-clear confidence and fail closed.
+        if mutation.get("identity_unproven"):
+            return True
+        try:
+            if int(mutation["audit_id"]) > int(review_audit["final_audit_id"]):
+                return True
+        except (KeyError, TypeError, ValueError):
+            return True
+        latest_event_at = mutation.get("event_at")
+        if not isinstance(latest_event_at, datetime):
+            return True
+        # Sequence allocation and transaction timestamps do not prove commit
+        # order.  The typed event chronology catches an overlapping mutation
+        # whose audit id was allocated before the subject review completed.
+        if latest_event_at >= final_event_at:
+            return True
+    rows = _rows(
+        db,
+        """
+        SELECT disposition, created_at, updated_at
+          FROM screening_hit_dispositions
+         WHERE application_id = ?
+           AND subject_type = ?
+           AND subject_name = ?
+        """,
+        (
+            alert.get("application_id"),
+            review.get("subject_type"),
+            review.get("subject_name"),
+        ),
+    )
+    for row in rows:
+        # Screening Review owns the decision. A subject-level clear cannot be
+        # projected while any persisted per-hit decision remains open, matched,
+        # escalated, unknown, or otherwise non-cleared.
+        if require_all_cleared and str(row.get("disposition") or "") != "cleared":
+            return True
+        row_at = _timestamp(row.get("updated_at") or row.get("created_at"))
+        # A persisted per-hit decision without provable chronology must never
+        # coexist with a projected clear state. Legacy columns are nullable,
+        # so fail closed instead of treating an unknown timestamp as old.
+        if row_at is None:
+            return True
+        if row_at.replace(microsecond=0) >= final_event_at:
             return True
     return False
 
@@ -1125,7 +1469,7 @@ def _screening_owner_state(
         evidence.get("evidence_available")
     )
     current_snapshot_unavailable = bool(
-        snapshot.get("linked_snapshot_id")
+        snapshot.get("current_snapshot_id")
         and (
             snapshot.get("current_snapshot_status") != "success"
             or not snapshot.get("current_snapshot_at")
@@ -1157,8 +1501,22 @@ def _screening_owner_state(
     )
     disposition = str(review.get("disposition") or "").strip()
     disposition_code = str(review.get("disposition_code") or "").strip()
-    audit_confirmed = _screening_review_audit_confirmed(db, alert, review)
+    review_audit = _screening_review_audit_evidence(db, alert, review)
+    audit_confirmed = bool(review_audit)
+    per_hit_state_changed = _screening_hit_state_changed_after_review(
+        db,
+        alert,
+        review,
+        review_audit,
+        require_all_cleared=(
+            disposition == "cleared"
+            and disposition_code == "false_positive_cleared"
+        ),
+    )
     review_at = _timestamp(review.get("updated_at") or review.get("created_at"))
+    authoritative_review_at = (
+        review_audit.get("final_event_at") if review_audit else review_at
+    )
     evidence_at = _timestamp(evidence.get("latest_evidence_at"))
     snapshot_at = _timestamp(snapshot.get("current_snapshot_at"))
     newest_evidence_at = max(
@@ -1183,7 +1541,13 @@ def _screening_owner_state(
     )
     if evidence_unavailable or current_snapshot_unavailable or not audit_confirmed:
         key = "unavailable"
-    elif newest_evidence_at and (not review_at or newest_evidence_at > review_at):
+    elif per_hit_state_changed:
+        key = "stale"
+    elif newest_evidence_at and (
+        not isinstance(authoritative_review_at, datetime)
+        or newest_evidence_at.replace(microsecond=0)
+        >= authoritative_review_at.replace(microsecond=0)
+    ):
         key = "stale"
     elif requires_four_eyes and not second_complete:
         key = "pending_second_review"
@@ -1223,11 +1587,58 @@ def _screening_owner_state(
     }
 
 
+def _snapshot_report(row: Mapping[str, Any]) -> Dict[str, Any]:
+    report = _load_json_object(row.get("normalized_report_json"))
+    if report is None:
+        if str(row.get("normalization_status") or "") == "success":
+            raise LinkageError(
+                "linkage_broken",
+                "The successful screening snapshot payload is invalid.",
+                linkage_type="screening_hit",
+                owner_module="screening_review",
+                reasons=["screening_snapshot_payload_invalid"],
+            )
+        return {}
+    return report
+
+
 def _snapshot_subject(row: Mapping[str, Any]) -> Dict[str, str]:
+    report = _snapshot_report(row)
+    providers = report.get("provider_specific")
+    providers = dict(providers) if isinstance(providers, Mapping) else {}
+    provider = providers.get("complyadvantage")
+    provider = dict(provider) if isinstance(provider, Mapping) else {}
+    nested = provider.get("screening_subject")
+    nested = dict(nested) if isinstance(nested, Mapping) else {}
+    nested_values = {
+        "kind": str(nested.get("kind") or "").strip(),
+        "scope": str(nested.get("scope") or "").strip(),
+        "person_key": str(nested.get("person_key") or "").strip(),
+    }
+    top_values = {
+        "kind": str(report.get("screening_subject_kind") or "").strip(),
+        "scope": str(report.get("subject_scope") or "").strip(),
+        "person_key": str(
+            report.get("screening_subject_person_key") or ""
+        ).strip(),
+    }
+    if any(
+        nested_values[key]
+        and top_values[key]
+        and nested_values[key] != top_values[key]
+        for key in nested_values
+    ):
+        raise LinkageError(
+            "linkage_integrity_error",
+            "The screening snapshot contains conflicting subject identities.",
+            linkage_type="screening_hit",
+            owner_module="screening_review",
+            reasons=["screening_snapshot_subject_identity_conflict"],
+        )
     return {
-        "kind": str(row.get("subject_kind") or "").strip(),
-        "scope": str(row.get("subject_scope") or "").strip(),
-        "person_key": str(row.get("subject_person_key") or "").strip(),
+        key: nested_values[key]
+        or top_values[key]
+        for key in ("kind", "scope", "person_key")
     }
 
 
@@ -1246,9 +1657,16 @@ def _json_string_list(value: Any) -> List[str]:
 
 
 def _snapshot_provider_references(row: Mapping[str, Any]) -> Dict[str, List[str]]:
+    report = _snapshot_report(row)
+    providers = report.get("provider_specific")
+    providers = dict(providers) if isinstance(providers, Mapping) else {}
+    provider = providers.get("complyadvantage")
+    provider = dict(provider) if isinstance(provider, Mapping) else {}
+    references = provider.get("provider_references")
+    references = dict(references) if isinstance(references, Mapping) else {}
     return {
-        "case_ids": _json_string_list(row.get("provider_case_ids_json")),
-        "alert_ids": _json_string_list(row.get("provider_alert_ids_json")),
+        "case_ids": _json_string_list(references.get("case_ids")),
+        "alert_ids": _json_string_list(references.get("alert_ids")),
     }
 
 
@@ -1259,16 +1677,7 @@ def _screening_snapshot_projection(
     subject_contract: Mapping[str, str],
 ) -> Dict[str, Any]:
     normalized_snapshot_id = source.get("normalized_record_id")
-    if normalized_snapshot_id in (None, ""):
-        return {
-            "linked_snapshot_id": None,
-            "current_snapshot_id": None,
-            "snapshot_role": "unavailable",
-            "normalization_status": "unavailable",
-            "current_snapshot_status": "unavailable",
-            "current_snapshot_at": None,
-            "current_snapshot_scope": "unavailable",
-        }
+    has_linked_snapshot_id = normalized_snapshot_id not in (None, "")
     cache = getattr(db, "_monitoring_linkage_snapshot_cache", None)
     cache_key = (
         str(alert.get("application_id") or ""),
@@ -1277,56 +1686,13 @@ def _screening_snapshot_projection(
     )
     rows = cache.get(cache_key) if isinstance(cache, dict) else None
     if rows is None:
-        if getattr(db, "is_postgres", False):
-            snapshot_sql = """
-                SELECT id, normalization_status, created_at, updated_at,
-                       CASE WHEN normalization_status = 'success' THEN COALESCE(
-                           normalized_report_json::jsonb #>> '{provider_specific,complyadvantage,screening_subject,kind}',
-                           normalized_report_json::jsonb ->> 'screening_subject_kind'
-                       ) END AS subject_kind,
-                       CASE WHEN normalization_status = 'success' THEN COALESCE(
-                           normalized_report_json::jsonb #>> '{provider_specific,complyadvantage,screening_subject,scope}',
-                           normalized_report_json::jsonb ->> 'subject_scope'
-                       ) END AS subject_scope,
-                       CASE WHEN normalization_status = 'success' THEN COALESCE(
-                           normalized_report_json::jsonb #>> '{provider_specific,complyadvantage,screening_subject,person_key}',
-                           normalized_report_json::jsonb ->> 'screening_subject_person_key'
-                       ) END AS subject_person_key,
-                       CASE WHEN normalization_status = 'success' THEN
-                           (normalized_report_json::jsonb #> '{provider_specific,complyadvantage,provider_references,case_ids}')::text
-                       END AS provider_case_ids_json,
-                       CASE WHEN normalization_status = 'success' THEN
-                           (normalized_report_json::jsonb #> '{provider_specific,complyadvantage,provider_references,alert_ids}')::text
-                       END AS provider_alert_ids_json
-                  FROM screening_reports_normalized
-                 WHERE application_id = ? AND client_id = ? AND provider = ?
-                 ORDER BY id DESC
-            """
-        else:
-            snapshot_sql = """
-                SELECT id, normalization_status, created_at, updated_at,
-                       CASE WHEN normalization_status = 'success' THEN COALESCE(
-                           json_extract(normalized_report_json, '$.provider_specific.complyadvantage.screening_subject.kind'),
-                           json_extract(normalized_report_json, '$.screening_subject_kind')
-                       ) END AS subject_kind,
-                       CASE WHEN normalization_status = 'success' THEN COALESCE(
-                           json_extract(normalized_report_json, '$.provider_specific.complyadvantage.screening_subject.scope'),
-                           json_extract(normalized_report_json, '$.subject_scope')
-                       ) END AS subject_scope,
-                       CASE WHEN normalization_status = 'success' THEN COALESCE(
-                           json_extract(normalized_report_json, '$.provider_specific.complyadvantage.screening_subject.person_key'),
-                           json_extract(normalized_report_json, '$.screening_subject_person_key')
-                       ) END AS subject_person_key,
-                       CASE WHEN normalization_status = 'success' THEN
-                           json_extract(normalized_report_json, '$.provider_specific.complyadvantage.provider_references.case_ids')
-                       END AS provider_case_ids_json,
-                       CASE WHEN normalization_status = 'success' THEN
-                           json_extract(normalized_report_json, '$.provider_specific.complyadvantage.provider_references.alert_ids')
-                       END AS provider_alert_ids_json
-                  FROM screening_reports_normalized
-                 WHERE application_id = ? AND client_id = ? AND provider = ?
-                 ORDER BY id DESC
-            """
+        snapshot_sql = """
+            SELECT id, normalization_status, created_at, updated_at,
+                   normalized_report_json
+              FROM screening_reports_normalized
+             WHERE application_id = ? AND client_id = ? AND provider = ?
+             ORDER BY id DESC
+        """
         rows = _rows(
             db,
             snapshot_sql,
@@ -1338,11 +1704,19 @@ def _screening_snapshot_projection(
         )
         if isinstance(cache, dict):
             cache[cache_key] = rows
-    linked = next(
-        (row for row in rows if str(row.get("id")) == str(normalized_snapshot_id)),
-        None,
+    linked = (
+        next(
+            (
+                row
+                for row in rows
+                if str(row.get("id")) == str(normalized_snapshot_id)
+            ),
+            None,
+        )
+        if has_linked_snapshot_id
+        else None
     )
-    if not linked:
+    if has_linked_snapshot_id and not linked:
         raise LinkageError(
             "linkage_broken",
             "The linked screening evidence snapshot does not exist.",
@@ -1350,7 +1724,7 @@ def _screening_snapshot_projection(
             owner_module="screening_review",
             reasons=["missing_screening_evidence_snapshot"],
         )
-    if str(linked.get("normalization_status") or "") != "success":
+    if linked and str(linked.get("normalization_status") or "") != "success":
         raise LinkageError(
             "linkage_broken",
             "The linked screening snapshot is unavailable for authoritative review.",
@@ -1358,8 +1732,8 @@ def _screening_snapshot_projection(
             owner_module="screening_review",
             reasons=["screening_snapshot_not_successful"],
         )
-    linked_subject = _snapshot_subject(linked)
-    if linked_subject != dict(subject_contract):
+    linked_subject = _snapshot_subject(linked) if linked else None
+    if linked and linked_subject != dict(subject_contract):
         raise LinkageError(
             "linkage_integrity_error",
             "The linked screening snapshot belongs to a different subject.",
@@ -1367,11 +1741,15 @@ def _screening_snapshot_projection(
             owner_module="screening_review",
             reasons=["screening_snapshot_subject_mismatch"],
         )
-    provider_references = _snapshot_provider_references(linked)
+    provider_references = _snapshot_provider_references(linked or {})
     expected_case = str(alert.get("case_identifier") or "").strip()
     expected_alert = str(source.get("alert_identifier") or "").strip()
-    if expected_case not in provider_references["case_ids"] or (
-        expected_alert and expected_alert not in provider_references["alert_ids"]
+    if linked and (
+        expected_case not in provider_references["case_ids"]
+        or (
+            expected_alert
+            and expected_alert not in provider_references["alert_ids"]
+        )
     ):
         raise LinkageError(
             "linkage_integrity_error",
@@ -1395,7 +1773,7 @@ def _screening_snapshot_projection(
     ):
         current = latest_app_provider
         current_scope = "application_provider_unattributed"
-    if not current:
+    if not current and has_linked_snapshot_id:
         raise LinkageError(
             "linkage_broken",
             "No current screening snapshot exists for the canonical subject.",
@@ -1403,15 +1781,27 @@ def _screening_snapshot_projection(
             owner_module="screening_review",
             reasons=["missing_current_screening_snapshot"],
         )
+    if not current:
+        return {
+            "linked_snapshot_id": None,
+            "current_snapshot_id": None,
+            "snapshot_role": "unavailable",
+            "normalization_status": "unavailable",
+            "current_snapshot_status": "unavailable",
+            "current_snapshot_at": None,
+            "current_snapshot_scope": "unavailable",
+        }
     return {
-        "linked_snapshot_id": linked.get("id"),
+        "linked_snapshot_id": linked.get("id") if linked else None,
         "current_snapshot_id": current.get("id"),
         "snapshot_role": (
             "current"
-            if str(current.get("id")) == str(linked.get("id"))
+            if linked and str(current.get("id")) == str(linked.get("id"))
             else "historical"
+            if linked
+            else "current_unlinked"
         ),
-        "normalization_status": "success",
+        "normalization_status": "success" if linked else "unavailable",
         "current_snapshot_status": str(
             current.get("normalization_status") or "unavailable"
         ),
@@ -1506,18 +1896,161 @@ def resolve_screening_linkage(db: Any, alert: Mapping[str, Any]) -> LinkageEnvel
     }
 
 
-def resolve_alert_linkage(db: Any, alert_id: Any) -> LinkageEnvelope:
+def _canonical_screening_subject_identity(
+    db: Any,
+    alert: Mapping[str, Any],
+    subject: Mapping[str, str],
+) -> Optional[Dict[str, str]]:
+    """Resolve only the stable owner identity needed for duplicate detection."""
+    application_id = str(alert.get("application_id") or "").strip()
+    if subject["kind"] == "entity" and subject["scope"] == "entity":
+        return {
+            "subject_id": application_id,
+            "subject_type": "entity",
+            "subject_person_key": "",
+            "subject_scope": "entity",
+        }
+    kinds = (
+        [subject["kind"]]
+        if subject["kind"] in _PARTY_TABLES
+        else ["director", "ubo"]
+    )
+    matches: List[Dict[str, Any]] = []
+    for kind in kinds:
+        table, _name_column = _PARTY_TABLES[kind]
+        for row in _rows(
+            db,
+            f"SELECT id, person_key FROM {table} "
+            "WHERE application_id = ? AND person_key = ?",
+            (application_id, subject["person_key"]),
+        ):
+            matches.append({**row, "subject_type": kind})
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    return {
+        "subject_id": str(match.get("id") or ""),
+        "subject_type": str(match.get("subject_type") or ""),
+        "subject_person_key": str(match.get("person_key") or ""),
+        "subject_scope": subject["scope"],
+    }
+
+
+def _monitoring_linkage_identity(db: Any, alert: Mapping[str, Any]) -> str:
+    """Build the exact producer identity shared by runtime and audit planning."""
+    alert_type = str(alert.get("alert_type") or "")
+    if alert_type in DOCUMENT_EXPIRY_ALERT_TYPES:
+        match = _DOCUMENT_REFERENCE_RE.fullmatch(
+            str(alert.get("source_reference") or "").strip()
+        )
+        application_id = str(alert.get("application_id") or "").strip()
+        return (
+            f"document:{application_id}:{alert_type}:{match.group(1)}"
+            if application_id and match
+            else ""
+        )
+    if alert_type in SCREENING_HIT_ALERT_TYPES:
+        try:
+            source = _screening_source(alert)
+            subject = _subject_contract(source)
+        except LinkageError:
+            return ""
+        application_id = str(alert.get("application_id") or "").strip()
+        provider = str(alert.get("provider") or "").strip()
+        case_identifier = str(alert.get("case_identifier") or "").strip()
+        if not all((application_id, provider, case_identifier)):
+            return ""
+        canonical_subject = _canonical_screening_subject_identity(
+            db,
+            alert,
+            subject,
+        )
+        if not canonical_subject:
+            return ""
+        return "screening:" + json.dumps(
+            {
+                "application_id": application_id,
+                "case_identifier": case_identifier,
+                "provider": provider,
+                **canonical_subject,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    return ""
+
+
+def _duplicate_monitoring_alert_ids(
+    db: Any,
+    alert: Mapping[str, Any],
+) -> List[Any]:
+    """Return unresolved alerts with the same exact producer identity."""
+    if not _monitoring_routing.is_alert_unresolved(alert):
+        return []
+    target_identity = _monitoring_linkage_identity(db, alert)
+    if not target_identity:
+        return []
+    candidates = _rows(
+        db,
+        """
+        SELECT id, application_id, alert_type, source_reference, provider,
+               case_identifier, status, resolved_at
+          FROM monitoring_alerts
+         WHERE application_id = ?
+           AND id <> ?
+         ORDER BY id ASC
+        """,
+        (
+            alert.get("application_id"),
+            alert.get("id"),
+        ),
+    )
+    duplicates: List[Any] = []
+    for candidate in candidates:
+        if not _monitoring_routing.is_alert_unresolved(candidate):
+            continue
+        if _monitoring_linkage_identity(db, candidate) == target_identity:
+            duplicates.append(candidate.get("id"))
+    return duplicates
+
+
+def _resolve_alert_linkage(
+    db: Any,
+    alert_id: Any,
+    *,
+    enforce_unique_monitoring_link: bool,
+) -> LinkageEnvelope:
     alert = _alert_context(db, alert_id)
     alert_type = str(alert.get("alert_type") or "")
     if alert_type in DOCUMENT_EXPIRY_ALERT_TYPES:
-        return resolve_document_linkage(db, alert)
-    if alert_type in SCREENING_HIT_ALERT_TYPES:
-        return resolve_screening_linkage(db, alert)
-    raise LinkageError(
-        "unsupported_alert_type",
-        "This Monitoring Alert type has no canonical linkage contract.",
-        http_status=422,
-        reasons=["unsupported_exact_alert_type"],
+        resolved = resolve_document_linkage(db, alert)
+    elif alert_type in SCREENING_HIT_ALERT_TYPES:
+        resolved = resolve_screening_linkage(db, alert)
+    else:
+        raise LinkageError(
+            "unsupported_alert_type",
+            "This Monitoring Alert type has no canonical linkage contract.",
+            http_status=422,
+            reasons=["unsupported_exact_alert_type"],
+        )
+    if enforce_unique_monitoring_link:
+        duplicates = _duplicate_monitoring_alert_ids(db, alert)
+        if duplicates:
+            raise LinkageError(
+                "linkage_duplicate",
+                "Multiple Monitoring Alerts resolve to the same owner record.",
+                linkage_type=resolved["linkage_type"],
+                owner_module=resolved["owner"]["module"],
+                reasons=["duplicate_monitoring_owner_linkage"],
+            )
+    return resolved
+
+
+def resolve_alert_linkage(db: Any, alert_id: Any) -> LinkageEnvelope:
+    return _resolve_alert_linkage(
+        db,
+        alert_id,
+        enforce_unique_monitoring_link=True,
     )
 
 
@@ -1590,7 +2123,14 @@ def _safe_plan_row(db: Any, alert: Mapping[str, Any]) -> Dict[str, Any]:
             "data_change_required": False,
         }
     try:
-        resolved = resolve_alert_linkage(db, alert_id)
+        # The complete plan classifies exact duplicate groups as a separate
+        # dimension after resolving each row. Runtime callers use the public
+        # resolver above, which fails closed on those same duplicates.
+        resolved = _resolve_alert_linkage(
+            db,
+            alert_id,
+            enforce_unique_monitoring_link=False,
+        )
     except LinkageError as exc:
         if exc.code == "linkage_ambiguous":
             classification = "ambiguous_linkage"
@@ -1673,53 +2213,24 @@ def _safe_plan_row(db: Any, alert: Mapping[str, Any]) -> Dict[str, Any]:
 
 def build_linkage_plan(db: Any) -> Dict[str, Any]:
     """Return a deterministic, read-only linkage inventory and fingerprint."""
-    alerts = _rows(db, "SELECT id, alert_type FROM monitoring_alerts ORDER BY id ASC")
+    alerts = _rows(
+        db,
+        "SELECT id, application_id, alert_type, source_reference, provider, "
+        "case_identifier, status, resolved_at "
+        "FROM monitoring_alerts ORDER BY id ASC",
+    )
+    unresolved_by_id = {
+        row.get("id"): _monitoring_routing.is_alert_unresolved(row)
+        for row in alerts
+    }
     rows = [_safe_plan_row(db, alert) for alert in alerts]
     duplicate_keys: Dict[str, List[Any]] = {}
+    alert_by_id = {row.get("id"): row for row in alerts}
     for row in rows:
-        proposed = row.get("proposed_linkage") or {}
-        if row.get("linkage_type") == "document_expiry":
-            identity = proposed.get("trigger_document_id")
-            application_id = proposed.get("application_id")
-            key = (
-                f"document:{application_id}:{identity}"
-                if application_id and identity
-                else ""
-            )
-        elif row.get("linkage_type") == "screening_hit":
-            application_id = proposed.get("application_id")
-            provider = proposed.get("provider")
-            case_id = proposed.get("case_identifier")
-            provider_reference = proposed.get("provider_reference")
-            subject_type = proposed.get("subject_type")
-            subject_id = proposed.get("subject_id")
-            person_key = proposed.get("subject_person_key") or ""
-            key = (
-                "screening:"
-                + json.dumps(
-                    {
-                        "application_id": application_id,
-                        "case_identifier": case_id,
-                        "provider": provider,
-                        "provider_reference": provider_reference,
-                        "subject_id": subject_id,
-                        "subject_person_key": person_key,
-                        "subject_type": subject_type,
-                    },
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    default=str,
-                )
-                if application_id
-                and provider
-                and case_id
-                and provider_reference not in (None, "")
-                and subject_type
-                and subject_id
-                else ""
-            )
-        else:
-            key = ""
+        alert_id = row.get("alert_id")
+        if not unresolved_by_id.get(alert_id, False):
+            continue
+        key = _monitoring_linkage_identity(db, alert_by_id[alert_id])
         if key:
             duplicate_keys.setdefault(key, []).append(row.get("alert_id"))
     duplicate_groups = [

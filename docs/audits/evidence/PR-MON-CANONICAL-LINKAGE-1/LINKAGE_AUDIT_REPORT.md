@@ -2,10 +2,10 @@
 
 - Contract: `monitoring_alert_linkage_v1`
 - Environment: `staging`
-- Deployed SHA: `cfb3412ae3f6dae67f44eeb60a25145117785581`
+- Deployed SHA: `33f4ce8bbfe880430bd998770ee024672a4cb3be`
 - Plan fingerprint: `aa62f673da249827c5c6de11bf59549428398d9ca7c923ab0af60551ae72c2ad`
 - Database transaction: `READ ONLY`, `REPEATABLE READ`, completed by `ROLLBACK`
-- Governed Monitoring flags: all four `OFF`
+- Collector-side governed-flag evaluation: all four `OFF` (not deployed-runtime evidence)
 - Apply support: `false`
 - Data changes planned: `0`
 

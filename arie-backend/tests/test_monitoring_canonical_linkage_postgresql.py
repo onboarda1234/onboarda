@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import timedelta
 
 import pytest
 
@@ -40,7 +41,9 @@ def test_postgres_json_projection_and_plan_are_read_only_and_repeatable():
                     alert_type TEXT,
                     source_reference TEXT,
                     provider TEXT,
-                    case_identifier TEXT
+                    case_identifier TEXT,
+                    status TEXT DEFAULT 'open',
+                    resolved_at TIMESTAMPTZ
                 ) ON COMMIT PRESERVE ROWS;
                 CREATE TEMP TABLE monitoring_alert_evidence (
                     id BIGSERIAL PRIMARY KEY,
@@ -75,12 +78,27 @@ def test_postgres_json_projection_and_plan_are_read_only_and_repeatable():
                     created_at TIMESTAMPTZ,
                     updated_at TIMESTAMPTZ
                 ) ON COMMIT PRESERVE ROWS;
+                CREATE TEMP TABLE screening_hit_dispositions (
+                    id BIGSERIAL PRIMARY KEY,
+                    application_id TEXT,
+                    subject_type TEXT,
+                    subject_name TEXT,
+                    hit_id TEXT,
+                    disposition TEXT,
+                    created_at TIMESTAMPTZ,
+                    updated_at TIMESTAMPTZ
+                ) ON COMMIT PRESERVE ROWS;
                 CREATE TEMP TABLE audit_log (
                     id BIGSERIAL PRIMARY KEY,
                     action TEXT,
                     target TEXT,
                     timestamp TIMESTAMPTZ,
                     detail TEXT
+                ) ON COMMIT PRESERVE ROWS;
+                CREATE TEMP TABLE users (
+                    id TEXT PRIMARY KEY,
+                    role TEXT,
+                    status TEXT
                 ) ON COMMIT PRESERVE ROWS;
                 CREATE TEMP TABLE screening_reports_normalized (
                     id BIGINT PRIMARY KEY,
@@ -145,6 +163,74 @@ def test_postgres_json_projection_and_plan_are_read_only_and_repeatable():
                 "'success',NOW(),NOW())",
                 (json.dumps(normalized, sort_keys=True),),
             )
+            cursor.execute(
+                "SELECT CURRENT_TIMESTAMP AS transaction_at, "
+                "date_trunc('second', clock_timestamp()) AS maker_event_at"
+            )
+            times = cursor.fetchone()
+            transaction_at = times[0]
+            maker_event_at = times[1]
+            checker_event_at = maker_event_at + timedelta(seconds=1)
+            cursor.execute(
+                "INSERT INTO users(id,role,status) VALUES "
+                "('maker-pg','co','active'),('checker-pg','sco','active')"
+            )
+            cursor.execute(
+                """
+                INSERT INTO screening_reviews(
+                    application_id,subject_type,subject_name,disposition,
+                    disposition_code,rationale,requires_four_eyes,reviewer_id,
+                    second_reviewer_id,second_disposition_code,second_rationale,
+                    second_reviewed_at,created_at,updated_at
+                ) VALUES (
+                    'app-pg-1','entity','PostgreSQL Contract','cleared',
+                    'false_positive_cleared','Maker rationale',TRUE,'maker-pg',
+                    'checker-pg','false_positive_cleared','Checker rationale',
+                    %s,%s,%s
+                )
+                """,
+                (checker_event_at, transaction_at, transaction_at),
+            )
+            common_audit = {
+                "application_id": "app-pg-1",
+                "subject_name": "PostgreSQL Contract",
+                "subject_type": "entity",
+                "disposition_code": "false_positive_cleared",
+                "case_identifier": "case-pg-1",
+                "provider": "complyadvantage",
+                "requires_four_eyes": True,
+                "provider_references": {
+                    "case_ids": ["case-pg-1"],
+                    "alert_ids": ["provider-alert-pg-1"],
+                },
+            }
+            maker_audit = {
+                **common_audit,
+                "actor": "maker-pg",
+                "actor_role": "co",
+                "rationale": "Maker rationale",
+                "four_eyes_status": "second_review_required",
+                "timestamp": maker_event_at.isoformat().replace("+00:00", "Z"),
+            }
+            checker_audit = {
+                **common_audit,
+                "actor": "checker-pg",
+                "actor_role": "sco",
+                "rationale": "Checker rationale",
+                "four_eyes_status": "second_review_complete",
+                "timestamp": checker_event_at.isoformat().replace("+00:00", "Z"),
+            }
+            cursor.execute(
+                "INSERT INTO audit_log(action,target,timestamp,detail) "
+                "VALUES ('Screening Review','APP-PG-1',%s,%s),"
+                "('Screening Review','APP-PG-1',%s,%s)",
+                (
+                    transaction_at,
+                    json.dumps(maker_audit, sort_keys=True),
+                    transaction_at,
+                    json.dumps(checker_audit, sort_keys=True),
+                ),
+            )
         connection.commit()
         connection.set_session(
             readonly=True,
@@ -167,7 +253,8 @@ def test_postgres_json_projection_and_plan_are_read_only_and_repeatable():
         assert result["screening_case"]["linked_snapshot_id"] == 71
         assert result["screening_case"]["current_snapshot_id"] == 71
         assert result["screening_case"]["snapshot_role"] == "current"
-        assert result["owner"]["state"]["key"] == "review_required"
+        assert result["owner"]["state"]["key"] == "resolved_in_screening_review"
+        assert result["owner"]["state"]["audit_confirmed"] is True
         assert first["counts"]["linked_correctly"] == 1
         assert first["counts"]["data_changes_planned"] == 0
         assert first["apply_supported"] is False

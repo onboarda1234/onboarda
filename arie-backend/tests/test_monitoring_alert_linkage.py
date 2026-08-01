@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import sys
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -9,6 +10,25 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import monitoring_alert_linkage as linkage
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "UPDATE monitoring_alerts SET status='resolved'",
+        "INSERT INTO monitoring_alerts(id) VALUES (1)",
+        "DELETE FROM monitoring_alerts",
+        "WITH changed AS (UPDATE monitoring_alerts SET status='open' RETURNING *) SELECT * FROM changed",
+        "SELECT id FROM monitoring_alerts; DELETE FROM monitoring_alerts",
+    ],
+)
+def test_read_only_row_helper_rejects_mutating_or_stacked_sql(sql):
+    class NeverExecute:
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("Rejected SQL must never reach the database")
+
+    with pytest.raises(ValueError, match="read-only SQL only"):
+        linkage._rows(NeverExecute(), sql)
 
 
 def _db():
@@ -30,7 +50,9 @@ def _db():
             alert_type TEXT,
             source_reference TEXT,
             provider TEXT,
-            case_identifier TEXT
+            case_identifier TEXT,
+            status TEXT DEFAULT 'open',
+            resolved_at TEXT
         );
         CREATE TABLE documents (
             id TEXT PRIMARY KEY,
@@ -126,6 +148,16 @@ def _db():
             created_at TEXT,
             updated_at TEXT
         );
+        CREATE TABLE screening_hit_dispositions (
+            id INTEGER PRIMARY KEY,
+            application_id TEXT,
+            subject_type TEXT,
+            subject_name TEXT,
+            hit_id TEXT,
+            disposition TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        );
         CREATE TABLE audit_log (
             id INTEGER PRIMARY KEY,
             action TEXT,
@@ -189,6 +221,7 @@ def _document(
     version=1,
     superseded_by=None,
     expiry_date="2000-01-01",
+    valid_until=None,
     verification="flagged",
     review="accepted",
     verification_results=None,
@@ -203,10 +236,11 @@ def _document(
         INSERT INTO documents
             (id, application_id, person_id, person_type, doc_type, slot_key,
              is_current, version, superseded_by_document_id, expiry_date,
+             valid_until,
              verification_status, verification_results, verified_at,
              review_status, reviewer_role, review_comment, reviewed_by,
              reviewed_at)
-        VALUES (?, ?, ?, ?, 'passport', ?, ?, ?, ?, ?, ?, ?, ?,
+        VALUES (?, ?, ?, ?, 'passport', ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?)
         """,
         (
@@ -219,6 +253,7 @@ def _document(
             version,
             superseded_by,
             expiry_date,
+            valid_until,
             verification,
             (
                 json.dumps(verification_results, sort_keys=True)
@@ -342,6 +377,7 @@ def _screening_review_audit(
     requires_four_eyes=False,
     four_eyes_status="complete",
     timestamp="2026-08-01T00:00:00Z",
+    event_timestamp=None,
 ):
     detail = {
         "application_id": "app-1",
@@ -355,6 +391,7 @@ def _screening_review_audit(
         "rationale": rationale,
         "requires_four_eyes": requires_four_eyes,
         "four_eyes_status": four_eyes_status,
+        "timestamp": event_timestamp or timestamp,
         "provider_references": {
             "case_ids": ["case-1"],
             "alert_ids": ["provider-alert-1"],
@@ -362,6 +399,29 @@ def _screening_review_audit(
     }
     conn.execute(
         "INSERT INTO audit_log(action, target, timestamp, detail) VALUES ('Screening Review','APP-001',?,?)",
+        (timestamp, json.dumps(detail, sort_keys=True)),
+    )
+
+
+def _screening_hit_disposition_audit(
+    conn,
+    *,
+    disposition="match",
+    timestamp="2026-08-02T00:00:00Z",
+):
+    detail = {
+        "application_id": "app-1",
+        "subject_name": "Canonical Entity Ltd",
+        "subject_type": "entity",
+        "hit_ids": ["match-1"],
+        "disposition": disposition,
+        "actor": "officer-1",
+        "actor_role": "co",
+        "timestamp": timestamp,
+    }
+    conn.execute(
+        "INSERT INTO audit_log(action, target, timestamp, detail) "
+        "VALUES ('Screening Hit Disposition','APP-001',?,?)",
         (timestamp, json.dumps(detail, sort_keys=True)),
     )
 
@@ -408,6 +468,11 @@ def _four_eyes_clear_review(
             second_reviewed_at,
         ),
     )
+    _screening_review_audit(
+        conn,
+        requires_four_eyes=True,
+        four_eyes_status="second_review_required",
+    )
     if second_reviewer_id:
         _screening_review_audit(
             conn,
@@ -417,12 +482,6 @@ def _four_eyes_clear_review(
             requires_four_eyes=True,
             four_eyes_status="second_review_complete",
             timestamp=second_reviewed_at or "2026-08-01T00:01:00Z",
-        )
-    else:
-        _screening_review_audit(
-            conn,
-            requires_four_eyes=True,
-            four_eyes_status="second_review_required",
         )
 
 
@@ -509,6 +568,55 @@ def test_document_ambiguous_current_version_fails_closed():
     assert exc.value.reasons == ["ambiguous_current_document"]
 
 
+def test_document_duplicate_monitoring_owner_linkage_fails_runtime_closed():
+    conn = _db()
+    _document_alert(conn, alert_id=1)
+    _document_alert(conn, alert_id=2)
+    _document(conn)
+
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 1)
+
+    assert exc.value.code == "linkage_duplicate"
+    assert exc.value.reasons == ["duplicate_monitoring_owner_linkage"]
+    plan = linkage.build_linkage_plan(conn)
+    assert plan["counts"]["duplicate_linkage_groups"] == 1
+    assert plan["duplicate_groups"][0]["alert_ids"] == [1, 2]
+
+
+def test_document_different_alert_predicates_are_not_duplicates():
+    conn = _db()
+    _document_alert(conn, alert_id=1, alert_type="document_expiring_soon")
+    _document_alert(conn, alert_id=2, alert_type="document_expired")
+    _document(conn)
+
+    first = linkage.resolve_alert_linkage(conn, 1)
+    second = linkage.resolve_alert_linkage(conn, 2)
+    plan = linkage.build_linkage_plan(conn)
+
+    assert first["linkage_status"] == "linked"
+    assert second["linkage_status"] == "linked"
+    assert plan["counts"]["duplicate_linkage_groups"] == 0
+    assert all(not row["duplicate_linkage"] for row in plan["rows"])
+
+
+def test_document_terminal_history_does_not_block_active_recurrence():
+    conn = _db()
+    _document_alert(conn, alert_id=1)
+    _document_alert(conn, alert_id=2)
+    conn.execute(
+        "UPDATE monitoring_alerts SET status='resolved', "
+        "resolved_at='2026-07-01T00:00:00Z' WHERE id=1"
+    )
+    _document(conn)
+
+    result = linkage.resolve_alert_linkage(conn, 2)
+    plan = linkage.build_linkage_plan(conn)
+
+    assert result["linkage_status"] == "linked"
+    assert plan["counts"]["duplicate_linkage_groups"] == 0
+
+
 @pytest.mark.parametrize("version", [None, 0, -1])
 def test_document_missing_or_invalid_version_fails_closed(version):
     conn = _db()
@@ -543,10 +651,115 @@ def test_stale_document_expired_signal_never_projects_expired(
     assert result["owner"]["state"]["key"] != "expired"
 
 
+def test_document_response_uses_same_validated_valid_until_as_owner_state():
+    conn = _db()
+    _document_alert(conn)
+    _document(conn, expiry_date="not-a-date", valid_until="2000-02-02")
+
+    result = linkage.resolve_alert_linkage(conn, 1)
+
+    assert result["owner"]["state"]["key"] == "expired"
+    assert result["document"]["trigger_expiry_date"] == "2000-02-02"
+    assert result["document"]["current_expiry_date"] == "2000-02-02"
+
+
+def test_document_response_uses_structured_canonical_expiry_evidence():
+    conn = _db()
+    _document_alert(conn)
+    _document(
+        conn,
+        expiry_date=None,
+        verification_results={"expiry_date": "2000-03-03"},
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 1)
+
+    assert result["owner"]["state"]["key"] == "expired"
+    assert result["document"]["current_expiry_date"] == "2000-03-03"
+
+
+def test_document_expiry_precedence_matches_document_health_owner_contract():
+    conn = _db()
+    _document_alert(conn)
+    _document(
+        conn,
+        expiry_date=None,
+        valid_until="2999-01-01",
+        verification_results={"expiry_date": "2000-04-04"},
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 1)
+
+    assert result["owner"]["state"]["key"] == "expired"
+    assert result["document"]["current_expiry_date"] == "2000-04-04"
+
+
+def test_document_expiry_offset_is_normalized_to_utc_like_document_health():
+    conn = _db()
+    _document_alert(conn)
+    today = datetime.now(timezone.utc).date().isoformat()
+    _document(conn, expiry_date=f"{today}T00:30:00+14:00")
+
+    result = linkage.resolve_alert_linkage(conn, 1)
+
+    assert result["owner"]["state"]["key"] == "expired"
+
+
+@pytest.mark.parametrize("verification_results", [[{}], ["invalid"], 42])
+def test_document_invalid_structured_expiry_fails_closed_and_plan_continues(
+    verification_results,
+):
+    conn = _db()
+    _document_alert(conn)
+    _document(
+        conn,
+        expiry_date=None,
+        valid_until=None,
+        verification_results=verification_results,
+    )
+
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 1)
+    plan = linkage.build_linkage_plan(conn)
+
+    assert exc.value.code == "linkage_broken"
+    assert exc.value.reasons == ["invalid_document_expiry_evidence"]
+    assert plan["counts"]["total_alerts"] == 1
+    assert plan["rows"][0]["review_disposition"] == "manual_review_required"
+    assert plan["rows"][0]["reasons"] == ["invalid_document_expiry_evidence"]
+
+
 def test_document_current_version_must_be_terminal():
     conn = _db()
     _document_alert(conn)
     _document(conn, superseded_by="unexpected-successor")
+
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 1)
+
+    assert exc.value.reasons == ["document_version_chain_broken"]
+
+
+@pytest.mark.parametrize(("trigger_version", "current_version"), [(2, 1), (1, 1)])
+def test_document_replacement_versions_must_increase_strictly(
+    trigger_version,
+    current_version,
+):
+    conn = _db()
+    _document_alert(conn)
+    _document(
+        conn,
+        document_id="doc-1",
+        is_current=0,
+        version=trigger_version,
+        superseded_by="doc-2",
+    )
+    _document(
+        conn,
+        document_id="doc-2",
+        is_current=1,
+        version=current_version,
+    )
 
     with pytest.raises(linkage.LinkageError) as exc:
         linkage.resolve_alert_linkage(conn, 1)
@@ -575,6 +788,7 @@ def test_document_preserves_trigger_and_current_replacement_versions():
             "overall": "verified",
             "checks": [{"name": "authenticity", "result": "pass"}],
         },
+        expiry_date="2999-01-01",
         verified_at="2026-08-01T00:00:00Z",
     )
     _agent1_verified_execution(conn)
@@ -589,6 +803,92 @@ def test_document_preserves_trigger_and_current_replacement_versions():
     assert result["owner"]["state"]["reliance_state"] == "verified"
     assert result["owner"]["state"]["verification_method"] == "agent1"
     assert result["navigation"]["document_id"] == "doc-2"
+
+
+def test_expired_verified_replacement_remains_expired_not_verified():
+    conn = _db()
+    _document_alert(conn)
+    _document(conn, document_id="doc-1", is_current=0, superseded_by="doc-2")
+    _document(
+        conn,
+        document_id="doc-2",
+        is_current=1,
+        version=2,
+        verification="verified",
+        review="accepted",
+        verification_results={
+            "overall": "verified",
+            "checks": [{"name": "authenticity", "result": "pass"}],
+        },
+        expiry_date="2000-01-01",
+        verified_at="2026-08-01T00:00:00Z",
+    )
+    _agent1_verified_execution(conn)
+
+    result = linkage.resolve_alert_linkage(conn, 1)
+
+    assert result["owner"]["state"]["key"] == "expired"
+    assert result["owner"]["state"]["key"] != "verified"
+
+
+def test_expiring_soon_replacement_inside_owner_window_is_not_verified():
+    conn = _db()
+    _document_alert(conn, alert_type="document_expiring_soon")
+    _document(conn, document_id="doc-1", is_current=0, superseded_by="doc-2")
+    soon_expiry = (
+        datetime.now(timezone.utc).date() + timedelta(days=2)
+    ).isoformat()
+    _document(
+        conn,
+        document_id="doc-2",
+        is_current=1,
+        version=2,
+        verification="verified",
+        review="accepted",
+        verification_results={
+            "overall": "verified",
+            "checks": [{"name": "authenticity", "result": "pass"}],
+        },
+        expiry_date=soon_expiry,
+        verified_at="2026-08-01T00:00:00Z",
+    )
+    _agent1_verified_execution(conn)
+
+    result = linkage.resolve_alert_linkage(conn, 1)
+
+    assert result["owner"]["state"]["key"] == "request_not_started"
+    assert result["owner"]["state"]["key"] != "verified"
+
+
+def test_expiring_soon_window_uses_document_health_owner_policy(monkeypatch):
+    conn = _db()
+    _document_alert(conn, alert_type="document_expiring_soon")
+    _document(conn, document_id="doc-1", is_current=0, superseded_by="doc-2")
+    expiry = (datetime.now(timezone.utc).date() + timedelta(days=2)).isoformat()
+    _document(
+        conn,
+        document_id="doc-2",
+        is_current=1,
+        version=2,
+        verification="verified",
+        review="accepted",
+        verification_results={
+            "overall": "verified",
+            "checks": [{"name": "authenticity", "result": "pass"}],
+        },
+        expiry_date=expiry,
+        verified_at="2026-08-01T00:00:00Z",
+    )
+    _agent1_verified_execution(conn)
+    monkeypatch.setattr(
+        linkage._document_health,
+        "DOCUMENT_EXPIRING_SOON_DAYS",
+        1,
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 1)
+
+    assert result["owner"]["state"]["key"] == "verified"
 
 
 def test_raw_verified_document_without_canonical_evidence_is_not_verified():
@@ -644,6 +944,7 @@ def test_document_request_identity_mismatch_fails_closed():
     with pytest.raises(linkage.LinkageError) as exc:
         linkage.resolve_alert_linkage(conn, 1)
 
+    assert exc.value.code == "linkage_integrity_error"
     assert exc.value.reasons == ["document_request_identity_mismatch"]
 
 
@@ -671,6 +972,7 @@ def test_document_request_requires_both_exact_document_ids(
     with pytest.raises(linkage.LinkageError) as exc:
         linkage.resolve_alert_linkage(conn, 1)
 
+    assert exc.value.code == "linkage_integrity_error"
     assert exc.value.reasons == ["document_request_identity_mismatch"]
 
 
@@ -777,6 +1079,84 @@ def test_screening_entity_linkage_uses_exact_case_and_application_subject():
     assert result["owner"]["state"]["key"] == "resolved_in_screening_review"
 
 
+@pytest.mark.parametrize(
+    ("disposition", "disposition_code", "expected_state"),
+    [
+        ("escalated", "confirmed_match", "escalated"),
+        ("follow_up_required", "needs_more_information", "review_required"),
+    ],
+)
+def test_screening_analyst_nonclear_review_projects_owner_state(
+    disposition,
+    disposition_code,
+    expected_state,
+):
+    conn = _db()
+    conn.execute("UPDATE users SET role='analyst' WHERE id='officer-1'")
+    _screening_alert(conn)
+    _evidence(conn)
+    conn.execute(
+        """
+        INSERT INTO screening_hit_dispositions(
+            id, application_id, subject_type, subject_name, hit_id,
+            disposition, created_at, updated_at
+        ) VALUES (1,'app-1','entity','Canonical Entity Ltd','match-1','match',
+                  '2026-07-01T00:00:00Z','2026-07-01T00:00:00Z')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO screening_reviews
+            (application_id, subject_type, subject_name, disposition,
+             disposition_code, rationale, requires_four_eyes, reviewer_id,
+             created_at, updated_at)
+        VALUES ('app-1','entity','Canonical Entity Ltd',?,?,
+                'Exact analyst review evidence',0,'officer-1',
+                '2026-08-01T00:00:00Z','2026-08-01T00:00:00Z')
+        """,
+        (disposition, disposition_code),
+    )
+    _screening_review_audit(
+        conn,
+        disposition_code=disposition_code,
+        actor_role="analyst",
+        rationale="Exact analyst review evidence",
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == expected_state
+    assert result["owner"]["state"]["audit_confirmed"] is True
+
+
+def test_screening_analyst_clear_is_not_treated_as_authoritative():
+    conn = _db()
+    conn.execute("UPDATE users SET role='analyst' WHERE id='officer-1'")
+    _screening_alert(conn)
+    _evidence(conn)
+    conn.execute(
+        """
+        INSERT INTO screening_reviews
+            (application_id, subject_type, subject_name, disposition,
+             disposition_code, rationale, requires_four_eyes, reviewer_id,
+             created_at, updated_at)
+        VALUES ('app-1','entity','Canonical Entity Ltd','cleared',
+                'false_positive_cleared','Invalid analyst clearance',0,
+                'officer-1','2026-08-01T00:00:00Z','2026-08-01T00:00:00Z')
+        """
+    )
+    _screening_review_audit(
+        conn,
+        actor_role="analyst",
+        rationale="Invalid analyst clearance",
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "unavailable"
+    assert result["owner"]["state"]["audit_confirmed"] is False
+
+
 def test_screening_person_linkage_requires_exact_person_key_not_name():
     conn = _db()
     conn.execute(
@@ -818,6 +1198,35 @@ def test_screening_person_linkage_requires_exact_person_key_not_name():
     assert exc.value.reasons == ["missing_screening_subject"]
 
 
+@pytest.mark.parametrize("colliding_name", ["jane  doe", "DOE, JANE"])
+def test_screening_owner_ui_name_collision_fails_closed(colliding_name):
+    conn = _db()
+    conn.execute(
+        "INSERT INTO directors(id, application_id, person_key, full_name) "
+        "VALUES ('dir-1','app-1','person-key-1','Jane Doe')"
+    )
+    conn.execute(
+        "INSERT INTO directors(id, application_id, person_key, full_name) "
+        "VALUES ('dir-2','app-1','person-key-2',?)",
+        (colliding_name,),
+    )
+    _screening_alert(
+        conn,
+        subject={
+            "kind": "director",
+            "scope": "person",
+            "person_key": "person-key-1",
+        },
+    )
+    _evidence(conn)
+
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 10)
+
+    assert exc.value.code == "linkage_ambiguous"
+    assert exc.value.reasons == ["screening_review_name_collision"]
+
+
 def test_screening_person_without_stable_key_requires_manual_review():
     conn = _db()
     _screening_alert(conn, subject={"kind": "subject", "scope": "person"})
@@ -838,6 +1247,106 @@ def test_screening_case_or_provider_disagreement_fails_closed():
         linkage.resolve_alert_linkage(conn, 10)
 
     assert exc.value.reasons == ["screening_case_identity_mismatch"]
+
+
+def test_screening_source_conflicting_subject_contract_fails_closed():
+    conn = _db()
+    _screening_alert(conn)
+    row = conn.execute(
+        "SELECT source_reference FROM monitoring_alerts WHERE id=10"
+    ).fetchone()
+    source = json.loads(row[0])
+    source["subject_kind"] = "director"
+    source["subject_scope"] = "person"
+    conn.execute(
+        "UPDATE monitoring_alerts SET source_reference=? WHERE id=10",
+        (json.dumps(source, sort_keys=True),),
+    )
+
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 10)
+
+    assert exc.value.reasons == ["screening_source_subject_identity_conflict"]
+
+
+def test_screening_source_conflicting_parallel_person_keys_fails_closed():
+    conn = _db()
+    subject = {"kind": "director", "scope": "person", "person_key": "person-1"}
+    _screening_alert(conn, subject=subject)
+    row = conn.execute(
+        "SELECT source_reference FROM monitoring_alerts WHERE id=10"
+    ).fetchone()
+    source = json.loads(row[0])
+    source["person_key"] = "person-2"
+    conn.execute(
+        "UPDATE monitoring_alerts SET source_reference=? WHERE id=10",
+        (json.dumps(source, sort_keys=True),),
+    )
+
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 10)
+
+    assert exc.value.reasons == ["screening_source_subject_identity_conflict"]
+
+
+def test_screening_intermediary_entity_scope_resolves_by_stable_person_key():
+    conn = _db()
+    conn.execute(
+        "INSERT INTO intermediaries(id, application_id, person_key, entity_name) "
+        "VALUES ('int-1','app-1','intermediary-key-1','Canonical Intermediary')"
+    )
+    _screening_alert(
+        conn,
+        subject={
+            "kind": "intermediary",
+            "scope": "entity",
+            "person_key": "intermediary-key-1",
+        },
+    )
+    _evidence(conn)
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["subject"] == {
+        "id": "int-1",
+        "person_key": "intermediary-key-1",
+        "type": "intermediary",
+        "scope": "entity",
+    }
+
+
+def test_screening_intermediary_person_scope_is_rejected():
+    conn = _db()
+    _screening_alert(
+        conn,
+        subject={
+            "kind": "intermediary",
+            "scope": "person",
+            "person_key": "intermediary-key-1",
+        },
+    )
+
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 10)
+
+    assert exc.value.reasons == ["missing_stable_screening_subject"]
+
+
+def test_screening_generic_person_subject_does_not_resolve_intermediary_entity():
+    conn = _db()
+    conn.execute(
+        "INSERT INTO intermediaries(id, application_id, person_key, entity_name) "
+        "VALUES ('int-1','app-1','shared-key','Canonical Intermediary')"
+    )
+    _screening_alert(
+        conn,
+        subject={"kind": "subject", "scope": "person", "person_key": "shared-key"},
+    )
+
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 10)
+
+    assert exc.value.reasons == ["missing_screening_subject"]
 
 
 def test_screening_evidence_cross_application_is_rejected():
@@ -882,12 +1391,22 @@ def test_screening_multiple_hits_are_not_treated_as_ambiguous():
     assert result["screening_case"]["match_identifiers"] == ["match-1", "match-2"]
 
 
-def test_screening_duplicate_identity_includes_exact_provider_alert_reference():
+def test_screening_duplicate_identity_uses_exact_provider_case_and_subject():
     conn = _db()
     _screening_alert(conn, alert_id=10, provider_alert_id="provider-alert-1")
-    _screening_alert(conn, alert_id=11, provider_alert_id="provider-alert-2")
+    _screening_alert(
+        conn,
+        alert_id=11,
+        case_id="case-2",
+        provider_alert_id="provider-alert-2",
+    )
     _evidence(conn, alert_id=10, provider_alert_id="provider-alert-1")
-    _evidence(conn, alert_id=11, provider_alert_id="provider-alert-2")
+    _evidence(
+        conn,
+        alert_id=11,
+        case_id="case-2",
+        provider_alert_id="provider-alert-2",
+    )
 
     distinct = linkage.build_linkage_plan(conn)
 
@@ -897,7 +1416,7 @@ def test_screening_duplicate_identity_includes_exact_provider_alert_reference():
     conn.execute(
         """
         UPDATE monitoring_alerts
-           SET source_reference = ?
+           SET source_reference = ?, case_identifier = 'case-1'
          WHERE id = 11
         """,
         (
@@ -905,7 +1424,7 @@ def test_screening_duplicate_identity_includes_exact_provider_alert_reference():
                 {
                     "provider": "complyadvantage",
                     "case_identifier": "case-1",
-                    "alert_identifier": "provider-alert-1",
+                    "alert_identifier": "provider-alert-2",
                     "screening_subject": {"kind": "entity", "scope": "entity"},
                 },
                 sort_keys=True,
@@ -915,7 +1434,7 @@ def test_screening_duplicate_identity_includes_exact_provider_alert_reference():
     conn.execute(
         """
         UPDATE monitoring_alert_evidence
-           SET alert_identifier = 'provider-alert-1'
+           SET case_identifier = 'case-1'
          WHERE monitoring_alert_id = 11
         """
     )
@@ -924,19 +1443,93 @@ def test_screening_duplicate_identity_includes_exact_provider_alert_reference():
 
     assert duplicate["counts"]["duplicate_linkage_groups"] == 1
     assert duplicate["duplicate_groups"][0]["alert_ids"] == [10, 11]
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 10)
+    assert exc.value.code == "linkage_duplicate"
+    assert exc.value.reasons == ["duplicate_monitoring_owner_linkage"]
 
 
-def test_screening_missing_provider_reference_is_not_guessed_duplicate():
+def test_screening_broken_duplicate_is_consistent_between_runtime_and_plan():
+    conn = _db()
+    _screening_alert(conn, alert_id=10)
+    _screening_alert(conn, alert_id=11)
+    _evidence(conn, alert_id=10)
+
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 10)
+    plan = linkage.build_linkage_plan(conn)
+    rows = {row["alert_id"]: row for row in plan["rows"]}
+
+    assert exc.value.code == "linkage_duplicate"
+    assert plan["counts"]["duplicate_linkage_groups"] == 1
+    assert plan["duplicate_groups"][0]["alert_ids"] == [10, 11]
+    assert rows[10]["linkage_classification"] == "linked_correctly"
+    assert rows[10]["duplicate_linkage"] is True
+    assert rows[11]["linkage_classification"] == "broken_linkage"
+    assert rows[11]["duplicate_linkage"] is True
+
+
+def test_screening_duplicate_identity_uses_resolved_canonical_subject():
+    conn = _db()
+    conn.execute(
+        "INSERT INTO directors(id, application_id, person_key, full_name) "
+        "VALUES ('dir-1','app-1','person-key-1','Canonical Person')"
+    )
+    _screening_alert(
+        conn,
+        alert_id=10,
+        subject={"kind": "subject", "scope": "person", "person_key": "person-key-1"},
+    )
+    _screening_alert(
+        conn,
+        alert_id=11,
+        subject={"kind": "director", "scope": "person", "person_key": "person-key-1"},
+    )
+    _evidence(conn, alert_id=10)
+    _evidence(conn, alert_id=11)
+
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 10)
+    plan = linkage.build_linkage_plan(conn)
+
+    assert exc.value.code == "linkage_duplicate"
+    assert plan["counts"]["duplicate_linkage_groups"] == 1
+    assert plan["duplicate_groups"][0]["alert_ids"] == [10, 11]
+
+
+def test_screening_exact_case_without_optional_provider_reference_is_duplicate():
     conn = _db()
     _screening_alert(conn, alert_id=10, provider_alert_id=None)
     _screening_alert(conn, alert_id=11, provider_alert_id=None)
     _evidence(conn, alert_id=10, provider_alert_id=None)
     _evidence(conn, alert_id=11, provider_alert_id=None)
 
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 10)
     plan = linkage.build_linkage_plan(conn)
 
+    assert exc.value.code == "linkage_duplicate"
+    assert plan["counts"]["duplicate_linkage_groups"] == 1
+    assert plan["duplicate_groups"][0]["alert_ids"] == [10, 11]
+    assert all(row["duplicate_linkage"] for row in plan["rows"])
+
+
+def test_screening_terminal_history_does_not_block_active_recurrence():
+    conn = _db()
+    _screening_alert(conn, alert_id=10)
+    _screening_alert(conn, alert_id=11)
+    _evidence(conn, alert_id=10)
+    _evidence(conn, alert_id=11)
+    conn.execute(
+        "UPDATE monitoring_alerts SET status='dismissed', "
+        "resolved_at='2026-07-01T00:00:00Z' WHERE id=10"
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 11)
+    plan = linkage.build_linkage_plan(conn)
+
+    assert result["linkage_status"] == "linked"
     assert plan["counts"]["duplicate_linkage_groups"] == 0
-    assert all(not row["duplicate_linkage"] for row in plan["rows"])
 
 
 def test_screening_evidence_without_timestamp_never_projects_resolved():
@@ -1070,6 +1663,169 @@ def test_screening_four_eyes_distinct_active_sco_with_exact_audit_resolves():
     assert result["owner"]["state"]["audit_confirmed"] is True
 
 
+def test_screening_four_eyes_checker_cannot_predate_maker_review():
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    _four_eyes_clear_review(
+        conn,
+        second_reviewer_id="officer-2",
+        second_disposition_code="false_positive_cleared",
+        second_rationale="Impossible earlier second review",
+        second_reviewed_at="2026-07-31T23:59:59Z",
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "unavailable"
+    assert result["owner"]["state"]["audit_confirmed"] is False
+
+
+def test_screening_four_eyes_requires_both_maker_and_checker_audits():
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    _four_eyes_clear_review(
+        conn,
+        second_reviewer_id="officer-2",
+        second_disposition_code="false_positive_cleared",
+        second_rationale="Independent second review",
+        second_reviewed_at="2026-08-01T00:01:00Z",
+    )
+    conn.execute(
+        """
+        DELETE FROM audit_log
+         WHERE json_extract(detail, '$.four_eyes_status') = 'second_review_required'
+        """
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "unavailable"
+    assert result["owner"]["state"]["audit_confirmed"] is False
+
+
+def test_screening_audit_uses_typed_event_time_not_transaction_start_time():
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    _four_eyes_clear_review(
+        conn,
+        second_reviewer_id="officer-2",
+        second_disposition_code="false_positive_cleared",
+        second_rationale="Independent second review",
+        second_reviewed_at="2026-08-01T00:01:00Z",
+    )
+    conn.execute(
+        """
+        UPDATE audit_log
+           SET timestamp = '2026-08-01T00:01:00.900Z'
+         WHERE json_extract(detail, '$.four_eyes_status') = 'second_review_complete'
+        """
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "resolved_in_screening_review"
+    assert result["owner"]["state"]["audit_confirmed"] is True
+
+
+def test_screening_audit_normalizes_review_timestamp_precision():
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    conn.execute(
+        """
+        INSERT INTO screening_reviews
+            (application_id, subject_type, subject_name, disposition,
+             disposition_code, rationale, requires_four_eyes, reviewer_id,
+             created_at, updated_at)
+        VALUES ('app-1','entity','Canonical Entity Ltd','cleared',
+                'false_positive_cleared','Exact reviewed evidence',0,'officer-1',
+                '2026-08-01T00:00:00.900Z','2026-08-01T00:00:00.900Z')
+        """
+    )
+    _screening_review_audit(
+        conn,
+        timestamp="2026-08-01T00:00:00.900Z",
+        event_timestamp="2026-08-01T00:00:00Z",
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "resolved_in_screening_review"
+    assert result["owner"]["state"]["audit_confirmed"] is True
+
+
+def test_screening_four_eyes_same_second_normalizes_maker_timestamp_precision():
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    _four_eyes_clear_review(
+        conn,
+        second_reviewer_id="officer-2",
+        second_disposition_code="false_positive_cleared",
+        second_rationale="Independent second review",
+        second_reviewed_at="2026-08-01T00:00:00Z",
+    )
+    conn.execute(
+        "UPDATE screening_reviews SET "
+        "created_at='2026-08-01T00:00:00.900Z', "
+        "updated_at='2026-08-01T00:00:00.900Z'"
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "resolved_in_screening_review"
+    assert result["owner"]["state"]["audit_confirmed"] is True
+
+
+def test_screening_four_eyes_stale_retained_checker_fails_closed():
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    _four_eyes_clear_review(
+        conn,
+        second_reviewer_id="officer-2",
+        second_disposition_code="false_positive_cleared",
+        second_rationale="Independent second review",
+        second_reviewed_at="2026-08-01T00:01:00Z",
+    )
+    conn.execute(
+        "UPDATE screening_reviews SET updated_at='2026-08-02T00:00:00Z'"
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "unavailable"
+    assert result["owner"]["state"]["audit_confirmed"] is False
+
+
+def test_screening_long_rationale_matches_protected_truncated_audit_contract():
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    long_rationale = "R" * 1200
+    conn.execute(
+        """
+        INSERT INTO screening_reviews
+            (application_id, subject_type, subject_name, disposition,
+             disposition_code, rationale, requires_four_eyes, reviewer_id,
+             created_at, updated_at)
+        VALUES ('app-1','entity','Canonical Entity Ltd','cleared',
+                'false_positive_cleared',?,0,'officer-1',
+                '2026-08-01T00:00:00Z','2026-08-01T00:00:00Z')
+        """,
+        (long_rationale,),
+    )
+    _screening_review_audit(conn, rationale=long_rationale[:1000])
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "resolved_in_screening_review"
+    assert result["owner"]["state"]["audit_confirmed"] is True
+
+
 def test_screening_unconfirmed_clear_never_projects_resolved():
     conn = _db()
     _screening_alert(conn)
@@ -1090,6 +1846,245 @@ def test_screening_unconfirmed_clear_never_projects_resolved():
 
     assert result["owner"]["state"]["key"] == "unavailable"
     assert result["owner"]["state"]["audit_confirmed"] is False
+
+
+@pytest.mark.parametrize("disposition", ["match", "escalated", "follow_up_required", "pending"])
+def test_screening_per_hit_mutation_after_subject_clear_never_projects_resolved(
+    disposition,
+):
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    _confirmed_clear_review(conn)
+    if disposition != "pending":
+        conn.execute(
+            """
+            INSERT INTO screening_hit_dispositions(
+                id, application_id, subject_type, subject_name, hit_id,
+                disposition, created_at, updated_at
+            ) VALUES (1,'app-1','entity','Canonical Entity Ltd','match-1',?,
+                      '2026-08-02T00:00:00Z','2026-08-02T00:00:00Z')
+            """,
+            (disposition,),
+        )
+    _screening_hit_disposition_audit(conn, disposition=disposition)
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "stale"
+    assert result["owner"]["state"]["key"] != "resolved_in_screening_review"
+
+
+@pytest.mark.parametrize(
+    "disposition",
+    ["match", "escalated", "follow_up_required", "", None],
+)
+def test_screening_open_per_hit_state_predating_subject_clear_fails_closed(
+    disposition,
+):
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    conn.execute(
+        """
+        INSERT INTO screening_hit_dispositions(
+            id, application_id, subject_type, subject_name, hit_id,
+            disposition, created_at, updated_at
+        ) VALUES (1,'app-1','entity','Canonical Entity Ltd','match-1',?,
+                  '2026-07-01T00:00:00Z','2026-07-01T00:00:00Z')
+        """,
+        (disposition,),
+    )
+    _confirmed_clear_review(conn)
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "stale"
+    assert result["owner"]["state"]["key"] != "resolved_in_screening_review"
+
+
+def test_screening_mixed_per_hit_state_predating_subject_clear_fails_closed():
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    conn.executemany(
+        """
+        INSERT INTO screening_hit_dispositions(
+            id, application_id, subject_type, subject_name, hit_id,
+            disposition, created_at, updated_at
+        ) VALUES (?,'app-1','entity','Canonical Entity Ltd',?,?,
+                  '2026-07-01T00:00:00Z','2026-07-01T00:00:00Z')
+        """,
+        [(1, "match-1", "cleared"), (2, "match-2", "match")],
+    )
+    _confirmed_clear_review(conn)
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "stale"
+
+
+def test_screening_hit_event_after_review_wins_over_earlier_audit_id():
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    _screening_hit_disposition_audit(
+        conn,
+        disposition="match",
+        timestamp="2026-08-02T00:00:00Z",
+    )
+    _confirmed_clear_review(conn)
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "stale"
+
+
+def test_screening_same_second_hit_event_with_lower_audit_id_fails_closed():
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    _screening_hit_disposition_audit(
+        conn,
+        disposition="pending",
+        timestamp="2026-08-01T00:00:00Z",
+    )
+    _confirmed_clear_review(conn)
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "stale"
+
+
+def test_screening_same_second_evidence_and_review_fails_closed():
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    conn.execute(
+        "UPDATE monitoring_alert_evidence SET "
+        "fetched_at='2026-08-01T00:00:00Z', created_at='2026-08-01T00:00:00Z'"
+    )
+    _confirmed_clear_review(conn)
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "stale"
+
+
+def test_screening_same_second_snapshot_and_review_fails_closed():
+    conn = _db()
+    _screening_alert(conn, normalized_record_id=1)
+    _evidence(conn)
+    _normalized_snapshot(conn, updated_at="2026-08-01T00:00:00Z")
+    _confirmed_clear_review(conn)
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "stale"
+
+
+@pytest.mark.parametrize("timestamp", [None, "not-a-timestamp"])
+def test_screening_per_hit_state_with_unprovable_chronology_fails_closed(timestamp):
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    _confirmed_clear_review(conn)
+    conn.execute(
+        """
+        INSERT INTO screening_hit_dispositions(
+            id, application_id, subject_type, subject_name, hit_id,
+            disposition, created_at, updated_at
+        ) VALUES (1,'app-1','entity','Canonical Entity Ltd','match-1',
+                  'cleared',?,?)
+        """,
+        (timestamp, timestamp),
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "stale"
+    assert result["owner"]["state"]["key"] != "resolved_in_screening_review"
+
+
+@pytest.mark.parametrize("event_timestamp", [None, "not-a-timestamp"])
+def test_screening_malformed_later_hit_audit_without_row_fails_closed(
+    event_timestamp,
+):
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    _confirmed_clear_review(conn)
+    _screening_hit_disposition_audit(
+        conn,
+        disposition="pending",
+        timestamp="2026-08-02T00:00:00Z",
+    )
+    detail = json.loads(
+        conn.execute(
+            "SELECT detail FROM audit_log WHERE action='Screening Hit Disposition'"
+        ).fetchone()[0]
+    )
+    if event_timestamp is None:
+        detail.pop("timestamp", None)
+    else:
+        detail["timestamp"] = event_timestamp
+    conn.execute(
+        "UPDATE audit_log SET detail=? WHERE action='Screening Hit Disposition'",
+        (json.dumps(detail, sort_keys=True),),
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "stale"
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "not-json",
+        "[]",
+        "{}",
+        json.dumps(
+            {
+                "application_id": "app-1",
+                "subject_type": "entity",
+                "timestamp": "2026-08-02T00:00:00Z",
+            },
+            sort_keys=True,
+        ),
+    ],
+)
+def test_screening_unattributable_later_hit_audit_fails_closed(detail):
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    _confirmed_clear_review(conn)
+    conn.execute(
+        "INSERT INTO audit_log(action, target, timestamp, detail) "
+        "VALUES ('Screening Hit Disposition','APP-001',"
+        "'2026-08-02T00:00:00Z',?)",
+        (detail,),
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "stale"
+
+
+def test_screening_lower_id_unattributable_hit_audit_fails_closed():
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    conn.execute(
+        "INSERT INTO audit_log(action, target, timestamp, detail) "
+        "VALUES ('Screening Hit Disposition','APP-001',"
+        "'2026-08-01T00:00:00Z','not-json')"
+    )
+    _confirmed_clear_review(conn)
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["owner"]["state"]["key"] == "stale"
 
 
 def test_screening_unconfirmed_nonterminal_review_never_projects_owner_state():
@@ -1194,6 +2189,29 @@ def test_screening_snapshot_must_match_exact_stable_subject():
     assert exc.value.reasons == ["screening_snapshot_subject_mismatch"]
 
 
+def test_screening_snapshot_conflicting_subject_contract_fails_closed():
+    conn = _db()
+    _screening_alert(conn, normalized_record_id=1)
+    _evidence(conn)
+    _normalized_snapshot(conn)
+    row = conn.execute(
+        "SELECT normalized_report_json FROM screening_reports_normalized WHERE id=1"
+    ).fetchone()
+    report = json.loads(row[0])
+    report["screening_subject_kind"] = "director"
+    report["subject_scope"] = "person"
+    report["screening_subject_person_key"] = "conflicting-person"
+    conn.execute(
+        "UPDATE screening_reports_normalized SET normalized_report_json=? WHERE id=1",
+        (json.dumps(report, sort_keys=True),),
+    )
+
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 10)
+
+    assert exc.value.reasons == ["screening_snapshot_subject_identity_conflict"]
+
+
 def test_screening_snapshot_distinguishes_historical_from_current():
     conn = _db()
     _screening_alert(conn, normalized_record_id=1)
@@ -1221,6 +2239,33 @@ def test_screening_failed_snapshot_never_projects_owner_state():
     assert exc.value.reasons == ["screening_snapshot_not_successful"]
 
 
+@pytest.mark.parametrize("payload", ["{", "[]", "42"])
+def test_screening_invalid_success_snapshot_fails_closed_and_plan_continues(payload):
+    conn = _db()
+    _screening_alert(conn, normalized_record_id=1)
+    _evidence(conn)
+    conn.execute(
+        """
+        INSERT INTO screening_reports_normalized
+            (id, application_id, client_id, provider, normalized_report_json,
+             normalization_status, created_at, updated_at)
+        VALUES (1, 'app-1', 'client-1', 'complyadvantage', ?, 'success',
+                '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')
+        """,
+        (payload,),
+    )
+
+    with pytest.raises(linkage.LinkageError) as exc:
+        linkage.resolve_alert_linkage(conn, 10)
+    plan = linkage.build_linkage_plan(conn)
+
+    assert exc.value.code == "linkage_broken"
+    assert exc.value.reasons == ["screening_snapshot_payload_invalid"]
+    assert plan["counts"]["total_alerts"] == 1
+    assert plan["rows"][0]["review_disposition"] == "manual_review_required"
+    assert plan["rows"][0]["reasons"] == ["screening_snapshot_payload_invalid"]
+
+
 def test_screening_latest_unattributed_failure_projects_unavailable():
     conn = _db()
     _screening_alert(conn, normalized_record_id=1)
@@ -1240,6 +2285,25 @@ def test_screening_latest_unattributed_failure_projects_unavailable():
     assert result["screening_case"]["current_snapshot_status"] == "failed"
     assert result["screening_case"]["current_snapshot_scope"] == "application_provider_unattributed"
     assert result["owner"]["state"]["key"] == "unavailable"
+
+
+def test_screening_unlinked_current_failure_never_projects_clear():
+    conn = _db()
+    _screening_alert(conn)
+    _evidence(conn)
+    _confirmed_clear_review(conn)
+    _normalized_snapshot(
+        conn,
+        status="failed",
+        updated_at="2026-08-02T00:00:00Z",
+    )
+
+    result = linkage.resolve_alert_linkage(conn, 10)
+
+    assert result["screening_case"]["linked_snapshot_id"] is None
+    assert result["screening_case"]["current_snapshot_status"] == "failed"
+    assert result["owner"]["state"]["key"] == "unavailable"
+    assert result["owner"]["state"]["key"] != "resolved_in_screening_review"
 
 
 def test_screening_provider_reference_must_match_case_evidence():

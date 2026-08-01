@@ -105,14 +105,18 @@ WITH fingerprints AS (
            MD5(COALESCE(STRING_AGG(TO_JSONB(t)::text, '' ORDER BY t.id::text), ''))
       FROM screening_reviews t
     UNION ALL
+    SELECT 'screening_hit_dispositions', COUNT(*)::bigint,
+           MD5(COALESCE(STRING_AGG(TO_JSONB(t)::text, '' ORDER BY t.id::text), ''))
+      FROM screening_hit_dispositions t
+    UNION ALL
     SELECT 'screening_reports_normalized', COUNT(*)::bigint,
            MD5(COALESCE(STRING_AGG(TO_JSONB(t)::text, '' ORDER BY t.id::text), ''))
       FROM screening_reports_normalized t
     UNION ALL
-    SELECT 'screening_review_audit', COUNT(*)::bigint,
+    SELECT 'screening_owner_audit', COUNT(*)::bigint,
            MD5(COALESCE(STRING_AGG(TO_JSONB(t)::text, '' ORDER BY t.id::text), ''))
       FROM audit_log t
-     WHERE t.action = 'Screening Review'
+     WHERE t.action IN ('Screening Review', 'Screening Hit Disposition')
 )
 SELECT relation, row_count, digest FROM fingerprints ORDER BY relation
 """
@@ -210,6 +214,8 @@ def _governed_flags(environment_name: str) -> dict[str, Any]:
         "features": {name: "OFF" for name in MONITORING_FEATURE_FLAGS},
         "all_monitoring_flags_off": True,
         "activation_controls": False,
+        "evaluation_source": "collector_environment_with_staging_defaults",
+        "deployed_runtime_observed": False,
     }
 
 
@@ -278,7 +284,8 @@ def _markdown_table(snapshot: Mapping[str, Any]) -> str:
         f"- Deployed SHA: `{snapshot.get('deployed_sha') or 'not recorded'}`",
         f"- Plan fingerprint: `{plan['fingerprint']}`",
         "- Database transaction: `READ ONLY`, `REPEATABLE READ`, completed by `ROLLBACK`",
-        "- Governed Monitoring flags: all four `OFF`",
+        "- Collector-side governed-flag evaluation: all four `OFF` "
+        "(not deployed-runtime evidence)",
         "- Apply support: `false`",
         "- Data changes planned: `0`",
         "",
