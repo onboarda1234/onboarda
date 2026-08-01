@@ -232,7 +232,7 @@ def test_pdf_renderer_is_decision_first_without_dashboard_appendices(monkeypatch
     html = captured["html"]
     assert pdf == b"%PDF-pr5b-test"
     assert "SCREENING RESOLUTION REQUIRED" in html
-    assert "APPROVE WITH CONDITIONS" not in html
+    assert "Approve with Conditions" not in html
     for heading in (
         "Document Control",
         "Memo Basis",
@@ -256,7 +256,8 @@ def test_backoffice_memo_browser_consistency_static_contract():
     html = _read_repo_file("arie-backoffice.html")
 
     assert 'id="memo-pdf-preview"' in html
-    assert "return installMemoPdfResponse(response);" in html
+    assert "return await installMemoPdfResponse(response, app, memo, expectedKey);" in html
+    assert "new AbortController()" in html
     assert "var cached = await fetchMemoPdfResponse(false);" in html
     assert "link.href = cached.url;" in html
     assert "if (lifecycle !== 'FINAL')" in html

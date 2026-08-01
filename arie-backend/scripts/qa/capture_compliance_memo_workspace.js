@@ -4,13 +4,33 @@
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
-const { chromium } = require("/Users/Aisha/node_modules/playwright");
 
 const backendRoot = path.resolve(__dirname, "../..");
 const repoRoot = path.resolve(backendRoot, "..");
 const outputDir = path.join(repoRoot, "docs", "validation", "compliance-memo");
 const backofficeHtml = fs.readFileSync(path.join(repoRoot, "arie-backoffice.html"));
-const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
+function loadChromium() {
+  try {
+    const playwrightPath = require.resolve("playwright", { paths: [__dirname] });
+    return require(playwrightPath).chromium;
+  } catch (error) {
+    const modulesDir = process.env.PLAYWRIGHT_NODE_MODULES;
+    if (modulesDir) return require(path.join(modulesDir, "playwright")).chromium;
+    throw new Error(
+      "Playwright is required. Install it for this workspace or set PLAYWRIGHT_NODE_MODULES " +
+        "to the directory containing the playwright package.",
+    );
+  }
+}
+
+function configuredChromePath() {
+  const executable = process.env.CHROME_PATH;
+  if (!executable || !fs.existsSync(executable)) {
+    throw new Error("CHROME_PATH must point to an installed Chrome or Chromium executable.");
+  }
+  return executable;
+}
 
 const draftPdf = fs.readFileSync(path.join(outputDir, "compliance-memo-draft-sample.pdf")).toString("base64");
 const finalPdf = fs.readFileSync(path.join(outputDir, "compliance-memo-final-sample.pdf")).toString("base64");
@@ -61,7 +81,7 @@ const history = [
     lifecycle_status: "AWAITING_OFFICER_SIGNOFF",
     recommendation: "APPROVE_WITH_CONDITIONS",
     generated_at: "2026-08-01T06:30:00+00:00",
-    reviewed_by: "Aisha Sudally",
+    reviewed_by: "Validation Officer",
     is_current: true,
   },
   {
@@ -70,7 +90,7 @@ const history = [
     lifecycle_status: "SUPERSEDED",
     recommendation: "APPROVE_WITH_CONDITIONS",
     generated_at: "2026-07-31T18:25:16+00:00",
-    approved_by: "Aisha Sudally",
+    approved_by: "Validation Officer",
     approved_at: "2026-07-31T18:27:10+00:00",
     is_current: false,
   },
@@ -143,40 +163,46 @@ async function capture(page, filename) {
 
 async function main() {
   fs.mkdirSync(outputDir, { recursive: true });
-  const server = http.createServer((request, response) => {
-    if (request.url === "/arie-backoffice.html") {
-      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      response.end(backofficeHtml);
-      return;
-    }
-    if (request.url === "/api/config/environment") {
-      response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ environment: "release_validation", is_production: false }));
-      return;
-    }
-    response.writeHead(404, { "Content-Type": "text/plain" });
-    response.end("Not found");
-  });
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  const backofficeUrl = `http://127.0.0.1:${address.port}/arie-backoffice.html`;
-  const browser = await chromium.launch({
-    headless: false,
-    executablePath: chromePath,
-    args: ["--disable-features=TranslateUI", "--no-first-run", "--no-default-browser-check"],
-  });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 1 });
-  const page = await context.newPage();
-  const errors = [];
-  page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
-  page.on("console", (message) => {
-    if (message.type() === "error") errors.push(`console: ${message.text()}`);
-  });
+  let server = null;
+  let browser = null;
+  let context = null;
 
   try {
+    const chromium = loadChromium();
+    const chromePath = configuredChromePath();
+    server = http.createServer((request, response) => {
+      if (request.url === "/arie-backoffice.html") {
+        response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        response.end(backofficeHtml);
+        return;
+      }
+      if (request.url === "/api/config/environment") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ environment: "release_validation", is_production: false }));
+        return;
+      }
+      response.writeHead(404, { "Content-Type": "text/plain" });
+      response.end("Not found");
+    });
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    const backofficeUrl = `http://127.0.0.1:${address.port}/arie-backoffice.html`;
+    browser = await chromium.launch({
+      headless: false,
+      executablePath: chromePath,
+      args: ["--disable-features=TranslateUI", "--no-first-run", "--no-default-browser-check"],
+    });
+    context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
+    page.on("console", (message) => {
+      if (message.type() === "error") errors.push(`console: ${message.text()}`);
+    });
+
     await preparePage(page, backofficeUrl);
 
     await installState(page, application(null));
@@ -225,6 +251,7 @@ async function main() {
 
     const section = await page.locator("#compliance-memo-workspace").boundingBox();
     const frameVisible = await page.locator("#memo-pdf-preview").isVisible();
+    const pageErrors = errors.filter((value, index, all) => all.indexOf(value) === index);
     const result = {
       viewport: "1440x1100",
       section,
@@ -239,13 +266,20 @@ async function main() {
         "07-stale-state.png",
         "08-desktop-responsive.png",
       ],
-      pageErrors: errors.filter((value, index, all) => all.indexOf(value) === index),
+      pageErrors,
     };
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    if (!frameVisible || pageErrors.length) {
+      throw new Error(
+        `Memo workspace capture failed: frameVisible=${frameVisible}, pageErrors=${pageErrors.length}`,
+      );
+    }
   } finally {
-    await context.close();
-    await browser.close();
-    await new Promise((resolve) => server.close(resolve));
+    if (context) await context.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
+    if (server && server.listening) {
+      await new Promise((resolve) => server.close(resolve));
+    }
   }
 }
 

@@ -1725,7 +1725,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           <button class="btn btn-outline btn-sm" id="btn-save-memo-rationale" onclick="saveMemoOfficerRationale()" disabled>Save Officer Rationale</button>
           <button class="btn btn-success btn-sm" id="btn-approve-memo" onclick="approveMemo()" disabled>Approve &amp; Lock</button>
           <button class="btn btn-outline btn-sm" id="btn-download-memo" onclick="downloadMemoPDF()" disabled>Download Final PDF</button>
-          <button class="btn btn-outline btn-sm" id="btn-memo-history" onclick="toggleMemoVersionHistory()" disabled>Version History</button>
+          <button class="btn btn-outline btn-sm" id="btn-memo-history" onclick="toggleMemoVersionHistory()" aria-expanded="false" aria-controls="memo-version-history-panel" disabled>Version History</button>
         </div>
 
         <div class="memo-workspace-notice" id="memo-workspace-notice" role="status"></div>
@@ -35191,6 +35191,7 @@ function currentMemoApprovalReason() {
 
 // ── Compliance Memo document workspace (PDF is the only memo presentation) ──
 window._memoPdfCache = null;
+window._memoPdfRequestController = null;
 window._memoWorkspaceAppId = null;
 
 function memoWorkspaceTimestamp(value) {
@@ -35248,6 +35249,10 @@ function setMemoStatusBadge(label) {
 }
 
 function releaseMemoPdfCache() {
+  if (window._memoPdfRequestController) {
+    window._memoPdfRequestController.abort();
+    window._memoPdfRequestController = null;
+  }
   if (window._memoPdfCache && window._memoPdfCache.url) {
     URL.revokeObjectURL(window._memoPdfCache.url);
   }
@@ -35429,19 +35434,24 @@ function setMemoDownloadState() {
   syncMemoWorkspaceActions();
 }
 
-async function installMemoPdfResponse(response) {
+async function installMemoPdfResponse(response, requestApp, requestMemo, expectedKey) {
   var blob = await response.blob();
   if (!blob || blob.size < 5 || (blob.type && blob.type.indexOf('application/pdf') < 0)) {
     throw new Error('The memo endpoint did not return a valid PDF.');
   }
-  var app = window._currentDetailApp || {};
-  var memo = window._currentMemoData || {};
+  var app = requestApp || {};
+  var memo = requestMemo || {};
+  if (memoWorkspacePdfKey(window._currentDetailApp || {}, window._currentMemoData) !== expectedKey) {
+    var identityError = new Error('The memo changed while the PDF was loading. Reload the preview.');
+    identityError.name = 'AbortError';
+    throw identityError;
+  }
   releaseMemoPdfCache();
   var url = URL.createObjectURL(blob);
   var disposition = response.headers.get('Content-Disposition') || '';
   var filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
   window._memoPdfCache = {
-    key: memoWorkspacePdfKey(app, memo),
+    key: expectedKey,
     url: url,
     blob: blob,
     filename: filenameMatch && filenameMatch[1] ? filenameMatch[1] : ('compliance_memo_' + String(app.ref || 'application').replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf'),
@@ -35460,19 +35470,29 @@ async function installMemoPdfResponse(response) {
 async function fetchMemoPdfResponse(preview) {
   var app = window._currentDetailApp;
   if (!app) throw new Error('No application selected.');
+  var memo = window._currentMemoData;
+  var expectedKey = memoWorkspacePdfKey(app, memo);
+  if (window._memoPdfRequestController) window._memoPdfRequestController.abort();
+  var controller = new AbortController();
+  window._memoPdfRequestController = controller;
   var suffix = preview ? '?preview=1' : '';
-  var response = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo/pdf' + suffix, {
-    headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
-  });
-  if (!response.ok) {
-    var message = preview ? 'Memo PDF preview failed.' : 'Memo PDF download failed.';
-    try {
-      var body = await response.json();
-      message = body.message || body.error || message;
-    } catch (ignored) {}
-    throw new Error(message);
+  try {
+    var response = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo/pdf' + suffix, {
+      headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      var message = preview ? 'Memo PDF preview failed.' : 'Memo PDF download failed.';
+      try {
+        var body = await response.json();
+        message = body.message || body.error || message;
+      } catch (ignored) {}
+      throw new Error(message);
+    }
+    return await installMemoPdfResponse(response, app, memo, expectedKey);
+  } finally {
+    if (window._memoPdfRequestController === controller) window._memoPdfRequestController = null;
   }
-  return installMemoPdfResponse(response);
 }
 
 async function previewMemoPDF(options) {
@@ -35496,6 +35516,7 @@ async function previewMemoPDF(options) {
   try {
     return await fetchMemoPdfResponse(true);
   } catch (error) {
+    if (error && error.name === 'AbortError') return null;
     setMemoPreviewEmpty(error.message || 'PDF preview unavailable.');
     if (!options.silent) showToast(error.message || 'PDF preview failed.', 'error');
     return null;
@@ -35533,7 +35554,7 @@ async function downloadMemoPDF() {
 async function generateComplianceMemo() {
   var app = window._currentDetailApp;
   if (!app) { alert('No application selected.'); return; }
-  if (!assertPermission('view_compliance_memo')) return;
+  if (!assertPermission('approve_low_medium')) return;
   var buttons = [document.getElementById('btn-generate-memo'), document.getElementById('btn-regenerate-memo')].filter(Boolean);
   buttons.forEach(function(button) { button.disabled = true; button.dataset.label = button.textContent; button.textContent = 'Generating…'; });
   try {
@@ -35613,6 +35634,8 @@ function toggleMemoVersionHistory(forceOpen) {
   if (!panel) return;
   var open = forceOpen === true || (forceOpen !== false && !panel.classList.contains('open'));
   panel.classList.toggle('open', open);
+  var historyBtn = document.getElementById('btn-memo-history');
+  if (historyBtn) historyBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
   if (open) loadMemoVersionHistory();
 }
 

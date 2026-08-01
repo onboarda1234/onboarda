@@ -1,7 +1,7 @@
 # Compliance Memorandum release gate failure (historical attempt)
 
 > Superseded on 2026-08-01 after environment remediation. The authoritative
-> final-tree restart completed with 8,909 passed, 11 skipped, 4 expected
+> post-review final-tree restart completed with 8,910 passed, 11 skipped, 4 expected
 > failures, and zero failures/errors. This report is retained only as evidence
 > of the correctly halted infrastructure-failure attempt.
 

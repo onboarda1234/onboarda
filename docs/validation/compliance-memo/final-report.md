@@ -3,7 +3,7 @@
 Implementation branch: `codex/compliance-memo-workspace`
 
 GitHub source baseline: `onboarda1234/onboarda` `main` at `c667f95ff8ae892bcc8cafe27efa1151cc7d92f6`
-Status: implementation and authoritative pre-merge validation complete; release workflow pending commit, PR, merge, and staging validation.
+Status: implementation and authoritative pre-merge validation complete; release workflow pending final hardening commit, PR checks, merge, and staging validation.
 
 ## 1. Current-state findings
 
@@ -24,6 +24,7 @@ The complete pre-change audit is in [current-state-findings.md](current-state-fi
 - Rebuilt the memo PDF as a nine-section, decision-first report with the concise Memo Basis and distinct draft/final formats.
 - Added `frame-src 'self' blob:` to enforcing and report-only CSP so authenticated PDF Blobs can render without enabling external frames.
 - Added deterministic PDF/sample generation and comprehensive visual evidence.
+- Hardened dynamic PDF footer values, legacy timestamp labels, quality-score display, rationale-save lock atomicity, PDF request identity, generation permission alignment, and validation-harness failure handling after PR review.
 
 ## 3. Files changed
 
@@ -100,13 +101,13 @@ The workflow remains:
 4. Officer Approval
 5. Download Final PDF
 
-`MemoApproveHandler` and its server-side approval/sign-off gates were not changed. All protected modules remained outside implementation scope. The UI continues to call the same approval endpoint with the existing sign-off shape and approval reason.
+`MemoApproveHandler` and its server-side approval/sign-off gates were not changed. All protected modules remained outside implementation scope. The UI continues to call the same approval endpoint with the existing sign-off shape and approval reason. The rationale-save update now atomically preserves the already-existing final-memo lock invariant.
 
 ## 7. Test results
 
-- Authoritative repository-wide final-tree gate: **8,909 passed, 11 skipped, 4 expected failures, 0 failed, 0 errors** in 19m 38s.
+- Authoritative post-review repository-wide gate: **8,910 passed, 11 skipped, 4 expected failures, 0 failed, 0 errors** in 19m 05s.
 - PostgreSQL-only contracts ran successfully against a fresh PostgreSQL 16 database supplied through `TEST_POSTGRES_DSN`.
-- Authenticated local PDF endpoint check proved preview/download byte equality with SHA-256 `68088d22f83be1e99dd98a89255adaddcfe9504ef11c897d10913ca87e654c5b`.
+- Authenticated post-review PDF endpoint check proved preview/download byte equality with SHA-256 `c95b37a8793f54edf58abccecba51edfe20ad82a3bae153b79659cee5630025a`.
 - PDF validation: two distinct 3-page A4 PDFs; all required headings present; no observed overlap or overflow.
 - Browser validation: all required states captured at 1440 × 1100; preview/download bytes matched by SHA-256.
 - Python compilation, browser script parsing, and `git diff --check`: passed.

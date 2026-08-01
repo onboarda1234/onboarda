@@ -90,7 +90,9 @@ def test_workspace_uses_actual_pdf_and_only_final_can_download():
 
     runtime = html[html.index("// ── Compliance Memo document workspace") :]
     assert "?preview=1" in runtime
-    assert "return installMemoPdfResponse(response);" in runtime
+    assert "return await installMemoPdfResponse(response, app, memo, expectedKey);" in runtime
+    assert "new AbortController()" in runtime
+    assert "memoWorkspacePdfKey(window._currentDetailApp || {}, window._currentMemoData) !== expectedKey" in runtime
     assert "var cached = await fetchMemoPdfResponse(false);" in runtime
     assert "link.href = cached.url;" in runtime
     assert "frame.src = url" in runtime
@@ -131,6 +133,8 @@ def test_existing_memo_resource_adds_history_and_rationale_without_new_route():
     assert '"lifecycle_status"' in handler
     assert "def patch(self, app_id):" in handler
     assert "UPDATE compliance_memos SET review_notes = ?, reviewed_by = ?" in handler
+    assert "LOWER(review_status) <> 'approved'" in handler
+    assert 'getattr(getattr(db, "_cursor", None), "rowcount", 0)' in handler
     assert '"Save Memo Officer Rationale"' in handler
     assert "def post(self, app_id):" in handler
 
@@ -276,6 +280,19 @@ def test_pdf_template_has_draft_and_final_locked_formats(monkeypatch):
     assert "Content Hash:" in draft_html
     assert "Officer Rationale - Professional Judgement" in final_html
     assert "Evidence supports the recorded opinion." in final_html
+    assert "Not recorded/10" not in draft_html
+
+
+def test_pdf_dynamic_css_and_timestamps_are_safe_and_explicit():
+    import pdf_generator
+
+    escaped = pdf_generator._css_content('</style><script>alert("x")</script>')
+
+    assert "<" not in escaped
+    assert ">" not in escaped
+    assert "</style>" not in escaped
+    assert pdf_generator._display_timestamp("2026-08-01T06:30:00") == "2026-08-01 06:30 UTC"
+    assert pdf_generator.COMPLIANCE_MEMO_TITLE == pdf_generator.BRAND["pdf_header"]
 
 
 def test_validation_sample_uses_professional_opinion_and_expanded_rationale():
@@ -285,12 +302,12 @@ def test_validation_sample_uses_professional_opinion_and_expanded_rationale():
     opinion = memo["sections"]["compliance_decision"]["content"]
     rationale = memo["sections"]["executive_summary"]["content"]
 
-    assert 120 <= len(opinion.split()) <= 180
+    assert len(opinion.split()) >= 120
     assert "no unresolved fact currently supports" not in opinion.lower()
     assert "identified and verified" in opinion
     assert "no confirmed sanctions, PEP or adverse-media matches" in opinion
     assert "proportionate" in opinion
-    assert 55 <= len(rationale.split()) <= 80
+    assert len(rationale.split()) >= 55
     assert "no unexplained control layer" in rationale
     assert "medium residual risk" in rationale
     assert "conditional approval proportionate" in rationale

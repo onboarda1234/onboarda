@@ -1,6 +1,6 @@
 # Compliance Memo validation report
 
-Validation date: 2026-07-31
+Validation date: 2026-08-01
 
 Source: GitHub `onboarda1234/onboarda`, `main` at `c667f95ff8ae892bcc8cafe27efa1151cc7d92f6`
 Implementation branch: `codex/compliance-memo-workspace`
@@ -8,7 +8,7 @@ Implementation branch: `codex/compliance-memo-workspace`
 ## Validation environment
 
 - GitHub-truth implementation branch fast-forwarded to current `origin/main` before the authoritative release gate.
-- Full suite on a remediated local host with 10.14 GiB available and a fresh SSL-enabled PostgreSQL 16 database supplied through `TEST_POSTGRES_DSN`.
+- Full suite on a remediated local host with 10.16 GiB available and a fresh SSL-enabled PostgreSQL 16 database supplied through `TEST_POSTGRES_DSN`.
 - Google Chrome viewport: 1440 × 1100. The actual back-office HTML and current sample PDF bytes were served by an ephemeral local validation harness so the native PDF viewer was painted into the evidence.
 - PDF renderer: WeasyPrint 69.0; page inspection: Poppler.
 - The installed in-app browser-control surface was unavailable in this task's tool set, so the browser skill's approved fallback was implemented with the bundled Playwright runtime and local Google Chrome.
@@ -25,8 +25,10 @@ The demo fixture's real Generate Memo attempt correctly failed its existing docu
 - FINAL is read-only and exposes Download Final PDF.
 - SUPERSEDED appears only on non-current history rows.
 - Timestamp-derived staleness overrides draft/final state, blocks preview/approval, and requires regeneration.
-- Preview and download call the same PDF generator. A fresh authenticated local handler check returned `200` for both, used `inline` versus `attachment` disposition only, reported lifecycle `FINAL`, and produced byte-identical 46,778-byte PDFs with SHA-256 `68088d22f83be1e99dd98a89255adaddcfe9504ef11c897d10913ca87e654c5b`.
+- Preview and download call the same PDF generator. A fresh authenticated post-review handler check returned `200` for both, used `inline` versus `attachment` disposition only, reported lifecycle `FINAL`, and produced byte-identical 44,499-byte PDFs with SHA-256 `c95b37a8793f54edf58abccecba51edfe20ad82a3bae153b79659cee5630025a`.
 - The iframe displays a Blob URL created from the authenticated PDF response; no second HTML memo is generated.
+- Superseded PDF requests are aborted, and a response is discarded if its captured application/memo identity no longer matches the active workspace.
+- The existing final-memo rationale lock is enforced atomically in the rationale update; the approval handler remains unchanged.
 
 ## Screenshot index
 
@@ -81,10 +83,10 @@ Before/after PDF screenshots:
 
 ## Automated validation
 
-- Authoritative repository-wide final-tree gate: **8,909 passed, 11 skipped, 4 expected failures, 0 failed, 0 errors** in 19m 38s.
+- Authoritative post-review repository-wide gate: **8,910 passed, 11 skipped, 4 expected failures, 0 failed, 0 errors** in 19m 05s.
 - PostgreSQL-only tests ran successfully against the fresh `TEST_POSTGRES_DSN`; they were not omitted or downgraded to partial evidence.
 - Focused memo/UI/API/governance/approval coverage and final PDF wording/layout coverage are included in that complete gate.
-- Live memo PDF handler check: preview/download both `200`, exact byte equality, `FINAL` lifecycle, and matching response SHA-256.
+- Live post-review memo PDF handler check: preview/download both `200`, exact byte equality, `FINAL` lifecycle, and matching SHA-256 `c95b37a8793f54edf58abccecba51edfe20ad82a3bae153b79659cee5630025a`.
 - Python compilation: `server.py`, `pdf_generator.py`, and `base_handler.py` passed.
 - Browser JavaScript parse: all 3 inline back-office scripts passed Node `vm.Script` parsing.
 - `git diff --check`: passed.

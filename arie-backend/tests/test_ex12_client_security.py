@@ -78,7 +78,7 @@ class TestPartA_RolePermissionHelpers:
         ("preApprovalReject", "approve_high_very_high"),
         ("preApprovalRequestInfo", "approve_high_very_high"),
         ("requestMoreInfo", "request_more_information"),
-        ("generateComplianceMemo", "view_compliance_memo"),
+        ("generateComplianceMemo", "approve_low_medium"),
         ("approveMemo", "approve_low_medium"),
     ]
 

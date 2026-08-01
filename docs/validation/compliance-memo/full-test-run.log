@@ -1,4 +1,3 @@
-JWT_SECRET not set for testing — using generated fallback. Set JWT_SECRET env var.
 ============================= test session starts ==============================
 platform darwin -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0
 rootdir: /Users/Aisha/Projects/Onboarda-compliance-memo/arie-backend
@@ -6,7 +5,7 @@ configfile: pytest.ini
 testpaths: tests
 plugins: cov-7.1.0, anyio-4.14.2, asyncio-1.3.0
 asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
-collected 8923 items / 1 skipped
+collected 8924 items / 1 skipped
 
 tests/test_a1f_object_authorization_characterization.py ...............  [  0%]
 tests/test_agent3_hit_level_output.py ..........................         [  0%]
@@ -107,7 +106,7 @@ tests/test_company_intake_backoffice_badges_static.py ..........         [ 18%]
 tests/test_company_intake_portal_static.py ..........................    [ 18%]
 tests/test_company_intake_write_path.py ...................              [ 19%]
 tests/test_company_registry.py ....................................      [ 19%]
-tests/test_compliance_memo_workspace.py ............                     [ 19%]
+tests/test_compliance_memo_workspace.py .............                    [ 19%]
 tests/test_complyadvantage_auth.py ...............                       [ 19%]
 tests/test_complyadvantage_client.py ...............                     [ 19%]
 tests/test_complyadvantage_config.py .............                       [ 20%]
@@ -122,7 +121,7 @@ tests/test_complyadvantage_payloads.py ................                  [ 21%]
 tests/test_complyadvantage_runtime_e2e.py .........                      [ 21%]
 tests/test_complyadvantage_subscriptions.py .....                        [ 21%]
 tests/test_complyadvantage_webhook_fetch.py ............                 [ 21%]
-tests/test_complyadvantage_webhook_handler.py .......................... [ 21%]
+tests/test_complyadvantage_webhook_handler.py .......................... [ 22%]
 ...                                                                      [ 22%]
 tests/test_complyadvantage_webhook_integration.py .                      [ 22%]
 tests/test_complyadvantage_webhook_mapping.py ....                       [ 22%]
@@ -140,7 +139,7 @@ tests/test_day6_deployment_observability_docs.py ..                      [ 23%]
 tests/test_day6_staging_smoke_workflow.py ....                           [ 23%]
 tests/test_decision_model.py .....................................       [ 23%]
 tests/test_decision_path_integrity_priority_b.py ....................... [ 23%]
-.................                                                        [ 23%]
+.................                                                        [ 24%]
 tests/test_declared_pep_truthfulness_priority_a2.py ...................  [ 24%]
 tests/test_demo_auth_hardening.py ...                                    [ 24%]
 tests/test_demo_safety.py ............                                   [ 24%]
@@ -215,7 +214,7 @@ tests/test_lifecycle_linkage.py ............................             [ 36%]
 tests/test_lifecycle_quarantine.py ........................              [ 36%]
 tests/test_lifecycle_queue.py .......................................... [ 36%]
 ....                                                                     [ 36%]
-tests/test_lifecycle_queue_handlers.py .................                 [ 36%]
+tests/test_lifecycle_queue_handlers.py .................                 [ 37%]
 tests/test_lowrisk_batch_r3bsa.py ............................           [ 37%]
 tests/test_memo_floor_and_gap_escalation.py .........                    [ 37%]
 tests/test_memo_ordering_gate.py ..                                      [ 37%]
@@ -271,7 +270,7 @@ tests/test_monitoring_status_backfill.py ..............................  [ 44%]
 tests/test_monitoring_status_model.py ...........                        [ 44%]
 tests/test_negative_path_fixtures.py ....................                [ 44%]
 tests/test_next_review_approval_anchor_reconciliation.py ............... [ 44%]
-xxxx                                                                     [ 44%]
+xxxx                                                                     [ 45%]
 tests/test_noncanonical_qa_exclusions.py ..                              [ 45%]
 tests/test_observability.py ....................                         [ 45%]
 tests/test_officer_correction_ui_static.py ...........                   [ 45%]
@@ -289,7 +288,7 @@ tests/test_p11_6_authz_audit_hardening.py ........                       [ 47%]
 tests/test_p11_7_download_webhook_hygiene.py ..........                  [ 47%]
 tests/test_p12_2_cm_txn_integrity.py ..................                  [ 47%]
 tests/test_p12_5_status_check_constraints.py ....................        [ 47%]
-tests/test_p12_7_hybrid_gate.py ..........                               [ 47%]
+tests/test_p12_7_hybrid_gate.py ..........                               [ 48%]
 tests/test_p12_8_purge_evidence.py .....................                 [ 48%]
 tests/test_p12_9_observability.py ..............................         [ 48%]
 tests/test_p13_3_defensive_api_parsing.py ................               [ 48%]
@@ -351,7 +350,7 @@ tests/test_pilot_scope_enterprise_modules_static.py .........            [ 57%]
 tests/test_pilot_scope_guard.py .................................        [ 57%]
 tests/test_portal_change_requests_ux.py .......                          [ 57%]
 tests/test_portal_cr_and_validation.py ........................          [ 57%]
-tests/test_portal_legal_confirmation_static.py ......                    [ 57%]
+tests/test_portal_legal_confirmation_static.py ......                    [ 58%]
 tests/test_portal_periodic_review_attestation_static.py ....             [ 58%]
 tests/test_portal_periodic_review_documents_static.py .                  [ 58%]
 tests/test_portal_periodic_review_notification_static.py ....            [ 58%]
@@ -584,6 +583,186 @@ tests/test_zero_hit_evidence_state_static.py ........................    [ 99%]
 tests/test_zero_hit_no_provider_hits_note_static.py ...                  [100%]
 
 =============================== warnings summary ===============================
+tests/test_a1f_object_authorization_characterization.py: 15 warnings
+tests/test_agent3_screening_interpretation_runtime.py: 12 warnings
+tests/test_api.py: 143 warnings
+tests/test_app_action_ownership_scope.py: 8 warnings
+tests/test_application.py: 8 warnings
+tests/test_application_enhanced_requirements.py: 22 warnings
+tests/test_application_role_matrix.py: 8 warnings
+tests/test_audit_export.py: 34 warnings
+tests/test_auth.py: 6 warnings
+tests/test_auth_extended.py: 3 warnings
+tests/test_auth_stability.py: 7 warnings
+tests/test_authority_audit_hardening.py: 8 warnings
+tests/test_b4_adhoc_screening_officer_only.py: 1 warning
+tests/test_backoffice_review_audit.py: 3 warnings
+tests/test_cm_audit_reconstruction.py: 1 warning
+tests/test_cm_lock_and_auto_draft_api.py: 12 warnings
+tests/test_company_intake_write_path.py: 18 warnings
+tests/test_directors_ubos_report.py: 8 warnings
+tests/test_doc_policy_canonical_registry.py: 1 warning
+tests/test_document_delete.py: 9 warnings
+tests/test_document_download_safety.py: 5 warnings
+tests/test_document_health_scheduler.py: 4 warnings
+tests/test_document_upload_storage.py: 4 warnings
+tests/test_document_versioning.py: 7 warnings
+tests/test_draft_persistence.py: 19 warnings
+tests/test_e2e_authority_matrix.py: 21 warnings
+tests/test_enhanced_requirement_settings.py: 6 warnings
+tests/test_ex01_ex04_closure.py: 6 warnings
+tests/test_ex12_client_security.py: 4 warnings
+tests/test_ex13_batch_refresh.py: 1 warning
+tests/test_fail_closed_decision_persistence.py: 8 warnings
+tests/test_fail_closed_revocation.py: 5 warnings
+tests/test_lifecycle_queue_handlers.py: 17 warnings
+tests/test_monitoring_alerts_list_contract_api.py: 7 warnings
+tests/test_monitoring_alerts_sprint2_api.py: 6 warnings
+tests/test_monitoring_dismissal_four_eyes.py: 15 warnings
+tests/test_monitoring_document_refresh_api.py: 23 warnings
+tests/test_monitoring_followups_api.py: 9 warnings
+tests/test_monitoring_overdue_escalation_api.py: 15 warnings
+tests/test_monitoring_refresh_status_decoupling.py: 5 warnings
+tests/test_officer_corrections.py: 40 warnings
+tests/test_p0_backend_document_link_regressions.py: 7 warnings
+tests/test_p0_kyc_party_document_integrity.py: 5 warnings
+tests/test_p11_6_authz_audit_hardening.py: 4 warnings
+tests/test_p9_13_runtime_role_coverage.py: 8 warnings
+tests/test_patch_decision_bypass.py: 12 warnings
+tests/test_perf_applications_default_projection.py: 13 warnings
+tests/test_periodic_review_attestation.py: 9 warnings
+tests/test_periodic_review_baseline_application_level.py: 7 warnings
+tests/test_periodic_review_baseline_simplified.py: 4 warnings
+tests/test_periodic_review_document_requests.py: 15 warnings
+tests/test_periodic_review_handlers.py: 69 warnings
+tests/test_periodic_review_memo.py: 32 warnings
+tests/test_periodic_review_memo_addendum_post_completion_error_guard.py: 3 warnings
+tests/test_periodic_review_phase1_handlers.py: 10 warnings
+tests/test_periodic_review_queue_hygiene.py: 5 warnings
+tests/test_periodic_review_queue_list_lite.py: 9 warnings
+tests/test_periodic_review_risk_reassessment.py: 11 warnings
+tests/test_periodic_review_workspace.py: 9 warnings
+tests/test_person_upload.py: 19 warnings
+tests/test_phase4_reporting_evidence.py: 9 warnings
+tests/test_phase5_p1_hardening.py: 11 warnings
+tests/test_pilot_scope_backend_lockdown.py: 5 warnings
+tests/test_pilot_scope_guard.py: 8 warnings
+tests/test_portal_remediation.py: 27 warnings
+tests/test_portal_to_approval_e2e.py: 1 warning
+tests/test_pr1_client_api_boundary.py: 7 warnings
+tests/test_pr1b_client_notification_boundary.py: 4 warnings
+tests/test_pr3_terminal_record_gate_reconciliation.py: 5 warnings
+tests/test_pr4_screening_memo_readiness_metadata.py: 2 warnings
+tests/test_pr_b_finalize_gate_integrity.py: 4 warnings
+tests/test_pr_c_honesty_and_audit.py: 4 warnings
+tests/test_pricing_to_compliance_review.py: 7 warnings
+tests/test_public_api.py: 15 warnings
+tests/test_r10_portal_ownership.py: 5 warnings
+tests/test_r6_portal_and_validation.py: 7 warnings
+tests/test_r7_portal_post_500.py: 5 warnings
+tests/test_r9_portal_ownership.py: 6 warnings
+tests/test_rmi_requests.py: 5 warnings
+tests/test_runtime_file_security_regressions.py: 7 warnings
+tests/test_screening_freshness.py: 2 warnings
+tests/test_sprint35.py: 14 warnings
+tests/test_srp2a_rescreen_existing_customer.py: 1 warning
+tests/test_submit_to_compliance.py: 13 warnings
+tests/test_supervisor_foundation_frozen_guards.py: 1 warning
+tests/test_upload_latency_contracts.py: 6 warnings
+tests/test_version_endpoint.py: 7 warnings
+  /tmp/regmind-release-venv/lib/python3.12/site-packages/jwt/api_jwt.py:147: InsecureKeyLengthWarning: The HMAC key is 29 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+    return self._jws.encode(
+
+tests/test_a1f_object_authorization_characterization.py: 15 warnings
+tests/test_agent3_screening_interpretation_runtime.py: 12 warnings
+tests/test_api.py: 143 warnings
+tests/test_app_action_ownership_scope.py: 8 warnings
+tests/test_application.py: 8 warnings
+tests/test_application_enhanced_requirements.py: 22 warnings
+tests/test_application_role_matrix.py: 8 warnings
+tests/test_audit_export.py: 32 warnings
+tests/test_auth.py: 5 warnings
+tests/test_auth_extended.py: 3 warnings
+tests/test_auth_stability.py: 7 warnings
+tests/test_authority_audit_hardening.py: 8 warnings
+tests/test_b4_adhoc_screening_officer_only.py: 1 warning
+tests/test_backoffice_review_audit.py: 3 warnings
+tests/test_cm_audit_reconstruction.py: 1 warning
+tests/test_cm_lock_and_auto_draft_api.py: 12 warnings
+tests/test_company_intake_write_path.py: 18 warnings
+tests/test_directors_ubos_report.py: 8 warnings
+tests/test_doc_policy_canonical_registry.py: 1 warning
+tests/test_document_delete.py: 9 warnings
+tests/test_document_download_safety.py: 5 warnings
+tests/test_document_health_scheduler.py: 4 warnings
+tests/test_document_upload_storage.py: 4 warnings
+tests/test_document_versioning.py: 7 warnings
+tests/test_draft_persistence.py: 19 warnings
+tests/test_e2e_authority_matrix.py: 21 warnings
+tests/test_enhanced_requirement_settings.py: 6 warnings
+tests/test_ex01_ex04_closure.py: 6 warnings
+tests/test_ex12_client_security.py: 4 warnings
+tests/test_ex13_batch_refresh.py: 9 warnings
+tests/test_fail_closed_decision_persistence.py: 8 warnings
+tests/test_fail_closed_revocation.py: 5 warnings
+tests/test_lifecycle_queue_handlers.py: 15 warnings
+tests/test_monitoring_alerts_list_contract_api.py: 7 warnings
+tests/test_monitoring_alerts_sprint2_api.py: 6 warnings
+tests/test_monitoring_dismissal_four_eyes.py: 15 warnings
+tests/test_monitoring_document_refresh_api.py: 23 warnings
+tests/test_monitoring_followups_api.py: 9 warnings
+tests/test_monitoring_overdue_escalation_api.py: 15 warnings
+tests/test_monitoring_refresh_status_decoupling.py: 5 warnings
+tests/test_officer_corrections.py: 40 warnings
+tests/test_p0_backend_document_link_regressions.py: 7 warnings
+tests/test_p0_kyc_party_document_integrity.py: 5 warnings
+tests/test_p11_6_authz_audit_hardening.py: 4 warnings
+tests/test_p9_13_runtime_role_coverage.py: 8 warnings
+tests/test_patch_decision_bypass.py: 12 warnings
+tests/test_perf_applications_default_projection.py: 13 warnings
+tests/test_periodic_review_attestation.py: 9 warnings
+tests/test_periodic_review_baseline_application_level.py: 7 warnings
+tests/test_periodic_review_baseline_simplified.py: 4 warnings
+tests/test_periodic_review_document_requests.py: 15 warnings
+tests/test_periodic_review_handlers.py: 67 warnings
+tests/test_periodic_review_memo.py: 19 warnings
+tests/test_periodic_review_memo_addendum_post_completion_error_guard.py: 1 warning
+tests/test_periodic_review_phase1_handlers.py: 10 warnings
+tests/test_periodic_review_queue_hygiene.py: 5 warnings
+tests/test_periodic_review_queue_list_lite.py: 2 warnings
+tests/test_periodic_review_risk_reassessment.py: 10 warnings
+tests/test_periodic_review_workspace.py: 9 warnings
+tests/test_person_upload.py: 19 warnings
+tests/test_phase4_reporting_evidence.py: 9 warnings
+tests/test_phase5_p1_hardening.py: 11 warnings
+tests/test_pilot_scope_backend_lockdown.py: 4 warnings
+tests/test_pilot_scope_guard.py: 8 warnings
+tests/test_portal_remediation.py: 26 warnings
+tests/test_portal_to_approval_e2e.py: 1 warning
+tests/test_pr1_client_api_boundary.py: 7 warnings
+tests/test_pr1b_client_notification_boundary.py: 4 warnings
+tests/test_pr3_terminal_record_gate_reconciliation.py: 5 warnings
+tests/test_pr4_screening_memo_readiness_metadata.py: 2 warnings
+tests/test_pr_b_finalize_gate_integrity.py: 4 warnings
+tests/test_pr_c_honesty_and_audit.py: 4 warnings
+tests/test_pricing_to_compliance_review.py: 6 warnings
+tests/test_public_api.py: 15 warnings
+tests/test_r10_portal_ownership.py: 5 warnings
+tests/test_r6_portal_and_validation.py: 7 warnings
+tests/test_r7_portal_post_500.py: 5 warnings
+tests/test_r9_portal_ownership.py: 6 warnings
+tests/test_rmi_requests.py: 5 warnings
+tests/test_runtime_file_security_regressions.py: 6 warnings
+tests/test_screening_freshness.py: 2 warnings
+tests/test_sprint35.py: 14 warnings
+tests/test_srp2a_rescreen_existing_customer.py: 1 warning
+tests/test_submit_to_compliance.py: 13 warnings
+tests/test_supervisor_foundation_frozen_guards.py: 1 warning
+tests/test_upload_latency_contracts.py: 6 warnings
+tests/test_version_endpoint.py: 7 warnings
+  /tmp/regmind-release-venv/lib/python3.12/site-packages/jwt/api_jwt.py:368: InsecureKeyLengthWarning: The HMAC key is 29 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+    decoded = self.decode_complete(
+
 tests/test_api.py::TestAuthenticatedAccess::test_dashboard_reports_surface_unknown_risk_bucket
 tests/test_phase4_reporting_evidence.py::TestPhase4ReportingHTTP::test_analytics_summary_reconciles_visible_lifecycle_statuses
 tests/test_phase4_reporting_evidence.py::TestPhase4ReportingHTTP::test_analytics_uses_canonical_pending_statuses_and_reports_scope
@@ -612,7 +791,7 @@ tests/test_app_action_ownership_scope.py: 4 warnings
 tests/test_e2e_authority_matrix.py: 11 warnings
 tests/test_fail_closed_decision_persistence.py: 4 warnings
 tests/test_portal_to_approval_e2e.py: 1 warning
-  /Users/Aisha/Projects/Onboarda-compliance-memo/arie-backend/server.py:36437: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  /Users/Aisha/Projects/Onboarda-compliance-memo/arie-backend/server.py:36442: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
     "checked_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
 
 tests/test_api.py::TestRiskModelAdminConfigSafety::test_partial_score_update_preserves_dimensions_and_thresholds
@@ -639,12 +818,12 @@ tests/test_srp2_refresh_stale_screening_reports.py: 1 warning
     timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 tests/test_authority_audit_hardening.py::AuthzDenialAuditTest::test_override_decision_writes_override_used_event
-  /Users/Aisha/Projects/Onboarda-compliance-memo/arie-backend/server.py:36577: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  /Users/Aisha/Projects/Onboarda-compliance-memo/arie-backend/server.py:36582: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
     "override_reviewed_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ") if override_ai else None,
 
 tests/test_e2e_authority_matrix.py: 2 warnings
 tests/test_submit_to_compliance.py: 10 warnings
-  /Users/Aisha/Projects/Onboarda-compliance-memo/arie-backend/server.py:35803: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  /Users/Aisha/Projects/Onboarda-compliance-memo/arie-backend/server.py:35808: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
     "captured_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
 
 tests/test_migration_026_supervisor_audit_schema_repair.py::test_supervisor_audit_schema_repair_backfills_legacy_rows
@@ -662,4 +841,4 @@ tests/test_phase4_reporting_evidence.py::TestPhase4ReportingHTTP::test_periodic_
     today = datetime.utcnow().date()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-==== 8909 passed, 11 skipped, 4 xfailed, 312 warnings in 1178.17s (0:19:38) ====
+=== 8910 passed, 11 skipped, 4 xfailed, 2272 warnings in 1145.03s (0:19:05) ====

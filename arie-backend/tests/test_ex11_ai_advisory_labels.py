@@ -56,7 +56,8 @@ class TestPartA_AISurfacesIdentified:
 
     def test_html_memo_renderer_is_disabled(self, backoffice_html):
         fn_start = backoffice_html.rindex('function renderMemoSections()')
-        fn_region = backoffice_html[fn_start:fn_start + 100]
+        fn_end = backoffice_html.index('function renderMemoGovernanceSummary()', fn_start)
+        fn_region = backoffice_html[fn_start:fn_end]
         assert "return '';" in fn_region
 
     def test_render_supervisor_results_function(self, backoffice_html):
@@ -84,8 +85,9 @@ class TestPartB_AdvisoryLabeling:
 
     def test_memo_content_is_the_generated_pdf(self, backoffice_html):
         workspace_start = backoffice_html.index('// ── Compliance Memo document workspace')
-        workspace_region = backoffice_html[workspace_start:]
-        assert 'id="memo-pdf-preview"' in backoffice_html
+        workspace_end = backoffice_html.index('// ══════════════════════════════════════════════════════════\n// AI SUPERVISOR', workspace_start)
+        workspace_region = backoffice_html[workspace_start:workspace_end]
+        assert 'id="memo-pdf-preview"' in _extract_detail_tab_region(backoffice_html, 'overview', 'kyc-docs')
         assert 'frame.src = url' in workspace_region
         assert 'ai-advisory-banner' not in _extract_detail_tab_region(backoffice_html, 'overview', 'kyc-docs')
 

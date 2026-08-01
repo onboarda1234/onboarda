@@ -32533,9 +32533,14 @@ class ComplianceMemoHandler(BaseHandler):
                 return self.error("Final memo is approved and locked.", 409)
 
             db.execute(
-                "UPDATE compliance_memos SET review_notes = ?, reviewed_by = ? WHERE id = ?",
+                "UPDATE compliance_memos SET review_notes = ?, reviewed_by = ? "
+                "WHERE id = ? AND (review_status IS NULL OR LOWER(review_status) <> 'approved')",
                 (rationale, user.get("sub", ""), memo_row["id"]),
             )
+            updated_rows = getattr(getattr(db, "_cursor", None), "rowcount", 0)
+            if updated_rows != 1:
+                db.rollback()
+                return self.error("Final memo is approved and locked.", 409)
             rationale_hash = hashlib.sha256(rationale.encode("utf-8")).hexdigest() if rationale else None
             db.execute(
                 "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
