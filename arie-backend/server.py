@@ -231,6 +231,7 @@ from document_scope_policy import (
 import monitoring_status as _monitoring_status
 import monitoring_dismissal_control as _mdc
 import monitoring_alert_state_machine as _monitoring_state_machine
+import monitoring_alert_linkage as _monitoring_linkage
 import monitoring_sla as _monitoring_sla
 import monitoring_followups as _monitoring_followups
 from monitoring_enrollment import (
@@ -24722,10 +24723,13 @@ def _filter_screening_queue_rows(rows, filters):
     provider_filter = _screening_queue_filter_value(filters.get("provider"))
     pep_filter = _screening_queue_filter_value(filters.get("pep"))
     app_ref_filter = _screening_queue_filter_value(filters.get("application_ref"))
+    exact_app_ref = str(filters.get("exact_application_ref") or "").strip()
     universal_terms = [token for token in (search, app_ref_filter) if token]
 
     filtered = []
     for row in rows:
+        if exact_app_ref and str(row.get("application_ref") or "") != exact_app_ref:
+            continue
         blob = _screening_queue_search_blob(row)
         if any(term not in blob for term in universal_terms):
             continue
@@ -24969,8 +24973,15 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         fx_excl, fx_params = fixture_app_exclude_clause(table_alias="", include_text_patterns=True)
         query += f" AND {fx_excl}"
         params.extend(fx_params)
+    exact_app_ref = str(filters.get("exact_application_ref") or "").strip()
     app_ref_filter = _screening_queue_filter_value(filters.get("application_ref"))
-    if app_ref_filter:
+    if exact_app_ref:
+        # Additive canonical-linkage handoff filter. Existing queue search
+        # remains fuzzy, while this exact stable reference is enforced before
+        # any cross-application evidence is loaded into the response.
+        query += " AND ref = ?"
+        params.append(exact_app_ref)
+    elif app_ref_filter:
         query += " AND lower(ref) LIKE ?"
         params.append(f"%{app_ref_filter}%")
     query += f" ORDER BY created_at DESC LIMIT {_SCREENING_QUEUE_APPLICATION_SCAN_CAP}"
@@ -25618,6 +25629,9 @@ class ScreeningQueueHandler(BaseHandler):
             "provider": self.get_argument("provider", "").strip(),
             "pep": self.get_argument("pep", "").strip(),
             "application_ref": self.get_argument("application_ref", "").strip(),
+            "exact_application_ref": self.get_argument(
+                "exact_application_ref", ""
+            ).strip(),
         }
         _queue_started = time.monotonic()
         db = get_db()
@@ -38053,6 +38067,75 @@ def _monitoring_alert_provider_evidence(db, alert_id):
     return evidence
 
 
+def _monitoring_linkage_safe_envelope(db, alert_id):
+    try:
+        return _monitoring_linkage.resolve_alert_linkage_envelope(db, alert_id)
+    except Exception:
+        logger.exception(
+            "monitoring_linkage_resolution_failed alert_id=%s request_id=%s",
+            alert_id,
+            (_obs_get_request_id() or ""),
+        )
+        return {
+            "contract_version": _monitoring_linkage.CONTRACT_VERSION,
+            "read_only": True,
+            "mutation_controls": False,
+            "error": {
+                "code": "linkage_unavailable",
+                "message": "Canonical linkage is temporarily unavailable.",
+                "alert_id": alert_id,
+                "linkage_status": "manual_review_required",
+                "reasons": ["linkage_resolution_failed"],
+            },
+        }
+
+
+class MonitoringAlertLinkageHandler(BaseHandler):
+    """Authenticated GET-only canonical owner-linkage projection."""
+
+    def get(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        db = get_db()
+        try:
+            result = _monitoring_linkage.resolve_alert_linkage(db, alert_id)
+            self.success(result)
+        except _monitoring_linkage.LinkageError as exc:
+            payload = exc.payload(alert_id)
+            linkage_error = payload.pop("error")
+            payload["error"] = linkage_error["message"]
+            payload["linkage_error"] = linkage_error
+            self.set_status(exc.http_status)
+            self.write(json.dumps(payload, default=str))
+        except Exception:
+            logger.exception(
+                "monitoring_linkage_api_failed alert_id=%s request_id=%s",
+                alert_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.set_status(500)
+            self.write(
+                json.dumps(
+                    {
+                        "contract_version": _monitoring_linkage.CONTRACT_VERSION,
+                        "read_only": True,
+                        "mutation_controls": False,
+                        "error": "Canonical linkage is temporarily unavailable.",
+                        "linkage_error": {
+                            "code": "linkage_unavailable",
+                            "message": "Canonical linkage is temporarily unavailable.",
+                            "alert_id": alert_id,
+                            "linkage_status": "manual_review_required",
+                            "reasons": ["linkage_resolution_failed"],
+                        },
+                    }
+                )
+            )
+        finally:
+            db.close()
+
+
 class MonitoringAlertDetailHandler(BaseHandler):
     """GET/PATCH /api/monitoring/alerts/:id — Get alert detail and update status"""
     def get(self, alert_id):
@@ -38105,6 +38188,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
             result["followups"] = []
             result["followups_summary"] = {"open_count": 0, "next_due_at": None}
         result["overdue_escalations"] = _monitoring_alert_overdue_escalations(db, alert_id)
+        result["canonical_linkage"] = _monitoring_linkage_safe_envelope(db, alert_id)
         db.close()
         self.success(result)
 
@@ -45347,6 +45431,7 @@ def make_app():
         (r"/api/monitoring/alerts/([^/]+)/escalate-overdue", MonitoringAlertOverdueEscalationHandler),
         (r"/api/monitoring/alerts/([^/]+)/followups/([0-9]+)/resolve", MonitoringAlertFollowupResolveHandler),
         (r"/api/monitoring/alerts/([^/]+)/followups", MonitoringAlertFollowupHandler),
+        (r"/api/monitoring/alerts/([0-9]+)/linkage", MonitoringAlertLinkageHandler),
         (r"/api/monitoring/alerts/([^/]+)", MonitoringAlertDetailHandler),
         (r"/api/monitoring/alerts", MonitoringAlertCreateHandler),
         # Agents

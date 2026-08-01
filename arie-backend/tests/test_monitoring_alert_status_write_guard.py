@@ -180,6 +180,10 @@ _APPROVED_UNRESOLVED_SQL = {
         "monitoring_alert_state_machine.py",
         "_query_one",
     ): ("Canonical service read-only query helper.", 1),
+    (
+        "monitoring_alert_linkage.py",
+        "_rows",
+    ): ("Canonical linkage exact read-only query helper.", 1),
     ("monitoring_automation.py", "_fetchall"): ("Read-only query helper.", 1),
     ("monitoring_automation.py", "_fetchone"): ("Read-only query helper.", 1),
     (
@@ -206,6 +210,10 @@ _APPROVED_UNRESOLVED_SQL = {
         "scripts/qa/monitoring_alert_runtime_audit.py",
         "_fetch",
     ): ("Read-only Monitoring audit query helper.", 1),
+    (
+        "scripts/qa/monitoring_canonical_linkage_audit.py",
+        "execute",
+    ): ("Fail-closed read-only PostgreSQL audit adapter.", 1),
     ("sumsub_idv_status.py", "_fetchall_optional"): ("Read-only query helper.", 1),
     (
         "supervisor/agent_executors.py",

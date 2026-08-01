@@ -6910,6 +6910,10 @@ var BO_DOC_UPLOAD_IN_FLIGHT = false;
 var BO_DOC_UPLOAD_PHASE = 'idle';
 var BO_DOC_UPLOAD_RUN_ID = 0;
 var currentScreeningReviewFocus = null;
+// Canonical Monitoring owner handoffs are navigation-only. Keep this mode
+// across asynchronous panel re-renders until another ordinary application
+// detail navigation explicitly resets it.
+var currentCanonicalLinkageReadOnlyNavigation = false;
 var detailLifecycleSummaryOverview = null;
 
 function applyAgent1PolicyPayload(payload) {
@@ -10917,7 +10921,10 @@ function renderUnifiedKycDocumentCard(app, doc, linkedRequirement, expectedSlot)
   var fileName = documentFileName(doc);
   var nextAction = documentShortNextAction(doc, policy, relianceState);
   var icon = documentReviewIconForType(doc, expectedSlot, linkedRequirement);
-  return '<div class="document-review-row ' + rowClass + '">' +
+  var canonicalDocumentAttrs = doc && doc.id && doc.version != null && String(doc.version).trim()
+    ? ' data-document-id="' + escapeHtml(String(doc.id)) + '" data-document-version="' + escapeHtml(String(doc.version)) + '" tabindex="-1"'
+    : '';
+  return '<div class="document-review-row ' + rowClass + '"' + canonicalDocumentAttrs + '>' +
     '<div class="document-review-main">' +
       '<div class="document-review-identity">' +
         '<span class="document-review-icon">' + escapeHtml(icon) + '</span>' +
@@ -12588,6 +12595,7 @@ function applyOfficerCorrectionLockedContext() {
 }
 
 function renderAuthoritativeAppDetail(app, options) {
+  options = options || {};
   var psData = app.prescreeningData || {};
   var documentReadiness = computeDocumentReadinessSummary(app);
   if (currentApp && currentApp.id && currentApp.id !== app.id) {
@@ -12598,6 +12606,7 @@ function renderAuthoritativeAppDetail(app, options) {
   decisionRecordsLoadedFor = null;
   window._currentDetailApp = app;
   currentScreeningReviewFocus = options.screeningFocus || null;
+  currentCanonicalLinkageReadOnlyNavigation = options.canonicalLinkageHandoff === true;
 
   var detailCompanyName = document.getElementById('detail-company-name');
   if (detailCompanyName) detailCompanyName.textContent = app.company;
@@ -19325,6 +19334,28 @@ function renderScreeningReviewPanel(app, focus) {
   var queueRows = (SCREENING_QUEUE && SCREENING_QUEUE.rows ? SCREENING_QUEUE.rows : []).filter(function(row) {
     return row.application_ref === app.ref;
   });
+  var canonicalHandoffRows = [];
+  if (focus && focus.canonical_linkage === true && focus.canonical_context_row) {
+    canonicalHandoffRows = monitoringCanonicalScreeningContextRows(
+      app,
+      focus,
+      [focus.canonical_context_row]
+    );
+    if (canonicalHandoffRows.length === 1) {
+      var canonicalQueueIndex = queueRows.findIndex(function(candidate) {
+        return screeningQueueRowsMatch(candidate, canonicalHandoffRows[0]);
+      });
+      if (canonicalQueueIndex >= 0) {
+        queueRows[canonicalQueueIndex] = Object.assign(
+          {},
+          queueRows[canonicalQueueIndex],
+          canonicalHandoffRows[0]
+        );
+      } else {
+        queueRows = queueRows.concat(canonicalHandoffRows);
+      }
+    }
+  }
   // E-1: no EVIDENCE-MODE data for this application yet → hydrate once.
   // Summary queue rows (include_evidence=false, i.e. arriving via the
   // Screening Queue list) carry a truthy screening_evidence dict with no
@@ -19377,6 +19408,16 @@ function renderScreeningReviewPanel(app, focus) {
       '<button type="button" class="btn btn-outline btn-sm" onclick="retryApplicationScreeningEvidenceRows(\'' + escapeJsAttr(app.ref) + '\')">Retry evidence load</button>' +
     '</div>';
   }
+  if (focus && focus.canonical_linkage === true) {
+    if (focus.context_proven === true && canonicalHandoffRows.length === 1) {
+      html += '<div data-canonical-screening-context="true" data-canonical-provider="' + escapeHtml(String(focus.provider)) + '" data-canonical-case="' + escapeHtml(String(focus.case_identifier)) + '" style="margin:0 18px 12px;padding:10px 14px;background:rgba(43,47,143,0.05);border:1px solid rgba(43,47,143,0.25);border-radius:8px;font-size:12px;color:var(--text2);">' +
+        '<strong style="color:var(--text1);">Monitoring owner handoff:</strong> exact ' + escapeHtml(String(focus.provider)) + ' case <span style="font-family:monospace;">' + escapeHtml(String(focus.case_identifier)) + '</span>' + (focus.provider_reference ? ' · alert <span style="font-family:monospace;">' + escapeHtml(String(focus.provider_reference)) + '</span>' : '') + '. Screening Review remains the authoritative decision surface.' +
+      '</div>';
+    } else {
+      html += '<div data-canonical-screening-context-error="true" role="alert" style="margin:0 18px 12px;padding:10px 14px;background:#fef2f2;border:1px solid #dc2626;border-radius:8px;font-size:12px;color:#991b1b;font-weight:600;">The exact provider case could not be proven in Screening Review. Manual review is required; no case-specific handoff is shown.</div>';
+      focus = null;
+    }
+  }
   // SRP-3e Phase E: the Agent 3 guidance panel renders inside the selected
   // subject workspace (between the triage strip and the ranked hit sections)
   // per the approved mockup — see screeningSubjectWorkspaceBody.
@@ -19386,14 +19427,17 @@ function renderScreeningReviewPanel(app, focus) {
     return screeningFocusMatches(focus, subject.subject_type, subject.subject_name);
   }) || triageSubjects[0] || null;
   if (selectedSubject) {
-    currentScreeningReviewFocus = {
+    currentScreeningReviewFocus = Object.assign({}, focus || {}, {
       subject_type: selectedSubject.subject_type,
       subject_name: selectedSubject.subject_name
-    };
+    });
     focus = currentScreeningReviewFocus;
     // Phase G: single-flight, flag-gated on-demand hydration of the selected
     // subject's top hits. Inert (no call) when the flag is off.
-    ensureSubjectProfileHydration(app, selectedSubject);
+    if (typeof currentCanonicalLinkageReadOnlyNavigation === 'undefined' ||
+        !currentCanonicalLinkageReadOnlyNavigation) {
+      ensureSubjectProfileHydration(app, selectedSubject);
+    }
   }
 
   html += '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;">';
@@ -26726,6 +26770,304 @@ function monitoringAlertApplicationActionHtml(alert) {
   return '<button class="btn btn-outline btn-sm" disabled title="Application link unavailable for this alert.">Open application</button><span style="font-size:12px;color:var(--text3);">Application link unavailable for this alert.</span>';
 }
 
+var MONITORING_CANONICAL_DOCUMENT_ALERT_TYPES = [
+  'document_expired',
+  'document_expiring_soon',
+  'document_expiry_missing'
+];
+var MONITORING_CANONICAL_SCREENING_ALERT_TYPES = [
+  'sanctions',
+  'watchlist',
+  'pep',
+  'media',
+  'adverse_media'
+];
+
+function monitoringCanonicalLinkageKind(alert) {
+  var storedType = String((alert && alert.raw && alert.raw.alert_type) || '');
+  if (MONITORING_CANONICAL_DOCUMENT_ALERT_TYPES.indexOf(storedType) >= 0) return 'document_expiry';
+  if (MONITORING_CANONICAL_SCREENING_ALERT_TYPES.indexOf(storedType) >= 0) return 'screening_hit';
+  return '';
+}
+
+function monitoringCanonicalLinkage(alert) {
+  var raw = (alert && alert.raw) || {};
+  return raw.canonical_linkage && typeof raw.canonical_linkage === 'object'
+    ? raw.canonical_linkage
+    : {};
+}
+
+function monitoringCanonicalLinkageError(linkage) {
+  var error = linkage && linkage.error;
+  if (error && typeof error === 'object') return error;
+  return linkage && linkage.linkage_error && typeof linkage.linkage_error === 'object'
+    ? linkage.linkage_error
+    : {};
+}
+
+function monitoringCanonicalNavigationAllowed(kind, linkage) {
+  var nav = (linkage && linkage.navigation) || {};
+  if (!linkage || linkage.linkage_status !== 'linked' || linkage.read_only !== true || linkage.mutation_controls !== false) return false;
+  if (!nav.application_id || String(nav.entity_id || '') !== String(nav.application_id)) return false;
+  if (nav.target_view !== 'application_review') return false;
+  if (kind === 'document_expiry') {
+    return nav.target_tab === 'kyc-docs' &&
+      nav.target_section === 'detail-kyc-documents-panel' &&
+      nav.action_mode === 'focus_document' &&
+      !!nav.document_id && !!nav.document_version;
+  }
+  return nav.target_tab === 'screening' &&
+    nav.target_section === 'detail-screening-review' &&
+    nav.action_mode === 'focus_screening_subject' &&
+    !!nav.subject_id && !!nav.subject_type && !!nav.provider && !!nav.case_identifier;
+}
+
+function monitoringCanonicalSubjectFromApp(app, nav) {
+  if (String(nav.subject_type || '') === 'entity') {
+    if (String(nav.subject_id || '') !== String(app.id || '') || String(nav.subject_person_key || '') !== '') return null;
+    return { subject_type: 'entity', subject_name: app.company || '' };
+  }
+  var collections = {
+    director: app.directors,
+    ubo: app.ubos,
+    intermediary: app.intermediaries
+  };
+  var subjectType = String(nav.subject_type || '');
+  var rows = Array.isArray(collections[subjectType]) ? collections[subjectType] : [];
+  var matches = rows.filter(function(row) {
+    return String(row.id || '') === String(nav.subject_id || '') &&
+      String(row.person_key || '') === String(nav.subject_person_key || '');
+  });
+  if (matches.length !== 1) return null;
+  return {
+    subject_type: subjectType,
+    subject_name: matches[0].name || matches[0].entity_name || ''
+  };
+}
+
+function monitoringCanonicalScreeningContextRows(app, focus, rows) {
+  if (!app || !focus || !focus.provider || !focus.case_identifier) return [];
+  return (Array.isArray(rows) ? rows : []).filter(function(row) {
+    if (!row || String(row.application_ref || '') !== String(app.ref || '')) return false;
+    if (String(row.subject_type || '') !== String(focus.subject_type || '') ||
+        String(row.subject_name || '') !== String(focus.subject_name || '')) return false;
+    var evidence = row.screening_evidence || {};
+    var items = Array.isArray(evidence.items) ? evidence.items : [];
+    var tupleMatches = items.filter(function(item) {
+      if (!item || String(item.provider || '') !== String(focus.provider)) return false;
+      if (String(item.provider_case_id || '') !== String(focus.case_identifier)) return false;
+      if (String(item.application_ref || '') !== String(app.ref || '')) return false;
+      if (String(item.subject_type || '') !== String(focus.subject_type || '') ||
+          String(item.subject_name || '') !== String(focus.subject_name || '')) return false;
+      return !focus.provider_reference ||
+        String(item.provider_alert_id || '') === String(focus.provider_reference);
+    });
+    if (!tupleMatches.length) return false;
+    if (!focus.provider_reference) {
+      var tupleAlertIds = tupleMatches.reduce(function(values, item) {
+        var alertId = String(item.provider_alert_id || '');
+        if (alertId && values.indexOf(alertId) < 0) values.push(alertId);
+        return values;
+      }, []);
+      if (tupleAlertIds.length > 1) return false;
+    }
+    return true;
+  });
+}
+
+async function fetchMonitoringCanonicalScreeningContext(app, subject, nav) {
+  var pageLimit = 100;
+  var maximumRows = 1000;
+  var offset = 0;
+  var expectedTotal = null;
+  var rows = [];
+  while (true) {
+    var params = [
+      'limit=' + pageLimit,
+      'offset=' + offset,
+      'include_evidence=1',
+      'exact_application_ref=' + encodeURIComponent(String(app.ref || ''))
+    ];
+    if (typeof showTestSmokeRecordsEnabled === 'function' && showTestSmokeRecordsEnabled()) {
+      params.push('show_fixtures=true');
+    }
+    var payload = await boApiCall('GET', '/screening/queue?' + params.join('&'), null, {
+      suppressAuthReset: true,
+      sessionId: getCurrentBoSessionId()
+    });
+    var pageRows = (payload && Array.isArray(payload.rows)) ? payload.rows : [];
+    var pagination = payload && payload.pagination;
+    if (!pagination ||
+        typeof pagination.offset !== 'number' ||
+        typeof pagination.returned !== 'number' ||
+        typeof pagination.total_rows !== 'number' ||
+        typeof pagination.has_next !== 'boolean' ||
+        pagination.offset !== offset ||
+        pagination.returned !== pageRows.length ||
+        pagination.total_rows < 0) {
+      throw new Error('Canonical screening pagination evidence is incomplete');
+    }
+    if (expectedTotal === null) expectedTotal = pagination.total_rows;
+    if (pagination.total_rows !== expectedTotal || expectedTotal > maximumRows) {
+      throw new Error('Canonical screening pagination changed or exceeds the safe read-only limit');
+    }
+    rows = rows.concat(pageRows);
+    if (!pagination.has_next) {
+      if (rows.length !== expectedTotal) {
+        throw new Error('Canonical screening pagination did not return the complete result');
+      }
+      break;
+    }
+    if (pageRows.length < 1 || rows.length >= expectedTotal) {
+      throw new Error('Canonical screening pagination did not advance safely');
+    }
+    offset += pageRows.length;
+  }
+  var focus = {
+    subject_type: subject.subject_type,
+    subject_name: subject.subject_name,
+    provider: String(nav.provider || ''),
+    case_identifier: String(nav.case_identifier || ''),
+    provider_reference: String(nav.provider_reference || '')
+  };
+  var exact = monitoringCanonicalScreeningContextRows(app, focus, rows);
+  if (exact.length !== 1) {
+    throw new Error('Canonical screening provider case is missing or ambiguous');
+  }
+  focus.canonical_context_row = exact[0];
+  return focus;
+}
+
+async function openMonitoringCanonicalOwner() {
+  var alert = MONITORING_ALERT_DETAIL && MONITORING_ALERT_DETAIL.normalized;
+  var kind = monitoringCanonicalLinkageKind(alert);
+  var linkage = monitoringCanonicalLinkage(alert);
+  var nav = linkage.navigation || {};
+  if (!kind || !monitoringCanonicalNavigationAllowed(kind, linkage)) {
+    showToast('Canonical owner link is unavailable. Manual review is required.', 'error');
+    return;
+  }
+  var button = document.getElementById('monitoring-open-canonical-owner-btn');
+  if (button) { button.disabled = true; button.textContent = 'Opening…'; }
+  try {
+    var app = await fetchApplicationDetail(String(nav.application_id));
+    if (!app || String(app.id || '') !== String(nav.application_id)) {
+      throw new Error('Application identity mismatch');
+    }
+    if (kind === 'document_expiry') {
+      renderAuthoritativeAppDetail(app, {
+        initialTab: 'kyc-docs',
+        canonicalLinkageHandoff: true
+      });
+      window.setTimeout(function() {
+        var details = document.getElementById('detail-kyc-documents-details');
+        if (details) details.open = true;
+        var host = document.getElementById('detail-docs-with-verification');
+        var matches = host ? Array.prototype.filter.call(host.querySelectorAll('[data-document-id]'), function(row) {
+          return String(row.getAttribute('data-document-id') || '') === String(nav.document_id) &&
+            String(row.getAttribute('data-document-version') || '') === String(nav.document_version);
+        }) : [];
+        if (matches.length !== 1) {
+          showToast('The exact canonical document is not present in the owner view. Manual review is required.', 'error');
+          return;
+        }
+        matches[0].focus();
+        matches[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 0);
+      return;
+    }
+    var subject = monitoringCanonicalSubjectFromApp(app, nav);
+    if (!subject || !subject.subject_name) {
+      throw new Error('Canonical screening subject mismatch');
+    }
+    var screeningContext = await fetchMonitoringCanonicalScreeningContext(app, subject, nav);
+    renderAuthoritativeAppDetail(app, {
+      initialTab: 'screening',
+      canonicalLinkageHandoff: true,
+      screeningFocus: {
+        canonical_linkage: true,
+        subject_type: subject.subject_type,
+        subject_name: subject.subject_name,
+        subject_id: String(nav.subject_id),
+        subject_person_key: String(nav.subject_person_key || ''),
+        provider: screeningContext.provider,
+        case_identifier: screeningContext.case_identifier,
+        provider_reference: screeningContext.provider_reference,
+        normalized_snapshot_id: String(nav.normalized_snapshot_id || ''),
+        canonical_context_row: screeningContext.canonical_context_row,
+        context_proven: true
+      }
+    });
+  } catch (err) {
+    showToast('The exact owner context could not be opened. Manual review is required.', 'error');
+  } finally {
+    if (button) { button.disabled = false; button.textContent = kind === 'document_expiry' ? 'Open in KYC & Documents' : 'Open in Screening Review'; }
+  }
+}
+
+function renderMonitoringCanonicalOwnerSection(alert) {
+  var kind = monitoringCanonicalLinkageKind(alert);
+  if (!kind) return '';
+  var linkage = monitoringCanonicalLinkage(alert);
+  var error = monitoringCanonicalLinkageError(linkage);
+  var linked = linkage.linkage_status === 'linked';
+  var owner = linkage.owner || {};
+  var ownerState = owner.state || {};
+  var rows = [
+    ['Linkage status', monitoringTextValue(linked ? 'Linked' : 'Manual review required', 'Manual review required')],
+    ['Owner module', monitoringTextValue(kind === 'document_expiry' ? 'KYC & Documents' : 'Screening Review', 'Not available')],
+    ['Owner state', monitoringTextValue(ownerState.label || (linked ? 'Unavailable' : 'Manual review required'), 'Unavailable')]
+  ];
+  if (kind === 'document_expiry' && linked) {
+    var doc = linkage.document || {};
+    var documentPersonLabel = '';
+    if (doc.person_id && doc.person_type) {
+      documentPersonLabel = doc.person_type + ' · ' + doc.person_id;
+    } else if (!doc.person_id && !doc.person_type) {
+      documentPersonLabel = 'Application entity';
+    }
+    rows = rows.concat([
+      ['Document type', monitoringTextValue(doc.document_type, 'Not available')],
+      ['Triggered document', monitoringTextValue(doc.trigger_document_id, 'Not available')],
+      ['Triggered version', monitoringTextValue(doc.trigger_document_version, 'Not available')],
+      ['Current document', monitoringTextValue(doc.canonical_document_id, 'Not available')],
+      ['Current version', monitoringTextValue(doc.current_document_version, 'Not available')],
+      ['Current expiry', monitoringTextValue(doc.current_expiry_date, 'Not available')],
+      ['Person / entity', monitoringTextValue(documentPersonLabel, 'Not available')]
+    ]);
+  } else if (kind === 'screening_hit' && linked) {
+    var subject = linkage.subject || {};
+    var screeningCase = linkage.screening_case || {};
+    var screeningSubjectLabel = subject.type && subject.id
+      ? subject.type + ' · ' + subject.id
+      : '';
+    rows = rows.concat([
+      ['Subject', monitoringTextValue(screeningSubjectLabel, 'Not available')],
+      ['Provider', monitoringTextValue(screeningCase.provider, 'Not available')],
+      ['Provider case', monitoringTextValue(screeningCase.case_identifier, 'Not available')],
+      ['Evidence snapshot', monitoringTextValue(screeningCase.snapshot_role, 'Unavailable')],
+      ['Four-eyes state', monitoringTextValue(ownerState.four_eyes_status, 'Not recorded')]
+    ]);
+  }
+  var reasons = Array.isArray(error.reasons) ? error.reasons.join(', ') : '';
+  var errorHtml = !linked
+    ? '<div role="alert" style="margin-top:12px;padding:10px 12px;border:1px solid var(--amber);border-radius:8px;background:rgba(217,119,6,0.05);font-size:12px;color:var(--text2);"><strong>Manual review required.</strong> ' + escapeHtml(String(error.message || 'The exact owner record could not be proven.')) + (reasons ? '<div style="margin-top:4px;font-family:monospace;font-size:11px;">' + escapeHtml(reasons) + '</div>' : '') + '</div>'
+    : '';
+  var actionHtml = monitoringCanonicalNavigationAllowed(kind, linkage)
+    ? '<button class="btn btn-primary btn-sm" id="monitoring-open-canonical-owner-btn" onclick="openMonitoringCanonicalOwner()">' + (kind === 'document_expiry' ? 'Open in KYC & Documents' : 'Open in Screening Review') + '</button>'
+    : '<button class="btn btn-outline btn-sm" disabled>Owner link unavailable</button>';
+  return monitoringDetailCard('Authoritative Owner Linkage',
+    '<div data-monitoring-canonical-owner="true" data-monitoring-linkage-status="' + escapeHtml(String(linkage.linkage_status || 'manual_review_required')) + '">' +
+      monitoringInfoGrid(rows) +
+      errorHtml +
+      '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border1);display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        actionHtml +
+        '<span style="font-size:12px;color:var(--text3);">Read-only projection. Decisions and evidence remain in the owner module; Monitoring exposes no duplicate decision control.</span>' +
+      '</div>' +
+    '</div>'
+  );
+}
+
 function renderMonitoringDownstreamLinks(alert) {
   var links = [];
   links.push(monitoringAlertApplicationActionHtml(alert));
@@ -26836,6 +27178,7 @@ function renderMonitoringAlertDetailView() {
   if (alert.typeKey === 'document_expiry' || alert.typeKey === 'missing_document_refresh') {
     body.innerHTML = fixtureBanner +
       renderMonitoringDocumentExpiryCard(alert, statusBadge, severityBadge) +
+      renderMonitoringCanonicalOwnerSection(alert) +
       renderMonitoringDecisionSection(alert) +
       renderMonitoringOverdueEscalationSummary(alert) +
       renderMonitoringAuditHistory(alert, state.auditHistory || []) +
@@ -26859,6 +27202,7 @@ function renderMonitoringAlertDetailView() {
       ['Source / provider', monitoringTextValue(monitoringProviderLabel(raw, parseMonitoringSourceReference(raw.source_reference)), 'Not available')]
     ]) + renderMonitoringDownstreamLinks(alert) + renderMonitoringAssignmentSection(alert)) +
     monitoringDetailCard('Issue / Evidence', monitoringAlertEvidenceHtml(alert)) +
+    renderMonitoringCanonicalOwnerSection(alert) +
     renderMonitoringDecisionSection(alert) +
     renderMonitoringOverdueEscalationSummary(alert) +
     renderMonitoringAuditHistory(alert, state.auditHistory || []) +
