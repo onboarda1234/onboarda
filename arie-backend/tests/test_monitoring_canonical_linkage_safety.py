@@ -586,9 +586,26 @@ def test_audit_markdown_derives_planner_and_governance_values():
     assert "Data changes planned: `2`" in dry_run_report
 
 
-def test_audit_postgresql_connection_has_finite_timeout():
-    source = inspect.getsource(audit.main)
-    assert "psycopg2.connect(database_url, connect_timeout=10)" in source
+def test_audit_postgresql_connection_has_finite_timeout(monkeypatch, tmp_path):
+    import psycopg2
+
+    recorded = {}
+
+    def fake_connect(dsn, **kwargs):
+        recorded["dsn"] = dsn
+        recorded.update(kwargs)
+        raise RuntimeError("stop after connect")
+
+    monkeypatch.setattr(psycopg2, "connect", fake_connect)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://audit@localhost/linkage")
+
+    with pytest.raises(RuntimeError, match="stop after connect"):
+        audit.main(["--output-dir", str(tmp_path)])
+
+    assert recorded["dsn"] == "postgresql://audit@localhost/linkage"
+    timeout = recorded.get("connect_timeout")
+    assert timeout is not None
+    assert 0 < float(timeout) < 120
 
 
 @pytest.mark.parametrize(
@@ -608,6 +625,10 @@ def test_audit_postgresql_connection_has_finite_timeout():
             "apply_supported": False,
             "counts": {"data_changes_planned": 0},
             "rows": [{"data_change_required": True}],
+        },
+        {
+            "apply_supported": False,
+            "rows": [],
         },
     ],
 )
