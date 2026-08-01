@@ -202,7 +202,7 @@ def test_checksum_detects_a_real_mutation(db):
 
 
 @pytest.mark.parametrize(
-    "path", sorted(PACKAGE_ROOT.glob("*.py")), ids=lambda p: p.name
+    "path", sorted(PACKAGE_ROOT.rglob("*.py")), ids=lambda p: p.name
 )
 def test_no_write_verb_in_source(path: pathlib.Path):
     """No module contains a mutating SQL verb or a commit call."""
@@ -257,6 +257,8 @@ def test_no_authoritative_module_imports_the_foundation():
 
     If an authoritative module imported the foundation, its runtime behaviour
     could change with a Supervisor edit — which the product boundary forbids.
+    The regex covers ``supervisor_foundation.probes`` as a prefix match, so an
+    authoritative module reaching for a probe fails here too.
     """
     importers = []
     for path in _backend_modules():
@@ -295,16 +297,27 @@ def test_foundation_imports_only_read_only_authoritative_helpers():
     # ``_entry_has_granular_material_fields`` — are clock-free and side-effect
     # free, which ``test_supervisor_foundation_bundle_v2`` re-asserts by AST
     # scan rather than by assertion here.
+    #
+    # Added for the Phase 0B-2 probes, all pure and clock-free:
+    #   ``rule_engine`` — ``_is_valid_risk_config_version`` (string check) and
+    #   two module constants. ``edd_routing_policy`` — ``evaluate_edd_routing``,
+    #   a pure function of its fact dict. ``periodic_review_policy`` — the
+    #   ``RISK_FREQUENCY_MONTHS`` table and ``frequency_months_for_risk``; the
+    #   module's ``parse_review_date`` reads a clock and is prohibited, which
+    #   ``test_supervisor_probe_p06_monitoring_requirement`` asserts by AST.
     permitted = {
         "company_registry",
         "document_reliance_gate",
+        "edd_routing_policy",
         "environment",
         "memo_governance",
+        "periodic_review_policy",
+        "rule_engine",
         "screening_state",
         "supervisor_engine",
     }
     seen: set[str] = set()
-    for path in sorted(PACKAGE_ROOT.glob("*.py")):
+    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
@@ -314,8 +327,8 @@ def test_foundation_imports_only_read_only_authoritative_helpers():
                     seen.add(alias.name.split(".")[0])
 
     stdlib = {
-        "__future__", "ast", "dataclasses", "datetime", "decimal", "enum",
-        "hashlib", "json", "math", "pathlib", "types", "typing",
+        "__future__", "ast", "calendar", "dataclasses", "datetime", "decimal",
+        "enum", "hashlib", "json", "math", "pathlib", "types", "typing",
     }
     authoritative = seen - stdlib - {"supervisor_foundation"}
     unexpected = sorted(authoritative - permitted)

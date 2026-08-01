@@ -4,12 +4,11 @@ Bundle in, deterministic finding list and review hash out. The runner takes no
 database handle, opens no connection, reads no clock, calls no external
 service, and triggers no authoritative function.
 
-Phase 0B-1 ships **no probes**. ``probes`` defaults to empty, so a review of any
-bundle produces an empty finding set and a hash determined entirely by the
-bundle and the version constants. The parameter exists so the reproducibility
-harness can inject synthetic probes and prove that finding identifiers and the
-review hash are stable — it is not a probe framework, and adding a real probe
-is Phase 0B-2 work.
+``probes`` defaults to empty, so a review of a bundle with no probes produces an
+empty finding set and a hash determined entirely by the bundle and the version
+constants. The Phase 0B-2 probe set is ``supervisor_foundation.probes.PROBES``;
+callers pass it explicitly, and this module never imports it — the runner knows
+nothing about which questions are being asked.
 """
 
 from __future__ import annotations
@@ -76,9 +75,20 @@ def _validate_draft(draft: Mapping[str, Any], index: int) -> None:
             "'unavailable' or 'not_replayable', never 'clear'"
         )
 
-    if not isinstance(draft.get("evidence_refs"), (list, tuple)):
+    refs = draft.get("evidence_refs")
+    if not isinstance(refs, (list, tuple)):
         raise ProbeContractError(
             f"probe draft {index} must supply evidence_refs as a list"
+        )
+
+    # An explicitly declared primary reference must be one the finding actually
+    # cites. A phantom reference would give the finding an identity that points
+    # at nothing.
+    declared = draft.get("primary_evidence_ref")
+    if declared is not None and str(declared) not in {str(ref) for ref in refs}:
+        raise ProbeContractError(
+            f"probe draft {index} declares primary_evidence_ref "
+            f"{declared!r}, which is not among its evidence_refs"
         )
 
 
@@ -88,6 +98,7 @@ def _normalise_draft(
     subject_type: str,
     subject_id: str,
     policy_version: str,
+    as_of: str,
 ) -> dict[str, Any]:
     finding = dict(draft)
 
@@ -102,9 +113,25 @@ def _normalise_draft(
     )
 
     # The primary reference is what separates two hits of the same probe on the
-    # same subject. Lowest sorted ref is deterministic; a probe that can hit
-    # more than once must therefore give each hit a distinct reference set.
-    primary = finding["evidence_refs"][0] if finding["evidence_refs"] else ""
+    # same subject.
+    #
+    # A probe that can hit more than once per subject **declares** it, because
+    # the fallback below is not sufficient on its own: two checks of the same
+    # probe on two different parties routinely share their lowest-sorting
+    # reference (the application status ref cited for severity), which would
+    # collapse two genuinely different findings onto one identifier. Declaring
+    # the reference makes identity depend on the field the check actually
+    # examined instead of on lexicographic luck.
+    #
+    # The fallback — lowest sorted ref — remains for single-hit probes, where it
+    # is unambiguous, and is recorded on the finding either way so the identity
+    # is always auditable from the output alone.
+    declared = finding.pop("primary_evidence_ref", None)
+    if declared is not None:
+        primary = str(declared)
+    else:
+        primary = finding["evidence_refs"][0] if finding["evidence_refs"] else ""
+    finding["primary_evidence_ref"] = primary
 
     finding["finding_id"] = compute_finding_id(
         subject_type=subject_type,
@@ -117,6 +144,9 @@ def _normalise_draft(
     finding["subject_type"] = subject_type
     finding["subject_id"] = subject_id
     finding["policy_version"] = policy_version
+    # Stamped by the runner, never by a probe, and always from the injected
+    # ``as_of`` — a probe reaching for a clock is the failure this prevents.
+    finding["created_at"] = as_of
     return finding
 
 
@@ -132,8 +162,9 @@ def run_review(
     Args:
         bundle: Output of :func:`assemble_application_bundle`. Never mutated.
         policy: Institution policy contract. Defaults to fully unconfigured.
-        probes: Probe callables. **Empty in Phase 0B-1.**
-        probe_set_version: Version identifier folded into ``review_hash``.
+        probes: Probe callables — normally ``supervisor_foundation.probes.PROBES``.
+        probe_set_version: Version identifier folded into ``review_hash``. Must
+            describe the probe set actually passed in ``probes``.
 
     Returns:
         The review: hashes, ordered findings, and the completeness counts that
@@ -160,6 +191,7 @@ def run_review(
                     subject_type=subject_type,
                     subject_id=subject_id,
                     policy_version=resolved_policy.policy_version,
+                    as_of=str(meta.get("as_of") or ""),
                 )
             )
 
