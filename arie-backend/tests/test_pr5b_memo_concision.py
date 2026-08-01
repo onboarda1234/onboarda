@@ -196,7 +196,7 @@ def test_messy_officer_note_is_sanitized_from_formal_default_memo():
     assert "raw rough draft" in appendix
 
 
-def test_pdf_renderer_keeps_decision_paper_and_appendix_index(monkeypatch):
+def test_pdf_renderer_is_decision_first_without_dashboard_appendices(monkeypatch):
     import pdf_generator
 
     memo = _build_memo()
@@ -232,9 +232,22 @@ def test_pdf_renderer_keeps_decision_paper_and_appendix_index(monkeypatch):
     html = captured["html"]
     assert pdf == b"%PDF-pr5b-test"
     assert "SCREENING RESOLUTION REQUIRED" in html
-    assert "APPROVE WITH CONDITIONS" not in html
-    assert "Appendix Evidence Index" in html
-    assert "appendix_sections" in html
+    assert "Approve with Conditions" not in html
+    for heading in (
+        "Document Control",
+        "Memo Basis",
+        "Compliance Opinion",
+        "Decision Rationale",
+        "Material Concerns and Mitigating Factors",
+        "Conditions Before Approval",
+        "Residual Risk and Monitoring Position",
+        "Officer Decision and Sign-Off",
+        "Audit and Governance Metadata",
+    ):
+        assert heading in html
+    assert "DRAFT - NOT APPROVED" in html
+    assert "Appendix Evidence Index" not in html
+    assert "appendix_sections" not in html
     assert "Content Hash:" in html
     assert "HIGH risk with score 22/100" not in html
 
@@ -242,13 +255,12 @@ def test_pdf_renderer_keeps_decision_paper_and_appendix_index(monkeypatch):
 def test_backoffice_memo_browser_consistency_static_contract():
     html = _read_repo_file("arie-backoffice.html")
 
-    assert "function memoCanonicalBlockers(memoData)" in html
-    assert "memoCanonicalBlockers(data).forEach" in html
-    assert "memoCanonicalBlockers(memoData).forEach" in html
-    assert "Fixes required before approval" in html
-    assert "Validation passed, but approval remains blocked" in html
-    assert "if (status === 'pass_with_fixes')" in html
-    assert "No issues found — memo meets quality standards" in html
-    pass_with_fixes_idx = html.index("status === 'pass_with_fixes'", html.index("function renderValidationPanel"))
-    clean_idx = html.index("No issues found — memo meets quality standards", html.index("function renderValidationPanel"))
-    assert pass_with_fixes_idx < clean_idx
+    assert 'id="memo-pdf-preview"' in html
+    assert "return await installMemoPdfResponse(response, app, memo, expectedKey);" in html
+    assert "new AbortController()" in html
+    assert "var cached = await fetchMemoPdfResponse(false);" in html
+    assert "link.href = cached.url;" in html
+    assert "if (lifecycle !== 'FINAL')" in html
+    assert "if (validationStatus === 'fail' || validationStatus === 'pending')" in html
+    assert "function renderMemoSections()" in html
+    assert "return '';" in html[html.rindex("function renderMemoSections()") :]

@@ -201,7 +201,7 @@ class TestFinding6_MemoVersion:
 # ── Finding 7: Validation issues contain fix field ──
 
 class TestFinding7_ValidationFixField:
-    """Verify validation issues contain 'fix' field and frontend surfaces it."""
+    """Verify validation issues retain actionable fixes without dashboard duplication."""
 
     def test_validation_issues_have_fix_field(self):
         """Each validation issue from the engine should have a 'fix' key."""
@@ -223,11 +223,13 @@ class TestFinding7_ValidationFixField:
             assert isinstance(issue["fix"], str) and len(issue["fix"]) > 0, \
                 f"Issue 'fix' field is empty for: {issue.get('description', '')[:60]}"
 
-    def test_backoffice_renders_fix_field(self):
-        """Backoffice HTML must reference issue.fix for display."""
+    def test_backoffice_keeps_validation_details_out_of_memo_workspace(self):
+        """Validation stays authoritative in the backend, not duplicated in memo HTML."""
         bo_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-backoffice.html")
         if not os.path.exists(bo_path):
             bo_path = os.path.join(os.path.dirname(__file__), "..", "arie-backoffice.html")
         with open(bo_path, "r", encoding="utf-8") as f:
             html = f.read()
-        assert "issue.fix" in html, "Backoffice HTML does not reference issue.fix — Finding 7 NOT fixed"
+        assert "issue.fix" not in html
+        assert "function renderValidationPanel" not in html
+        assert 'id="compliance-memo-workspace"' in html

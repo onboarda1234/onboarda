@@ -412,13 +412,13 @@ class TestPartC_FrontendHardening:
     def test_memo_guard_fails_closed(self, backoffice_html):
         fn_start = backoffice_html.index('async function approveMemo()')
         fn_region = backoffice_html[fn_start:fn_start + 2000]
-        assert '!memoSignoff || !memoSignoff.checked' in fn_region, \
+        assert '!signoff || !signoff.checked' in fn_region, \
             "Memo sign-off guard must fail closed"
 
     def test_memo_guard_not_fail_open(self, backoffice_html):
         fn_start = backoffice_html.index('async function approveMemo()')
         fn_region = backoffice_html[fn_start:fn_start + 2000]
-        fail_open = re.search(r'memoSignoff\s*&&\s*!memoSignoff\.checked', fn_region)
+        fail_open = re.search(r'signoff\s*&&\s*!signoff\.checked', fn_region)
         assert fail_open is None
 
     def test_decision_sends_signoff_payload(self, backoffice_html):
@@ -461,22 +461,21 @@ class TestPartC_FrontendHardening:
 
 
 class TestPartD_XSSHardening:
-    """ai_source rendering must be escaped to prevent XSS."""
+    """The memo workspace must not render memo content as dynamic HTML."""
 
     def test_ai_source_escaped_in_source_tag(self, backoffice_html):
         fn_start = backoffice_html.index('function renderMemoSections')
         fn_end = backoffice_html.index('function generateComplianceMemo', fn_start)
         fn_region = backoffice_html[fn_start:fn_end]
-        # The generic fallback case for unknown ai_source must use escapeHtml
-        assert 'escapeHtml(aiSource)' in fn_region, \
-            "Unknown ai_source values must be escaped with escapeHtml()"
+        assert "return '';" in fn_region
+        assert 'aiSource' not in fn_region
 
     def test_ai_source_escaped_in_simulated_banner(self, backoffice_html):
         fn_start = backoffice_html.index('function renderMemoSections')
         fn_end = backoffice_html.index('function generateComplianceMemo', fn_start)
         fn_region = backoffice_html[fn_start:fn_end]
-        assert 'escapeHtml(aiSource.toUpperCase())' in fn_region, \
-            "aiSource.toUpperCase() must be escaped with escapeHtml()"
+        assert 'aiSource.toUpperCase()' not in fn_region
+        assert 'memo-pdf-preview' in backoffice_html
 
     def test_ai_source_not_raw_in_source_tag(self, backoffice_html):
         """The generic fallback should NOT inject raw aiSource into HTML."""
@@ -495,20 +494,17 @@ class TestPartD_XSSHardening:
         fn_start = backoffice_html.index('function renderMemoSections')
         fn_end = backoffice_html.index('function generateComplianceMemo', fn_start)
         fn_region = backoffice_html[fn_start:fn_end]
-        assert 'escapeHtml(fallbackReason)' in fn_region, \
-            "fallbackReason must be escaped"
+        assert 'fallbackReason' not in fn_region
 
-    def test_known_sources_not_escaped_unnecessary(self, backoffice_html):
-        """Known sources (mock, demo, live, deterministic, fallback) use string literals."""
+    def test_known_sources_are_not_rendered_in_workspace(self, backoffice_html):
         fn_start = backoffice_html.index('function renderMemoSections')
         fn_end = backoffice_html.index('function generateComplianceMemo', fn_start)
         fn_region = backoffice_html[fn_start:fn_end]
-        # Known sources use safe string literals, not user input
-        assert "Source: Mock / Simulated" in fn_region
-        assert "Source: Live AI" in fn_region
-        assert "Source: Demo Mode" in fn_region
-        assert "Source: Deterministic (Rule-Based)" in fn_region
-        assert "Source: Fallback Template" in fn_region
+        assert "Source: Mock / Simulated" not in fn_region
+        assert "Source: Live AI" not in fn_region
+        assert "Source: Demo Mode" not in fn_region
+        assert "Source: Deterministic (Rule-Based)" not in fn_region
+        assert "Source: Fallback Template" not in fn_region
 
     def test_escape_html_function_exists(self, backoffice_html):
         assert 'function escapeHtml(str)' in backoffice_html
@@ -525,10 +521,13 @@ class TestPartD_XSSHardening:
 class TestPartE_Regression:
     """Verify existing EX-11 labeling and approval gates remain intact."""
 
-    def test_advisory_banners_still_present(self, backoffice_html):
-        assert 'System-Generated — Advisory Only' in backoffice_html
-        assert 'ai-advisory-banner' in backoffice_html
-        assert 'ai-advisory-badge' in backoffice_html
+    def test_memo_workspace_has_document_controls_instead_of_advisory_panels(self, backoffice_html):
+        overview_start = backoffice_html.index('id="detail-tab-overview"')
+        overview_end = backoffice_html.index('id="detail-tab-kyc-docs"', overview_start)
+        overview = backoffice_html[overview_start:overview_end]
+        assert 'Application Snapshot Timestamp' in overview
+        assert 'id="memo-pdf-preview"' in overview
+        assert 'ai-advisory-banner' not in overview
 
     def test_signoff_checkboxes_still_present(self, backoffice_html):
         assert 'id="decision-officer-signoff"' in backoffice_html
@@ -537,12 +536,12 @@ class TestPartE_Regression:
 
     def test_existing_memo_gates_preserved(self, backoffice_html):
         fn_start = backoffice_html.index('async function approveMemo()')
-        fn_region = backoffice_html[fn_start:fn_start + 3000]
-        assert 'GATE 1' in fn_region
-        assert 'GATE 2' in fn_region
-        assert 'GATE 3' in fn_region
-        assert 'GATE 4' in fn_region
-        assert 'GATE 5' in fn_region
+        fn_region = backoffice_html[fn_start:fn_start + 4000]
+        assert "memoWorkspaceLifecycle(app, memoData) === 'STALE'" in fn_region
+        assert '(memoData.metadata || {}).blocked' in fn_region
+        assert "consistency.verdict === 'INCONSISTENT'" in fn_region
+        assert 'ruleEngine.total_violations > 0' in fn_region
+        assert "validationStatus === 'fail' || validationStatus === 'pending'" in fn_region
 
     def test_decision_still_requires_reason(self, backoffice_html):
         fn_start = backoffice_html.index('async function confirmDecision()')

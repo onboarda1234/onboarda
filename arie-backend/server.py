@@ -6440,6 +6440,56 @@ def _memo_final_status(memo_row):
     return "draft"
 
 
+def _memo_lifecycle_status(
+    memo_row,
+    memo_data=None,
+    *,
+    is_current=True,
+    is_stale=None,
+):
+    """Project existing memo controls into the document-workspace lifecycle.
+
+    This is deliberately derived rather than persisted: review, validation,
+    approval, version and staleness remain the authoritative workflow fields.
+    """
+    if not memo_row:
+        return "NOT_GENERATED"
+    if not is_current:
+        return "SUPERSEDED"
+    row = dict(memo_row)
+    stale = _memo_stale_bool(row.get("is_stale")) if is_stale is None else bool(is_stale)
+    if stale:
+        return "STALE"
+    if str(row.get("review_status") or "").strip().lower() == "approved":
+        return "FINAL"
+    if row.get("blocked"):
+        return "DRAFT"
+
+    validation_status = str(row.get("validation_status") or "pending").strip().lower()
+    if validation_status not in ("pass", "pass_with_fixes"):
+        return "DRAFT"
+
+    if memo_data is None:
+        try:
+            memo_data = safe_json_loads(row.get("memo_data") or "{}")
+        except Exception:
+            memo_data = {}
+    memo_data = memo_data if isinstance(memo_data, dict) else {}
+    metadata = memo_data.get("metadata") if isinstance(memo_data.get("metadata"), dict) else {}
+    if metadata.get("is_fallback") is True:
+        return "DRAFT"
+    consistency = memo_data.get("supervisor") or metadata.get("supervisor") or {}
+    consistency = consistency if isinstance(consistency, dict) else {}
+    verdict = str(consistency.get("verdict") or row.get("supervisor_status") or "").upper()
+    if (
+        verdict in ("CONSISTENT", "CONSISTENT_WITH_WARNINGS")
+        and consistency.get("can_approve") is not False
+        and not consistency.get("mandatory_escalation")
+    ):
+        return "AWAITING_OFFICER_SIGNOFF"
+    return "DRAFT"
+
+
 OFFICER_CORRECTION_TARGETS = frozenset({
     "application",
     "director",
@@ -8532,7 +8582,8 @@ class ApplicationDetailHandler(BaseHandler):
             result["id"],
             columns="""
                 id, version, memo_data, review_status, validation_status, blocked, block_reason,
-                quality_score, memo_version, approved_by, approved_at, approval_reason, created_at,
+                quality_score, memo_version, reviewed_by, review_notes, supervisor_status,
+                approved_by, approved_at, approval_reason, created_at,
                 is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
             """,
         )
@@ -8554,11 +8605,26 @@ class ApplicationDetailHandler(BaseHandler):
             latest_memo_data["approved_by"] = latest_memo_dict.get("approved_by")
             latest_memo_data["approved_at"] = latest_memo_dict.get("approved_at")
             latest_memo_data["approval_reason"] = latest_memo_dict.get("approval_reason") or ""
+            latest_memo_data["officer_rationale"] = (
+                latest_memo_dict.get("approval_reason")
+                or latest_memo_dict.get("review_notes")
+                or ""
+            )
             latest_memo_data["is_stale"] = stale_view["is_stale"]
             latest_memo_data["stale_reason"] = stale_view["reason"]
             latest_memo_data["stale_trigger"] = stale_view["trigger"]
             latest_memo_data["memo_version"] = latest_memo_dict.get("memo_version") or latest_memo_dict.get("version")
             latest_memo_data["memo_generated"] = latest_memo_dict.get("created_at")
+            latest_memo_data["application_snapshot_timestamp"] = (
+                latest_memo_data["metadata"].get("application_snapshot_timestamp")
+                or latest_memo_data["metadata"].get("memo_generated_at")
+                or latest_memo_dict.get("created_at")
+            )
+            latest_memo_data["lifecycle_status"] = _memo_lifecycle_status(
+                latest_memo_dict,
+                latest_memo_data,
+                is_stale=stale_view["is_stale"],
+            )
             latest_memo_data["application_ref"] = result.get("ref")
             latest_memo_data["metadata"]["memo_id"] = latest_memo_dict.get("id")
             latest_memo_data["metadata"]["canonical_memo_id"] = latest_memo_selection["canonical_memo_id"]
@@ -8591,6 +8657,9 @@ class ApplicationDetailHandler(BaseHandler):
             latest_memo_dict["memo_selection"] = latest_memo_selection
             latest_memo_dict["canonical_memo_id"] = latest_memo_selection["canonical_memo_id"]
             latest_memo_dict["selector"] = MEMO_SELECTOR_VERSION
+            latest_memo_dict["officer_rationale"] = latest_memo_data["officer_rationale"]
+            latest_memo_dict["application_snapshot_timestamp"] = latest_memo_data["application_snapshot_timestamp"]
+            latest_memo_dict["lifecycle_status"] = latest_memo_data["lifecycle_status"]
             result["latest_memo"] = latest_memo_dict
             result["latest_memo_data"] = latest_memo_data
             result["memo_is_stale"] = stale_view["is_stale"]
@@ -32312,7 +32381,205 @@ def _locked_memo_application_row(db, app_id):
 
 
 class ComplianceMemoHandler(BaseHandler):
-    """POST /api/applications/:id/memo — Generate compliance memo from application data"""
+    """Compliance memo document workspace resource."""
+
+    def get(self, app_id):
+        """Return compact lifecycle and version history for the memo workspace."""
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app_view = _attach_memo_screening_current_snapshot(db, dict(app))
+
+            rows = db.execute(
+                f"""
+                SELECT id, application_id, version, memo_version, memo_data,
+                       ai_recommendation, review_status, reviewed_by,
+                       validation_status, supervisor_status, blocked, block_reason,
+                       is_stale, stale_reason, stale_trigger, stale_marked_at,
+                       approved_by, approved_at, pdf_generated_at,
+                       created_at
+                  FROM compliance_memos
+                 WHERE application_id = ?
+                {CANONICAL_MEMO_ORDER_SQL}
+                """,
+                (app["id"],),
+            ).fetchall()
+
+            versions = []
+            for index, raw_row in enumerate(rows):
+                row = dict(raw_row)
+                try:
+                    memo_data = safe_json_loads(row.get("memo_data") or "{}")
+                except Exception:
+                    memo_data = {}
+                memo_data = memo_data if isinstance(memo_data, dict) else {}
+                metadata = memo_data.get("metadata") if isinstance(memo_data.get("metadata"), dict) else {}
+                approved_by_name = resolve_user_display_name(db, row.get("approved_by"))
+                reviewed_by_name = resolve_user_display_name(db, row.get("reviewed_by"))
+                stale_view = (
+                    _memo_staleness_view(app_view, row)
+                    if index == 0
+                    else {
+                        "is_stale": _memo_stale_bool(row.get("is_stale")),
+                        "reason": row.get("stale_reason") or "",
+                        "trigger": row.get("stale_trigger") or "",
+                    }
+                )
+                lifecycle_status = _memo_lifecycle_status(
+                    row,
+                    memo_data,
+                    is_current=index == 0,
+                    is_stale=stale_view["is_stale"],
+                )
+                versions.append({
+                    "memo_id": row.get("id"),
+                    "version": row.get("version"),
+                    "memo_version": row.get("memo_version") or row.get("version"),
+                    "lifecycle_status": lifecycle_status,
+                    "is_current": index == 0,
+                    "recommendation": (
+                        row.get("ai_recommendation")
+                        or metadata.get("approval_recommendation")
+                        or "REVIEW"
+                    ),
+                    "generated_at": row.get("created_at"),
+                    "application_snapshot_timestamp": (
+                        metadata.get("application_snapshot_timestamp")
+                        or metadata.get("memo_generated_at")
+                        or row.get("created_at")
+                    ),
+                    "review_status": row.get("review_status"),
+                    "validation_status": row.get("validation_status"),
+                    "is_stale": bool(stale_view["is_stale"]),
+                    "stale_reason": stale_view.get("reason") or "",
+                    "stale_trigger": stale_view.get("trigger") or "",
+                    "reviewed_by": reviewed_by_name or row.get("reviewed_by"),
+                    "approved_by": approved_by_name or row.get("approved_by"),
+                    "approved_at": row.get("approved_at"),
+                    "pdf_generated_at": row.get("pdf_generated_at"),
+                })
+
+            current = versions[0] if versions else None
+            self.success({
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "entity_name": app["company_name"],
+                "application_snapshot_timestamp": (
+                    current["application_snapshot_timestamp"]
+                    if current else app.get("inputs_updated_at")
+                ),
+                "lifecycle_status": current["lifecycle_status"] if current else "NOT_GENERATED",
+                "current": current,
+                "versions": versions,
+                "version_count": len(versions),
+            })
+        finally:
+            db.close()
+
+    def patch(self, app_id):
+        """Persist draft officer rationale without approving the memo."""
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        body = self.get_json() or {}
+        if not isinstance(body, dict):
+            return self.error("Request body must be a JSON object.", 400)
+        rationale_value = body.get("officer_rationale")
+        if rationale_value is None:
+            return self.error("officer_rationale is required.", 400)
+        if not isinstance(rationale_value, str):
+            return self.error("officer_rationale must be text.", 400)
+        rationale = rationale_value.strip()
+        if len(rationale) > 4000:
+            return self.error("officer_rationale must be 4000 characters or fewer.", 400)
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            memo_row = latest_compliance_memo_row(db, app["id"])
+            if not memo_row:
+                return self.error("No compliance memo found. Generate a memo first.", 404)
+
+            stale = _ensure_memo_fresh_or_mark_stale(
+                db,
+                app,
+                memo_row,
+                actor=user,
+                ip_address=self.get_client_ip(),
+                context="memo_officer_rationale",
+            )
+            if stale.get("is_stale"):
+                db.commit()
+                return self.error(
+                    "Cannot save rationale against a stale memo. Regenerate the memo first.",
+                    409,
+                )
+            if str(memo_row.get("review_status") or "").lower() == "approved":
+                return self.error("Final memo is approved and locked.", 409)
+
+            db.execute(
+                "UPDATE compliance_memos SET review_notes = ?, reviewed_by = ? "
+                "WHERE id = ? AND (review_status IS NULL OR LOWER(review_status) <> 'approved')",
+                (rationale, user.get("sub", ""), memo_row["id"]),
+            )
+            updated_rows = getattr(getattr(db, "_cursor", None), "rowcount", 0)
+            if updated_rows != 1:
+                db.rollback()
+                return self.error("Final memo is approved and locked.", 409)
+            rationale_hash = hashlib.sha256(rationale.encode("utf-8")).hexdigest() if rationale else None
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    user.get("sub", ""),
+                    user.get("name", ""),
+                    user.get("role", ""),
+                    "Save Memo Officer Rationale",
+                    app["ref"],
+                    app["id"],
+                    json.dumps({
+                        "event": "memo_officer_rationale_saved",
+                        "memo_id": memo_row["id"],
+                        "character_count": len(rationale),
+                        "rationale_sha256": rationale_hash,
+                    }, sort_keys=True),
+                    self.get_client_ip(),
+                    (_obs_get_request_id() or ""),
+                ),
+            )
+            db.commit()
+            memo_after = dict(memo_row)
+            memo_after["review_notes"] = rationale
+            self.success({
+                "status": "saved",
+                "memo_id": memo_row["id"],
+                "memo_version": memo_row.get("memo_version") or memo_row.get("version"),
+                "lifecycle_status": _memo_lifecycle_status(memo_after),
+                "officer_rationale": rationale,
+                "reviewed_by": user.get("name") or user.get("sub", ""),
+            })
+        except Exception as exc:
+            db.rollback()
+            logger.error("Failed to save memo officer rationale for %s: %s", app_id, exc, exc_info=True)
+            return self.error("Failed to save officer rationale.", 500)
+        finally:
+            db.close()
+
     def post(self, app_id):
         user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
@@ -32573,6 +32840,10 @@ class ComplianceMemoHandler(BaseHandler):
         memo["metadata"]["risk_calculated_at"] = authoritative_risk.get("calculated_at")
         memo["metadata"]["risk_source"] = authoritative_risk.get("source")
         memo["metadata"]["memo_generated_at"] = datetime.now(timezone.utc).isoformat()
+        memo["metadata"]["application_snapshot_timestamp"] = _risk_metadata_json_value(
+            app.get("inputs_updated_at")
+            or memo["metadata"]["memo_generated_at"]
+        )
         if authoritative_risk.get("available"):
             memo["metadata"]["canonical_risk"] = {
                 **(memo["metadata"].get("canonical_risk") or {}),
@@ -34779,6 +35050,9 @@ class MemoPDFDownloadHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
             return
+        inline_preview = str(self.get_query_argument("preview", "")).strip().lower() in (
+            "1", "true", "yes", "inline",
+        )
 
         if not HAS_PDF_GENERATOR:
             return self.error("PDF generation not available. Install weasyprint.", 503)
@@ -34871,6 +35145,7 @@ class MemoPDFDownloadHandler(BaseHandler):
                 supervisor_result=supervisor_result,
                 approved_by=approved_by,
                 approved_at=approved_at,
+                approval_reason=memo_row.get("approval_reason") or "",
             )
         except Exception as e:
             logger.error("PDF generation failed for %s: %s", app_id, str(e))
@@ -34894,7 +35169,7 @@ class MemoPDFDownloadHandler(BaseHandler):
                 (pdf_generated_at, memo_row["id"])
             )
             audit_detail = json.dumps({
-                "event": "memo_pdf_generated",
+                "event": "memo_pdf_previewed" if inline_preview else "memo_pdf_generated",
                 "application_ref": app["ref"],
                 "company_name": app["company_name"],
                 "memo_id": memo_row["id"],
@@ -34917,7 +35192,7 @@ class MemoPDFDownloadHandler(BaseHandler):
             })
             db.execute(
                 "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                (user.get("sub",""), user.get("name",""), user.get("role",""), "Download Memo PDF", app["ref"],
+                (user.get("sub",""), user.get("name",""), user.get("role",""), "Preview Memo PDF" if inline_preview else "Download Memo PDF", app["ref"],
                  audit_detail, self.get_client_ip())
             )
             db.commit()
@@ -34929,10 +35204,15 @@ class MemoPDFDownloadHandler(BaseHandler):
         safe_ref = re.sub(r'[^a-zA-Z0-9_-]', '_', app.get("ref", "memo"))
         filename = f"compliance_memo_{safe_ref}.pdf"
         self.set_header("Content-Type", "application/pdf")
-        self.set_header("Content-Disposition", f'attachment; filename="{filename}"')
+        disposition = "inline" if inline_preview else "attachment"
+        self.set_header("Content-Disposition", f'{disposition}; filename="{filename}"')
         self.set_header("Content-Length", str(len(pdf_bytes)))
         self.set_header("X-Memo-Id", str(memo_row["id"]))
         self.set_header("X-Memo-Version", str(memo_version))
+        self.set_header(
+            "X-Memo-Lifecycle",
+            _memo_lifecycle_status(memo_row, memo_data),
+        )
         self.set_header("X-PDF-SHA256", pdf_sha256)
         self.set_header("X-Build-Git-Sha", renderer_build["git_sha"])
         self.set_header("X-Build-Git-Sha-Short", renderer_build["git_sha_short"])

@@ -1047,29 +1047,25 @@ class TestDayThreeApprovalBlockerUX:
         assert "screening_second_review_pending" not in portal
         assert "Screening second review pending" not in portal
 
-    def test_memo_validation_panel_has_visible_approval_blockers(self):
+    def test_memo_workspace_does_not_render_a_duplicate_validation_panel(self):
         html = self._read_backoffice()
-        assert 'id="memo-approval-blockers"' in html
-        assert "function getMemoApprovalBlockers(app, validationResult)" in html
-        assert "function renderMemoApprovalBlockers(result)" in html
-        fn_start = html.index("function renderValidationPanel(result)")
-        fn_region = html[fn_start:fn_start + 7600]
-        assert "renderMemoApprovalBlockers(result)" in fn_region
-        assert "memoApprovalBlockers" in fn_region
+        assert 'id="memo-approval-blockers"' not in html
+        assert 'id="memo-validation-panel"' not in html
+        assert "function renderValidationPanel" not in html
+        assert "function fetchValidationResults" not in html
 
     def test_pass_with_fixes_approval_reason_is_captured_by_ui(self):
         html = self._read_backoffice()
         assert 'id="memo-approval-reason"' in html
         assert "function currentMemoApprovalReason()" in html
-        assert "approval_reason: approvalReason" in html
-        assert "Enter the approval reason before submitting memo approval." in html
+        assert "approval_reason: rationale" in html
+        assert "Officer rationale is required before approval." in html
         assert "this UI does not capture or submit that reason yet" not in html
-        fn_start = html.index("PASS WITH FIXES requires documented approval reason")
-        fn_start = html.rfind("} else if (status === 'pass_with_fixes')", 0, fn_start)
-        fn_end = html.index("} else if (status === 'pass')", fn_start)
-        fn_region = html[fn_start:fn_end]
-        assert "approveBtn.disabled = memoApprovalBlockers.length > 0" in fn_region
-        assert "memoApprovalBlockers.length" in fn_region
+        fn_start = html.index("async function approveMemo()")
+        fn_region = html[fn_start:fn_start + 3600]
+        assert "validationStatus === 'pass_with_fixes'" in fn_region
+        assert "findings and rationale support approval" in fn_region
+        assert "officer_signoff: { acknowledged: true" in fn_region
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1213,7 +1209,7 @@ class TestDayFourKPIEDDRoutingTruthfulness:
 # I4. DAY 3 MEMO QUALITY TRUTHFULNESS
 # ═══════════════════════════════════════════════════════════
 class TestDayThreeMemoQualityTruthfulness:
-    """Pin status-aware memo quality labels in the back-office validation panel."""
+    """Pin removal of dashboard-style quality widgets from the memo workspace."""
 
     def _read_backoffice(self):
         with open(os.path.join(
@@ -1222,34 +1218,21 @@ class TestDayThreeMemoQualityTruthfulness:
         ), "r", encoding="utf-8") as f:
             return f.read()
 
-    def test_memo_quality_label_is_status_aware(self):
+    def test_memo_quality_label_widget_is_not_rendered(self):
         html = self._read_backoffice()
-        assert "function memoQualityScoreLabel(status, score)" in html
-        fn_start = html.index("function memoQualityScoreLabel(status, score)")
-        fn_region = html[fn_start:fn_start + 900]
-        assert "if (status === 'fail') return prefix + 'Validation failed; remediation required';" in fn_region
-        assert "if (status === 'pass_with_fixes') return prefix + 'Needs fixes before approval';" in fn_region
-        assert "if (status !== 'pass') return 'Run validation to see server-calculated memo quality results';" in fn_region
-        assert "var scoreLabel = score >= 8 ? 'Excellent'" in fn_region
+        assert "function memoQualityScoreLabel(status, score)" not in html
+        assert 'id="memo-quality-score-text"' not in html
 
-    def test_memo_quality_gauge_is_status_aware(self):
+    def test_memo_quality_gauge_is_not_rendered(self):
         html = self._read_backoffice()
-        assert "function memoQualityGaugeClass(status, score)" in html
-        fn_start = html.index("function memoQualityGaugeClass(status, score)")
-        fn_region = html[fn_start:fn_start + 500]
-        assert "if (status === 'fail') return 'poor';" in fn_region
-        assert "if (status === 'pass_with_fixes') return 'fair';" in fn_region
-        assert "if (status !== 'pass') return 'pending';" in fn_region
+        assert "function memoQualityGaugeClass(status, score)" not in html
+        assert 'class="memo-quality-gauge' not in html
 
-    def test_validation_panel_uses_quality_truthfulness_helpers(self):
+    def test_removed_validation_result_does_not_drive_workspace_presentation(self):
         html = self._read_backoffice()
-        fn_start = html.index("function renderValidationPanel(result)")
-        fn_region = html[fn_start:fn_start + 1700]
-        assert "var hasQualityScore = hasMemoQualityScore(result);" in fn_region
-        assert "memoQualityGaugeClass(status, score)" in fn_region
-        assert "memoQualityScoreLabel(status, score)" in fn_region
-        assert "gauge.className = 'memo-quality-gauge ' + (score >= 8" not in fn_region
-        assert "scoreText.textContent = score.toFixed(1) + ' / 10 — ' + scoreLabel" not in fn_region
+        assert "function renderValidationPanel" not in html
+        assert "/memo/validation" not in html
+        assert "function syncMemoWorkspaceActions()" in html
 
 
 # ═══════════════════════════════════════════════════════════

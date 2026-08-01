@@ -41,74 +41,29 @@ def _run_node(script: str) -> str:
     return result.stdout
 
 
-def test_memo_renderer_escapes_malicious_section_finding_and_company_text():
+def test_memo_workspace_does_not_inject_memo_sections_into_html():
     source = _html()
-    memo_region = _slice_between(source, "function renderMemoDecisionSnapshot", "async function generateComplianceMemo")
-    script = f"""
-const assert = require('assert');
-global.window = {{ _currentDetailApp: {{ statusRaw: 'submitted' }} }};
-const RISK_UNAVAILABLE_TEXT = 'Risk unavailable';
-function buildRiskDisplayState() {{ return {{ hasRisk: true, level: 'bad class injected', score: 42.5 }}; }}
-function memoCanonicalBlockers() {{ return []; }}
-function appendMemoCanonicalBlocker(items, blocker) {{ items.push(blocker); }}
-{_security_helpers(source)}
-{memo_region}
-const rendered = renderMemoSections({{
-  application_ref: '<svg onload=alert(1)>',
-  memo_generated: '2026-07-09T12:00:00Z',
-  metadata: {{
-    risk_rating: 'high hacked',
-    approval_recommendation: 'REVIEW injected',
-    block_reason: '<script>alert(1)</script>',
-    blocked: true,
-    rule_engine: {{
-      engine_status: 'ENFORCED',
-      enforcements: [{{ rule: '<img src=x onerror=alert(1)>', reason: '<script>alert(1)</script>', original: '<svg onload=alert(1)>', enforced: 'safe' }}],
-      violations: [{{ rule: '<script>alert(1)</script>', severity: 'bad class injected', detail: '<img src=x onerror=alert(1)>', action: 'javascript:alert(1)' }}]
-    }}
-  }},
-  sections: {{
-    client_overview: {{ title: 'Company <script>alert(1)</script>', content: '<img src=x onerror=alert(1)>' }},
-    risk_assessment: {{
-      title: 'Risk section',
-      content: '<script>alert(1)</script>',
-      sub_sections: {{
-        jurisdiction_risk: {{ title: '<svg onload=alert(1)>', rating: 'very high injected', content: 'javascript:alert(1)' }}
-      }}
-    }},
-    red_flags_and_mitigants: {{
-      title: 'Findings',
-      red_flags: ['<script>alert(1)</script>'],
-      mitigants: ['<img src=x onerror=alert(1)>']
-    }},
-    compliance_decision: {{ decision: '"><img src=x onerror=alert(1)>', content: '<svg onload=alert(1)>' }},
-    ownership_and_control: {{ structure_complexity: '<script>alert(1)</script>', control_statement: '<img src=x onerror=alert(1)>', content: '<svg onload=alert(1)>' }},
-    ai_explainability: {{
-      content: '<script>alert(1)</script>',
-      risk_increasing_factors: ['<img src=x onerror=alert(1)>'],
-      risk_decreasing_factors: ['<svg onload=alert(1)>']
-    }}
-  }},
-  supervisor: {{
-    verdict: 'CONSISTENT_WITH_WARNINGS',
-    supervisor_confidence: 0.6,
-    recommendation: '<script>alert(1)</script>',
-    contradictions: [{{ severity: 'critical injected', description: '<img src=x onerror=alert(1)>', section_a: '<svg onload=alert(1)>', section_b: 'javascript:alert(1)' }}],
-    warnings: [{{ severity: 'bad class injected', description: '<script>alert(1)</script>' }}]
-  }}
-}});
-assert(rendered.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
-assert(rendered.includes('&lt;img src=x onerror=alert(1)&gt;'));
-assert(rendered.includes('&lt;svg onload=alert(1)&gt;'));
-assert(!rendered.includes('<script'));
-assert(!rendered.includes('<img'));
-assert(!rendered.includes('<svg'));
-assert(!/href\\s*=\\s*["']?\\s*javascript:/i.test(rendered));
-assert(!/src\\s*=\\s*["']?\\s*data:/i.test(rendered));
-assert(rendered.includes('class="memo-risk-badge medium"'));
-assert(rendered.includes('class="memo-decision-box review"'));
-"""
-    _run_node(script)
+    renderer = _slice_between(
+        source,
+        "function renderMemoSections()",
+        "function renderMemoGovernanceSummary",
+    )
+    history = _slice_between(
+        source,
+        "async function loadMemoVersionHistory()",
+        "function toggleMemoVersionHistory",
+    )
+
+    assert "return '';" in renderer
+    assert "innerHTML" not in renderer
+    for expression in (
+        "escapeHtml(item.memo_version || item.version || '—')",
+        "escapeHtml(String(item.recommendation || 'REVIEW').replace(/_/g, ' '))",
+        "escapeHtml(memoWorkspaceTimestamp(item.generated_at))",
+        "escapeHtml(officer)",
+        "escapeHtml(item.stale_reason)",
+    ):
+        assert expression in history
 
 
 def test_supervisor_renderer_escapes_contradictions_rules_and_recommendations():

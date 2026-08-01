@@ -11,24 +11,23 @@ def _backoffice_html():
         return handle.read()
 
 
-def test_backoffice_memo_renderer_includes_enhanced_review_section():
+def test_backoffice_memo_workspace_does_not_duplicate_enhanced_review():
+    html = _backoffice_html()
+    start = html.index('id="compliance-memo-workspace"')
+    end = html.index('</section>', start)
+    region = html[start:end]
+
+    assert 'id="memo-pdf-preview"' in region
+    assert "enhanced_review_edd" not in region
+    assert "Onboarding Enhanced Review" not in region
+
+
+def test_backoffice_html_memo_renderer_is_a_noop():
     html = _backoffice_html()
     start = html.index("function renderMemoSections")
     end = html.index("function generateComplianceMemo", start)
     region = html[start:end]
 
-    assert "enhanced_review_edd" in region
-    assert "Onboarding Enhanced Review" in region
-    assert "deterministic lifecycle summary" in region
-
-
-def test_backoffice_memo_renderer_does_not_call_workflow_side_effects():
-    html = _backoffice_html()
-    start = html.index("function renderMemoSections")
-    end = html.index("function generateComplianceMemo", start)
-    region = html[start:end]
-
-    assert "/rmi" not in region.lower()
+    assert "return '';" in region
+    assert "enhanced_review_edd" not in region
     assert "notification" not in region.lower()
-    assert "/approval" not in region.lower()
-    assert "/memo" not in region.lower().replace("rendermemosections", "")

@@ -1,16 +1,8 @@
-"""
-Onboarda — Server-Side PDF Generation Engine
-Sprint 3: Regulator-grade compliance memo PDF export via WeasyPrint.
-Sprint 4: Branded as "Onboarda Compliance Report" / "Powered by RegMind".
+"""Server-side generation of the canonical Compliance Memo PDF.
 
-Produces immutable, branded PDF snapshots of compliance memos with:
-    - Onboarda/RegMind branding (config-driven)
-    - Full structured memo including onboarding Enhanced Review summary
-    - Risk rating badges, decision highlighting
-    - Validation status, supervisor verdict
-    - Approval metadata, generation timestamp
-    - Proper page breaks, no truncation
-    - Safe from HTML/script injection (all content escaped)
+The document is deliberately decision-first. Detailed calculations, raw
+screening evidence, document-level checks and workflow history remain in their
+authoritative modules or evidence pack.
 """
 import hashlib
 import json
@@ -26,6 +18,7 @@ from branding import BRAND
 logger = logging.getLogger("arie")
 
 _VALID_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}
+COMPLIANCE_MEMO_TITLE = BRAND["pdf_header"]
 
 # Lazy-load WeasyPrint (heavy import)
 _weasyprint = None
@@ -47,9 +40,9 @@ def _get_weasyprint():
 PDF_CSS = """
 @page {
     size: A4;
-    margin: 2.5cm 2cm 2.5cm 2cm;
+    margin: 2.2cm 2cm 2.2cm 2cm;
     @top-right {
-        content: "CONFIDENTIAL \u2014 """ + BRAND["pdf_header"] + """";
+        content: "CONFIDENTIAL - """ + BRAND["pdf_header"] + """";
         font-size: 8pt;
         color: #888;
     }
@@ -66,41 +59,45 @@ PDF_CSS = """
 }
 body {
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-    font-size: 10pt;
-    line-height: 1.5;
-    color: #222;
+    font-size: 9.9pt;
+    line-height: 1.58;
+    color: #1f2937;
 }
 h1 {
-    font-size: 18pt;
+    font-size: 17pt;
+    line-height: 1.25;
     color: #1a3a5c;
     border-bottom: 3px solid #1a3a5c;
-    padding-bottom: 8px;
+    letter-spacing: -0.15pt;
+    padding-bottom: 9px;
     margin-top: 0;
+    margin-bottom: 17px;
 }
 h2 {
-    font-size: 13pt;
+    font-size: 12.25pt;
     color: #1a3a5c;
-    border-bottom: 1px solid #ccc;
-    padding-bottom: 4px;
-    margin-top: 20px;
+    border-bottom: 1px solid #cbd5e1;
+    letter-spacing: -0.05pt;
+    padding-bottom: 5px;
+    margin-top: 17px;
     page-break-after: avoid;
 }
 h3 {
-    font-size: 11pt;
+    font-size: 10.5pt;
     color: #2c5f8a;
-    margin-top: 12px;
+    margin-top: 13px;
     page-break-after: avoid;
 }
 p {
-    margin: 6px 0;
-    text-align: justify;
+    margin: 7px 0;
+    text-align: left;
 }
 .header-block {
     background: #f5f8fc;
     border: 1px solid #d0d8e4;
     border-radius: 4px;
-    padding: 16px;
-    margin-bottom: 20px;
+    padding: 11px 14px;
+    margin-bottom: 15px;
 }
 .header-block table {
     width: 100%;
@@ -192,14 +189,249 @@ table.risk-table th {
     text-align: center;
     color: #bbb;
     font-size: 8pt;
-    margin-top: 30px;
+    margin-top: 18px;
     border-top: 1px solid #ddd;
-    padding-top: 8px;
+    padding-top: 6px;
 }
+.watermark p { margin: 3px 0; }
 .immutable-hash {
     font-family: 'Courier New', monospace;
     font-size: 7pt;
     color: #aaa;
+}
+.draft-watermark {
+    position: fixed;
+    top: 42%;
+    left: 7%;
+    width: 86%;
+    text-align: center;
+    transform: rotate(-28deg);
+    color: rgba(153, 27, 27, 0.10);
+    font-size: 44pt;
+    font-weight: 800;
+    letter-spacing: 2pt;
+    z-index: -1;
+}
+.document-state {
+    border-radius: 4px;
+    color: white;
+    font-size: 11pt;
+    font-weight: 800;
+    letter-spacing: 0.5pt;
+    margin-bottom: 14px;
+    padding: 8px 12px;
+    text-align: center;
+}
+.document-state.draft { background: #991b1b; }
+.document-state.final { background: #166534; }
+.memo-section {
+    break-inside: avoid;
+    margin-top: 14px;
+}
+.memo-section h2 { margin-bottom: 8px; }
+.memo-basis {
+    background: #ffffff;
+    border-bottom: 1px solid #dbe3ec;
+    border-top: 1px solid #dbe3ec;
+    padding: 7px 12px 8px;
+}
+.memo-basis p { margin: 3px 0 5px; }
+.basis-list {
+    columns: 2;
+    column-gap: 28px;
+    margin: 5px 0 7px 18px;
+    padding: 0;
+}
+.basis-list li {
+    break-inside: avoid;
+    margin: 2px 0;
+}
+.opinion-box {
+    background: #f5f8fc;
+    border: 1px solid #cbd5e1;
+    border-left: 5px solid #1a3a5c;
+    border-radius: 4px;
+    padding: 10px 13px;
+}
+.opinion-box p {
+    font-size: 9.6pt;
+    line-height: 1.55;
+    margin: 5px 0;
+}
+.recommendation {
+    border-bottom: 1px solid #d5deea;
+    margin: 1px 0 11px;
+    padding: 1px 0 10px;
+}
+.recommendation-label {
+    color: #64748b;
+    display: block;
+    font-size: 7.8pt;
+    font-weight: 700;
+    letter-spacing: 0.75pt;
+    margin-bottom: 3px;
+    text-transform: uppercase;
+}
+.recommendation-value {
+    color: #173a5e;
+    display: block;
+    font-size: 13.5pt;
+    font-weight: 650;
+    letter-spacing: -0.08pt;
+    line-height: 1.25;
+}
+.two-column {
+    display: table;
+    table-layout: fixed;
+    width: 100%;
+}
+.two-column > div {
+    display: table-cell;
+    padding-right: 10px;
+    vertical-align: top;
+    width: 50%;
+}
+.two-column > div:last-child {
+    padding-left: 10px;
+    padding-right: 0;
+}
+.content-box {
+    background: #fafafa;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 10px 12px;
+}
+.content-box h3 { margin: 0 0 6px; }
+.content-box ul { margin: 5px 0 0 18px; padding: 0; }
+.content-box li { margin: 3px 0; overflow-wrap: anywhere; }
+.conditions-grid .content-box { min-height: 76px; }
+.condition-list {
+    margin: 6px 0 0 21px;
+    padding: 0;
+}
+.condition-list li {
+    margin: 4px 0;
+    padding-left: 3px;
+}
+.signature-grid {
+    border-collapse: collapse;
+    table-layout: fixed;
+    width: 100%;
+}
+.signature-grid td {
+    border: 1px solid #cbd5e1;
+    overflow-wrap: anywhere;
+    padding: 7px 9px;
+    vertical-align: top;
+}
+.signature-grid .label {
+    background: #f1f5f9;
+    color: #475569;
+    font-weight: 700;
+    width: 24%;
+}
+.officer-rationale-box {
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-left: 5px solid #1a3a5c;
+    border-radius: 4px;
+    margin: 16px 0 19px;
+    min-height: 88px;
+    padding: 18px 20px;
+}
+.officer-rationale-box.final {
+    background: #f4faf6;
+    border-color: #b9d8c2;
+    border-left-color: #166534;
+}
+.officer-rationale-label {
+    color: #475569;
+    font-size: 8.2pt;
+    font-weight: 800;
+    letter-spacing: 0.8pt;
+    margin-bottom: 9px;
+    text-transform: uppercase;
+}
+.officer-rationale-box p {
+    color: #172033;
+    font-size: 10.6pt;
+    line-height: 1.68;
+    margin: 0;
+}
+.governance-table {
+    border-collapse: collapse;
+    table-layout: fixed;
+    width: 100%;
+}
+.governance-table th, .governance-table td {
+    border: 1px solid #cbd5e1;
+    overflow-wrap: anywhere;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+}
+.governance-table th {
+    background: #f1f5f9;
+    color: #334155;
+    width: 32%;
+}
+.document-control {
+    border-collapse: collapse;
+    table-layout: fixed;
+    width: 100%;
+}
+.document-control td {
+    border-bottom: 1px solid #dbe3ec;
+    overflow-wrap: anywhere;
+    padding: 4px 7px;
+    vertical-align: top;
+    width: 25%;
+}
+.document-control .label {
+    color: #475569;
+    font-size: 8.5pt;
+    font-weight: 700;
+    width: 18%;
+}
+.risk-summary-cell {
+    padding: 5px 7px !important;
+}
+.risk-summary {
+    display: table;
+    table-layout: fixed;
+    width: 100%;
+}
+.risk-metric {
+    display: table-cell;
+    padding-right: 10px;
+    vertical-align: top;
+    width: 50%;
+}
+.risk-metric:last-child {
+    border-left: 1px solid #dbe3ec;
+    padding-left: 12px;
+    padding-right: 0;
+}
+.risk-metric-label {
+    color: #64748b;
+    display: block;
+    font-size: 7.5pt;
+    font-weight: 700;
+    letter-spacing: 0.35pt;
+    line-height: 1.25;
+    margin-bottom: 3px;
+    text-transform: uppercase;
+}
+.risk-metric-value {
+    color: #1e3f63;
+    display: block;
+    font-size: 11pt;
+    font-weight: 700;
+    line-height: 1.25;
+}
+.timestamp {
+    font-size: 8.5pt;
+    white-space: nowrap;
 }
 """
 
@@ -213,6 +445,20 @@ def _esc(val: Any) -> str:
     if val is None:
         return "N/A"
     return escape(str(val))
+
+
+def _display_timestamp(value: Any) -> str:
+    """Format stored timestamps in UTC, including legacy naive UTC values."""
+    if value in (None, ""):
+        return "Not recorded"
+    text = str(value).strip()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return text
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return parsed.strftime("%Y-%m-%d %H:%M UTC")
 
 
 def _risk_badge(level: str) -> str:
@@ -243,6 +489,73 @@ def _decision_badge(decision: str) -> str:
     }
     css_class = css_map.get(decision.upper() if decision else "", "decision-review")
     return f'<span class="decision-badge {css_class}">{_esc(d)}</span>'
+
+
+def _decision_label(decision: Any) -> str:
+    """Return a restrained, human-readable recommendation label."""
+    normalised = str(decision or "REVIEW").strip().upper().replace(" ", "_")
+    return {
+        "APPROVE": "Approve",
+        "APPROVE_WITH_CONDITIONS": "Approve with Conditions",
+        "EDD": "Enhanced Due Diligence",
+        "REJECT": "Reject",
+        "REVIEW": "Review",
+        "ESCALATE": "Escalate",
+    }.get(normalised, normalised.replace("_", " "))
+
+
+def _risk_classification_label(level: Any) -> str:
+    """Return the authoritative risk class in professional title case."""
+    normalised = str(level or "NOT_RATED").strip().upper().replace(" ", "_").replace("-", "_")
+    return {
+        "LOW": "Low",
+        "MEDIUM": "Medium",
+        "HIGH": "High",
+        "VERY_HIGH": "Very High",
+        "NOT_RATED": "Not Yet Rated",
+        "UNRATED": "Not Yet Rated",
+    }.get(normalised, normalised.replace("_", " ").title())
+
+
+def _css_content(value: Any) -> str:
+    """Escape dynamic text for use inside a quoted CSS generated-content value."""
+    text = " ".join(str(value or "Not recorded").split())
+    text = text.replace("<", "").replace(">", "")
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _memo_page_css(memo_version: Any, evidence_pack_ref: Any, content_hash: str) -> str:
+    """Build memo-only running header and footer styles without changing other PDFs."""
+    return f"""
+@page {{
+    @top-right {{
+        content: "CONFIDENTIAL - {_css_content(COMPLIANCE_MEMO_TITLE)}";
+        font-size: 8pt;
+        color: #64748b;
+    }}
+    @bottom-left {{
+        content: "Generated by {_css_content(BRAND['platform_name'])} Compliance OS\\A Memo Version: {_css_content(memo_version)}";
+        white-space: pre;
+        font-size: 6.4pt;
+        line-height: 1.35;
+        color: #64748b;
+    }}
+    @bottom-center {{
+        content: "Evidence Pack Reference\\A {_css_content(evidence_pack_ref)}";
+        white-space: pre;
+        font-size: 6.4pt;
+        line-height: 1.35;
+        color: #64748b;
+    }}
+    @bottom-right {{
+        content: "Classification: CONFIDENTIAL\\A Content Hash: {_css_content(content_hash)}  |  Page " counter(page) " of " counter(pages);
+        white-space: pre;
+        font-size: 6.4pt;
+        line-height: 1.35;
+        color: #64748b;
+    }}
+}}
+"""
 
 
 def _normalise_pdf_risk_level(value: Any) -> Optional[str]:
@@ -282,7 +595,11 @@ def _pdf_risk_display(metadata: Dict, application: Optional[Dict] = None) -> tup
     """Return authoritative risk badge, score text, and timestamp."""
     app_level, app_score, app_calculated_at = _application_pdf_risk_display(application)
     if app_level and app_score is not None:
-        return app_level, f"{_score_text(app_score)}/100", str(app_calculated_at or "Not recorded")
+        return app_level, f"{_score_text(app_score)}/100", str(
+            app_calculated_at
+            or metadata.get("risk_calculated_at")
+            or "Not recorded"
+        )
 
     canonical_risk = metadata.get("canonical_risk") if isinstance(metadata.get("canonical_risk"), dict) else None
     if not canonical_risk or canonical_risk.get("available") is not True:
@@ -450,6 +767,89 @@ def _render_appendix_index(memo_data: Dict) -> str:
     return html
 
 
+def _section_text(sections: Dict, key: str, default: str = "Not recorded") -> str:
+    section = sections.get(key) or {}
+    if isinstance(section, dict):
+        value = section.get("content")
+    else:
+        value = section
+    text = " ".join(str(value or "").split())
+    return text or default
+
+
+def _text_list(value: Any, *, limit: int = 8) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    result = []
+    for item in value:
+        text = " ".join(str(item or "").split())
+        if text and text not in result:
+            result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _render_compact_list(items: list[str], empty_text: str) -> str:
+    if not items:
+        return f"<p>{_esc(empty_text)}</p>"
+    return "<ul>" + "".join(f"<li>{_esc(item)}</li>" for item in items) + "</ul>"
+
+
+def _render_numbered_conditions(items: list[str], empty_text: str) -> str:
+    if not items:
+        return f"<p>{_esc(empty_text)}</p>"
+    return (
+        '<ol class="condition-list">'
+        + "".join(f"<li>{_esc(item)}</li>" for item in items)
+        + "</ol>"
+    )
+
+
+def _condition_groups(metadata: Dict, concerns_section: Dict) -> tuple[list[str], list[str]]:
+    """Return explicit condition groups without changing the approval record."""
+    mandatory = _text_list(metadata.get("mandatory_conditions"), limit=6)
+    operational = _text_list(metadata.get("operational_conditions"), limit=6)
+    if mandatory or operational:
+        return mandatory, operational
+
+    conditions = _text_list(metadata.get("conditions"), limit=8)
+    if not conditions:
+        conditions = _text_list(concerns_section.get("conditions"), limit=8)
+    if not conditions:
+        conditions = _text_list(concerns_section.get("approval_blockers"), limit=8)
+    return conditions, []
+
+
+def _screening_snapshot_text(metadata: Dict) -> str:
+    snapshot = metadata.get("canonical_screening_current_summary")
+    if not isinstance(snapshot, dict) or not snapshot:
+        snapshot = metadata.get("screening_state_summary")
+    if not isinstance(snapshot, dict) or not snapshot:
+        return "Screening snapshot not recorded"
+    state = (
+        snapshot.get("canonical_state")
+        or snapshot.get("status")
+        or snapshot.get("state")
+        or "not recorded"
+    )
+    mode = (
+        snapshot.get("provider_mode")
+        or snapshot.get("screening_mode")
+        or snapshot.get("mode")
+        or "not recorded"
+    )
+    captured_at = (
+        snapshot.get("snapshot_at")
+        or snapshot.get("screened_at")
+        or snapshot.get("generated_at")
+    )
+    text = f"{str(state).replace('_', ' ')}; provider mode: {str(mode).replace('_', ' ')}"
+    if captured_at:
+        text += f"; captured: {_display_timestamp(captured_at)}"
+    return text
+
+
 # ══════════════════════════════════════════════════════════
 # MAIN PDF GENERATION
 # ══════════════════════════════════════════════════════════
@@ -461,185 +861,180 @@ def generate_memo_pdf(
     supervisor_result: Optional[Dict] = None,
     approved_by: Optional[str] = None,
     approved_at: Optional[str] = None,
+    approval_reason: Optional[str] = None,
 ) -> bytes:
-    """
-    Generate a regulator-grade PDF from a compliance memo.
-
-    Args:
-        memo_data: The full memo dict (sections + metadata)
-        application: The application row (ref, company_name, country, sector, etc.)
-        validation_result: Optional validation engine output
-        supervisor_result: Optional supervisor engine output
-        approved_by: Name of approving officer (if approved)
-        approved_at: Approval timestamp (if approved)
-
-    Returns:
-        PDF file content as bytes
-    """
+    """Generate the canonical decision-first memo document."""
     weasyprint = _get_weasyprint()
 
-    sections = memo_data.get("sections", {})
-    metadata = memo_data.get("metadata", {})
+    memo_data = memo_data if isinstance(memo_data, dict) else {}
+    application = application if isinstance(application, dict) else {}
+    sections = memo_data.get("sections") if isinstance(memo_data.get("sections"), dict) else {}
+    metadata = memo_data.get("metadata") if isinstance(memo_data.get("metadata"), dict) else {}
     risk_level, risk_score_display, risk_calculated_at = _pdf_risk_display(metadata, application)
-    decision = metadata.get("approval_recommendation", "REVIEW")
-    confidence = metadata.get("confidence_level", 0)
+    decision_section = sections.get("compliance_decision") if isinstance(sections.get("compliance_decision"), dict) else {}
+    decision = decision_section.get("decision") or metadata.get("approval_recommendation", "REVIEW")
     memo_version = metadata.get("memo_version", "1.0")
     memo_generated_at = metadata.get("memo_generated_at") or metadata.get("generated_at")
 
     app_ref = application.get("ref", "N/A")
     company_name = application.get("company_name", "Unknown Entity")
-    country = application.get("country", "N/A")
-    sector = application.get("sector", "N/A")
-    entity_type = application.get("entity_type", "N/A")
-
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    memo_generated_display = memo_generated_at or now
+    application_snapshot = (
+        metadata.get("application_snapshot_timestamp")
+        or application.get("inputs_updated_at")
+        or application.get("updated_at")
+        or "Not recorded"
+    )
+    risk_model_version = (
+        application.get("risk_config_version")
+        or metadata.get("risk_config_version")
+        or metadata.get("model_version")
+        or "Not recorded"
+    )
+    memo_generated_display = memo_generated_at or memo_data.get("memo_generated") or "Not recorded"
+    screening_snapshot = _screening_snapshot_text(metadata)
+    is_final = bool(approved_by)
+    document_state = "FINAL - APPROVED / LOCKED" if is_final else "DRAFT - NOT APPROVED"
+    state_class = "final" if is_final else "draft"
 
     # Content hash for immutability verification
     content_hash = hashlib.sha256(json.dumps(memo_data, sort_keys=True).encode()).hexdigest()[:16]
+    evidence_pack_ref = metadata.get("evidence_pack_reference") or app_ref
+
+    validation_result = validation_result if isinstance(validation_result, dict) else {}
+    validation_status = validation_result.get("validation_status") or metadata.get("validation_status") or "pending"
+    quality_score = validation_result.get("quality_score")
+    if quality_score in (None, ""):
+        quality_score = metadata.get("quality_score", "Not recorded")
+    quality_score_display = (
+        f"{quality_score}/10"
+        if isinstance(quality_score, (int, float)) and not isinstance(quality_score, bool)
+        else str(quality_score)
+    )
+    rule_engine = metadata.get("rule_engine") if isinstance(metadata.get("rule_engine"), dict) else {}
+    rule_status = rule_engine.get("engine_status") or "Not recorded"
+    memo_input_hash = metadata.get("memo_input_hash") or "Not recorded"
+    build = metadata.get("build") if isinstance(metadata.get("build"), dict) else {}
+    renderer_build = build.get("git_sha_short") or build.get("git_sha") or "Not recorded"
+
+    opinion = _section_text(sections, "compliance_decision", "Compliance opinion pending")
+    decision_rationale = _section_text(sections, "executive_summary", "Decision rationale not recorded")
+    concerns_section = sections.get("red_flags_and_mitigants") if isinstance(sections.get("red_flags_and_mitigants"), dict) else {}
+    concerns = _text_list(concerns_section.get("red_flags"), limit=6)
+    mitigants = _text_list(concerns_section.get("mitigants"), limit=6)
+    mandatory_conditions, operational_conditions = _condition_groups(metadata, concerns_section)
+    residual_risk = _section_text(sections, "risk_assessment", "Residual risk position not recorded")
+    monitoring_position = _section_text(sections, "ongoing_monitoring", "Monitoring position not recorded")
+    officer_rationale = " ".join(str(approval_reason or metadata.get("approval_reason") or "").split())
 
     # ── Build HTML ──
     html = f"""<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"><style>{PDF_CSS}</style></head>
+<head><meta charset="utf-8"><style>{PDF_CSS}{_memo_page_css(memo_version, evidence_pack_ref, content_hash)}</style></head>
 <body>
+{'' if is_final else '<div class="draft-watermark">DRAFT - NOT APPROVED</div>'}
+<h1>{_esc(COMPLIANCE_MEMO_TITLE)} - {_esc(company_name)}</h1>
+<div class="document-state {state_class}">{_esc(document_state)}</div>
 
-<h1>{_esc(BRAND['pdf_header'])} — {_esc(company_name)}</h1>
-
+<h2>1. Document Control</h2>
 <div class="header-block">
-<table>
-<tr><td class="label">Application Reference</td><td>{_esc(app_ref)}</td>
-    <td class="label">Entity Name</td><td>{_esc(company_name)}</td></tr>
-<tr><td class="label">Country of Incorporation</td><td>{_esc(country)}</td>
-    <td class="label">Sector</td><td>{_esc(sector)}</td></tr>
-<tr><td class="label">Entity Type</td><td>{_esc(entity_type)}</td>
-    <td class="label">Risk Rating</td><td>{_risk_badge(risk_level)}</td></tr>
-    <tr><td class="label">Authoritative Case Risk Score</td><td>{_esc(risk_score_display)}</td>
-    <td class="label">Confidence</td><td>{_esc(round(confidence * 100, 1) if isinstance(confidence, (int, float)) else confidence)}%</td></tr>
-    <tr><td class="label">Risk Calculated At</td><td>{_esc(risk_calculated_at)}</td>
-    <td class="label">Memo Generated At</td><td>{_esc(memo_generated_display)}</td></tr>
-    <tr><td class="label">Decision</td><td colspan="3">{_decision_badge(decision)}</td></tr>
-    <tr><td class="label">Memo Version</td><td>{_esc(memo_version)}</td>
-    <td class="label">PDF Generated</td><td>{_esc(now)}</td></tr>
-"""
+<table class="document-control">
+<tr><td class="label">Entity name</td><td>{_esc(company_name)}</td>
+    <td class="label">Application reference</td><td>{_esc(app_ref)}</td></tr>
+<tr><td class="label">Memo version</td><td>{_esc(memo_version)}</td>
+    <td class="label">Document status</td><td><strong>{_esc(document_state)}</strong></td></tr>
+<tr><td class="label">Generated timestamp</td><td class="timestamp">{_esc(_display_timestamp(memo_generated_display))}</td>
+    <td class="label">Application snapshot timestamp</td><td class="timestamp">{_esc(_display_timestamp(application_snapshot))}</td></tr>
+<tr><td class="label">Risk model version</td><td>{_esc(risk_model_version)}</td>
+    <td class="risk-summary-cell" colspan="2"><div class="risk-summary">
+        <div class="risk-metric"><span class="risk-metric-label">Risk Classification</span><span class="risk-metric-value">{_esc(_risk_classification_label(risk_level))}</span></div>
+        <div class="risk-metric"><span class="risk-metric-label">Authoritative Risk Score</span><span class="risk-metric-value">{_esc(risk_score_display)}</span></div>
+    </div></td></tr>
+<tr><td class="label">Screening snapshot</td><td colspan="3">{_esc(screening_snapshot)}</td></tr>
+</table>
+</div>
 
-    if approved_by:
-        html += f'<tr><td class="label">Approved By</td><td>{_esc(approved_by)}</td>'
-        html += f'<td class="label">Approved At</td><td>{_esc(approved_at or "N/A")}</td></tr>'
+<div class="memo-section">
+<h2>2. Memo Basis</h2>
+<div class="memo-basis">
+<p>This compliance opinion has been prepared using:</p>
+<ul class="basis-list">
+<li>Current Application Profile</li>
+<li>Current Risk Assessment</li>
+<li>Current Screening Snapshot</li>
+<li>Current Document Verification Status</li>
+<li>Current Enhanced Review Status</li>
+</ul>
+<p>This memo reflects the application state at the generation timestamp. Subsequent material changes require a new memo version.</p>
+</div>
+</div>
 
-    html += """</table></div>"""
+<div class="memo-section">
+<h2>3. Compliance Opinion</h2>
+<div class="opinion-box">
+<div class="recommendation">
+<span class="recommendation-label">Recommendation</span>
+<span class="recommendation-value">{_esc(_decision_label(decision))}</span>
+</div>
+<p>{_esc(opinion)}</p>
+</div>
+</div>
 
-    # ── Section 1: Executive Summary ──
-    html += '<h2>1. Executive Summary</h2>'
-    html += _render_section_content(sections.get("executive_summary", {}))
+<div class="memo-section">
+<h2>4. Decision Rationale</h2>
+<div class="section-content"><p>{_esc(decision_rationale)}</p></div>
+</div>
 
-    # ── Section 2: Client Overview ──
-    html += '<h2>2. Client Overview</h2>'
-    html += _render_section_content(sections.get("client_overview", {}))
+<div class="memo-section">
+<h2>5. Material Concerns and Mitigating Factors</h2>
+<div class="two-column">
+<div><div class="content-box"><h3>Material concerns</h3>{_render_compact_list(concerns, 'No material concerns recorded.')}</div></div>
+<div><div class="content-box"><h3>Mitigating factors</h3>{_render_compact_list(mitigants, 'No mitigating factors recorded.')}</div></div>
+</div>
+</div>
 
-    # ── Section 3: Ownership & Control ──
-    html += '<h2>3. Ownership &amp; Control</h2>'
-    ownership = sections.get("ownership_and_control", {})
-    if isinstance(ownership, dict):
-        html += _render_ownership(ownership)
-    else:
-        html += _render_section_content(ownership)
+<div class="memo-section">
+<h2>6. Conditions Before Approval</h2>
+<div class="two-column conditions-grid">
+<div><div class="content-box"><h3>Mandatory Conditions</h3>{_render_numbered_conditions(mandatory_conditions, 'No mandatory conditions recorded.')}</div></div>
+<div><div class="content-box"><h3>Operational Conditions</h3>{_render_numbered_conditions(operational_conditions, 'No operational conditions beyond the recorded monitoring position.')}</div></div>
+</div>
+</div>
 
-    # ── Section 4: Risk Assessment ──
-    html += '<h2>4. Risk Assessment</h2>'
-    risk_section = sections.get("risk_assessment", {})
-    if isinstance(risk_section, dict) and risk_section.get("sub_sections"):
-        html += _render_risk_assessment(risk_section)
-    else:
-        html += _render_section_content(risk_section)
+<div class="memo-section">
+<h2>7. Residual Risk and Monitoring Position</h2>
+<div class="section-content">
+<p><strong>Residual risk:</strong> {_esc(residual_risk)}</p>
+<p><strong>Monitoring position:</strong> {_esc(monitoring_position)}</p>
+<p><strong>Risk calculated at:</strong> {_esc(_display_timestamp(risk_calculated_at))}</p>
+</div>
+</div>
 
-    # ── Section 5: Screening Results ──
-    html += '<h2>5. Screening Results</h2>'
-    html += _render_section_content(sections.get("screening_results", {}))
+<div class="memo-section">
+<h2>8. Officer Decision and Sign-Off</h2>
+<table class="signature-grid">
+<tr><td class="label">Decision status</td><td>{_esc(document_state)}</td></tr>
+<tr><td class="label">Officer</td><td>{_esc(approved_by or 'Pending officer approval')}</td></tr>
+<tr><td class="label">Decision timestamp</td><td>{_esc(_display_timestamp(approved_at) if approved_at else 'Not approved')}</td></tr>
+<tr><td class="label">Lock status</td><td>{_esc('Locked - new evidence requires a new memo version' if is_final else 'Unlocked draft')}</td></tr>
+</table>
+<div class="officer-rationale-box {state_class}">
+<div class="officer-rationale-label">Officer Rationale - Professional Judgement</div>
+<p>{_esc(officer_rationale or 'Officer rationale pending')}</p>
+</div>
+</div>
 
-    # ── Section 6: Document Verification ──
-    html += '<h2>6. Document Verification</h2>'
-    html += _render_section_content(sections.get("document_verification", {}))
-
-    # ── Section 7: Onboarding Enhanced Review ──
-    html += '<h2>7. Onboarding Enhanced Review</h2>'
-    html += _render_section_content(sections.get("enhanced_review_edd", {}))
-
-    # ── Section 8: AI Explainability Layer ──
-    html += '<h2>8. AI Explainability Layer</h2>'
-    ai_section = sections.get("ai_explainability", {})
-    if isinstance(ai_section, dict) and (ai_section.get("risk_increasing_factors") or ai_section.get("risk_decreasing_factors")):
-        html += _render_ai_explainability(ai_section)
-    else:
-        html += _render_section_content(ai_section)
-
-    # ── Section 9: Red Flags & Mitigants ──
-    html += '<h2>9. Red Flags &amp; Mitigants</h2>'
-    rf_section = sections.get("red_flags_and_mitigants", {})
-    if isinstance(rf_section, dict) and (rf_section.get("red_flags") or rf_section.get("mitigants")):
-        html += _render_red_flags(rf_section)
-    else:
-        html += _render_section_content(rf_section)
-
-    # ── Section 10: Compliance Decision ──
-    html += '<h2>10. Compliance Decision</h2>'
-    decision_section = sections.get("compliance_decision", {})
-    html += '<div class="section-content">'
-    if isinstance(decision_section, dict):
-        d = decision_section.get("decision", decision)
-        html += f'<p><strong>Recommendation:</strong> {_decision_badge(d)}</p>'
-        content = decision_section.get("content", "")
-        if content:
-            html += f'<p>{_esc(content)}</p>'
-    else:
-        html += _render_section_content(decision_section)
-    html += '</div>'
-
-    # ── Section 11: Ongoing Monitoring ──
-    html += '<h2>11. Ongoing Monitoring &amp; Review</h2>'
-    html += _render_section_content(sections.get("ongoing_monitoring", {}))
-
-    # ── Section 12: Audit & Governance ──
-    html += '<h2>12. Audit &amp; Governance</h2>'
-    html += _render_section_content(sections.get("audit_and_governance", {}))
-
-    html += _render_appendix_index(memo_data)
-
-    # ── Validation & Supervisor Summary Box ──
-    val_status = "N/A"
-    quality_score = "N/A"
-    if validation_result:
-        val_status = validation_result.get("validation_status", "pending")
-        quality_score = validation_result.get("quality_score", 0)
-
-    supervisor_verdict = "N/A"
-    if supervisor_result:
-        supervisor_verdict = supervisor_result.get("verdict", "N/A")
-
-    # Also check metadata for embedded results
-    meta_rule = metadata.get("rule_engine", {})
-    rule_status = meta_rule.get("engine_status", "N/A")
-
-    html += f"""
-    <div class="validation-box">
-        <h3>Quality Assurance Summary</h3>
-        <table class="risk-table">
-        <tr><th>Check</th><th>Status</th></tr>
-        <tr><td>Validation Engine</td><td><strong>{_esc(val_status).upper()}</strong> (Score: {_esc(quality_score)}/10)</td></tr>
-        <tr><td>Supervisor Engine</td><td><strong>{_esc(supervisor_verdict)}</strong></td></tr>
-        <tr><td>Rule Engine</td><td><strong>{_esc(rule_status)}</strong></td></tr>
-        </table>
-    </div>
-    """
-
-    # ── Immutability Footer ──
-    html += f"""
-    <div class="watermark">
-        <p>This document is a system-generated compliance memo. It constitutes an immutable snapshot at the time of generation.</p>
-        <p>Any amendments require a new memo version with full audit trail.</p>
-        <p class="immutable-hash">Content Hash: {content_hash} | Generated: {_esc(now)}</p>
-    </div>
-
+<div class="memo-section">
+<h2>9. Audit and Governance Metadata</h2>
+<table class="governance-table">
+<tr><th>Memo content hash</th><td>{_esc(content_hash)}</td></tr>
+<tr><th>Memo input hash</th><td>{_esc(memo_input_hash)}</td></tr>
+<tr><th>Validation result</th><td>{_esc(str(validation_status).upper())} (quality score: {_esc(quality_score_display)})</td></tr>
+<tr><th>Deterministic rule status</th><td>{_esc(rule_status)}</td></tr>
+<tr><th>Renderer build</th><td>{_esc(renderer_build)}</td></tr>
+<tr><th>Classification</th><td>CONFIDENTIAL - regulated compliance record</td></tr>
+<tr><th>Retention</th><td>Retain under the applicable compliance-record retention policy.</td></tr>
+</table>
+</div>
 </body>
 </html>"""
 
