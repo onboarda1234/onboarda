@@ -265,6 +265,94 @@ def test_finding_identifiers_are_unique_across_the_whole_set(defective_case, db)
     assert len({f["finding_id"] for f in findings}) == len(findings)
 
 
+def test_evidence_order_cannot_change_identity(defective_case, db):
+    """Identity survives a probe listing its references in another order.
+
+    The runner sorts ``evidence_refs``, and a declared ``primary_evidence_ref``
+    is chosen by name rather than by position, so neither path is
+    order-sensitive. A future acknowledgement workflow depends on this.
+    """
+    bundle = assemble_application_bundle(db, defective_case, as_of=AS_OF)
+    baseline = _review(db, defective_case)["findings"]
+
+    def shuffled(probe):
+        def wrapper(bundle_arg, policy_arg):
+            drafts = []
+            for draft in probe(bundle_arg, policy_arg):
+                copy = dict(draft)
+                copy["evidence_refs"] = list(reversed(list(copy["evidence_refs"])))
+                drafts.append(copy)
+            return drafts
+
+        return wrapper
+
+    reordered = run_review(
+        bundle,
+        policy=unconfigured_policy(),
+        probes=tuple(shuffled(probe) for probe in PROBES),
+    )["findings"]
+
+    assert [f["finding_id"] for f in reordered] == [
+        f["finding_id"] for f in baseline
+    ]
+
+
+def test_wording_cannot_change_identity(defective_case, db):
+    """Rewriting prose must not orphan an acknowledged finding.
+
+    ``compute_finding_id`` hashes subject, probe, probe version, category and
+    the primary evidence reference — never claim text. Improving a claim is
+    therefore free.
+    """
+    bundle = assemble_application_bundle(db, defective_case, as_of=AS_OF)
+    baseline = _review(db, defective_case)["findings"]
+
+    def reworded(probe):
+        def wrapper(bundle_arg, policy_arg):
+            drafts = []
+            for draft in probe(bundle_arg, policy_arg):
+                copy = dict(draft)
+                for field in ("claim", "why_it_matters", "officer_question",
+                              "required_action", "close_condition"):
+                    copy[field] = f"rewritten: {copy[field]}"
+                drafts.append(copy)
+            return drafts
+
+        return wrapper
+
+    rewritten = run_review(
+        bundle,
+        policy=unconfigured_policy(),
+        probes=tuple(reworded(probe) for probe in PROBES),
+    )["findings"]
+
+    assert {f["finding_id"] for f in rewritten} == {
+        f["finding_id"] for f in baseline
+    }
+
+
+def test_probe_version_is_part_of_identity(defective_case, db):
+    """Documented consequence, asserted so nobody discovers it in production.
+
+    Bumping a probe's version re-mints every identifier that probe produces. A
+    later acknowledgement workflow must therefore treat a probe-version bump as
+    a re-issue of that probe's findings, not as continuity — the same defect
+    gets a new identifier by design, because the question asked has changed.
+    """
+    from supervisor_foundation.hashing import compute_finding_id
+
+    kwargs = dict(
+        subject_type="application",
+        subject_id="app-1",
+        probe_id="P-02",
+        category="risk",
+        primary_evidence_ref="risk:app-1#factor:x",
+    )
+    assert compute_finding_id(probe_version="p02-v1", **kwargs) != compute_finding_id(
+        probe_version="p02-v2", **kwargs
+    )
+
+
 def test_findings_are_ordered_canonically(defective_case, db):
     findings = _review(db, defective_case)["findings"]
     keys = [

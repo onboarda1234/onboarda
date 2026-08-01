@@ -236,7 +236,76 @@ def test_add_months_clamps_to_a_short_month(db):
     assert monitoring_requirement.add_months(date(2026, 3, 15), 12) == date(2027, 3, 15)
 
 
-def test_earliest_readable_review_governs(db):
+# ── Governing-review selection ───────────────────────────────────────
+
+
+def test_terminal_states_match_the_authoritative_set():
+    """The probe's closed-state set is the engine's, not a private opinion."""
+    from periodic_review_engine import TERMINAL_REVIEW_STATES as AUTHORITATIVE
+
+    assert monitoring_requirement.TERMINAL_REVIEW_STATES == frozenset(AUTHORITATIVE)
+
+
+def test_a_closed_review_never_governs_over_the_open_one(db):
+    """The systematic false negative this probe would otherwise have.
+
+    Completing a review inserts the next cycle as a new pending row, so from the
+    second cycle onward every customer has closed rows whose next_review_date is
+    in the past — always earlier than the live one. Governing on the earliest
+    date across all rows would silently grade a closed historical cycle and
+    report clear while the live schedule went unexamined.
+    """
+    app_id = _approved(db)
+    add_periodic_review(
+        db, app_id, last_review_date="2024-01-15", next_review_date="2026-01-15",
+        status="completed",
+    )
+    add_periodic_review(
+        db, app_id, last_review_date="2026-01-15", next_review_date="2029-06-01",
+        status="pending",
+    )
+    finding = next(
+        f for f in run_probe(bundle_for(db, app_id), PROBE)
+        if "later than the" in f["claim"]
+    )
+    assert "2029-06-01" in finding["claim"], (
+        "the probe graded a closed cycle instead of the live one"
+    )
+
+
+def test_only_closed_reviews_is_a_hit_not_a_clear(db):
+    """A file holding only closed reviews has fallen out of the schedule."""
+    app_id = _approved(db)
+    add_periodic_review(db, app_id, next_review_date="2027-06-01", status="completed")
+    add_periodic_review(db, app_id, next_review_date="2027-09-01", status="cancelled")
+    finding = only(run_probe(bundle_for(db, app_id), PROBE))
+    assert finding["status"] == "hit"
+    assert "completed or cancelled" in finding["claim"]
+    assert finding["status"] != "clear"
+
+
+def test_a_cancelled_review_alone_does_not_satisfy_the_obligation(db):
+    app_id = _approved(db)
+    add_periodic_review(db, app_id, next_review_date="2027-06-01", status="cancelled")
+    finding = only(run_probe(bundle_for(db, app_id), PROBE))
+    assert finding["status"] == "hit"
+
+
+def test_a_closed_review_alongside_a_compliant_open_one_clears(db):
+    """History must not manufacture a finding either."""
+    app_id = _approved(db)
+    add_periodic_review(
+        db, app_id, last_review_date="2024-01-15", next_review_date="2026-01-15",
+        status="completed",
+    )
+    add_periodic_review(
+        db, app_id, last_review_date="2026-01-15", next_review_date="2027-06-01",
+        status="pending",
+    )
+    assert only(run_probe(bundle_for(db, app_id), PROBE))["status"] == "clear"
+
+
+def test_earliest_readable_open_review_governs(db):
     """The nearest commitment is the one the institution is held to."""
     app_id = _approved(db)
     add_periodic_review(db, app_id, next_review_date="2029-01-01")
@@ -244,6 +313,20 @@ def test_earliest_readable_review_governs(db):
     finding = only(run_probe(bundle_for(db, app_id), PROBE))
     assert finding["status"] == "clear"
     assert "2027-06-01" in finding["claim"]
+
+
+def test_probe_does_not_restate_the_overdue_surface(db):
+    """Overdue reviews are already escalated by monitoring_sla; not restated.
+
+    A review whose date has passed relative to ``as_of`` is not a P-06 finding.
+    The monitoring surface owns overdue; this probe owns whether a governed
+    schedule exists at all and whether its cycle is within policy.
+    """
+    app_id = _approved(db)
+    add_periodic_review(
+        db, app_id, last_review_date="2026-01-15", next_review_date="2026-03-01"
+    )
+    assert only(run_probe(bundle_for(db, app_id), PROBE))["status"] == "clear"
 
 
 # ── Check 3: policy version attribution ──────────────────────────────

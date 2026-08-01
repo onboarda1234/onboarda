@@ -50,7 +50,8 @@ python -m pytest tests/probe_corpus_report.py::production_path \
 ## 2. What the corpus run changed
 
 Three implementation defects were found by running against the corpus that no
-unit test had caught. Each is now covered by a regression test.
+unit test had caught, and two more in the pre-merge closure review. Each is now
+covered by a regression test that fails without the fix.
 
 ### 2.1 P-02 accepted only one of two spellings of "resolved" — 253 false positives
 
@@ -103,7 +104,76 @@ material match is a failure of officer process that survives a re-screen.
 Stage 2 volume: **33 → 16 findings**, one per subject, each with a distinct
 action.
 
-### 2.4 Finding identity collapsed across subjects
+### 2.4 P-03 re-ran the policy on an incomplete input set
+
+Found in the closure review, by capturing what `memo_handler` actually fed
+`evaluate_edd_routing` and diffing it against what P-03 reconstructs.
+
+`evaluate_edd_routing` reads **ten** fact keys. `REQUIRED_FACT_KEYS` — which the
+bundle projects — names **eight**. The bundle treated the completeness contract
+as the read set. The two keys read but not required:
+
+| Key | Recoverable? | Effect when absent |
+|---|---|---|
+| `supervisor_mandatory_escalation_reasons` | Yes — already in the supervisor-verdict projection | `mandatory_escalation_edd_relevant` collapses to `False`, dropping the `supervisor_mandatory_escalation` trigger |
+| `sector_label` | No — carrying it is a bundle-contract change | Drops `crypto_or_virtual_asset_sector`, and `high_risk_sector` where the tier does not already force it |
+
+Measured across the corpus, comparing memo-time facts against the probe's
+reconstruction on every evaluable case:
+
+| | route mismatches | trigger-set mismatches |
+|---|---:|---:|
+| Before | 0 / 38 | **15 / 38** |
+| After supplying the reasons list | 0 / 38 | **1 / 38** |
+
+The remaining one is the single crypto case, missing
+`crypto_or_virtual_asset_sector`; the route is unaffected because
+`memo_handler`'s `BIZ_RISK_KEYWORD_FLOOR` independently forces
+`sector_risk_tier = HIGH`.
+
+**Why this was merge-blocking even at zero route mismatches.** An absent input
+can only *remove* a trigger, so the recomputed route can only under-trigger. The
+comparison "policy says standard, file says EDD" is therefore indistinguishable
+from "an input is missing" — and P-03 was reporting it as HIGH-severity
+divergence, i.e. accusing an officer of escalating beyond policy on evidence
+that cannot support the claim. That the corpus happened not to trigger it is
+luck, not safety: the synthetic reproduction is two lines.
+
+P-03 now reports divergence only in the direction absent keys cannot
+manufacture (stored `standard`, re-run `edd`). The opposite direction is
+`not_replayable`. The conservative-over-routing check rested entirely on the
+unsafe direction and was removed — extra diligence is not a control failure, so
+an unfalsifiable claim about it is pure noise.
+
+Two guards now hold the line: an AST scan of the policy's `facts.get(...)`
+call sites against the keys the probe supplies (a new policy input fails the
+build), and a behavioural test that captures a real memo's routing facts and
+asserts the probe reproduces the same route with no invented triggers.
+
+### 2.5 P-06 graded closed review cycles instead of live ones
+
+Also found in the closure review, by reading `periodic_review_engine`. Completing
+a review inserts the **next** cycle as a new `pending` row
+(`_ensure_next_periodic_review_cycle`), so a reviewed customer accumulates
+closed rows whose `next_review_date` is in the past.
+
+`_governing_review` selected the earliest `next_review_date` across *all* rows.
+From the second cycle onward that is always the oldest completed review. The
+probe would have graded a closed historical cycle and reported `clear` while the
+live schedule — which is what the probe exists to check — went unexamined.
+
+Two consequences, both silent:
+
+1. **Systematic false negative across the entire reviewed population.** An
+   over-long live cycle is invisible behind any compliant closed one.
+2. **A file holding only cancelled reviews read as compliant** — the exact
+   inversion of "monitoring requirement not established".
+
+The corpus did not catch it because the canonical dataset carries at most one
+periodic review per application. P-06 now governs on open reviews only, and
+treats "every review closed" as the same control gap as "no review at all".
+
+### 2.6 Finding identity collapsed across subjects
 
 Found before the corpus run but worth recording alongside the others. The runner
 derived a finding's identity from its lowest-sorting evidence reference. Every
@@ -196,12 +266,17 @@ wrong; it has no standing to.
 | Probe | Verdict | Basis |
 |-------|---------|-------|
 | **P-02** Risk factor resolution integrity | **SHIP** | Highest-value probe in the set. Found a real, previously invisible attributability gap on 9 of 41 reference cases. Signal-to-noise after the vocabulary fix is 9 hits / 34 clears — precise, not chatty. Every hit names a specific field and a specific action. |
-| **P-03** EDD routing divergence | **SHIP** | Sound, and the only thing in the product that re-runs the governed routing policy against the facts it was given. Clean on 6/8 production-path cases with no false positives. Caveat: its value is *contingent on divergence existing*, and the reference corpus contains none — it cannot be credited with a caught defect yet. Ships because a silent, unverified agreement between policy and stored route is exactly what an auditor asks about, and because the check is free once the memo exists. |
+| **P-03** EDD routing divergence | **SHIP WITH LIMITATIONS** | Downgraded from SHIP in the closure review. The probe is sound *within the direction it can defend* (§2.4), and the under-routing check — the valuable one — is unaffected. But it cannot conclusively compare routes until the bundle carries `sector_label`, so one direction of its headline check reports `not_replayable` rather than an answer. It also cannot yet be credited with a caught defect: the reference corpus contains no divergence case. Ships because the under-routing check is genuinely free once a memo exists and nothing else in the product re-runs the policy; limited because a reviewer must understand that "not replayable" is a real state, not a failure. |
 | **P-04** Screening reliance defensibility | **SHIP, with a volume watch** | Per-subject machinery works against real `screening.py` output. Two rounds of noise reduction were needed to get from 4 findings per subject to 1. Recommend re-measuring volume on a deployment with live provider credentials before exposing it to officers: in this environment every subject is a hit for the same reason, and that pattern (many subjects, one root cause) is the one most likely to need a roll-up. |
-| **P-06** Monitoring requirement not established | **SHIP** | 3 clear / 9 hit / 29 not_applicable — correct scoping (only approved cases carry the obligation) and a credible hit rate. Carries the sharpest clock-safety property in the set: it refuses `parse_review_date`, which would have read a corrupt review date as "scheduled today" and passed. Also refuses `normalize_risk_level`'s silent fallback to MEDIUM, which would have attributed a governed 24-month cycle to an ungoverned risk level. |
+| **P-06** Monitoring requirement not established | **SHIP** | 3 clear / 9 hit / 29 not_applicable — correct scoping (only approved cases carry the obligation) and a credible hit rate. Carries the sharpest clock-safety property in the set: it refuses `parse_review_date`, which would have read a corrupt review date as "scheduled today" and passed. Also refuses `normalize_risk_level`'s silent fallback to MEDIUM, which would have attributed a governed 24-month cycle to an ungoverned risk level. The closed-cycle defect (§2.5) is fixed and regression-tested; note that the corpus could not have caught it, so the fix rests on unit coverage plus a reading of `periodic_review_engine`. |
 
-**No probe is DROP. No probe is REVISE-before-ship.** The three defects the
-corpus exposed were fixed in this phase and are covered by regression tests.
+**No probe is DROP. No probe is REVISE-before-ship.** The five defects — three
+from the corpus run, two from the closure review — are fixed and covered by
+regression tests that fail without the fix.
+
+**What would move P-03 to a clean SHIP:** carrying `sector_label` in
+`edd.routing_facts`. That is a bundle-contract change requiring a schema version
+bump and founder authorisation, deliberately not taken in a closure review.
 
 ---
 
@@ -219,7 +294,15 @@ none.
    not proven to *clear* correctly against a live ComplyAdvantage response.
 3. **No divergence cases for P-03.** The corpus contains no case where the
    stored route disagrees with the policy, so P-03's headline check is covered
-   by unit tests only.
+   by unit tests only. One direction of that check is additionally limited by
+   the `sector_label` gap and reports `not_replayable` (§2.4).
+6. **P-04's disposition link is name-based.** The bundle matches a screening
+   review to a subject on `(subject_type, sha256(name.strip().lower()))`. A
+   spelling or spacing difference between the screening report and
+   `screening_reviews.subject_name` breaks the link, and P-04 would report an
+   undispositioned match that was in fact dispositioned. No instance was seen in
+   the corpus, but the matching is exact and this is a real false-positive path
+   inherited from the bundle, not from the probe.
 4. **No officer feedback.** Whether these findings are *acted on* — the real
    commercial test — cannot be answered from a corpus run. That belongs to
    pilot usage.
@@ -234,6 +317,9 @@ none.
   credentials; decide then whether a per-application roll-up is warranted.
 - Construct a routing-divergence case for P-03 in a QA fixture set, so its
   headline check has corpus coverage rather than unit coverage alone.
+- Decide whether to carry `sector_label` (and any future policy input outside
+  `REQUIRED_FACT_KEYS`) in a bundle v3, which would let P-03 compare routes in
+  both directions and lift its SHIP WITH LIMITATIONS to SHIP.
 - The `sub_factor_score_4` attributability gap in §4 is a finding *about the
   platform*, surfaced by the Supervisor. Whether `rule_engine` should record a
   reason for sub-factor elevations is a product decision for the founder, not a

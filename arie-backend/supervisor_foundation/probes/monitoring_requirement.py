@@ -56,6 +56,12 @@ PROSE_LIMITATION = (
     "memo prose."
 )
 
+#: Review states that are closed, mirroring
+#: ``periodic_review_engine.TERMINAL_REVIEW_STATES`` (including the historical
+#: "canceled" spelling). Defined here rather than imported so the probe package
+#: keeps its narrow authoritative-import surface; a test asserts the two agree.
+TERMINAL_REVIEW_STATES = frozenset({"completed", "cancelled", "canceled"})
+
 #: Risk levels where a missing schedule is a high-severity control gap rather
 #: than a medium one. Derived from the governed frequency table: the shorter the
 #: required cycle, the more consequential its absence.
@@ -94,18 +100,33 @@ def add_months(anchor: date, months: int) -> date:
     return date(year, month, min(anchor.day, monthrange(year, month)[1]))
 
 
-def _governing_review(reviews: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | None:
-    """The review that governs the next cycle.
+def is_live(review: Mapping[str, Any]) -> bool:
+    """Whether a periodic review is still an open commitment.
 
-    The earliest readable ``next_review_date`` wins — that is the commitment the
-    institution is held to. Rows whose date cannot be read sort last so they are
-    reported rather than silently preferred.
+    Completing a review inserts the next cycle as a new ``pending`` row
+    (``periodic_review_engine._ensure_next_periodic_review_cycle``), so a
+    healthy customer accumulates closed rows plus exactly one open one.
     """
-    readable = [
-        (parse_iso_date(row.get("next_review_date")), row)
-        for row in reviews
-        if isinstance(row, Mapping)
-    ]
+    return str(review.get("status") or "").strip().lower() not in TERMINAL_REVIEW_STATES
+
+
+def _governing_review(reviews: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | None:
+    """The open review that governs the next cycle, or ``None`` if none is open.
+
+    **Open rows only, and this is the whole point.** Closed rows keep the
+    ``next_review_date`` of the cycle they closed — a date in the past — so the
+    earliest date across *all* rows is the oldest completed review, every time.
+    Governing on that would mean that from the second cycle onward the probe
+    silently grades a closed historical cycle and reports ``clear`` while the
+    live schedule goes unexamined: a systematic false negative across the whole
+    reviewed population, which is precisely the population the probe exists for.
+
+    Among open rows the earliest readable ``next_review_date`` wins — that is
+    the nearest commitment the institution is held to. Rows whose date cannot be
+    read sort last so they are reported rather than silently preferred.
+    """
+    live = [row for row in reviews if isinstance(row, Mapping) and is_live(row)]
+    readable = [(parse_iso_date(row.get("next_review_date")), row) for row in live]
     dated = sorted(
         (item for item in readable if item[0] is not None),
         key=lambda item: (item[0], str(item[1].get("id") or "")),
@@ -243,8 +264,19 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
     severity_missing = HIGH if risk_level in HIGH_SEVERITY_LEVELS else MEDIUM
     policy_ref = f"periodic_review_policy:RISK_FREQUENCY_MONTHS#{risk_level}"
 
-    # ── Check 1 — approved, obligation exists, no schedule at all ──
-    if not reviews:
+    # ── Check 1 — approved, obligation exists, no open schedule ──
+    # "No rows at all" and "rows exist but every one is closed" are the same
+    # control gap — no live monitoring cycle — and differ only in what the
+    # officer should look at, so they share a finding and differ in wording.
+    governing = _governing_review(reviews)
+    if governing is None:
+        closed_only = bool(reviews)
+        detail = (
+            "every periodic review recorded against it is completed or "
+            "cancelled, so no open cycle exists"
+            if closed_only
+            else "no periodic review record exists for the application"
+        )
         return [
             finding_draft(
                 probe_id=PROBE_ID,
@@ -257,7 +289,7 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
                 claim=(
                     f"This approved {risk_level} customer requires a periodic "
                     f"review every {frequency} months under governed policy, but "
-                    "no periodic review record exists for the application."
+                    f"{detail}."
                 ),
                 evidence_refs=unique_refs(
                     [
@@ -270,9 +302,11 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
                 primary_evidence_ref=f"{subject}#periodic_reviews",
                 source_modules=list(SOURCE_MODULES),
                 why_it_matters=(
-                    "The monitoring obligation began at approval and no cycle "
-                    "was established. The monitoring surface lists the reviews "
-                    "that exist; it cannot show the one that should. "
+                    "The monitoring obligation began at approval and no open "
+                    "cycle stands against it. The monitoring surface lists the "
+                    "reviews that exist; it cannot show the one that should. "
+                    "Closing a review normally creates the next cycle, so a file "
+                    "holding only closed reviews has fallen out of the schedule. "
                     + PROSE_LIMITATION
                 ),
                 regulatory_or_policy_basis=(
@@ -293,10 +327,9 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
             )
         ]
 
-    governing = _governing_review(reviews)
-    review_id = (governing or {}).get("id")
+    review_id = governing.get("id")
     review_ref = f"periodic_review:{review_id}"
-    raw_next = (governing or {}).get("next_review_date")
+    raw_next = governing.get("next_review_date")
     next_date = parse_iso_date(raw_next)
 
     # Field-level references. Two checks below can fire on the same review in
@@ -366,7 +399,7 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
         # else the review instant. Each is a defensible start for the cycle;
         # the precedence is fixed so the result is deterministic.
         anchor = (
-            parse_iso_date((governing or {}).get("last_review_date"))
+            parse_iso_date(governing.get("last_review_date"))
             or parse_iso_date((bundle.get("decision") or {}).get("decided_at"))
             or parse_iso_date((bundle.get("meta") or {}).get("as_of"))
         )
@@ -420,7 +453,7 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
                 )
 
     # ── Check 3 — no governed policy version on the schedule ──────
-    if "policy_version" not in (governing or {}):
+    if "policy_version" not in governing:
         drafts.append(
             finding_draft(
                 probe_id=PROBE_ID,
@@ -456,7 +489,7 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
                 ),
             )
         )
-    elif not str((governing or {}).get("policy_version") or "").strip():
+    elif not str(governing.get("policy_version") or "").strip():
         drafts.append(
             finding_draft(
                 probe_id=PROBE_ID,

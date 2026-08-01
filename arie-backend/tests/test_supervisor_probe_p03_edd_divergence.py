@@ -127,9 +127,10 @@ def test_existing_case_clears_the_under_routing_check(db):
 def test_stored_edd_route_never_actuated(db):
     """Stored route 'edd' with standard-routing facts and no case.
 
-    The memo recorded an escalation the policy does not derive and the queue
-    never received. Both the divergence and the missing case are reported —
-    they are different defects with different owners.
+    Two findings with different owners and different confidence. The missing
+    case rests on the *stored* route and is asserted outright. The route
+    comparison rests on a re-run whose inputs are incomplete, so it is reported
+    as not replayable rather than as divergence.
     """
     app_id = seed_application(db)
     add_memo(db, app_id, facts=routing_facts(), stored_route="edd")
@@ -138,20 +139,65 @@ def test_stored_edd_route_never_actuated(db):
     assert len(findings) == 2
     assert len({finding["finding_id"] for finding in findings}) == 2
     text = claims(findings)
-    assert "does not follow from the facts recorded" in text
     assert "recorded and never actuated" in text
+
+    replay = next(f for f in findings if f["status"] == "not_replayable")
+    assert replay["availability_status"] == "snapshot_incomplete"
+    assert "sector_label" in replay["claim"]
+    assert "does not follow from the facts recorded" not in replay["claim"]
+
+
+def test_stored_edd_with_standard_recompute_is_never_reported_as_divergence(db):
+    """The false-positive class this probe must not have.
+
+    An absent policy input can only remove triggers, so "policy says standard,
+    file says EDD" is exactly what an incomplete contract looks like. Asserting
+    divergence there would accuse an officer of escalating beyond policy on
+    evidence that cannot support the claim.
+    """
+    app_id = seed_application(db)
+    add_memo(db, app_id, facts=routing_facts(), stored_route="edd")
+    add_edd_case(db, app_id)
+    finding = only(run_probe(bundle_for(db, app_id), PROBE))
+    assert finding["status"] == "not_replayable"
+    assert finding["status"] != "clear"
+    assert finding["severity"] == "low"
+
+
+def test_crypto_sector_label_is_the_known_replay_gap():
+    """Names the gap the safe-direction rule exists for, on the real policy.
+
+    ``sector_label`` is read by ``evaluate_edd_routing`` but is not in
+    ``REQUIRED_FACT_KEYS`` and so is not carried in the bundle. If it is ever
+    carried, this fails and the safe-direction restriction can be lifted.
+    """
+    from edd_routing_policy import REQUIRED_FACT_KEYS, evaluate_edd_routing
+
+    from supervisor_foundation.bundle import EDD_ROUTING_FACT_KEYS
+
+    for key in edd_divergence.UNREPLAYABLE_POLICY_KEYS:
+        assert key not in REQUIRED_FACT_KEYS
+        assert key not in EDD_ROUTING_FACT_KEYS
+
+    base = dict(routing_facts(), supervisor_mandatory_escalation=False)
+    with_label = dict(base, sector_label="Crypto / Digital Assets Exchange")
+    assert evaluate_edd_routing(with_label)["route"] == "edd"
+    assert evaluate_edd_routing(base)["route"] == "standard"
 
 
 # ── Check 3: stored route disagrees with the policy ──────────────────
 
 
 def test_stored_standard_route_contradicts_the_policy(db):
+    """The safe direction: no absent key could have manufactured this."""
     app_id = seed_application(db, risk_level="HIGH", final_risk_level="HIGH")
     add_memo(db, app_id, facts=EDD_FACTS, stored_route="standard")
     add_edd_case(db, app_id)
     finding = only(run_probe(bundle_for(db, app_id), PROBE))
     assert finding["category"] == "policy"
-    assert "yields route 'edd'" in finding["claim"]
+    assert finding["status"] == "hit"
+    assert finding["severity"] == "high"
+    assert "requires enhanced due diligence" in finding["claim"]
     assert "is 'standard'" in finding["claim"]
 
 
@@ -167,40 +213,36 @@ def test_policy_version_is_cited_as_the_basis(db):
 # ── Check 5: conservative over-routing ───────────────────────────────
 
 
-def test_over_routing_is_informational_not_a_control_failure(db):
+def test_conservative_over_routing_produces_no_finding(db):
+    """An EDD case beyond what policy requires is not reported at all.
+
+    The check that would report it rests on "the policy says standard", which
+    an absent input can manufacture. Extra diligence is not a control failure,
+    so an unfalsifiable claim about it is pure noise and the check is absent.
+    """
     app_id = seed_application(db)
     add_memo(db, app_id, facts=routing_facts(), stored_route="standard")
     add_edd_case(db, app_id, stage="edd_approved")
     finding = only(run_probe(bundle_for(db, app_id), PROBE))
-    assert finding["severity"] == "info"
-    assert "more conservatively than policy required" in finding["claim"]
-    assert finding["required_action"].startswith("None required")
+    assert finding["status"] == "clear"
+    assert "conservativ" not in claims([finding]).lower()
 
 
-def test_over_routing_alongside_another_defect_is_low_not_info(db):
-    app_id = seed_application(db)
-    add_memo(db, app_id, facts=routing_facts(), stored_route="edd")
-    add_edd_case(db, app_id)
-    findings = run_probe(bundle_for(db, app_id), PROBE)
-    severities = {finding["category"]: finding["severity"] for finding in findings}
-    assert severities["policy"] == "high"
-    assert severities["edd"] == "low"
-
-
-def test_over_routing_never_outranks_under_routing(db):
-    """Extra diligence must never be scored above missing diligence."""
+def test_under_routing_is_the_highest_severity_the_probe_emits(db):
+    """Missing diligence outranks everything else P-03 can say."""
     order = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
-
-    over_id = seed_application(db)
-    add_memo(db, over_id, facts=routing_facts(), stored_route="standard")
-    add_edd_case(db, over_id)
-    over = only(run_probe(bundle_for(db, over_id), PROBE))
 
     under_id = seed_application(db, risk_level="HIGH", final_risk_level="HIGH")
     add_memo(db, under_id, facts=EDD_FACTS, stored_route="edd")
+    approve(db, under_id, risk_level="HIGH")
     under = only(run_probe(bundle_for(db, under_id), PROBE))
+    assert under["severity"] == "critical"
 
-    assert order[over["severity"]] < order[under["severity"]]
+    replay_id = seed_application(db)
+    add_memo(db, replay_id, facts=routing_facts(), stored_route="edd")
+    add_edd_case(db, replay_id)
+    replay = only(run_probe(bundle_for(db, replay_id), PROBE))
+    assert order[replay["severity"]] < order[under["severity"]]
 
 
 # ── Determinism and clock discipline ─────────────────────────────────
@@ -263,3 +305,115 @@ def test_incomplete_contract_case_does_not_restate_the_approval_blocker(db):
     approve(db, app_id, risk_level="HIGH")
     findings = run_probe(bundle_for(db, app_id), PROBE)
     assert only(findings)["status"] == "clear"
+
+
+# ── Replay fidelity ──────────────────────────────────────────────────
+# The defect class that motivated the safe-direction rule: the bundle projects
+# ``REQUIRED_FACT_KEYS`` — the policy's *completeness* contract — and an earlier
+# draft treated that as its *read* set. The policy reads more. These two tests
+# make that gap impossible to widen silently.
+
+
+def test_probe_supplies_every_policy_input_except_the_declared_gap():
+    """Static: AST-scan the policy for the keys it reads.
+
+    A new ``facts.get("…")`` added to ``edd_routing_policy`` fails here rather
+    than silently degrading every recomputed route in production.
+    """
+    import ast
+    import inspect
+
+    import edd_routing_policy
+
+    from supervisor_foundation.bundle import EDD_ROUTING_FACT_KEYS
+
+    tree = ast.parse(inspect.getsource(edd_routing_policy.evaluate_edd_routing))
+    read = {
+        node.args[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "facts"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+    }
+    assert read, "the policy read-set scan found nothing — the scan has drifted"
+
+    supplied = set(EDD_ROUTING_FACT_KEYS) | {
+        "supervisor_mandatory_escalation",
+        "supervisor_mandatory_escalation_reasons",
+    }
+    unsupplied = read - supplied
+    assert unsupplied == set(edd_divergence.UNREPLAYABLE_POLICY_KEYS), (
+        f"the policy reads {sorted(unsupplied)}; the probe declares its gap as "
+        f"{sorted(edd_divergence.UNREPLAYABLE_POLICY_KEYS)}. Either supply the "
+        "key or declare it, but do not let a recomputed route rest on an "
+        "input nobody has accounted for."
+    )
+
+
+def test_probe_reproduces_the_route_a_real_memo_was_routed_on(db):
+    """Behavioural: capture what ``memo_handler`` fed the policy and compare.
+
+    The strongest available form of the claim "this probe measures the decision
+    path's own inputs". Missing ``supervisor_mandatory_escalation_reasons``
+    alone caused 14 of 15 trigger-set mismatches against the canonical corpus.
+    """
+    import memo_handler
+    from edd_routing_policy import evaluate_edd_routing
+
+    captured = {}
+    real = memo_handler._evaluate_edd_routing
+
+    def spy(facts):
+        captured["facts"] = dict(facts)
+        return real(facts)
+
+    app_id = seed_application(
+        db, risk_level="HIGH", final_risk_level="HIGH",
+        sector="Software / SaaS", country="Nigeria",
+    )
+    row = dict(db.execute(
+        "SELECT * FROM applications WHERE id = ?", (app_id,)
+    ).fetchone())
+
+    memo_handler._evaluate_edd_routing = spy
+    try:
+        memo, *_ = memo_handler.build_compliance_memo(row, [], [], [])
+    finally:
+        memo_handler._evaluate_edd_routing = real
+
+    assert "facts" in captured, "memo generation did not reach the routing policy"
+
+    import json
+
+    db.execute(
+        "INSERT INTO compliance_memos (application_id, version, memo_data, "
+        "validation_status, quality_score) VALUES (?,?,?,?,?)",
+        (app_id, 1, json.dumps(memo, default=str), "pass", 0.9),
+    )
+    db.commit()
+
+    bundle = bundle_for(db, app_id)
+    stored = (bundle.get("edd") or {}).get("routing_facts") or {}
+    assert stored.get("present") and not stored.get("absent_fact_keys")
+
+    verdict = (bundle.get("supervisor_verdict") or {}).get("verdict") or {}
+    reconstructed = dict(stored.get("facts") or {})
+    reconstructed["supervisor_mandatory_escalation"] = bool(
+        verdict.get("mandatory_escalation")
+    )
+    reconstructed["supervisor_mandatory_escalation_reasons"] = list(
+        verdict.get("mandatory_escalation_reasons") or []
+    )
+
+    at_memo_time = evaluate_edd_routing(captured["facts"])
+    at_review_time = evaluate_edd_routing(reconstructed)
+
+    assert at_review_time["route"] == at_memo_time["route"]
+    # Triggers may be a strict subset only for the declared gap; nothing the
+    # probe reconstructs may ever add a trigger memo time did not have.
+    assert set(at_review_time["triggers"]) <= set(at_memo_time["triggers"])
+    assert set(at_memo_time["triggers"]) - set(at_review_time["triggers"]) == set()

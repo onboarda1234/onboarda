@@ -1285,10 +1285,28 @@ exists to any authority listed in §2.3.
 Package `supervisor_foundation/probes/`, exit criteria met. Real-case results,
 the three defects the corpus exposed and the SHIP/REVISE/DROP calls are in
 [`supervisor-0b2-real-case-validation.md`](supervisor-0b2-real-case-validation.md).
-Four deviations from the specification above are worth recording here, because
-each was a decision rather than an omission:
+Six deviations from the specification above are worth recording here, because
+each was a decision rather than an omission. Items 1 and 5 were found in the
+pre-merge closure review, not during implementation:
 
-1. **P-04 ships four checks, not five.** A terminality check was implemented and
+1. **P-03 compares routes in one direction only.** ``evaluate_edd_routing``
+   reads ten fact keys; ``REQUIRED_FACT_KEYS`` — the policy's *completeness*
+   contract — names eight, and the bundle projects those. The two it reads but
+   does not require are ``sector_label`` and
+   ``supervisor_mandatory_escalation_reasons``. The reasons list is recoverable
+   from the supervisor-verdict section and is now supplied; ``sector_label`` is
+   not carried and doing so is a bundle-contract change.
+
+   An absent input can only *remove* a trigger, so the recomputed route can only
+   under-trigger. P-03 therefore reports divergence only where stored is
+   ``standard`` and the re-run says ``edd`` — the direction no absent key can
+   manufacture. The opposite direction is reported ``not_replayable``, and the
+   conservative-over-routing check was removed because it rested entirely on the
+   unsafe direction. Measured on the canonical corpus: 15 of 38 evaluable cases
+   diverged in trigger set before the reasons fix, 1 after (the crypto case,
+   route unaffected); 0 route mismatches either way.
+
+2. **P-04 ships four checks, not five.** A terminality check was implemented and
    removed. `screening_state.derive_screening_state()` derives the state from the
    same provider record `provider_mode_from_record()` reads, so a non-terminal
    state is entailed by a non-live provider mode and the two checks reported one
@@ -1297,7 +1315,7 @@ each was a decision rather than an omission:
    `test_terminality_is_entailed_by_provider_mode`; if `screening_state` ever
    lets the two diverge, the check is reinstated deliberately.
 
-2. **Findings declare their identity anchor.** §10.6 derives `finding_id` from a
+3. **Findings declare their identity anchor.** §10.6 derives `finding_id` from a
    *primary evidence reference*, which the 0B-1 runner took to be the
    lowest-sorting reference. Every P-04 finding cites the same application-level
    approval references, so several findings on one case collapsed onto a single
@@ -1306,12 +1324,21 @@ each was a decision rather than an omission:
    runner validates it is one of the finding's own references and records it on
    the output. The fallback is unchanged for single-hit probes.
 
-3. **P-03 calls `evaluate_edd_routing()`.** The clock-hazard register above
+4. **P-03 calls `evaluate_edd_routing()`.** The clock-hazard register above
    previously said it would not be called in Phase 0B. Re-running the governed
    policy *is* the probe, and its one clock-bearing field is cosmetic and
    excluded from comparison. The register row is updated accordingly.
 
-4. **Two silent authoritative fallbacks are refused, not inherited.**
+5. **P-06 governs on open periodic reviews only.** Completing a review inserts
+   the next cycle as a new ``pending`` row, so a reviewed customer accumulates
+   closed rows whose ``next_review_date`` is in the past. Selecting the earliest
+   date across *all* rows — as the first implementation did — would grade a
+   closed historical cycle from the second cycle onward and report ``clear``
+   while the live schedule went unexamined: a systematic false negative across
+   the entire reviewed population. A file holding only closed reviews is now the
+   same control gap as a file holding none.
+
+6. **Two silent authoritative fallbacks are refused, not inherited.**
    `periodic_review_policy.parse_review_date()` (§10.4.3) returns today for
    unreadable input, and `periodic_review_policy.normalize_risk_level()` maps any
    unrecognised level to `MEDIUM`. Inheriting either would convert a defective

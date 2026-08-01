@@ -58,6 +58,26 @@ COSMETIC_KEYS = ("evaluated_at",)
 ROUTE_EDD = "edd"
 ROUTE_STANDARD = "standard"
 
+#: Keys ``evaluate_edd_routing`` reads that the canonical bundle does not carry.
+#:
+#: ``sector_label`` drives the crypto / virtual-asset discriminator. It is
+#: present in the stored contract but outside ``EDD_ROUTING_FACT_KEYS``, which
+#: projects ``REQUIRED_FACT_KEYS`` — the policy's *completeness* contract, not
+#: its *read* set. Carrying it is a bundle-contract change and therefore a
+#: governed decision, so the probe compensates rather than assuming.
+#:
+#: **The consequence, and why it shapes the checks below.** A missing input can
+#: only ever *remove* a trigger, so the recomputed trigger set is a subset of
+#: the memo-time set and the recomputed route can only under-trigger. Therefore:
+#:
+#: * recomputed ``edd`` while stored is ``standard`` is safe to report — no
+#:   absent key could have manufactured it;
+#: * recomputed ``standard`` while stored is ``edd`` is **not** safe — that is
+#:   exactly what an absent key produces — and is reported as not replayable;
+#: * a conservative-over-routing check would rest entirely on the unsafe
+#:   direction, which is why this probe does not have one.
+UNREPLAYABLE_POLICY_KEYS = ("sector_label",)
+
 #: **Deliberately not checked here: an EDD case opened and never completed.**
 #: The approval gate already blocks final approval unless
 #: ``edd_completion.collect_edd_completion_status`` reports an approved EDD case
@@ -191,11 +211,22 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
     # ── Re-run the governed policy on the recorded facts ──────────
     from edd_routing_policy import evaluate_edd_routing  # local: pure, versioned
 
+    # ``supervisor_mandatory_escalation`` and its reasons are absent from the
+    # stored contract — ``memo_handler`` adds them to the dict it hands the
+    # policy without persisting them — so both are taken from the supervisor
+    # verdict section. Supplying the flag without the reasons is not enough:
+    # the policy derives ``mandatory_escalation_edd_relevant`` from the reason
+    # list, and an empty list makes it False, dropping the
+    # ``supervisor_mandatory_escalation`` trigger from the recomputed set. That
+    # gap accounted for 14 of 15 trigger-set mismatches against the canonical
+    # corpus before it was closed.
+    verdict = (bundle.get("supervisor_verdict") or {}).get("verdict") or {}
     facts = dict(routing_facts.get("facts") or {})
     facts["supervisor_mandatory_escalation"] = bool(
-        ((bundle.get("supervisor_verdict") or {}).get("verdict") or {}).get(
-            "mandatory_escalation"
-        )
+        verdict.get("mandatory_escalation")
+    )
+    facts["supervisor_mandatory_escalation_reasons"] = list(
+        verdict.get("mandatory_escalation_reasons") or []
     )
     recomputed = _comparable(evaluate_edd_routing(facts))
     recomputed_route = str(recomputed.get("route") or "").strip().lower()
@@ -212,7 +243,9 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
     drafts: list[dict[str, Any]] = []
 
     # ── Check 3 — the stored route disagrees with the policy ──────
-    if stored_route and recomputed_route and stored_route != recomputed_route:
+    # Only in the direction absent inputs cannot manufacture. See
+    # ``UNREPLAYABLE_POLICY_KEYS``.
+    if recomputed_route == ROUTE_EDD and stored_route == ROUTE_STANDARD:
         drafts.append(
             finding_draft(
                 probe_id=PROBE_ID,
@@ -223,11 +256,11 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
                 availability_status=AvailabilityStatus.AVAILABLE,
                 confidence=1.0,
                 claim=(
-                    f"Re-running the governed EDD policy on the recorded fact "
-                    f"contract yields route '{recomputed_route}', but the stored "
-                    f"routing outcome for this application is '{stored_route}'. "
-                    "The stored outcome does not follow from the facts recorded "
-                    "alongside it."
+                    "Re-running the governed EDD policy on the recorded fact "
+                    "contract requires enhanced due diligence, but the stored "
+                    "routing outcome for this application is 'standard'. The "
+                    "stored outcome does not follow from the facts recorded "
+                    f"alongside it (reproducible triggers: {fired})."
                 ),
                 evidence_refs=unique_refs([*refs, anchor_route]),
                 primary_evidence_ref=anchor_route,
@@ -256,6 +289,52 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
             )
         )
 
+    elif recomputed_route == ROUTE_STANDARD and stored_route == ROUTE_EDD:
+        drafts.append(
+            finding_draft(
+                probe_id=PROBE_ID,
+                probe_version=PROBE_VERSION,
+                category="policy",
+                severity=LOW,
+                status=FindingStatus.NOT_REPLAYABLE,
+                availability_status=AvailabilityStatus.SNAPSHOT_INCOMPLETE,
+                confidence=1.0,
+                claim=(
+                    "The stored routing outcome is 'edd' and the governed policy "
+                    "re-run on the stored contract yields 'standard'. This "
+                    "comparison is not conclusive: the stored contract omits "
+                    f"{list(UNREPLAYABLE_POLICY_KEYS)}, which the policy reads, "
+                    "and an absent input can only remove triggers. Whether the "
+                    "escalation exceeded policy or the record is simply "
+                    "incomplete cannot be established from what was stored."
+                ),
+                evidence_refs=unique_refs([*refs, anchor_route]),
+                primary_evidence_ref=anchor_route,
+                source_modules=list(SOURCE_MODULES),
+                why_it_matters=(
+                    "Reported rather than scored so an inconclusive replay is "
+                    "never read as either agreement or divergence. Escalating "
+                    "beyond policy is not a control failure, and claiming it "
+                    "happened on incomplete inputs would be a false accusation."
+                ),
+                regulatory_or_policy_basis=(
+                    f"edd_routing_policy {stored_routing.get('policy_version')}"
+                ),
+                officer_question=(
+                    "Was the EDD escalation a deliberate judgement beyond policy?"
+                ),
+                required_action=(
+                    "None on this case. Carrying every key the policy reads in "
+                    "the stored contract would make this comparison conclusive."
+                ),
+                close_condition=(
+                    "The stored contract carries every key evaluate_edd_routing "
+                    "reads, and the recomputed route can be compared to the "
+                    "stored route."
+                ),
+            )
+        )
+
     # ── Checks 1 and 2 — policy or stored route says EDD, no case ──
     if recomputed_route == ROUTE_EDD and not has_case:
         drafts.append(
@@ -269,9 +348,9 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
                 confidence=1.0,
                 claim=(
                     "The governed EDD policy, re-run on the fact contract "
-                    f"recorded for this application, requires enhanced due "
-                    f"diligence (triggers: {fired}). No EDD case exists for the "
-                    "application."
+                    "recorded for this application, requires enhanced due "
+                    f"diligence (reproducible triggers: {fired}). No EDD case "
+                    "exists for the application."
                     + (
                         " The application was approved without one."
                         if approved
@@ -290,8 +369,8 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
                     f"edd_routing_policy {stored_routing.get('policy_version')}"
                 ),
                 officer_question=(
-                    "Why did this case not proceed to enhanced due diligence when "
-                    f"the policy triggers {fired} were present?"
+                    "Why did this case not proceed to enhanced due diligence "
+                    f"when the policy triggers {fired} were present?"
                 ),
                 required_action=(
                     "Route the case to EDD through the existing authoritative "
@@ -345,54 +424,6 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
             )
         )
 
-    # ── Check 5 — conservative over-routing, informational ────────
-    if recomputed_route == ROUTE_STANDARD and has_case:
-        stages = sorted(str(case.get("stage") or "") for case in cases)
-        drafts.append(
-            finding_draft(
-                probe_id=PROBE_ID,
-                probe_version=PROBE_VERSION,
-                category="edd",
-                # Over-routing alongside another inconsistency warrants slightly
-                # more attention than over-routing alone, but never approaches
-                # under-routing: extra diligence is not a control failure.
-                severity=LOW if drafts else INFO,
-                status=FindingStatus.HIT,
-                availability_status=AvailabilityStatus.AVAILABLE,
-                confidence=1.0,
-                claim=(
-                    "An EDD case exists for this application (stages "
-                    f"{stages}) although the governed policy, re-run on the "
-                    "recorded fact contract, routes it to standard review. The "
-                    "case was handled more conservatively than policy required."
-                ),
-                evidence_refs=unique_refs([*refs, anchor_case]),
-                primary_evidence_ref=anchor_case,
-                source_modules=list(SOURCE_MODULES),
-                why_it_matters=(
-                    "This is not a control failure — extra diligence is not a "
-                    "defect. It is recorded so the divergence is explainable, and "
-                    "so a pattern of routine over-routing can be seen if the "
-                    "policy is mis-tuned."
-                ),
-                regulatory_or_policy_basis=(
-                    f"edd_routing_policy {stored_routing.get('policy_version')}"
-                ),
-                officer_question=(
-                    "Was the EDD escalation a deliberate officer judgement beyond "
-                    "policy?"
-                ),
-                required_action=(
-                    "None required. Confirm the escalation was intentional if the "
-                    "pattern recurs."
-                ),
-                close_condition=(
-                    "No action needed; the finding clears when the policy and the "
-                    "route agree, or the escalation rationale is recorded."
-                ),
-            )
-        )
-
     if drafts:
         return drafts
 
@@ -407,15 +438,18 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
             confidence=1.0,
             claim=(
                 "Re-running the governed EDD policy on the recorded fact "
-                f"contract reproduces the stored route '{stored_route}', and the "
-                "operational EDD case state is consistent with it."
+                f"contract reproduces the stored route '{stored_route}' "
+                f"(reproducible triggers: {fired}), and the operational EDD "
+                "case state is consistent with it."
             ),
             evidence_refs=unique_refs([*refs, anchor_route]),
             primary_evidence_ref=anchor_route,
             source_modules=list(SOURCE_MODULES),
             why_it_matters=(
                 "Recorded so the completeness count distinguishes a routing "
-                "check that ran and agreed from one that never ran."
+                "check that ran and agreed from one that never ran. The trigger "
+                "list is those reproducible from the stored contract; see "
+                "UNREPLAYABLE_POLICY_KEYS."
             ),
             regulatory_or_policy_basis=(
                 f"edd_routing_policy {stored_routing.get('policy_version')}"
