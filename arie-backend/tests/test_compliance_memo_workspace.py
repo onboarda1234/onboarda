@@ -139,14 +139,16 @@ def test_existing_memo_resource_adds_history_and_rationale_without_new_route():
     assert "def post(self, app_id):" in handler
 
 
-def test_preview_and_download_share_one_pdf_generator_and_differ_only_in_disposition():
+def test_preview_and_download_serve_one_stored_pdf_and_differ_only_in_disposition():
     server_source = _read("arie-backend/server.py")
     handler = server_source[
         server_source.index("class MemoPDFDownloadHandler") :
         server_source.index("class ScreeningReportPDFDownloadHandler")
     ]
 
-    assert handler.count("generate_memo_pdf(") == 1
+    assert "generate_memo_pdf(" not in handler
+    assert "_ensure_memo_pdf_artifact(" in handler
+    assert '"X-PDF-Artifact-Source", "stored"' in handler
     assert 'inline_preview = str(self.get_query_argument("preview", ""))' in handler
     assert 'disposition = "inline" if inline_preview else "attachment"' in handler
     assert '"X-PDF-SHA256"' in handler
@@ -164,16 +166,25 @@ def test_approval_contract_and_gates_remain_in_existing_handler():
     assert 'self.require_auth(roles=["admin", "sco"])' in handler
     assert '_validate_officer_signoff(body.get("officer_signoff"), "memo")' in handler
     assert "latest_compliance_memo_row_for_identifier" in handler
+    assert "authorize_signoff_ownership(" in handler
+    assert "peer_supervisor_only=True" in handler
     assert "_ensure_memo_fresh_or_mark_stale(" in handler
+    assert 'artifact_state="draft"' in handler
+    assert 'artifact_state="final"' in handler
+    assert "reject_different_existing=True" in handler
     assert 'body.get("approval_reason")' in handler
     assert 'SET review_status = \'approved\'' in handler
 
 
 def test_lifecycle_reuses_existing_database_columns():
     schema = _read("arie-backend/db.py")
-    first_table = schema[
-        schema.index("CREATE TABLE IF NOT EXISTS compliance_memos") :
-        schema.index("CREATE TABLE IF NOT EXISTS edd_findings")
+    postgres_start = schema.index("CREATE TABLE IF NOT EXISTS compliance_memos")
+    postgres_tables = schema[
+        postgres_start : schema.index("CREATE TABLE IF NOT EXISTS edd_findings", postgres_start)
+    ]
+    sqlite_start = schema.index("CREATE TABLE IF NOT EXISTS compliance_memos", postgres_start + 1)
+    sqlite_tables = schema[
+        sqlite_start : schema.index("CREATE TABLE IF NOT EXISTS edd_findings", sqlite_start)
     ]
 
     for existing_column in (
@@ -188,8 +199,17 @@ def test_lifecycle_reuses_existing_database_columns():
         "stale_reason TEXT",
         "pdf_generated_at TIMESTAMP",
     ):
-        assert existing_column in first_table
-    assert "lifecycle_status" not in first_table
+        assert existing_column in postgres_tables
+    assert "lifecycle_status" not in postgres_tables
+    assert "CREATE TABLE IF NOT EXISTS compliance_memo_pdf_artifacts" in postgres_tables
+    assert "UNIQUE(memo_id, artifact_state)" in postgres_tables
+    assert "pdf_bytes BYTEA NOT NULL" in postgres_tables
+    assert "pdf_sha256 TEXT NOT NULL" in postgres_tables
+
+    assert "CREATE TABLE IF NOT EXISTS compliance_memo_pdf_artifacts" in sqlite_tables
+    assert "UNIQUE(memo_id, artifact_state)" in sqlite_tables
+    assert "pdf_bytes BLOB NOT NULL" in sqlite_tables
+    assert "pdf_sha256 TEXT NOT NULL" in sqlite_tables
 
 
 def test_pdf_template_has_draft_and_final_locked_formats(monkeypatch):

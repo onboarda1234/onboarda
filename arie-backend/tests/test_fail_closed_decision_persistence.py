@@ -15,6 +15,7 @@ production failure mode: a specific INSERT/UPDATE raising at the DB layer):
 Plus a unit test that `save_decision_record` raises (no log-and-continue), and
 source guards locking the fail-closed wiring.
 """
+import hashlib
 import json
 import os
 import sys
@@ -322,6 +323,12 @@ class FailClosedPersistenceTest(AsyncHTTPTestCase):
         assert memo["review_status"] == "draft", (
             "failed persist must not leave the memo approved: %r" % memo)
         assert memo["approved_by"] is None
+        artifact_count = self.db.execute(
+            "SELECT COUNT(*) AS n FROM compliance_memo_pdf_artifacts a "
+            "JOIN compliance_memos m ON m.id=a.memo_id WHERE m.application_id=?",
+            (app_id,),
+        ).fetchone()["n"]
+        assert artifact_count == 0, "approval rollback must remove draft and final artefacts"
 
     def test_memo_approval_clean_run_succeeds(self):
         """Positive control for the injection test above."""
@@ -334,9 +341,20 @@ class FailClosedPersistenceTest(AsyncHTTPTestCase):
         )
         assert resp.code == 200, resp.body.decode()
         memo = dict(self.db.execute(
-            "SELECT review_status FROM compliance_memos "
+            "SELECT id, review_status FROM compliance_memos "
             "WHERE application_id=? ORDER BY id DESC LIMIT 1", (app_id,)).fetchone())
         assert memo["review_status"] == "approved"
+        artifacts = self.db.execute(
+            "SELECT artifact_state, pdf_sha256, byte_length, pdf_bytes "
+            "FROM compliance_memo_pdf_artifacts WHERE memo_id=? ORDER BY artifact_state",
+            (memo["id"],),
+        ).fetchall()
+        assert [row["artifact_state"] for row in artifacts] == ["draft", "final"]
+        assert artifacts[0]["pdf_sha256"] != artifacts[1]["pdf_sha256"]
+        for artifact in artifacts:
+            content = bytes(artifact["pdf_bytes"])
+            assert artifact["pdf_sha256"] == hashlib.sha256(content).hexdigest()
+            assert artifact["byte_length"] == len(content)
 
     # ── RDI-011: memo validation never fakes success ──
 

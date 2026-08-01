@@ -1806,6 +1806,23 @@ def _get_postgres_schema() -> str:
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Immutable canonical PDF bytes for each memo lifecycle artefact.  Draft
+    -- and final are distinct because officer sign-off changes the regulated
+    -- document while the memo row/version remains the same.
+    CREATE TABLE IF NOT EXISTS compliance_memo_pdf_artifacts (
+        id SERIAL PRIMARY KEY,
+        memo_id INTEGER NOT NULL REFERENCES compliance_memos(id) ON DELETE CASCADE,
+        artifact_state TEXT NOT NULL CHECK(artifact_state IN ('draft','final')),
+        pdf_bytes BYTEA NOT NULL,
+        pdf_sha256 TEXT NOT NULL,
+        byte_length INTEGER NOT NULL,
+        renderer_build_sha TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(memo_id, artifact_state)
+    );
+    CREATE INDEX IF NOT EXISTS idx_compliance_memo_pdf_artifacts_memo
+        ON compliance_memo_pdf_artifacts(memo_id);
+
     CREATE TABLE IF NOT EXISTS edd_findings (
         id SERIAL PRIMARY KEY,
         edd_case_id INTEGER NOT NULL UNIQUE,
@@ -3219,6 +3236,21 @@ def _get_sqlite_schema() -> str:
         pdf_generated_at TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
+
+    -- Immutable canonical PDF bytes for each memo lifecycle artefact.
+    CREATE TABLE IF NOT EXISTS compliance_memo_pdf_artifacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        memo_id INTEGER NOT NULL REFERENCES compliance_memos(id) ON DELETE CASCADE,
+        artifact_state TEXT NOT NULL CHECK(artifact_state IN ('draft','final')),
+        pdf_bytes BLOB NOT NULL,
+        pdf_sha256 TEXT NOT NULL,
+        byte_length INTEGER NOT NULL,
+        renderer_build_sha TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(memo_id, artifact_state)
+    );
+    CREATE INDEX IF NOT EXISTS idx_compliance_memo_pdf_artifacts_memo
+        ON compliance_memo_pdf_artifacts(memo_id);
 
     CREATE TABLE IF NOT EXISTS edd_findings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
