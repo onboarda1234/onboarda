@@ -4,6 +4,13 @@
 live, complete, dispositioned, current — and where it reads as clear, is that a
 clearance or merely an absence?
 
+**Four checks, not five.** Provider defensibility, match disposition, freshness
+and adverse-media absence. A separate terminality check was implemented and then
+removed: ``derive_screening_state`` derives the state from the same provider
+record the mode comes from, so a non-terminal state is entailed by a non-live
+mode and reporting both produced two findings per subject saying one thing. The
+provider finding names the derived state instead.
+
 **Why it is not a restatement.** The Screening Queue shows a status. It does not
 show that an *approved* case was approved on a sandbox result, nor that a
 material match was never dispositioned, nor — the sharpest one — that
@@ -59,9 +66,18 @@ UNDEFENSIBLE_MODES = {
 #: Modes meaning the provider never produced an answer at all.
 UNAVAILABLE_MODES = {"not_configured", "failed", "pending"}
 
-#: The authoritative terminal states. Anything else means screening did not
-#: complete, whatever the aggregate status may suggest.
+#: The authoritative terminal states, carried for the entailment test in
+#: ``test_supervisor_probe_p04_screening_defensibility``. There is deliberately
+#: **no separate terminality check**: ``screening_state.derive_screening_state``
+#: maps every non-live provider mode onto a non-terminal state and every live
+#: one onto a terminal state, so "this subject did not complete" is entailed by
+#: the provider-mode check and never independent of it. An earlier draft ran
+#: both and produced two findings per subject saying the same thing — 33
+#: findings across 8 production-path cases, half of them redundant.
 TERMINAL_STATES = frozenset({"completed_clear", "completed_match"})
+
+#: The one provider mode that constitutes a defensible answer.
+LIVE_PROVIDER_MODE = "live_provider"
 
 #: `rule_engine` scores adverse media 1 when it has nothing to read. That is an
 #: absence, not a clearance — which is the whole point of check 5.
@@ -108,6 +124,7 @@ def _provider_findings(
     bundle: Mapping[str, Any], subject: Mapping[str, Any], application: str
 ) -> list[dict[str, Any]]:
     mode = str(subject.get("provider_mode") or "").strip().lower()
+    state = str(subject.get("screening_state") or "").strip().lower()
     key = subject.get("subject_key")
     anchor = _field_ref(subject, application, "provider_mode")
     refs = unique_refs(
@@ -127,7 +144,9 @@ def _provider_findings(
                 confidence=1.0,
                 claim=(
                     f"Screening subject '{key}' was screened against "
-                    f"{UNDEFENSIBLE_MODES[mode]}, not a live provider."
+                    f"{UNDEFENSIBLE_MODES[mode]}, not a live provider, so its "
+                    f"screening state is '{state or 'unrecorded'}' rather than "
+                    "a terminal result."
                     + (
                         " The application was approved relying on this result."
                         if approved
@@ -175,7 +194,8 @@ def _provider_findings(
                 confidence=1.0,
                 claim=(
                     f"Screening provider state for subject '{key}' is "
-                    f"'{mode or 'unrecorded'}', so whether this subject was "
+                    f"'{mode or 'unrecorded'}' and its screening state is "
+                    f"'{state or 'unrecorded'}', so whether this subject was "
                     "screened against a live provider cannot be established."
                 ),
                 evidence_refs=refs,
@@ -202,60 +222,6 @@ def _provider_findings(
         ]
 
     return []
-
-
-def _terminality_findings(
-    bundle: Mapping[str, Any], subject: Mapping[str, Any], application: str
-) -> list[dict[str, Any]]:
-    state = str(subject.get("screening_state") or "").strip().lower()
-    if state in TERMINAL_STATES:
-        return []
-    key = subject.get("subject_key")
-    anchor = _field_ref(subject, application, "screening_state")
-    return [
-        finding_draft(
-            probe_id=PROBE_ID,
-            probe_version=PROBE_VERSION,
-            category="screening",
-            severity=severity_by_reliance(bundle, approved=CRITICAL, pending=HIGH),
-            status=FindingStatus.HIT,
-            availability_status=AvailabilityStatus.AVAILABLE,
-            confidence=1.0,
-            claim=(
-                f"Screening for subject '{key}' did not complete: its recorded "
-                f"state is '{state or 'unrecorded'}', which is not a terminal "
-                "result."
-                + (
-                    " The application was approved with this subject unscreened."
-                    if is_approved(bundle)
-                    else ""
-                )
-            ),
-            evidence_refs=unique_refs(
-                [anchor, _subject_ref(subject, application), *approval_refs(bundle)]
-            ),
-            primary_evidence_ref=anchor,
-            source_modules=list(SOURCE_MODULES),
-            why_it_matters=(
-                "A non-terminal subject has not been screened, only queued. "
-                "Aggregate screening status can read as complete while an "
-                "individual required subject never returned a result."
-            ),
-            regulatory_or_policy_basis="internal_policy_only",
-            officer_question=(
-                f"Why did screening for subject '{key}' not reach a terminal "
-                "result?"
-            ),
-            required_action=(
-                "Complete screening for this subject through the existing "
-                "authoritative path."
-            ),
-            close_condition=(
-                f"Subject '{key}' records a terminal screening state of "
-                "completed_clear or completed_match."
-            ),
-        )
-    ]
 
 
 def _disposition_findings(
@@ -587,6 +553,24 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
     drafts.extend(_adverse_media_absence_finding(bundle, application))
 
     if not subjects:
+        # Two materially different situations, and conflating them would waste
+        # the finding. No report at all is a missing step. A report that exists
+        # and carries no subject records is worse: the screening surface reads
+        # as complete while nothing about any individual was actually recorded.
+        if screening.get("report_present"):
+            claim = (
+                "A screening report is stored for this application but it "
+                "carries no per-subject records: no company, director or UBO "
+                "screening evidence is present in it. Provider defensibility, "
+                "completion and match disposition cannot be examined for any "
+                "subject."
+            )
+        else:
+            claim = (
+                "No screening report exists for this application, so provider "
+                "defensibility, completion and match disposition cannot be "
+                "examined."
+            )
         drafts.append(
             finding_draft(
                 probe_id=PROBE_ID,
@@ -596,11 +580,7 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
                 status=FindingStatus.UNAVAILABLE,
                 availability_status=AvailabilityStatus.DATA_ABSENT,
                 confidence=1.0,
-                claim=(
-                    "No per-subject screening evidence exists for this "
-                    "application, so provider defensibility, completion and "
-                    "match disposition cannot be examined."
-                ),
+                claim=claim,
                 evidence_refs=unique_refs(
                     [f"{subject}#screening_subjects", *approval_refs(bundle)]
                 ),
@@ -633,10 +613,20 @@ def probe(bundle: Mapping[str, Any], policy: Any) -> Sequence[Mapping[str, Any]]
     }
 
     for row in subjects:
-        drafts.extend(_provider_findings(bundle, row, application))
-        drafts.extend(_terminality_findings(bundle, row, application))
+        provider = _provider_findings(bundle, row, application)
+        drafts.extend(provider)
+
+        # Disposition runs regardless of provider quality: an undispositioned
+        # material match is a failure of officer process, not of the provider,
+        # and it stays open after a re-screen.
         drafts.extend(_disposition_findings(bundle, row, reviews_by_id, application))
-        if as_of_dt is not None:
+
+        # Freshness does not. "Is this result still current?" presupposes a
+        # result worth being current; when the provider answer is undefensible
+        # or absent, the required action is already "re-run screening" and a
+        # second finding restates it. Suppressed only when the provider check
+        # itself reported — never silently.
+        if not provider and as_of_dt is not None:
             drafts.extend(_freshness_findings(bundle, row, application, as_of_dt))
 
     if drafts:

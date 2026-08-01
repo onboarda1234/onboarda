@@ -1,9 +1,13 @@
 """P-04 — screening reliance defensibility.
 
-Five checks, all per-subject except adverse-media absence. This suite carries
-the identity-collision regression for the whole probe set: P-04 is the only
-probe that can fire four times on one subject and once per subject across many,
-so if finding identity is fragile it breaks here first.
+Four checks: provider defensibility, match disposition and freshness per
+subject, plus adverse-media absence once per application.
+
+This suite carries the identity-collision regression for the whole probe set.
+P-04 is the only probe that fires several times on one subject *and* once per
+subject across many, so if finding identity is fragile it breaks here first. It
+also carries the entailment proof that justifies there being four checks rather
+than five — see ``test_terminality_is_entailed_by_provider_mode``.
 """
 
 from __future__ import annotations
@@ -89,11 +93,13 @@ def test_unavailable_provider_modes_are_never_clear(db, api_status,
 # ── Check 2: terminality ─────────────────────────────────────────────
 
 
-def test_non_terminal_subject_is_reported_as_incomplete(db):
+def test_non_terminal_state_is_named_in_the_provider_finding(db):
+    """One finding per subject, carrying both the mode and the derived state."""
     app_id = seed_application(db)
     add_screening(db, app_id, company=screening_record(api_status="pending"))
-    findings = _findings_for(db, app_id)
-    assert "did not complete" in claims(findings)
+    finding = only(_findings_for(db, app_id))
+    assert "'pending'" in finding["claim"]
+    assert "pending_provider" in finding["claim"]
 
 
 def test_terminal_states_match_the_authoritative_set():
@@ -103,13 +109,61 @@ def test_terminal_states_match_the_authoritative_set():
     assert screening_defensibility.TERMINAL_STATES == frozenset(AUTHORITATIVE)
 
 
-def test_approved_case_with_an_unscreened_subject_is_critical(db):
+@pytest.mark.parametrize(
+    "api_status", ["live", "sandbox", "simulated", "pending", "error",
+                   "not_configured", ""]
+)
+@pytest.mark.parametrize("matched", [True, False])
+def test_terminality_is_entailed_by_provider_mode(api_status, matched):
+    """Why this probe has no separate terminality check.
+
+    Over the whole provider-mode vocabulary, a live mode always derives a
+    terminal state and every other mode always derives a non-terminal one. A
+    terminality finding could therefore only ever repeat the provider finding.
+    If ``screening_state`` ever allows the two to diverge, this fails and the
+    removed check needs reinstating.
+    """
+    from screening_state import derive_screening_state, provider_mode_from_record
+
+    record = {
+        "provider": "complyadvantage",
+        "api_status": api_status,
+        "matched": matched,
+        "results": [{"match_id": "m1"}] if matched else [],
+    }
+    mode = provider_mode_from_record(record)
+    state = derive_screening_state(record)
+    is_terminal = state in screening_defensibility.TERMINAL_STATES
+    assert is_terminal == (mode == screening_defensibility.LIVE_PROVIDER_MODE), (
+        f"api_status={api_status!r} matched={matched}: mode={mode!r} "
+        f"state={state!r} — provider mode and terminality have diverged"
+    )
+
+
+def test_unavailable_provider_yields_one_finding_per_subject_not_two(db):
+    """The noise regression.
+
+    An unconfigured provider used to produce a provider finding *and* a
+    terminality finding for every subject. On the production-path corpus that
+    was 33 findings across 8 cases, half of them redundant.
+    """
     app_id = seed_application(db)
-    add_screening(db, app_id, company=screening_record(api_status="pending"))
+    add_screening(
+        db, app_id,
+        company=screening_record(api_status="not_configured"),
+        directors=[
+            person_entry("Jane Doe", screening_record(api_status="not_configured")),
+            person_entry("John Roe", screening_record(api_status="not_configured")),
+        ],
+    )
     approve(db, app_id)
     findings = _findings_for(db, app_id)
-    terminality = next(f for f in findings if "did not complete" in f["claim"])
-    assert terminality["severity"] == "critical"
+    provider_findings = [
+        f for f in findings if "Screening provider state" in f["claim"]
+    ]
+    assert len(provider_findings) == 3
+    assert all(f["availability_status"] == "credentials_absent"
+               for f in provider_findings)
 
 
 # ── Check 3: match disposition ───────────────────────────────────────
@@ -376,8 +430,13 @@ def test_same_defect_on_two_subjects_yields_two_identities(db):
     assert len({f["finding_id"] for f in findings}) == 2
 
 
-def test_four_defects_on_one_subject_yield_four_identities(db):
-    """Provider, terminality, disposition and freshness on a single subject."""
+def test_two_defects_on_one_subject_yield_two_identities(db):
+    """Provider and disposition on a single subject.
+
+    Freshness is suppressed here on purpose: the provider answer is a sandbox
+    result, so "is it still current?" has no useful answer. Disposition still
+    fires — an unassessed match survives a re-screen.
+    """
     app_id = seed_application(db)
     add_screening(
         db, app_id,
@@ -395,9 +454,28 @@ def test_four_defects_on_one_subject_yield_four_identities(db):
         screening_valid_until="2026-01-01T00:00:00",
     )
     findings = _findings_for(db, app_id)
-    assert len(findings) == 4
-    assert len({f["finding_id"] for f in findings}) == 4
-    assert len({f["primary_evidence_ref"] for f in findings}) == 4
+    assert len(findings) == 2
+    assert {f["category"] for f in findings} == {"screening", "sanctions"}
+    assert len({f["finding_id"] for f in findings}) == 2
+    assert len({f["primary_evidence_ref"] for f in findings}) == 2
+    assert "expired" not in claims(findings)
+
+
+def test_freshness_still_runs_when_the_provider_answer_is_defensible(db):
+    """The suppression must not swallow a stale live result."""
+    app_id = seed_application(db)
+    add_screening(
+        db, app_id,
+        directors=[
+            person_entry(
+                "Jane Doe",
+                screening_record(valid_until="2026-01-01T00:00:00"),
+            )
+        ],
+        screening_valid_until="2026-01-01T00:00:00",
+    )
+    finding = only(_findings_for(db, app_id))
+    assert "expired" in finding["claim"]
 
 
 def test_every_finding_identity_is_unique_across_a_busy_case(db):
@@ -414,8 +492,9 @@ def test_every_finding_identity_is_unique_across_a_busy_case(db):
         ubos=[person_entry("Zara Late", screening_record(api_status="error"))],
     )
     findings = _findings_for(db, app_id)
-    assert len(findings) > 4
+    assert len(findings) >= 4
     assert len({f["finding_id"] for f in findings}) == len(findings)
+    assert len({f["primary_evidence_ref"] for f in findings}) == len(findings)
 
 
 def test_findings_are_stable_across_repeated_runs(db):

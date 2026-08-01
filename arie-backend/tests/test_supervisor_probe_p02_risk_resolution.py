@@ -66,6 +66,160 @@ def test_absent_resolution_status_is_not_treated_as_resolved(db):
     assert "carries no resolution status" in finding["claim"]
 
 
+def test_mapped_is_a_resolved_status(db):
+    """The corpus regression.
+
+    ``risk_controlled_values`` writes ``mapped`` for a successful controlled
+    lookup; only ``rule_engine`` writes ``resolved``. An earlier draft accepted
+    ``resolved`` alone and reported 253 false positives across the 41-case
+    canonical pilot corpus — every controlled-registry factor in the dataset.
+    """
+    findings = _run(
+        db,
+        risk_dimensions=risk_dimensions(
+            [
+                factor("industry_sector", dimension="D4", rule_score=3,
+                       resolution_status="mapped"),
+                factor("entity_type", resolution_status="mapped"),
+            ]
+        ),
+    )
+    assert only(findings)["status"] == "clear"
+
+
+def test_resolved_vocabulary_matches_what_the_engine_actually_writes():
+    """Derived from the writers, not asserted as a literal.
+
+    ``risk_controlled_values.resolve_controlled_score`` returns ``mapped`` on a
+    successful lookup and ``unresolved`` on a miss. Reading both out of the real
+    resolver means a renamed status breaks this test rather than silently
+    flipping every factor in the corpus to "defective".
+    """
+    from risk_controlled_values import resolve_controlled_score
+
+    miss = resolve_controlled_score("entity_type", "a value no registry holds")
+    assert miss.status in risk_resolution.UNRESOLVED_STATUSES
+
+    hit = resolve_controlled_score("entity_type", "SME / Private Company")
+    assert hit.controlled_id, "registry lookup failed — fixture value drifted"
+    assert hit.status in risk_resolution.RESOLVED_STATUSES, (
+        f"the controlled registry writes {hit.status!r} for a successful "
+        "lookup and the probe does not recognise it as resolved"
+    )
+
+
+def test_unmatched_is_reported_as_a_fallback_score(db):
+    """``unmatched`` means scored by a fallback rule, never mapped.
+
+    ``rule_engine`` promotes it to ``unresolved`` only under strict mode, so
+    outside strict mode it is exactly the silent default this probe exists for.
+    """
+    findings = _run(
+        db,
+        risk_dimensions=risk_dimensions(
+            [factor("service_type", resolution_status="unmatched")]
+        ),
+    )
+    finding = only(findings)
+    assert finding["status"] == "hit"
+    assert "scored by a fallback rule" in finding["claim"]
+
+
+def test_unrecognised_status_is_neither_assumed_good_nor_bad(db):
+    findings = _run(
+        db,
+        risk_dimensions=risk_dimensions(
+            [factor("service_type", resolution_status="probably_fine")]
+        ),
+    )
+    finding = only(findings)
+    assert finding["status"] == "hit"
+    assert "not a status this platform's risk engine is known to write" in finding["claim"]
+
+
+@pytest.mark.parametrize("controlled_values_enabled", [False, True])
+def test_probe_agrees_with_the_real_risk_engine_on_a_clean_input(
+    db, monkeypatch, controlled_values_enabled
+):
+    """End-to-end guard against the vocabulary drifting again.
+
+    Rather than trusting a hand-written status string, this scores a realistic
+    application through ``rule_engine.compute_risk_score`` and feeds the
+    evidence it actually produces to the probe. A new spelling of "resolved"
+    appearing upstream fails here.
+
+    Both sides of the controlled-value contract flag are exercised, because
+    they write *different* success spellings: the legacy path writes
+    ``resolved`` and the controlled registry writes ``mapped``. Testing only
+    the default would have missed the bug this test was written for.
+    """
+    import json
+
+    import environment
+    import risk_controlled_values
+    from rule_engine import compute_risk_score
+
+    flag = risk_controlled_values.ACTIVATION_FLAG
+    managers = (environment.flags, risk_controlled_values.flags)
+    snapshots = [dict(manager._cache) for manager in managers]
+    monkeypatch.setenv(flag, "true" if controlled_values_enabled else "false")
+    for manager in managers:
+        manager._cache[flag] = controlled_values_enabled
+
+    try:
+        result = compute_risk_score(
+            {
+                "company_name": "Probe Engine Ltd",
+                "country": "Mauritius",
+                "sector": "Management Consulting",
+                "entity_type": "SME / Private Company",
+                "ownership_structure": "Simple — direct identifiable UBOs",
+                "primary_service": "Advisory",
+                "monthly_volume": "Under USD 100k",
+                "transaction_complexity": "Simple — single currency, domestic corridors",
+                "introduction_method": "Direct application — client initiated",
+            }
+        )
+    finally:
+        for manager, snapshot in zip(managers, snapshots):
+            manager._cache.clear()
+            manager._cache.update(snapshot)
+
+    evidence = (result.get("dimensions") or {}).get("factor_computation_evidence")
+    assert evidence, "risk engine produced no factor evidence — fixture drifted"
+
+    engine_factors = evidence.get("factors") or []
+    assert engine_factors, "risk engine produced no factors"
+    statuses = {str(item.get("resolution_status")) for item in engine_factors}
+    if controlled_values_enabled:
+        assert "mapped" in statuses, (
+            "the controlled-value path no longer writes 'mapped'; this test is "
+            "no longer covering the spelling it was written for"
+        )
+
+    findings = _run(
+        db,
+        risk_dimensions=json.dumps(result["dimensions"]),
+        risk_score=result["score"],
+    )
+    reported = claims(findings)
+
+    # The expected vocabulary is stated here, not read from the probe: comparing
+    # the probe against its own constant would pass no matter what that constant
+    # said, which is exactly how the original bug survived its first test.
+    for item in engine_factors:
+        key = str(item.get("factor_key") or "")
+        status = str(item.get("resolution_status"))
+        if not key:
+            continue
+        if status in {"mapped", "resolved"}:
+            assert key not in reported, (
+                f"{key} resolved as {status!r} and was still reported"
+            )
+        elif status in {"unresolved", "unmatched"}:
+            assert key in reported, f"{key} was {status!r} and went unreported"
+
+
 def test_resolution_is_never_inferred_from_a_normal_looking_score(db):
     """A factor scoring 1 with an unresolved status is still unresolved.
 

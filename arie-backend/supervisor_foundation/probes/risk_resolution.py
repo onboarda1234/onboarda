@@ -40,11 +40,32 @@ SOURCE_MODULES = (
     "supervisor_foundation.bundle",
 )
 
-#: A factor is resolved only when it says so. Anything else — an explicit
-#: unresolved sentinel, an unrecognised token, or the key missing entirely — is
-#: treated as unresolved. Resolution is never inferred from the score, because a
-#: silent default produces a perfectly ordinary-looking score.
-RESOLVED_STATUS = "resolved"
+#: The authoritative resolution vocabulary, read from the two modules that
+#: write it. ``risk_controlled_values.ControlledResolution`` emits ``mapped`` or
+#: ``unresolved``; ``rule_engine`` additionally emits ``resolved`` for factors
+#: resolved outside the controlled registry and ``unmatched`` for a service
+#: label scored by a fallback rule.
+#:
+#: Both spellings of success are accepted. Validating against ``resolved`` alone
+#: — as an earlier draft of this probe did — reported every controlled-registry
+#: factor in the corpus as defective: 253 findings across 41 cases, all wrong.
+RESOLVED_STATUSES = frozenset({"mapped", "resolved"})
+
+#: Failure states, and what each one means to an officer. ``unmatched`` is the
+#: subtle one: the factor *was* scored, by a fallback rule, without ever mapping
+#: to a controlled entry. ``rule_engine`` promotes it to ``unresolved`` only
+#: under strict mode, so outside strict mode it is exactly the silent default
+#: this probe exists to surface.
+UNRESOLVED_STATUSES = {
+    "unresolved": (
+        "records resolution status 'unresolved', so its value did not map to "
+        "any entry in the controlled-value registry"
+    ),
+    "unmatched": (
+        "records resolution status 'unmatched': it was scored by a fallback "
+        "rule rather than by mapping to a controlled-value entry"
+    ),
+}
 
 #: `rule_engine` maps these factor keys onto jurisdiction inputs; used only to
 #: pick a finding category, never to re-derive a score.
@@ -199,7 +220,8 @@ def _unresolved_factor_findings(
 
         has_status = "resolution_status" in factor
         status_value = factor.get("resolution_status")
-        if has_status and str(status_value or "").strip().lower() == RESOLVED_STATUS:
+        normalised = str(status_value or "").strip().lower()
+        if has_status and normalised in RESOLVED_STATUSES:
             continue
 
         rule_score = factor.get("rule_score")
@@ -214,10 +236,17 @@ def _unresolved_factor_findings(
                 "carries no resolution status in the stored factor evidence, so "
                 "whether it resolved to a controlled value cannot be established"
             )
+        elif normalised in UNRESOLVED_STATUSES:
+            detail = UNRESOLVED_STATUSES[normalised]
         else:
+            # An unrecognised token. Reported as unrecognised rather than
+            # assumed either way: guessing "probably fine" is how a new failure
+            # spelling would go unnoticed, and guessing "broken" is how a new
+            # success spelling would flood the officer with noise.
             detail = (
-                f"records resolution status {str(status_value)!r} rather than "
-                "'resolved', so it did not map to a controlled value"
+                f"records resolution status {str(status_value)!r}, which is not "
+                "a status this platform's risk engine is known to write, so "
+                "whether it resolved to a controlled value cannot be established"
             )
 
         drafts.append(

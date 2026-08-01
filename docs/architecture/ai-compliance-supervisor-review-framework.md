@@ -1280,6 +1280,51 @@ no frozen-module guard test regresses; findings are advisory-only and provably
 cannot reach an approval gate — enforced by a guard test asserting no write path
 exists to any authority listed in §2.3.
 
+##### 0B-2 as implemented — `probe-set-0b2-v1`
+
+Package `supervisor_foundation/probes/`, exit criteria met. Real-case results,
+the three defects the corpus exposed and the SHIP/REVISE/DROP calls are in
+[`supervisor-0b2-real-case-validation.md`](supervisor-0b2-real-case-validation.md).
+Four deviations from the specification above are worth recording here, because
+each was a decision rather than an omission:
+
+1. **P-04 ships four checks, not five.** A terminality check was implemented and
+   removed. `screening_state.derive_screening_state()` derives the state from the
+   same provider record `provider_mode_from_record()` reads, so a non-terminal
+   state is entailed by a non-live provider mode and the two checks reported one
+   fact twice. The derived state is named in the provider finding instead. The
+   entailment is asserted across the whole provider-mode vocabulary by
+   `test_terminality_is_entailed_by_provider_mode`; if `screening_state` ever
+   lets the two diverge, the check is reinstated deliberately.
+
+2. **Findings declare their identity anchor.** §10.6 derives `finding_id` from a
+   *primary evidence reference*, which the 0B-1 runner took to be the
+   lowest-sorting reference. Every P-04 finding cites the same application-level
+   approval references, so several findings on one case collapsed onto a single
+   identifier. A probe that can fire more than once per subject now declares
+   `primary_evidence_ref` explicitly, naming the field the check examined; the
+   runner validates it is one of the finding's own references and records it on
+   the output. The fallback is unchanged for single-hit probes.
+
+3. **P-03 calls `evaluate_edd_routing()`.** The clock-hazard register above
+   previously said it would not be called in Phase 0B. Re-running the governed
+   policy *is* the probe, and its one clock-bearing field is cosmetic and
+   excluded from comparison. The register row is updated accordingly.
+
+4. **Two silent authoritative fallbacks are refused, not inherited.**
+   `periodic_review_policy.parse_review_date()` (§10.4.3) returns today for
+   unreadable input, and `periodic_review_policy.normalize_risk_level()` maps any
+   unrecognised level to `MEDIUM`. Inheriting either would convert a defective
+   record into a compliant-looking one — a corrupt date read as "scheduled
+   today", or a governed 24-month cycle attributed to an ungoverned level. P-06
+   parses dates itself and refuses the frequency lookup for a level outside
+   `RISK_FREQUENCY_MONTHS`. The second is reachable in practice:
+   `applications.risk_level` carries a CHECK constraint on the four governed
+   levels and `final_risk_level`, the column the probe reads, does not.
+
+**Not addressed, by instruction:** the five-field cross-section duplication and
+the risk/decision null-versus-absent inconsistency deferred at bundle v2.
+
 ---
 
 #### 0B-3 — Policy-dependent probes
@@ -1418,7 +1463,7 @@ Two distinct severities matter here, and conflating them is the trap:
 |---|---|---|---|
 | `evaluate_document_reliance_gate()` | **Material** | Calls `datetime.now(timezone.utc)` for `generated_at` **and derives the `stale_verification` blocker from it** | **Do not call.** Assemble `build_required_document_expectations()` output plus per-document reliance state; derive staleness from `as_of` |
 | `build_screening_truth_summary()` | **Material** | Reaches a clock transitively via `screening_state._timestamp_is_past`, which compares `screening_valid_until` against `datetime.now(timezone.utc)`. This feeds **`freshness`, `stale` and `approval_blocking`** | **Do not call.** Assemble the stored screening report and officer dispositions; derive freshness from `as_of` |
-| `evaluate_edd_routing()` | Cosmetic (but out of scope) | Emits `evaluated_at` | Not called in Phase 0B — re-running the policy is probe P-03 |
+| `evaluate_edd_routing()` | Cosmetic | Emits `evaluated_at` | **Called in Phase 0B-2** by probe P-03, which re-runs the policy on the stored fact contract. `evaluated_at` is excluded from every comparison the probe makes (`edd_divergence.COSMETIC_KEYS`) and never reaches a finding. The route and triggers the probe compares are pure functions of the facts |
 | `run_memo_supervisor()` | Cosmetic | Emits `"checked_at": datetime.now().isoformat()` | Call behind a stripping adapter; strip before hashing |
 | `periodic_review_policy.parse_review_date()` | **Material — silent** | Falls back to `datetime.now(timezone.utc).date()` on malformed or missing input, and `add_months()` / `_interval_days()` inherit it | **Do not call on unvalidated input.** Parse dates in the probe; report malformed or missing dates explicitly. See §10.4.3 |
 | `Finding.created_at` | Cosmetic | Would make every run unique | Set from the injected `as_of`, never wall-clock |
