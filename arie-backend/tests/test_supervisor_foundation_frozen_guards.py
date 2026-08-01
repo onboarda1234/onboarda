@@ -291,5 +291,5 @@ def test_importing_the_foundation_has_no_side_effects():
     import supervisor_foundation
 
     reloaded = importlib.reload(supervisor_foundation)
-    assert reloaded.BUNDLE_SCHEMA_VERSION == "supervisor-bundle-v1"
-    assert reloaded.PROBE_SET_VERSION == "probe-set-0b1-empty"
+    assert reloaded.BUNDLE_SCHEMA_VERSION == "supervisor-bundle-v2"
+    assert reloaded.PROBE_SET_VERSION == "probe-set-0b2-empty"

@@ -52,7 +52,7 @@ def test_sections_are_present_even_when_empty(db):
 def test_meta_carries_schema_version_subject_and_as_of(db):
     bundle = _bundle(db, complete_standard(db))
     meta = bundle["meta"]
-    assert meta["bundle_schema_version"] == "supervisor-bundle-v1"
+    assert meta["bundle_schema_version"] == "supervisor-bundle-v2"
     assert meta["subject_type"] == SubjectType.APPLICATION.value
     assert meta["subject_id"]
     assert meta["as_of"] == AS_OF

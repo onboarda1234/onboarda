@@ -116,9 +116,55 @@ def complete_standard(db) -> str:
                     "screening_provider": "complyadvantage",
                     "screening_mode": "live",
                     "screened_at": "2026-07-01T09:00:00",
-                    "company_screening": {"matched": False, "results": []},
-                    "director_screenings": [{"name": "A"}, {"name": "B"}],
-                    "ubo_screenings": [{"name": "C"}],
+                    "company_screening": {
+                        "company_name": "Fixture Holdings Ltd",
+                        "provider": "complyadvantage",
+                        "api_status": "live",
+                        "matched": False,
+                        "results": [],
+                        "screened_at": "2026-07-01T09:00:00",
+                        "screening_valid_until": "2026-10-29T00:00:00",
+                    },
+                    # v2: per-subject records, in reverse name order so the
+                    # subjects[] ordering rule is exercised, not assumed.
+                    "director_screenings": [
+                        {
+                            "person_name": "Zara Late",
+                            "has_pep_hit": True,
+                            "screening": {
+                                "provider": "complyadvantage",
+                                "api_status": "live",
+                                "matched": True,
+                                "results": [{"match_id": "m1"}],
+                                "screened_at": "2026-07-01T09:00:00",
+                                "screening_valid_until": "2026-10-29T00:00:00",
+                            },
+                        },
+                        {
+                            "person_name": "Jane Doe",
+                            "screening": {
+                                "provider": "complyadvantage",
+                                "api_status": "live",
+                                "matched": False,
+                                "results": [],
+                                "screened_at": "2026-07-01T09:00:00",
+                                "screening_valid_until": "2026-10-29T00:00:00",
+                            },
+                        },
+                    ],
+                    "ubo_screenings": [
+                        {
+                            "person_name": "John Roe",
+                            "screening": {
+                                "provider": "complyadvantage",
+                                "api_status": "live",
+                                "matched": False,
+                                "results": [],
+                                "screened_at": "2026-07-01T09:00:00",
+                                "screening_valid_until": "2026-10-29T00:00:00",
+                            },
+                        }
+                    ],
                 },
             }
         ),
@@ -221,6 +267,42 @@ def complete_standard(db) -> str:
                             "policy_version": "edd_routing_policy_v1",
                             "route": "edd",
                             "triggers": ["declared_pep_present", "high_or_very_high_risk"],
+                        },
+                        # v2: the stored EDD fact contract, shaped as
+                        # memo_handler persists it. Trigger flags are seeded
+                        # unsorted so the canonical ordering is exercised.
+                        "agent5_input_contract": {
+                            "final_risk_level": "HIGH",
+                            "declared_pep_present": True,
+                            "jurisdiction_risk_tier": "high",
+                            "sector_risk_tier": "medium",
+                            "ownership_transparency_status": "transparent",
+                            "edd_trigger_flags": [
+                                "risk_escalation:elevated_jurisdiction",
+                                "declared_pep_present",
+                            ],
+                            "screening_terminality_summary": {
+                                "terminal": True,
+                                "has_terminal_match": False,
+                                "has_non_terminal": False,
+                                "canonical_state": "completed_clear",
+                                "provider_mode": "live_provider",
+                                "defensible_clear": True,
+                                "approval_blocking": False,
+                                "has_sandbox": False,
+                                "has_simulated": False,
+                                "has_formally_cleared_match": False,
+                                "has_uncleared_completed_match": False,
+                                "screening_result": "clear",
+                                # Not a policy input — must be dropped by the
+                                # projection rather than carried through.
+                                "blocking_reasons": [],
+                            },
+                            # Contract keys the policy does not read; the
+                            # projection must exclude these.
+                            "decision_recommendation": "REVIEW",
+                            "monitoring_tier": "Enhanced",
+                            "sector_label": "Technology",
                         },
                     },
                 }
