@@ -57,14 +57,19 @@ PHASE_0B1_HEAD = "901265f9cbfb45bac62358da6a453e24c052078e"
 #
 # **The one-commit residual, stated rather than hidden.** A commit cannot contain
 # its own hash, so the commit that writes this pin necessarily comes after the
-# head it names. That residual is bounded two ways and is not a gap an
-# authoritative change could hide in:
+# head it names. It touches this file and the phase documentation only, and both
+# ``arie-backend/tests/test_supervisor_`` and ``docs/`` are inside
+# ``PHASE_0B2_ALLOWED_PREFIXES``, so nothing authoritative can hide in the gap.
 #
-# * ``test_phase_0b2_residual_commits_are_allowlisted`` below diffs
-#   ``PHASE_0B2_HEAD..HEAD`` while this branch is still ahead of the pinned head
-#   and holds it to the same allowlist, so the residual is proved, not assumed;
-# * that check is skipped once ``HEAD`` reaches the pinned head or the work has
-#   merged, at which point the pinned-range proof is the whole story.
+# **Why that residual is documented rather than asserted.** A test diffing
+# ``PHASE_0B2_HEAD..HEAD`` was written, passed locally, and failed CI: Actions
+# checks out the pull request's *merge ref*, so ``HEAD`` there is this branch
+# merged with ``main`` and the diff swept in every unrelated change ``main`` had
+# made since the base. "Commits after the pinned head on this branch" is not a
+# well-defined set once a merge ref or a descendant branch is involved, so it
+# cannot be soundly asserted — which is the same reason both bounds are pinned
+# in the first place. The immutable range below is the proof; the residual is a
+# reading of the diff.
 PHASE_0B2_BASE = "c667f95ff8ae892bcc8cafe27efa1151cc7d92f6"
 PHASE_0B2_HEAD = "3a4ac607f9605f8ad3f29f39eec01983f15cb818"
 
@@ -208,38 +213,6 @@ def test_phase_0b2_adds_only_foundation_paths():
         if not path.startswith(PHASE_0B2_ALLOWED_PREFIXES)
     )
     assert not unexpected, f"unexpected paths changed in Phase 0B-2: {unexpected}"
-
-
-def test_phase_0b2_residual_commits_are_allowlisted():
-    """Close the one-commit residual the pin cannot cover.
-
-    ``PHASE_0B2_HEAD`` names the approved head; the commit that wrote that pin
-    comes after it. While this branch is still ahead of the pinned head, hold
-    everything past it to the same allowlist so the residual is proved rather
-    than argued. Once the branch is at or behind the pinned head — which is what
-    a descendant branch after merge looks like — there is no residual and the
-    pinned-range proof stands alone.
-    """
-    behind = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", "HEAD", PHASE_0B2_HEAD],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if behind.returncode == 0:
-        pytest.skip("HEAD is at or behind the pinned Phase 0B-2 head")
-
-    residual = _git("diff", "--name-only", PHASE_0B2_HEAD, "HEAD").split()
-    unexpected = sorted(
-        path
-        for path in residual
-        if not path.startswith(PHASE_0B2_ALLOWED_PREFIXES)
-    )
-    assert not unexpected, (
-        f"commits after the pinned Phase 0B-2 head touch {unexpected}, which "
-        "the phase was not authorised to change"
-    )
 
 
 def test_protected_files_unchanged_by_phase_0b1():
