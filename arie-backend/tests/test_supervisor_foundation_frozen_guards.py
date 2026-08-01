@@ -70,8 +70,15 @@ PHASE_0B1_HEAD = "901265f9cbfb45bac62358da6a453e24c052078e"
 # cannot be soundly asserted — which is the same reason both bounds are pinned
 # in the first place. The immutable range below is the proof; the residual is a
 # reading of the diff.
+#
+# **Merge-commit only.** Both this guard and the Phase 0B-1 guard above require
+# the pinned head to remain reachable from later branches, which a merge commit
+# preserves. Squashing or rebasing this pull request would rewrite these commits
+# out of history and make both proofs fail for everyone afterwards — not
+# silently pass, which is the one thing worse. This pull request must be landed
+# with a merge commit.
 PHASE_0B2_BASE = "c667f95ff8ae892bcc8cafe27efa1151cc7d92f6"
-PHASE_0B2_HEAD = "3a4ac607f9605f8ad3f29f39eec01983f15cb818"
+PHASE_0B2_HEAD = "5fd784dea606ba3d24e959f320fb34db67c65704"
 
 
 def _git(*args: str) -> str:
