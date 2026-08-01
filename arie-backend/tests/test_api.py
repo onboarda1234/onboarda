@@ -6,6 +6,7 @@ Runs a real Tornado HTTP server in a background thread for true HTTP-level valid
 import os
 import sys
 import json
+import hashlib
 import tempfile
 import socket
 import threading
@@ -8144,13 +8145,22 @@ def test_h1_live_memo_route_is_deterministic(api_server, monkeypatch):
 
     conn = get_db()
     row = conn.execute(
-        "SELECT memo_data FROM compliance_memos WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+        "SELECT id, memo_data FROM compliance_memos WHERE application_id = ? ORDER BY id DESC LIMIT 1",
         (app_id,),
+    ).fetchone()
+    artifact = conn.execute(
+        "SELECT artifact_state, pdf_bytes, pdf_sha256, byte_length "
+        "FROM compliance_memo_pdf_artifacts WHERE memo_id=?",
+        (row["id"],),
     ).fetchone()
     conn.close()
     assert row is not None
     persisted = json.loads(row["memo_data"])
     assert persisted["metadata"]["ai_source"] == "deterministic"
+    assert artifact["artifact_state"] == "draft"
+    assert bytes(artifact["pdf_bytes"]).startswith(b"%PDF-")
+    assert artifact["pdf_sha256"] == hashlib.sha256(bytes(artifact["pdf_bytes"])).hexdigest()
+    assert artifact["byte_length"] == len(bytes(artifact["pdf_bytes"]))
 
 
 def _seed_compliance_memo_workspace_history():
@@ -8318,6 +8328,239 @@ class TestComplianceMemoWorkspaceAPI:
             timeout=5,
         )
         assert locked.status_code == 409
+
+    def test_preview_download_share_immutable_lifecycle_artifacts(
+        self,
+        api_server,
+        monkeypatch,
+    ):
+        """Preview/download are byte views of one stored draft or final PDF."""
+        from auth import create_token
+        from db import get_db
+        from memo_pdf_artifacts import (
+            MemoPDFArtifactImmutableError,
+            persist_memo_pdf_artifact,
+        )
+        import server
+
+        app_id, app_ref = _seed_compliance_memo_workspace_history()
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        headers = {"Authorization": f"Bearer {token}"}
+        render_calls = []
+
+        def nondeterministic_renderer(**kwargs):
+            state = "final" if kwargs.get("approved_at") else "draft"
+            render_calls.append(state)
+            return (
+                b"%PDF-1.7\n"
+                + f"canonical-{state}-render-{len(render_calls)}".encode("ascii")
+                + b"\n%%EOF\n"
+            )
+
+        monkeypatch.setattr(server, "generate_memo_pdf", nondeterministic_renderer)
+
+        def fetch(preview):
+            suffix = "?preview=1" if preview else ""
+            response = http_requests.get(
+                f"{api_server}/api/applications/{app_ref}/memo/pdf{suffix}",
+                headers=headers,
+                timeout=5,
+            )
+            assert response.status_code == 200, response.text
+            assert response.headers["X-PDF-Artifact-Source"] == "stored"
+            assert response.headers.get("Content-Encoding") in (None, "identity")
+            assert int(response.headers["Content-Length"]) == len(response.content)
+            assert response.headers["X-PDF-SHA256"] == hashlib.sha256(response.content).hexdigest()
+            return response
+
+        draft_preview_1 = fetch(True)
+        draft_download_1 = fetch(False)
+        draft_preview_2 = fetch(True)
+        draft_download_2 = fetch(False)
+
+        assert render_calls == ["draft"]
+        assert draft_preview_1.content == draft_download_1.content
+        assert draft_preview_1.content == draft_preview_2.content == draft_download_2.content
+        assert draft_preview_1.headers["X-PDF-SHA256"] == draft_download_1.headers["X-PDF-SHA256"]
+        assert draft_preview_1.headers["X-PDF-Artifact-State"] == "draft"
+
+        db = get_db()
+        current = db.execute(
+            "SELECT id, memo_data FROM compliance_memos "
+            "WHERE application_id=? ORDER BY version DESC LIMIT 1",
+            (app_id,),
+        ).fetchone()
+        draft_row = db.execute(
+            "SELECT pdf_sha256, byte_length, pdf_bytes FROM compliance_memo_pdf_artifacts "
+            "WHERE memo_id=? AND artifact_state='draft'",
+            (current["id"],),
+        ).fetchone()
+        assert draft_row["pdf_sha256"] == draft_preview_1.headers["X-PDF-SHA256"]
+        assert draft_row["byte_length"] == len(draft_preview_1.content)
+        assert bytes(draft_row["pdf_bytes"]) == draft_preview_1.content
+        access_audits = db.execute(
+            "SELECT application_id, request_id FROM audit_log "
+            "WHERE application_id=? AND action IN ('Preview Memo PDF', 'Download Memo PDF')",
+            (app_id,),
+        ).fetchall()
+        assert len(access_audits) == 4
+        assert all(row["application_id"] == app_id for row in access_audits)
+        assert all(str(row["request_id"] or "").strip() for row in access_audits)
+
+        db.execute(
+            "UPDATE compliance_memos SET review_status='approved', approved_by='admin001', "
+            "approved_at='2026-07-31T10:04:00+00:00', approval_reason=? WHERE id=?",
+            ("The officer accepts the documented residual risk.", current["id"]),
+        )
+        db.commit()
+        db.close()
+
+        final_preview = fetch(True)
+        final_download = fetch(False)
+        assert render_calls == ["draft", "final"]
+        assert final_preview.content == final_download.content
+        assert final_preview.headers["X-PDF-SHA256"] == final_download.headers["X-PDF-SHA256"]
+        assert final_preview.headers["X-PDF-Artifact-State"] == "final"
+        assert final_preview.content != draft_preview_1.content
+        assert final_preview.headers["X-PDF-SHA256"] != draft_preview_1.headers["X-PDF-SHA256"]
+
+        def forbidden_regeneration(**_kwargs):
+            raise AssertionError("stored final artefact must not be regenerated")
+
+        monkeypatch.setattr(server, "generate_memo_pdf", forbidden_regeneration)
+        assert fetch(True).content == final_preview.content
+        assert fetch(False).content == final_preview.content
+
+        db = get_db()
+        with pytest.raises(MemoPDFArtifactImmutableError):
+            persist_memo_pdf_artifact(
+                db,
+                memo_id=current["id"],
+                artifact_state="final",
+                pdf_bytes=b"%PDF-1.7\nreplacement-final\n%%EOF\n",
+                renderer_build_sha="different-build",
+                reject_different_existing=True,
+            )
+        stored_final = db.execute(
+            "SELECT pdf_sha256, pdf_bytes FROM compliance_memo_pdf_artifacts "
+            "WHERE memo_id=? AND artifact_state='final'",
+            (current["id"],),
+        ).fetchone()
+        assert stored_final["pdf_sha256"] == final_preview.headers["X-PDF-SHA256"]
+        assert bytes(stored_final["pdf_bytes"]) == final_preview.content
+
+        version_three = json.loads(current["memo_data"])
+        version_three.setdefault("metadata", {})["memo_version"] = "v3"
+        version_three["metadata"]["memo_generated_at"] = "2026-07-31T10:05:00+00:00"
+        db.execute(
+            "INSERT INTO compliance_memos ("
+            "application_id, version, memo_data, generated_by, ai_recommendation, "
+            "review_status, quality_score, validation_status, memo_version, "
+            "supervisor_status, rule_engine_status, blocked, is_stale, created_at"
+            ") VALUES (?, 3, ?, 'admin001', 'APPROVE', 'draft', 9.0, 'pass', "
+            "'v3', 'CONSISTENT', 'pass', 0, 0, '2026-07-31T10:05:00+00:00')",
+            (app_id, json.dumps(version_three)),
+        )
+        db.commit()
+        new_memo = db.execute(
+            "SELECT id FROM compliance_memos WHERE application_id=? AND version=3",
+            (app_id,),
+        ).fetchone()
+        db.close()
+
+        monkeypatch.setattr(
+            server,
+            "generate_memo_pdf",
+            lambda **_kwargs: b"%PDF-1.7\ncanonical-new-version\n%%EOF\n",
+        )
+        new_preview = fetch(True)
+        new_download = fetch(False)
+        assert new_preview.content == new_download.content
+        assert new_preview.headers["X-PDF-SHA256"] != draft_preview_1.headers["X-PDF-SHA256"]
+        assert int(new_preview.headers["X-Memo-Id"]) == new_memo["id"]
+
+        db = get_db()
+        old_artifacts = db.execute(
+            "SELECT artifact_state, pdf_sha256 FROM compliance_memo_pdf_artifacts "
+            "WHERE memo_id=? ORDER BY artifact_state",
+            (current["id"],),
+        ).fetchall()
+        new_artifacts = db.execute(
+            "SELECT artifact_state, pdf_sha256 FROM compliance_memo_pdf_artifacts "
+            "WHERE memo_id=?",
+            (new_memo["id"],),
+        ).fetchall()
+        db.close()
+        assert [row["artifact_state"] for row in old_artifacts] == ["draft", "final"]
+        assert [row["artifact_state"] for row in new_artifacts] == ["draft"]
+
+    def test_pdf_and_approval_authorisation_remain_enforced(self, api_server):
+        from auth import create_token
+
+        _, app_ref = _seed_compliance_memo_workspace_history()
+        endpoint = f"{api_server}/api/applications/{app_ref}/memo/pdf?preview=1"
+        assert http_requests.get(endpoint, timeout=5).status_code == 401
+
+        client_token = create_token("client001", "client", "Test Client", "client")
+        client_headers = {"Authorization": f"Bearer {client_token}"}
+        assert http_requests.get(endpoint, headers=client_headers, timeout=5).status_code == 403
+
+        analyst_token = create_token("analyst001", "analyst", "Test Analyst", "officer")
+        analyst_headers = {"Authorization": f"Bearer {analyst_token}"}
+        denied = http_requests.post(
+            f"{api_server}/api/applications/{app_ref}/memo/approve",
+            headers=analyst_headers,
+            json={
+                "approval_reason": "This must remain inaccessible.",
+                "officer_signoff": {"acknowledged": True},
+            },
+            timeout=5,
+        )
+        assert denied.status_code == 403
+
+    def test_unexpected_pdf_preparation_failure_closes_safely(
+        self,
+        api_server,
+        monkeypatch,
+    ):
+        from auth import create_token
+        from db import get_db
+        import server
+
+        app_id, app_ref = _seed_compliance_memo_workspace_history()
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        def unexpected_context_failure(*_args, **_kwargs):
+            raise RuntimeError("injected unexpected PDF context failure")
+
+        monkeypatch.setattr(server, "_memo_pdf_render_context", unexpected_context_failure)
+        failed = http_requests.get(
+            f"{api_server}/api/applications/{app_ref}/memo/pdf?preview=1",
+            headers=headers,
+            timeout=5,
+        )
+        assert failed.status_code == 500
+        assert "failed safely" in failed.text
+
+        db = get_db()
+        memo = db.execute(
+            "SELECT id FROM compliance_memos WHERE application_id=? ORDER BY version DESC LIMIT 1",
+            (app_id,),
+        ).fetchone()
+        artifact_count = db.execute(
+            "SELECT COUNT(*) AS n FROM compliance_memo_pdf_artifacts WHERE memo_id=?",
+            (memo["id"],),
+        ).fetchone()["n"]
+        db.close()
+        assert artifact_count == 0
+
+        workspace = http_requests.get(
+            f"{api_server}/api/applications/{app_ref}/memo",
+            headers=headers,
+            timeout=5,
+        )
+        assert workspace.status_code == 200, workspace.text
 
 
 class TestScreeningHitDisposition:

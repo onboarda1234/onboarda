@@ -139,6 +139,12 @@ from memo_governance import (
     latest_compliance_memo_row_for_identifier,
     memo_selection_metadata,
 )
+from memo_pdf_artifacts import (
+    MemoPDFArtifactError,
+    MemoPDFArtifactIntegrityError,
+    load_memo_pdf_artifact,
+    persist_memo_pdf_artifact,
+)
 from provider_errors import sanitize_provider_error
 from screening_jobs import (
     JOB_FAILED as SCREENING_JOB_FAILED,
@@ -32318,9 +32324,159 @@ def _latest_compliance_memo_row(db, application_id):
         columns="""
             id, version, memo_data, review_status, validation_status, blocked,
             block_reason, quality_score, memo_version, raw_output_hash, created_at,
-            is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
+            is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at,
+            supervisor_status, approved_by, approved_at, approval_reason,
+            pdf_generated_at
         """,
     )
+
+
+def _memo_pdf_artifact_state(memo_row):
+    """Map the existing review status to the canonical PDF artefact state."""
+    return (
+        "final"
+        if str((memo_row or {}).get("review_status") or "").strip().lower() == "approved"
+        else "draft"
+    )
+
+
+def _memo_pdf_render_context(
+    db,
+    application,
+    memo_row,
+    *,
+    approved_by=None,
+    approved_at=None,
+    approval_reason=None,
+):
+    """Build the existing PDF renderer inputs without changing memo content."""
+    try:
+        memo_data = safe_json_loads(memo_row.get("memo_data") or "{}")
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise MemoPDFArtifactError("Memo data is corrupt or unparseable") from exc
+    if not isinstance(memo_data, dict):
+        raise MemoPDFArtifactError("Memo data is corrupt or unparseable")
+
+    memo_data = dict(memo_data)
+    metadata = dict(memo_data.get("metadata") or {})
+    authoritative_risk = _application_authoritative_risk_metadata(application)
+    metadata["authoritative_case_risk"] = authoritative_risk
+    metadata["risk_source"] = authoritative_risk.get("source")
+    metadata["risk_calculated_at"] = authoritative_risk.get("calculated_at")
+    metadata["memo_generated_at"] = _risk_metadata_json_value(
+        metadata.get("memo_generated_at") or memo_row.get("created_at")
+    )
+    if authoritative_risk.get("available"):
+        metadata["canonical_risk"] = {
+            **(metadata.get("canonical_risk") or {}),
+            **authoritative_risk,
+        }
+        metadata["display_risk_rating"] = authoritative_risk.get("level")
+        metadata["display_risk_score"] = authoritative_risk.get("score")
+        metadata["risk_rating"] = authoritative_risk.get("level")
+        metadata["risk_score"] = authoritative_risk.get("score")
+    memo_data["metadata"] = metadata
+
+    validation_result = {
+        "validation_status": (
+            memo_row.get("validation_status")
+            or metadata.get("validation_status", "pending")
+        ),
+        "quality_score": (
+            memo_row.get("quality_score")
+            or metadata.get("quality_score", 0)
+        ),
+    }
+    stored_supervisor = memo_data.get("supervisor") or metadata.get("supervisor", {})
+    supervisor_result = {
+        "verdict": (
+            memo_row.get("supervisor_status")
+            or stored_supervisor.get("verdict", "N/A")
+        ),
+    }
+
+    resolved_approved_by = (
+        memo_row.get("approved_by") if approved_by is None else approved_by
+    )
+    if resolved_approved_by:
+        approver = db.execute(
+            "SELECT email FROM users WHERE id = ?",
+            (resolved_approved_by,),
+        ).fetchone()
+        if approver:
+            resolved_approved_by = approver["email"]
+
+    return {
+        "memo_data": memo_data,
+        "metadata": metadata,
+        "authoritative_risk": authoritative_risk,
+        "validation_result": validation_result,
+        "supervisor_result": supervisor_result,
+        "approved_by": resolved_approved_by,
+        "approved_at": memo_row.get("approved_at") if approved_at is None else approved_at,
+        "approval_reason": (
+            memo_row.get("approval_reason") or ""
+            if approval_reason is None
+            else approval_reason
+        ),
+    }
+
+
+def _ensure_memo_pdf_artifact(
+    db,
+    application,
+    memo_row,
+    *,
+    artifact_state=None,
+    approved_by=None,
+    approved_at=None,
+    approval_reason=None,
+    reject_different_existing=False,
+):
+    """Load the immutable artefact, or render and persist it exactly once."""
+    state = artifact_state or _memo_pdf_artifact_state(memo_row)
+    stored = load_memo_pdf_artifact(db, memo_row["id"], state)
+    if stored:
+        return stored, False, None
+    if not HAS_PDF_GENERATOR:
+        raise MemoPDFArtifactError("PDF generation not available. Install weasyprint.")
+
+    context = _memo_pdf_render_context(
+        db,
+        application,
+        memo_row,
+        approved_by=approved_by,
+        approved_at=approved_at,
+        approval_reason=approval_reason,
+    )
+    try:
+        rendered = generate_memo_pdf(
+            memo_data=context["memo_data"],
+            application=dict(application),
+            validation_result=context["validation_result"],
+            supervisor_result=context["supervisor_result"],
+            approved_by=context["approved_by"],
+            approved_at=context["approved_at"],
+            approval_reason=context["approval_reason"],
+        )
+    except Exception as exc:
+        raise MemoPDFArtifactError(f"PDF generation failed: {exc}") from exc
+
+    renderer_build = get_build_metadata()
+    artifact, created = persist_memo_pdf_artifact(
+        db,
+        memo_id=memo_row["id"],
+        artifact_state=state,
+        pdf_bytes=rendered,
+        renderer_build_sha=renderer_build.get("git_sha") or "unknown",
+        reject_different_existing=reject_different_existing,
+    )
+    if created:
+        db.execute(
+            "UPDATE compliance_memos SET pdf_generated_at = ? WHERE id = ?",
+            (artifact.get("created_at") or datetime.now(timezone.utc).isoformat(), memo_row["id"]),
+        )
+    return artifact, created, context
 
 
 def _memo_payload_if_fingerprint_unchanged(latest_row, fingerprint):
@@ -32754,6 +32910,21 @@ class ComplianceMemoHandler(BaseHandler):
             reused_memo = None
         if reused_memo:
             reused_blocked = bool(reused_memo.get("metadata", {}).get("blocked"))
+            try:
+                _, artifact_created, _ = _ensure_memo_pdf_artifact(
+                    db,
+                    app,
+                    dict(latest_memo_row),
+                )
+            except MemoPDFArtifactError as exc:
+                logger.error(
+                    "Failed to ensure canonical PDF artefact for reused memo %s: %s",
+                    latest_memo_row.get("id"),
+                    exc,
+                    exc_info=True,
+                )
+                _rollback_and_close(db)
+                return self.error("Failed to persist canonical memo PDF artefact", 500)
             db.execute(
                 "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
                 "VALUES (?,?,?,?,?,?,?,?,?)",
@@ -32767,6 +32938,7 @@ class ComplianceMemoHandler(BaseHandler):
                     "Compliance memo generation reused existing memo "
                     + str(reused_memo.get("metadata", {}).get("idempotency", {}).get("memo_id"))
                     + " because source inputs were unchanged"
+                    + (" | canonical_pdf_artifact_created=true" if artifact_created else "")
                     + (" | reused_blocked_memo=true" if reused_blocked else ""),
                     self.get_client_ip(),
                     (_obs_get_request_id() or ""),
@@ -32877,6 +33049,15 @@ class ComplianceMemoHandler(BaseHandler):
                  memo.get("metadata", {}).get("memo_version", "v" + str(next_version)), memo_input_hash, next_version,
                  _memo_blocked_val, _memo_block_reason)
             )
+            persisted_memo_row = _latest_compliance_memo_row(db, real_id)
+            if not persisted_memo_row or int(persisted_memo_row.get("version") or 0) != next_version:
+                raise MemoPDFArtifactError("Newly generated memo row could not be resolved")
+            draft_artifact, _, _ = _ensure_memo_pdf_artifact(
+                db,
+                app,
+                persisted_memo_row,
+                artifact_state="draft",
+            )
             db.execute(
                 "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
                 "VALUES (?,?,?,?,?,?,?,?,?)",
@@ -32891,6 +33072,7 @@ class ComplianceMemoHandler(BaseHandler):
                     + " | Supervisor: " + supervisor_result["verdict"]
                     + " | Quality: " + str(validation_result["quality_score"]) + "/10"
                     + " | Rule Engine: " + rule_engine_result["engine_status"]
+                    + " | Canonical PDF: " + draft_artifact["pdf_sha256"]
                     + (" | BLOCKED" if memo["metadata"].get("blocked") else ""),
                     self.get_client_ip(),
                     (_obs_get_request_id() or ""),
@@ -34910,6 +35092,26 @@ class MemoApproveHandler(BaseHandler):
 
         now_ts = datetime.now().isoformat()
         try:
+            draft_artifact, _, _ = _ensure_memo_pdf_artifact(
+                db,
+                app_row,
+                memo_row,
+                artifact_state="draft",
+            )
+            final_artifact, _, _ = _ensure_memo_pdf_artifact(
+                db,
+                app_row,
+                memo_row,
+                artifact_state="final",
+                approved_by=user.get("sub", ""),
+                approved_at=now_ts,
+                approval_reason=approval_reason,
+                reject_different_existing=True,
+            )
+            if final_artifact["pdf_sha256"] == draft_artifact["pdf_sha256"]:
+                raise MemoPDFArtifactIntegrityError(
+                    "Draft and final memo PDF artefacts must be distinct"
+                )
             db.execute(
                 "UPDATE compliance_memos SET review_status = 'approved', approved_by = ?, approved_at = ?, reviewed_by = ?, approval_reason = ? WHERE id = ?",
                 (user.get("sub", ""), now_ts, user.get("sub", ""), approval_reason, memo_row["id"])
@@ -34928,7 +35130,11 @@ class MemoApproveHandler(BaseHandler):
                 audit_detail += "Validation status: pass_with_fixes. "
             if supervisor_warnings_approval:
                 audit_detail += "Supervisor verdict: CONSISTENT_WITH_WARNINGS. "
-            audit_detail += f"Approval reason: {approval_reason}"
+            audit_detail += (
+                f"Approval reason: {approval_reason}. "
+                f"Canonical final PDF: {final_artifact['pdf_sha256']} "
+                f"({final_artifact['byte_length']} bytes)"
+            )
 
             db.execute(
                 "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
@@ -35045,7 +35251,7 @@ class MemoValidationResultsHandler(BaseHandler):
 
 
 class MemoPDFDownloadHandler(BaseHandler):
-    """GET /api/applications/:id/memo/pdf — Generate and download compliance memo as PDF"""
+    """Serve the immutable canonical memo PDF for preview or download."""
     def get(self, app_id):
         user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
@@ -35054,106 +35260,87 @@ class MemoPDFDownloadHandler(BaseHandler):
             "1", "true", "yes", "inline",
         )
 
-        if not HAS_PDF_GENERATOR:
-            return self.error("PDF generation not available. Install weasyprint.", 503)
-
         db = get_db()
-        # Fetch application
-        app = db.execute(
-            "SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)
-        ).fetchone()
-        if not app:
-            db.close()
-            return self.error("Application not found", 404)
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)
+            ).fetchone()
+            if not app:
+                db.close()
+                return self.error("Application not found", 404)
 
-        real_id = app["id"]
+            real_id = app["id"]
+            memo_row = latest_compliance_memo_row(db, real_id)
+            if not memo_row:
+                db.close()
+                return self.error("No compliance memo found. Generate a memo first.", 404)
 
-        # Fetch canonical latest memo
-        memo_row = latest_compliance_memo_row(db, real_id)
-        if not memo_row:
-            db.close()
-            return self.error("No compliance memo found. Generate a memo first.", 404)
+            stale = _ensure_memo_fresh_or_mark_stale(
+                db,
+                app,
+                memo_row,
+                actor=user,
+                ip_address=self.get_client_ip(),
+                context="memo_pdf_export",
+            )
+            if stale.get("is_stale"):
+                db.commit()
+                db.close()
+                return self.error(
+                    "PDF export blocked: Compliance memo is stale: "
+                    + stale.get("reason", "Regenerate the memo before PDF export."),
+                    409,
+                )
+        except Exception as exc:
+            logger.error(
+                "Failed to resolve canonical memo PDF source for %s: %s",
+                app_id,
+                exc,
+                exc_info=True,
+            )
+            _rollback_and_close(db)
+            return self.error("Failed to resolve canonical memo PDF source.", 500)
 
-        stale = _ensure_memo_fresh_or_mark_stale(
-            db,
-            app,
-            memo_row,
-            actor=user,
-            ip_address=self.get_client_ip(),
-            context="memo_pdf_export",
-        )
-        if stale.get("is_stale"):
-            db.commit()
-            db.close()
+        try:
+            artifact_state = _memo_pdf_artifact_state(memo_row)
+            artifact, artifact_created, render_context = _ensure_memo_pdf_artifact(
+                db,
+                app,
+                memo_row,
+                artifact_state=artifact_state,
+                reject_different_existing=(artifact_state == "final"),
+            )
+            context = render_context or _memo_pdf_render_context(db, app, memo_row)
+        except MemoPDFArtifactError as exc:
+            logger.error(
+                "Canonical memo PDF artefact failure for %s: %s",
+                app_id,
+                exc,
+                exc_info=True,
+            )
+            _rollback_and_close(db)
             return self.error(
-                "PDF export blocked: Compliance memo is stale: "
-                + stale.get("reason", "Regenerate the memo before PDF export."),
-                409,
+                "Canonical memo PDF artefact is unavailable or failed integrity validation.",
+                500,
             )
-
-        # Parse memo data
-        try:
-            memo_data = safe_json_loads(memo_row["memo_data"])
-        except (json.JSONDecodeError, TypeError):
-            db.close()
-            return self.error("Memo data is corrupt or unparseable.", 500)
-        memo_data = dict(memo_data or {})
-        metadata = dict(memo_data.get("metadata") or {})
-        authoritative_risk = _application_authoritative_risk_metadata(app)
-        metadata["authoritative_case_risk"] = authoritative_risk
-        metadata["risk_source"] = authoritative_risk.get("source")
-        metadata["risk_calculated_at"] = authoritative_risk.get("calculated_at")
-        metadata["memo_generated_at"] = _risk_metadata_json_value(
-            metadata.get("memo_generated_at") or memo_row.get("created_at")
-        )
-        if authoritative_risk.get("available"):
-            metadata["canonical_risk"] = {
-                **(metadata.get("canonical_risk") or {}),
-                **authoritative_risk,
-            }
-            metadata["display_risk_rating"] = authoritative_risk.get("level")
-            metadata["display_risk_score"] = authoritative_risk.get("score")
-            metadata["risk_rating"] = authoritative_risk.get("level")
-            metadata["risk_score"] = authoritative_risk.get("score")
-        memo_data["metadata"] = metadata
-
-        # Build validation/supervisor context from memo metadata
-        validation_result = {
-            "validation_status": memo_row.get("validation_status") or metadata.get("validation_status", "pending"),
-            "quality_score": memo_row.get("quality_score") or metadata.get("quality_score", 0),
-        }
-        stored_supervisor = memo_data.get("supervisor") or metadata.get("supervisor", {})
-        supervisor_result = {
-            "verdict": memo_row.get("supervisor_status") or stored_supervisor.get("verdict", "N/A"),
-        }
-
-        approved_by = memo_row.get("approved_by")
-        approved_at = memo_row.get("approved_at")
-
-        # If approved_by is user ID, try to resolve to name
-        if approved_by:
-            approver = db.execute("SELECT email FROM users WHERE id = ?", (approved_by,)).fetchone()
-            if approver:
-                approved_by = approver["email"]
-
-        # Generate PDF
-        try:
-            pdf_bytes = generate_memo_pdf(
-                memo_data=memo_data,
-                application=dict(app),
-                validation_result=validation_result,
-                supervisor_result=supervisor_result,
-                approved_by=approved_by,
-                approved_at=approved_at,
-                approval_reason=memo_row.get("approval_reason") or "",
+        except Exception as exc:
+            logger.error(
+                "Unexpected canonical memo PDF preparation failure for %s: %s",
+                app_id,
+                exc,
+                exc_info=True,
             )
-        except Exception as e:
-            logger.error("PDF generation failed for %s: %s", app_id, str(e))
-            db.close()
-            return self.error(f"PDF generation failed: {str(e)}", 500)
+            _rollback_and_close(db)
+            return self.error("Canonical memo PDF preparation failed safely.", 500)
 
-        pdf_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
-        pdf_generated_at = datetime.now(timezone.utc).isoformat()
+        pdf_bytes = artifact["pdf_bytes"]
+        pdf_sha256 = artifact["pdf_sha256"]
+        pdf_generated_at = _risk_metadata_json_value(artifact.get("created_at"))
+        memo_data = context["memo_data"]
+        metadata = context["metadata"]
+        validation_result = context["validation_result"]
+        supervisor_result = context["supervisor_result"]
+        authoritative_risk = context["authoritative_risk"]
         memo_version = memo_row.get("memo_version") or (metadata or {}).get("memo_version") or str(memo_row.get("version") or "")
         renderer_build = get_build_metadata()
         memo_build = metadata.get("build") if isinstance(metadata.get("build"), dict) else {}
@@ -35162,12 +35349,7 @@ class MemoPDFDownloadHandler(BaseHandler):
             memo_build_sha[:7] if memo_build_sha != "unknown" else "unknown"
         )
 
-        # Update pdf_generated_at timestamp
         try:
-            db.execute(
-                "UPDATE compliance_memos SET pdf_generated_at = ? WHERE id = ?",
-                (pdf_generated_at, memo_row["id"])
-            )
             audit_detail = json.dumps({
                 "event": "memo_pdf_previewed" if inline_preview else "memo_pdf_generated",
                 "application_ref": app["ref"],
@@ -35177,7 +35359,11 @@ class MemoPDFDownloadHandler(BaseHandler):
                 "memo_selection": memo_selection_metadata(memo_row),
                 "memo_version": memo_version,
                 "pdf_sha256": pdf_sha256,
-                "pdf_bytes": len(pdf_bytes),
+                "pdf_bytes": artifact["byte_length"],
+                "pdf_artifact_state": artifact_state,
+                "canonical_artifact_created": artifact_created,
+                "canonical_artifact_created_at": pdf_generated_at,
+                "canonical_renderer_build_sha": artifact.get("renderer_build_sha"),
                 "build": renderer_build,
                 "renderer_build": renderer_build,
                 "memo_build": memo_build or None,
@@ -35189,18 +35375,35 @@ class MemoPDFDownloadHandler(BaseHandler):
                 "risk_source": authoritative_risk.get("source"),
                 "risk_calculated_at": authoritative_risk.get("calculated_at"),
                 "generated_at": pdf_generated_at,
+                "served_at": datetime.now(timezone.utc).isoformat(),
             })
             db.execute(
-                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                (user.get("sub",""), user.get("name",""), user.get("role",""), "Preview Memo PDF" if inline_preview else "Download Memo PDF", app["ref"],
-                 audit_detail, self.get_client_ip())
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    user.get("sub", ""),
+                    user.get("name", ""),
+                    user.get("role", ""),
+                    "Preview Memo PDF" if inline_preview else "Download Memo PDF",
+                    app["ref"],
+                    real_id,
+                    audit_detail,
+                    self.get_client_ip(),
+                    (_obs_get_request_id() or ""),
+                ),
             )
             db.commit()
-        except Exception as e:
-            logger.error(f"Failed to store PDF generation audit for {app_id}: {e}", exc_info=True)
+        except Exception as exc:
+            logger.error(
+                "Failed to persist canonical PDF access audit for %s: %s",
+                app_id,
+                exc,
+                exc_info=True,
+            )
+            _rollback_and_close(db)
+            return self.error("Memo PDF access could not be audited safely.", 500)
         db.close()
 
-        # Return PDF as binary download
         safe_ref = re.sub(r'[^a-zA-Z0-9_-]', '_', app.get("ref", "memo"))
         filename = f"compliance_memo_{safe_ref}.pdf"
         self.set_header("Content-Type", "application/pdf")
@@ -35214,6 +35417,13 @@ class MemoPDFDownloadHandler(BaseHandler):
             _memo_lifecycle_status(memo_row, memo_data),
         )
         self.set_header("X-PDF-SHA256", pdf_sha256)
+        self.set_header("X-PDF-Artifact-State", artifact_state)
+        self.set_header("X-PDF-Artifact-Source", "stored")
+        self.set_header("X-PDF-Artifact-Created-At", str(pdf_generated_at or ""))
+        self.set_header(
+            "X-PDF-Renderer-Build-Sha",
+            str(artifact.get("renderer_build_sha") or "unknown"),
+        )
         self.set_header("X-Build-Git-Sha", renderer_build["git_sha"])
         self.set_header("X-Build-Git-Sha-Short", renderer_build["git_sha_short"])
         self.set_header("X-Memo-Build-Git-Sha", memo_build_sha)
