@@ -13,7 +13,7 @@ Review, RSMP, KYC & Documents, EDD, Change Management, or the Portal.
 
 ## Flags
 
-| Flag | Default | Future consumer |
+| Flag | Default | Consumer |
 |---|---:|---|
 | `ENABLE_DOCUMENT_RENEWAL_AUTOMATION` | OFF | Document Renewal request workflow (`monitoring_document_renewal_request_v1`) |
 | `ENABLE_AGENT1_REFRESH_VERIFICATION` | OFF | Agent 1 |
@@ -40,6 +40,10 @@ files. The other three flags still have no business-workflow consumer.
 4. Never use a code default of ON.
 5. Treat an unknown value as OFF and correct the configuration before
    activation.
+6. Treat flag changes as restart-controlled: `FeatureFlags` caches evaluated
+   values at process startup, so activation or deactivation requires replacing
+   or restarting the backend and worker processes. Per-operation service gates
+   still fail closed against that authoritative process value.
 
 ## Operator visibility
 

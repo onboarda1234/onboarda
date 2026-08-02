@@ -702,9 +702,11 @@ def _legacy_conflict(
     trigger_document_id: Any,
     document_slot_key: Any,
 ) -> Optional[Dict[str, Any]]:
+    legacy_statuses = tuple(sorted(LEGACY_DOCUMENT_REFRESH_ACTIVE_STATUSES))
+    status_placeholders = ",".join("?" for _ in legacy_statuses)
     conflict = _row(
         db.execute(
-            """
+            f"""
             SELECT aer.id, aer.status, aer.monitoring_document_id
              FROM application_enhanced_requirements aer
              LEFT JOIN documents md
@@ -714,9 +716,7 @@ def _legacy_conflict(
                ON ld.id = aer.linked_document_id
               AND ld.application_id = aer.application_id
              WHERE active = 1
-               AND LOWER(COALESCE(aer.status, '')) IN (
-                    'requested','uploaded','under_review','rejected'
-               )
+               AND LOWER(COALESCE(aer.status, '')) IN ({status_placeholders})
                AND (
                     aer.monitoring_alert_id = ?
                     OR (
@@ -728,6 +728,7 @@ def _legacy_conflict(
              LIMIT 1
             """,
             (
+                *legacy_statuses,
                 alert_id,
                 application_id,
                 document_slot_key,
@@ -769,7 +770,7 @@ def _project(row: Mapping[str, Any]) -> Dict[str, Any]:
                 {
                     "key": "awaiting_upload",
                     "label": "Awaiting Upload",
-                    "complete": status == "awaiting_upload",
+                    "complete": bool(result.get("sent_at")),
                 },
             ],
         }

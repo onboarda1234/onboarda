@@ -29,8 +29,9 @@ _UPLOAD_LATENCY_DEFAULTS = {flag: False for flag in UPLOAD_LATENCY_FLAGS}
 
 # PR-MON-FEATURE-FLAGS-1 introduced these governed Monitoring switches.  The
 # document-renewal request service is the first deliberately approved consumer:
-# it gates every request/reminder/upload mutation and still defaults OFF in
-# every environment.  The remaining three switches remain governance-only.
+# it gates new request/reminder/upload work and eligibility ticks while still
+# defaulting OFF in every environment. Cleanup reconciliation is intentionally
+# flag-independent. The remaining three switches remain governance-only.
 MONITORING_FEATURE_DEFINITIONS = (
     (
         "ENABLE_DOCUMENT_RENEWAL_AUTOMATION",
@@ -571,8 +572,9 @@ FLAG_LIFECYCLE = {
     "ENABLE_DOCUMENT_RENEWAL_AUTOMATION": _temp(
         "compliance",
         "Remove the gate after Document Renewal automation reaches approved GA.",
-        "Document Renewal request workflow; every mutation is fail-closed "
-        "behind this flag and the default remains OFF.",
+        "Document Renewal request workflow; new request, reminder, upload, "
+        "and eligibility work is fail-closed behind this flag. Cleanup "
+        "reconciliation remains flag-independent and the default remains OFF.",
         introduced="PR-MON-FEATURE-FLAGS-1; first consumer "
         "PR-MON-DOC-RENEWAL-REQUEST-1",
     ),

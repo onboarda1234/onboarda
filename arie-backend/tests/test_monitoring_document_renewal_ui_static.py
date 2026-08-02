@@ -298,5 +298,6 @@ def test_changed_ui_inline_scripts_parse():
             text=True,
             capture_output=True,
             check=False,
+            timeout=30,
         )
         assert result.returncode == 0, result.stderr or result.stdout

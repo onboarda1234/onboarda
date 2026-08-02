@@ -590,6 +590,11 @@ def test_upload_is_staged_only_and_idempotent(renewal_db):
         renewal_db, request["request_id"], **kwargs
     )
     assert uploaded["request_status"] == "upload_received"
+    assert {item["key"]: item["complete"] for item in uploaded["milestones"]} == {
+        "renewal_requested": True,
+        "request_sent": True,
+        "awaiting_upload": True,
+    }
     assert uploaded["verification_controls"] is False
     assert len(uploaded["uploads"]) == 1
     assert "storage_key" not in uploaded["uploads"][0]

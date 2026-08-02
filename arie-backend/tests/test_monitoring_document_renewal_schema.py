@@ -182,25 +182,28 @@ def test_request_constraints_and_person_pair_fail_closed(renewal_db):
     _insert_request(renewal_db)
 
     bad_cases = (
-        {"request_id": "bad-version", "document_id": "renewal-doc-b", "alert_id": 58002, "document_version": 0},
-        {"request_id": "bad-revision", "document_id": "renewal-doc-b", "alert_id": 58002, "revision": 0},
-        {"request_id": "bad-person", "document_id": "renewal-doc-b", "alert_id": 58002, "person_type": None},
-        {"request_id": "bad-fingerprint", "document_id": "renewal-doc-b", "alert_id": 58002, "fingerprint": "ABC"},
+        {"request_id": "bad-version", "document_id": "renewal-doc-b", "document_type": "proof_of_address", "alert_id": 58002, "document_version": 0},
+        {"request_id": "bad-revision", "document_id": "renewal-doc-b", "document_type": "proof_of_address", "alert_id": 58002, "revision": 0},
+        {"request_id": "bad-person", "document_id": "renewal-doc-b", "document_type": "proof_of_address", "alert_id": 58002, "person_type": None},
+        {"request_id": "bad-fingerprint", "document_id": "renewal-doc-b", "document_type": "proof_of_address", "alert_id": 58002, "fingerprint": "ABC"},
         {
             "request_id": "bad-status",
             "document_id": "renewal-doc-b",
+            "document_type": "proof_of_address",
             "alert_id": 58002,
             "status": "verified",
         },
         {
             "request_id": "bad-awaiting",
             "document_id": "renewal-doc-b",
+            "document_type": "proof_of_address",
             "alert_id": 58002,
             "status": "awaiting_upload",
         },
         {
             "request_id": "bad-cancelled",
             "document_id": "renewal-doc-b",
+            "document_type": "proof_of_address",
             "alert_id": 58002,
             "status": "cancelled",
         },
