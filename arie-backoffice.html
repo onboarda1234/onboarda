@@ -26730,9 +26730,10 @@ function monitoringDocumentRenewalUploadBinding(request) {
 
 function monitoringDocumentRenewalBindingStatusLabel(binding, requestStatus) {
   if (!binding || typeof binding !== 'object') {
-    return requestStatus === 'upload_received'
-      ? 'Binding unavailable — manual review required'
-      : 'Not bound';
+    var unboundRequestStatuses = ['created', 'awaiting_upload', 'cancelled'];
+    return unboundRequestStatuses.indexOf(requestStatus) >= 0
+      ? 'Not bound'
+      : 'Binding unavailable — manual review required';
   }
   var status = monitoringCanonicalToken(binding.binding_status || '');
   var uploadId = String(binding.upload_id || '').trim();

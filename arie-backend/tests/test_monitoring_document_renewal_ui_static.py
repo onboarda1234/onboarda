@@ -52,8 +52,14 @@ const valid = {
   contract_version: 'monitoring_document_renewal_upload_binding_v1',
 };
 if (label(valid, 'upload_received') !== 'Bound') throw new Error('valid binding not bound');
-if (label(null, 'awaiting_upload') !== 'Not bound') throw new Error('valid unbound state failed');
-if (!label(null, 'upload_received').includes('manual review')) throw new Error('missing received binding did not fail closed');
+for (const status of ['created', 'awaiting_upload', 'cancelled']) {
+  if (label(null, status) !== 'Not bound') throw new Error('valid unbound state failed');
+}
+for (const status of ['upload_received', '', 'unknown']) {
+  if (!label(null, status).includes('manual review')) {
+    throw new Error('missing binding did not fail closed');
+  }
+}
 for (const invalid of [
   {...valid, application_id: ''},
   {...valid, uploaded_document_id: 'document-1'},
