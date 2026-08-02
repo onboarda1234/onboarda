@@ -38704,6 +38704,72 @@ def _mark_monitoring_renewal_artifact_cleanup_pending(
             db.close()
 
 
+def _mark_monitoring_renewal_artifact_not_owned(cleanup_id, *, error_code):
+    """Finalize a reservation when a conditional S3 write wrote no object."""
+
+    db = None
+    try:
+        db = get_db()
+        row = db.execute(
+            """
+            SELECT * FROM monitoring_document_renewal_upload_cleanup
+             WHERE cleanup_id = ?
+            """,
+            (cleanup_id,),
+        ).fetchone()
+        if not row:
+            return False
+        artifact = dict(row)
+        if artifact["artifact_state"] == "cleaned":
+            return True
+        if artifact["artifact_state"] != "reserved":
+            return False
+        timestamp = datetime.now(timezone.utc).isoformat()
+        cursor = db.execute(
+            """
+            UPDATE monitoring_document_renewal_upload_cleanup
+               SET artifact_state = 'cleaned', cleaned_at = ?, updated_at = ?,
+                   last_error_code = ?, lease_owner = NULL,
+                   lease_expires_at = NULL, next_retry_at = NULL
+             WHERE cleanup_id = ? AND artifact_state = 'reserved'
+            """,
+            (
+                timestamp,
+                timestamp,
+                str(error_code or "candidate_not_owned")[:64],
+                cleanup_id,
+            ),
+        )
+        if _monitoring_renewal_rowcount(cursor) not in (-1, 1):
+            raise RuntimeError("artifact reservation changed before finalization")
+        _monitoring_renewal_artifact_audit(
+            db,
+            artifact,
+            action="not_owned",
+            actor_id=None,
+            actor_name=None,
+            actor_role=None,
+            before_state="reserved",
+            after_state="cleaned",
+        )
+        db.commit()
+        return True
+    except Exception:
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.exception(
+            "renewal artifact not-owned finalization failed cleanup_id=%s",
+            cleanup_id,
+        )
+        return False
+    finally:
+        if db is not None:
+            db.close()
+
+
 async def _attempt_monitoring_renewal_inline_cleanup(cleanup_id):
     """Best-effort request-path cleanup; the durable sweep remains authoritative."""
 
@@ -38876,6 +38942,7 @@ def _process_monitoring_renewal_upload_artifact(cleanup_id):
         db.close()
 
     cleaned = False
+    not_owned = False
     error_code = None
     if artifact["backend"] == "local":
         if not _monitoring_renewal_local_artifact_allowed(
@@ -38928,10 +38995,19 @@ def _process_monitoring_renewal_upload_artifact(cleanup_id):
                     get_s3_client().delete_monitoring_renewal_candidate(
                         artifact["storage_key"],
                         version_id=artifact.get("s3_version_id"),
+                        expected_request_id=artifact.get("request_id"),
+                        expected_upload_id=artifact.get("upload_id"),
+                        expected_cleanup_id=artifact.get("cleanup_id"),
                     )
                 )
                 if not cleaned:
-                    error_code = str(result_code or "s3_candidate_delete_failed")[:64]
+                    if result_code == "candidate_ownership_mismatch":
+                        not_owned = True
+                        error_code = result_code
+                    else:
+                        error_code = str(
+                            result_code or "s3_candidate_delete_failed"
+                        )[:64]
             except Exception:
                 error_code = "s3_candidate_delete_failed"
     else:
@@ -38940,25 +39016,31 @@ def _process_monitoring_renewal_upload_artifact(cleanup_id):
     timestamp = datetime.now(timezone.utc)
     db = get_db()
     try:
-        if cleaned:
+        if cleaned or not_owned:
             cursor = db.execute(
                 """
                 UPDATE monitoring_document_renewal_upload_cleanup
                    SET artifact_state = 'cleaned', cleaned_at = ?,
                        updated_at = ?, lease_owner = NULL,
                        lease_expires_at = NULL, next_retry_at = NULL,
-                       last_error_code = NULL
+                       last_error_code = ?
                  WHERE cleanup_id = ? AND lease_owner = ?
                    AND artifact_state IN ('reserved','stored','cleanup_pending')
                 """,
-                (timestamp.isoformat(), timestamp.isoformat(), cleanup_id, lease_owner),
+                (
+                    timestamp.isoformat(),
+                    timestamp.isoformat(),
+                    "candidate_ownership_mismatch" if not_owned else None,
+                    cleanup_id,
+                    lease_owner,
+                ),
             )
             if _monitoring_renewal_rowcount(cursor) not in (-1, 1):
                 raise RuntimeError("artifact cleanup lost its lease")
             _monitoring_renewal_artifact_audit(
                 db,
                 artifact,
-                action="cleaned",
+                action="not_owned" if not_owned else "cleaned",
                 actor_id=None,
                 actor_name=None,
                 actor_role=None,
@@ -38990,7 +39072,11 @@ def _process_monitoring_renewal_upload_artifact(cleanup_id):
         db.commit()
     finally:
         db.close()
-    return {"claimed": True, "cleaned": cleaned, "attached": False}
+    return {
+        "claimed": True,
+        "cleaned": bool(cleaned or not_owned),
+        "attached": False,
+    }
 
 
 def process_monitoring_renewal_upload_cleanup(*, limit=25):
@@ -45974,11 +46060,28 @@ class PortalDocumentRenewalUploadHandler(BaseHandler):
                         or not isinstance(upload_result, dict)
                         or str(upload_result.get("key") or "").strip() != s3_key
                     ):
-                        _mark_monitoring_renewal_artifact_cleanup_pending(
-                            cleanup_id,
-                            error_code="durable_upload_rejected",
+                        non_owning_conflict = (
+                            not success
+                            and isinstance(upload_result, str)
+                            and upload_result
+                            in {
+                                "candidate_already_exists",
+                                "candidate_upload_conflict",
+                            }
                         )
-                        await _attempt_monitoring_renewal_inline_cleanup(cleanup_id)
+                        if non_owning_conflict:
+                            _mark_monitoring_renewal_artifact_not_owned(
+                                cleanup_id,
+                                error_code=str(upload_result),
+                            )
+                        else:
+                            _mark_monitoring_renewal_artifact_cleanup_pending(
+                                cleanup_id,
+                                error_code="durable_upload_rejected",
+                            )
+                            await _attempt_monitoring_renewal_inline_cleanup(
+                                cleanup_id
+                            )
                         return self.error(
                             "Document upload failed: unable to store the file "
                             "durably. Please retry.",
@@ -47770,25 +47873,35 @@ if __name__ == "__main__":
                             _document_renewal_workflow_worker,
                         )
                     )
-                    log_method = (
-                        logger.error
-                        if reminder_summary.get("degraded")
-                        else logger.info
+                    degraded = bool(
+                        eligibility_summary.get("degraded")
+                        or reminder_summary.get("degraded")
                     )
+                    log_method = logger.error if degraded else logger.info
                     log_method(
                         "document-renewal: run %s eligibility_scanned=%s "
                         "requests_created=%s eligibility_blocked=%s "
+                        "eligibility_failure_codes=%s "
                         "reminders_scanned=%s reminders_generated=%s "
                         "reminders_blocked=%s reminders_unchanged=%s "
                         "reminder_failure_codes=%s",
                         (
                             "degraded"
-                            if reminder_summary.get("degraded")
+                            if degraded
                             else "complete"
                         ),
                         eligibility_summary.get("scanned", 0),
                         eligibility_summary.get("created", 0),
                         eligibility_summary.get("blocked", 0),
+                        sorted(
+                            {
+                                str(item.get("code") or "")
+                                for item in eligibility_summary.get(
+                                    "degraded_failures", []
+                                )
+                                if item.get("code")
+                            }
+                        ),
                         reminder_summary.get("scanned", 0),
                         reminder_summary.get("generated", 0),
                         reminder_summary.get("blocked", 0),

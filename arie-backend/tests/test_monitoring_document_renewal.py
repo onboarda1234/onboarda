@@ -444,7 +444,30 @@ def test_exact_automatic_eligibility_and_no_semantic_aliases(renewal_db):
     renewal_db.commit()
     with pytest.raises(renewal.RenewalError) as exc:
         _create(renewal_db, reason="expired")
-    assert exc.value.code in {"linkage_not_authoritative", "reason_alert_mismatch"}
+    assert exc.value.code == "linkage_not_authoritative"
+    assert exc.value.details == {"linkage_code": "unsupported_alert_type"}
+
+
+def test_creation_transition_requires_exactly_one_updated_row(renewal_db):
+    renewal_db.execute(
+        """
+        CREATE TRIGGER ignore_renewal_creation_transition
+        BEFORE UPDATE OF request_status
+        ON monitoring_document_renewal_requests
+        WHEN OLD.request_status = 'created'
+         AND NEW.request_status = 'awaiting_upload'
+        BEGIN
+            SELECT RAISE(IGNORE);
+        END
+        """
+    )
+    with pytest.raises(renewal.RenewalError) as exc:
+        _create(renewal_db, request_id="renewal-stale-transition")
+    assert exc.value.code == "stale_request"
+    assert _scalar(
+        renewal_db,
+        "SELECT COUNT(*) FROM monitoring_document_renewal_requests",
+    ) == 0
 
 
 def test_expiring_soon_outside_window_is_ineligible(renewal_db):
@@ -1420,6 +1443,97 @@ def test_eligibility_cursor_advances_past_blocked_prefix(renewal_db):
     assert first["blocked_alerts"][0]["alert_id"] == "1"
     assert second["created"] == 1
     assert renewal.renewal_request_for_alert(renewal_db, 2) is not None
+
+
+@pytest.mark.parametrize(
+    "failure_code", ["notification_unavailable", "audit_unavailable"]
+)
+def test_eligibility_cursor_advances_past_deferrable_delivery_failure(
+    renewal_db, monkeypatch, failure_code
+):
+    _add_document_alert(
+        renewal_db,
+        alert_id=2,
+        app_id="app-2",
+        document_id="doc-2",
+    )
+
+    call_options = {}
+    fail_once = {"pending": True}
+    if failure_code == "notification_unavailable":
+        publish = renewal._publish_portal_notification
+
+        def fail_first_notification(db, request, **kwargs):
+            if fail_once["pending"] and request["monitoring_alert_id"] == 1:
+                fail_once["pending"] = False
+                raise renewal.RenewalError(
+                    "notification_unavailable", "Notification unavailable."
+                )
+            return publish(db, request, **kwargs)
+
+        monkeypatch.setattr(
+            renewal, "_publish_portal_notification", fail_first_notification
+        )
+    else:
+
+        def fail_first_audit(db, **kwargs):
+            if fail_once["pending"] and kwargs["target"].startswith(
+                "monitoring_renewal_request:"
+            ):
+                fail_once["pending"] = False
+                raise renewal.RenewalError(
+                    "audit_unavailable", "Audit unavailable."
+                )
+            return append_audit_log(db, **kwargs)
+
+        call_options["audit_writer"] = fail_first_audit
+
+    first = renewal.generate_eligible_renewal_requests(
+        renewal_db,
+        actor=SCHEDULER,
+        limit=1,
+        now=NOW,
+        feature_flags=Flags(True),
+        **call_options,
+    )
+    assert first["blocked_alerts"] == [
+        {"alert_id": "1", "code": failure_code}
+    ]
+    assert first["degraded"] is True
+    assert first["degraded_failures"] == first["blocked_alerts"]
+    assert _scalar(
+        renewal_db,
+        "SELECT COUNT(*) FROM monitoring_document_renewal_requests",
+    ) == 0
+    assert _scalar(
+        renewal_db,
+        "SELECT COUNT(*) FROM monitoring_document_renewal_events",
+    ) == 0
+    assert _scalar(renewal_db, "SELECT COUNT(*) FROM client_notifications") == 0
+    assert _scalar(renewal_db, "SELECT COUNT(*) FROM audit_log") == 0
+    second = renewal.generate_eligible_renewal_requests(
+        renewal_db,
+        actor=SCHEDULER,
+        limit=1,
+        now=NOW,
+        feature_flags=Flags(True),
+        **call_options,
+    )
+    retry = renewal.generate_eligible_renewal_requests(
+        renewal_db,
+        actor=SCHEDULER,
+        limit=1,
+        now=NOW,
+        feature_flags=Flags(True),
+        **call_options,
+    )
+
+    assert second["created"] == 1
+    assert renewal.renewal_request_for_alert(renewal_db, 2) is not None
+    assert second["degraded"] is False
+    assert retry["created"] == 1
+    assert renewal.renewal_request_for_alert(renewal_db, 1) is not None
+    assert retry["degraded"] is False
 
 
 def test_reminder_cursor_advances_past_blocked_prefix(renewal_db):

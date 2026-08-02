@@ -75,6 +75,11 @@ def test_backoffice_renewal_card_is_exact_type_and_flag_gated():
 
 def test_backoffice_renewal_controls_are_orchestration_only():
     html = BACKOFFICE_HTML.read_text(encoding="utf-8")
+    renewal_ui = _region(
+        html,
+        "function monitoringDocumentRenewalStatusLabel",
+        "function renderMonitoringDocumentDecisionSection",
+    )
     card = _region(
         html,
         "function renderMonitoringDocumentRenewalCreateControls",
@@ -91,7 +96,7 @@ def test_backoffice_renewal_controls_are_orchestration_only():
         "Change Due Date",
         "Cancel Request",
     ):
-        assert label in html
+        assert label in renewal_ui
     for prohibited in (
         "monitoring-accept-updated-document-btn",
         "monitoring-reject-updated-document-btn",

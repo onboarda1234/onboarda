@@ -400,12 +400,15 @@ class S3Client:
     ) -> Tuple[bool, Union[Dict[str, Optional[str]], str]]:
         """Write one pre-reserved candidate and return its exact object version."""
 
-        expected = self.build_monitoring_renewal_candidate_key(
-            customer_id,
-            request_id,
-            upload_id,
-            original_filename,
-        )
+        try:
+            expected = self.build_monitoring_renewal_candidate_key(
+                customer_id,
+                request_id,
+                upload_id,
+                original_filename,
+            )
+        except (TypeError, ValueError):
+            return False, "invalid_reserved_key"
         if key != expected or not monitoring_renewal_candidate_key_allowed(key):
             return False, "invalid_reserved_key"
         try:
@@ -422,29 +425,80 @@ class S3Client:
                     "file-sha256": _sanitize_s3_metadata_value(file_sha256, 64),
                 }
             )
-            if _s3_user_metadata_size(metadata) > _S3_MAX_USER_METADATA_BYTES:
-                return False, "metadata_limit_exceeded"
-            response = self.monitoring_renewal_candidate_client().put_object(
-                Bucket=self.bucket_name,
-                Key=key,
-                Body=file_data,
-                ContentType=content_type or "application/octet-stream",
-                ServerSideEncryption="AES256",
-                IfNoneMatch="*",
-                Metadata=metadata,
-                Tagging=(
-                    "doc_type=monitoring_renewal_candidate&"
-                    f"client_id={_url_quote(_sanitize_s3_tag_value(customer_id), safe='')}"
-                ),
-            )
-            return True, {
-                "key": key,
-                "version_id": str(response.get("VersionId") or "").strip() or None,
-                "etag": str(response.get("ETag") or "").strip() or None,
-            }
         except Exception:
-            logger.exception("S3 monitoring renewal candidate upload failed")
+            logger.exception("S3 monitoring renewal candidate metadata failed")
             return False, "candidate_upload_failed"
+        if _s3_user_metadata_size(metadata) > _S3_MAX_USER_METADATA_BYTES:
+            return False, "metadata_limit_exceeded"
+
+        def reconcile_conditional_write():
+            inspected, result = self.inspect_monitoring_renewal_candidate(key)
+            if not inspected or not isinstance(result, dict):
+                return None
+            if result.get("exists") is not True:
+                return False
+            identity_matches = all(
+                (
+                    str(result.get("request_id") or "") == str(request_id),
+                    str(result.get("upload_id") or "") == str(upload_id),
+                    str(result.get("cleanup_id") or "") == str(cleanup_id),
+                    str(result.get("file_sha256") or "") == str(file_sha256),
+                    result.get("content_length") == len(file_data),
+                )
+            )
+            if not identity_matches:
+                return False
+            return {
+                "key": key,
+                "version_id": str(result.get("version_id") or "").strip() or None,
+                "etag": str(result.get("etag") or "").strip() or None,
+                "reconciled": True,
+            }
+
+        for attempt in range(2):
+            try:
+                response = self.monitoring_renewal_candidate_client().put_object(
+                    Bucket=self.bucket_name,
+                    Key=key,
+                    Body=file_data,
+                    ContentType=content_type or "application/octet-stream",
+                    ServerSideEncryption="AES256",
+                    IfNoneMatch="*",
+                    Metadata=metadata,
+                    Tagging=(
+                        "doc_type=monitoring_renewal_candidate&"
+                        f"client_id={_url_quote(_sanitize_s3_tag_value(customer_id), safe='')}"
+                    ),
+                )
+                return True, {
+                    "key": key,
+                    "version_id": str(response.get("VersionId") or "").strip() or None,
+                    "etag": str(response.get("ETag") or "").strip() or None,
+                }
+            except ClientError as exc:
+                code = str((exc.response.get("Error") or {}).get("Code") or "")
+                if code in ("PreconditionFailed", "412"):
+                    reconciled = reconcile_conditional_write()
+                    if isinstance(reconciled, dict):
+                        return True, reconciled
+                    if reconciled is None:
+                        return False, "candidate_ownership_unconfirmed"
+                    return False, "candidate_already_exists"
+                if code in ("ConditionalRequestConflict", "409"):
+                    if attempt == 0:
+                        continue
+                    reconciled = reconcile_conditional_write()
+                    if isinstance(reconciled, dict):
+                        return True, reconciled
+                    if reconciled is None:
+                        return False, "candidate_ownership_unconfirmed"
+                    return False, "candidate_upload_conflict"
+                logger.exception("S3 monitoring renewal candidate upload failed")
+                return False, "candidate_upload_failed"
+            except Exception:
+                logger.exception("S3 monitoring renewal candidate upload failed")
+                return False, "candidate_upload_failed"
+        return False, "candidate_upload_conflict"
 
     def inspect_monitoring_renewal_candidate(
         self,
@@ -459,9 +513,20 @@ class S3Client:
                 Bucket=self.bucket_name,
                 Key=key,
             )
+            metadata = response.get("Metadata") or {}
+            try:
+                content_length = int(response.get("ContentLength"))
+            except (TypeError, ValueError):
+                content_length = None
             return True, {
                 "exists": True,
                 "version_id": str(response.get("VersionId") or "").strip() or None,
+                "etag": str(response.get("ETag") or "").strip() or None,
+                "request_id": str(metadata.get("renewal-request-id") or ""),
+                "upload_id": str(metadata.get("renewal-upload-id") or ""),
+                "cleanup_id": str(metadata.get("renewal-cleanup-id") or ""),
+                "file_sha256": str(metadata.get("file-sha256") or ""),
+                "content_length": content_length,
             }
         except ClientError as exc:
             code = str((exc.response.get("Error") or {}).get("Code") or "")
@@ -476,6 +541,9 @@ class S3Client:
         key: str,
         *,
         version_id: Optional[str] = None,
+        expected_request_id: Optional[str] = None,
+        expected_upload_id: Optional[str] = None,
+        expected_cleanup_id: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """Delete the exact uncommitted object version, never a general document."""
 
@@ -488,6 +556,17 @@ class S3Client:
                 return False, "candidate_inspection_failed"
             if result.get("exists") is not True:
                 return True, "candidate_absent"
+            expected_identity = {
+                "request_id": str(expected_request_id or ""),
+                "upload_id": str(expected_upload_id or ""),
+                "cleanup_id": str(expected_cleanup_id or ""),
+            }
+            if any(expected_identity.values()) and any(
+                str(result.get(field) or "") != value
+                for field, value in expected_identity.items()
+                if value
+            ):
+                return False, "candidate_ownership_mismatch"
             exact_version = str(result.get("version_id") or "").strip() or None
         try:
             kwargs = {"Bucket": self.bucket_name, "Key": key}

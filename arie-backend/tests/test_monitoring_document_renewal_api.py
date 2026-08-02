@@ -942,7 +942,9 @@ def test_s3_success_without_exact_key_fails_closed_and_reconciles_reservation(
             return True, {"key": "", "version_id": None}
 
         @staticmethod
-        def delete_monitoring_renewal_candidate(key, *, version_id=None):
+        def delete_monitoring_renewal_candidate(
+            key, *, version_id=None, **_expected_identity
+        ):
             deleted.append((key, version_id))
             return True, "candidate_deleted"
 
@@ -990,6 +992,92 @@ def test_s3_success_without_exact_key_fails_closed_and_reconciles_reservation(
         conn.close()
     assert artifact["artifact_state"] == "cleaned"
     assert artifact["last_error_code"] is None
+
+
+@pytest.mark.parametrize(
+    "failure_code", ["candidate_already_exists", "candidate_upload_conflict"]
+)
+def test_s3_non_owning_conflict_never_deletes_existing_candidate(
+    renewal_api_server,
+    failure_code,
+):
+    base_url, db_module, server_module = renewal_api_server
+    case = _seed_case(db_module, f"s3-{failure_code}")
+    request = _create(base_url, case).json()["request"]
+    deletes = []
+
+    class ConflictS3:
+        @staticmethod
+        def build_monitoring_renewal_candidate_key(*args):
+            return server_module.build_monitoring_renewal_candidate_key(*args)
+
+        @staticmethod
+        def upload_monitoring_renewal_candidate(**_kwargs):
+            return False, failure_code
+
+        @staticmethod
+        def delete_monitoring_renewal_candidate(*args, **kwargs):
+            deletes.append((args, kwargs))
+            return True, "candidate_deleted"
+
+    original_has_s3 = server_module.HAS_S3
+    original_get_s3 = server_module.get_s3_client
+    server_module.HAS_S3 = True
+    server_module.get_s3_client = lambda: ConflictS3()
+    try:
+        upload = requests.post(
+            f"{base_url}/api/portal/applications/{case['application_id']}"
+            f"/renewal-requests/{request['request_id']}/upload",
+            headers=_auth_headers(_client_token(case["client_id"])),
+            files={
+                "file": (
+                    "conditional-conflict.pdf",
+                    b"%PDF-1.4\n% conflict must not delete\n%%EOF",
+                    "application/pdf",
+                )
+            },
+            timeout=10,
+        )
+    finally:
+        server_module.HAS_S3 = original_has_s3
+        server_module.get_s3_client = original_get_s3
+
+    assert upload.status_code == 500
+    assert deletes == []
+    conn = db_module.get_db()
+    try:
+        artifact = dict(
+            conn.execute(
+                """
+                SELECT artifact_state, last_error_code, cleaned_at
+                  FROM monitoring_document_renewal_upload_cleanup
+                 WHERE request_id = ?
+                """,
+                (request["request_id"],),
+            ).fetchone()
+        )
+        assert conn.execute(
+            """
+            SELECT COUNT(*) AS c
+              FROM monitoring_document_renewal_uploads
+             WHERE request_id = ?
+            """,
+            (request["request_id"],),
+        ).fetchone()["c"] == 0
+        assert conn.execute(
+            """
+            SELECT COUNT(*) AS c
+              FROM audit_log
+             WHERE action = 'monitoring.document_renewal.artifact_not_owned'
+               AND target = ?
+            """,
+            (f"monitoring_renewal_request:{request['request_id']}",),
+        ).fetchone()["c"] == 1
+    finally:
+        conn.close()
+    assert artifact["artifact_state"] == "cleaned"
+    assert artifact["last_error_code"] == failure_code
+    assert artifact["cleaned_at"]
 
 
 def _request_row(db_module, request_id):
@@ -1076,6 +1164,91 @@ def test_inline_cleanup_is_not_queued_behind_periodic_sweep(
     finally:
         release_sweep.set()
         sweep_future.result(timeout=5)
+
+
+def test_cleanup_finalizes_proven_nonowned_s3_reservation_without_delete_retry(
+    renewal_api_server,
+):
+    base_url, db_module, server_module = renewal_api_server
+    case = _seed_case(db_module, "artifact-nonowned-s3")
+    public = _create(base_url, case).json()["request"]
+    request = _request_row(db_module, public["request_id"])
+    upload_id = "0" * 32
+    cleanup_id = "7" * 32
+    storage_key = server_module.build_monitoring_renewal_candidate_key(
+        case["client_id"],
+        request["request_id"],
+        upload_id,
+        "candidate.pdf",
+    )
+    conn = db_module.get_db()
+    try:
+        server_module._reserve_monitoring_renewal_upload_artifact(
+            conn,
+            request=request,
+            actor={"sub": case["client_id"], "name": "Client", "role": "client"},
+            cleanup_id=cleanup_id,
+            upload_id=upload_id,
+            backend="s3",
+            storage_key=storage_key,
+            file_extension=".pdf",
+        )
+    finally:
+        conn.close()
+    server_module._mark_monitoring_renewal_artifact_cleanup_pending(
+        cleanup_id,
+        error_code="candidate_ownership_unconfirmed",
+    )
+
+    checks = []
+
+    class OwnershipMismatchS3:
+        @staticmethod
+        def delete_monitoring_renewal_candidate(key, **expected_identity):
+            checks.append((key, expected_identity))
+            return False, "candidate_ownership_mismatch"
+
+    original_has_s3 = server_module.HAS_S3
+    original_get_s3 = server_module.get_s3_client
+    server_module.HAS_S3 = True
+    server_module.get_s3_client = lambda: OwnershipMismatchS3()
+    try:
+        first = server_module.process_monitoring_renewal_upload_cleanup(limit=10)
+        second = server_module.process_monitoring_renewal_upload_cleanup(limit=10)
+    finally:
+        server_module.HAS_S3 = original_has_s3
+        server_module.get_s3_client = original_get_s3
+
+    assert first["cleaned"] == 1
+    assert second["scanned"] == 0
+    assert checks == [
+        (
+            storage_key,
+            {
+                "version_id": None,
+                "expected_request_id": request["request_id"],
+                "expected_upload_id": upload_id,
+                "expected_cleanup_id": cleanup_id,
+            },
+        )
+    ]
+    conn = db_module.get_db()
+    try:
+        artifact = dict(
+            conn.execute(
+                """
+                SELECT artifact_state, last_error_code, cleaned_at
+                  FROM monitoring_document_renewal_upload_cleanup
+                 WHERE cleanup_id = ?
+                """,
+                (cleanup_id,),
+            ).fetchone()
+        )
+    finally:
+        conn.close()
+    assert artifact["artifact_state"] == "cleaned"
+    assert artifact["last_error_code"] == "candidate_ownership_mismatch"
+    assert artifact["cleaned_at"]
 
 
 def test_reserved_artifact_lease_blocks_cleanup_and_retry_runs_with_flag_off(
@@ -1313,7 +1486,9 @@ def test_s3_artifact_cleanup_is_exact_idempotent_and_never_deletes_attached(
 
     class ExactDeleteS3:
         @staticmethod
-        def delete_monitoring_renewal_candidate(key, *, version_id=None):
+        def delete_monitoring_renewal_candidate(
+            key, *, version_id=None, **_expected_identity
+        ):
             deletes.append((key, version_id))
             return True, "candidate_deleted"
 
@@ -1448,7 +1623,9 @@ def test_s3_artifact_cleanup_failure_backs_off_then_retries_exact_version(
 
     class RetryDeleteS3:
         @staticmethod
-        def delete_monitoring_renewal_candidate(key, *, version_id=None):
+        def delete_monitoring_renewal_candidate(
+            key, *, version_id=None, **_expected_identity
+        ):
             deletes.append((key, version_id))
             if len(deletes) == 1:
                 return False, "temporary_delete_failure"
@@ -1652,6 +1829,224 @@ def test_s3_candidate_put_is_conditional_and_delete_uses_exact_version():
     )
     assert deleted is True
     assert calls[1][1]["VersionId"] == "version-123"
+
+
+def test_s3_candidate_rejects_invalid_reserved_identity_without_put():
+    from s3_client import S3Client
+
+    class CandidateClient:
+        @staticmethod
+        def put_object(**_kwargs):
+            raise AssertionError("invalid identity must fail before S3 PUT")
+
+    client = object.__new__(S3Client)
+    client.bucket_name = "renewal-test-bucket"
+    client.monitoring_renewal_candidate_client = lambda: CandidateClient()
+    success, result = client.upload_monitoring_renewal_candidate(
+        key="clients/renewal-client/monitoring_renewal_candidate/invalid.pdf",
+        file_data=b"%PDF-1.4\n%%EOF",
+        customer_id="renewal-client",
+        request_id="renewal-request",
+        upload_id="not-a-canonical-upload-id",
+        cleanup_id="7" * 32,
+        original_filename="candidate.pdf",
+        content_type="application/pdf",
+        file_sha256="a" * 64,
+    )
+    assert (success, result) == (False, "invalid_reserved_key")
+
+
+def test_s3_candidate_conditional_conflicts_are_bounded_and_distinct():
+    from botocore.exceptions import ClientError
+    from s3_client import S3Client, build_monitoring_renewal_candidate_key
+
+    key = build_monitoring_renewal_candidate_key(
+        "renewal-client",
+        "renewal-request",
+        "6" * 32,
+        "candidate.pdf",
+    )
+    kwargs = {
+        "key": key,
+        "file_data": b"%PDF-1.4\n%%EOF",
+        "customer_id": "renewal-client",
+        "request_id": "renewal-request",
+        "upload_id": "6" * 32,
+        "cleanup_id": "7" * 32,
+        "original_filename": "candidate.pdf",
+        "content_type": "application/pdf",
+        "file_sha256": "a" * 64,
+    }
+
+    def conditional_error(code, status):
+        return ClientError(
+            {
+                "Error": {"Code": code, "Message": "conditional write rejected"},
+                "ResponseMetadata": {"HTTPStatusCode": status},
+            },
+            "PutObject",
+        )
+
+    class CandidateClient:
+        def __init__(self, outcomes, *, head_result=None, head_error=None):
+            self.outcomes = list(outcomes)
+            self.calls = 0
+            self.head_calls = 0
+            self.head_result = head_result or {
+                "ContentLength": len(kwargs["file_data"]),
+                "Metadata": {
+                    "renewal-request-id": "different-request",
+                    "renewal-upload-id": "8" * 32,
+                    "renewal-cleanup-id": "9" * 32,
+                    "file-sha256": "b" * 64,
+                },
+            }
+            self.head_error = head_error
+
+        def put_object(self, **_kwargs):
+            self.calls += 1
+            outcome = self.outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        def head_object(self, **_kwargs):
+            self.head_calls += 1
+            if self.head_error:
+                raise self.head_error
+            return self.head_result
+
+    client = object.__new__(S3Client)
+    client.bucket_name = "renewal-test-bucket"
+
+    precondition = CandidateClient([conditional_error("PreconditionFailed", 412)])
+    client.monitoring_renewal_candidate_client = lambda: precondition
+    assert client.upload_monitoring_renewal_candidate(**kwargs) == (
+        False,
+        "candidate_already_exists",
+    )
+    assert precondition.calls == 1
+    assert precondition.head_calls == 1
+
+    exact_head = {
+        "VersionId": "recovered-version",
+        "ETag": "recovered-etag",
+        "ContentLength": len(kwargs["file_data"]),
+        "Metadata": {
+            "renewal-request-id": kwargs["request_id"],
+            "renewal-upload-id": kwargs["upload_id"],
+            "renewal-cleanup-id": kwargs["cleanup_id"],
+            "file-sha256": kwargs["file_sha256"],
+        },
+    }
+    lost_response = CandidateClient(
+        [conditional_error("PreconditionFailed", 412)],
+        head_result=exact_head,
+    )
+    client.monitoring_renewal_candidate_client = lambda: lost_response
+    success, result = client.upload_monitoring_renewal_candidate(**kwargs)
+    assert success is True
+    assert result == {
+        "key": key,
+        "version_id": "recovered-version",
+        "etag": "recovered-etag",
+        "reconciled": True,
+    }
+    assert lost_response.calls == 1
+    assert lost_response.head_calls == 1
+
+    unconfirmed = CandidateClient(
+        [conditional_error("PreconditionFailed", 412)],
+        head_error=RuntimeError("simulated HEAD outage"),
+    )
+    client.monitoring_renewal_candidate_client = lambda: unconfirmed
+    assert client.upload_monitoring_renewal_candidate(**kwargs) == (
+        False,
+        "candidate_ownership_unconfirmed",
+    )
+
+    retry_success = CandidateClient(
+        [
+            conditional_error("ConditionalRequestConflict", 409),
+            {"VersionId": "retry-version", "ETag": "retry-etag"},
+        ]
+    )
+    client.monitoring_renewal_candidate_client = lambda: retry_success
+    success, result = client.upload_monitoring_renewal_candidate(**kwargs)
+    assert success is True
+    assert result["version_id"] == "retry-version"
+    assert retry_success.calls == 2
+
+    exhausted = CandidateClient(
+        [
+            conditional_error("ConditionalRequestConflict", 409),
+            conditional_error("ConditionalRequestConflict", 409),
+        ]
+    )
+    client.monitoring_renewal_candidate_client = lambda: exhausted
+    assert client.upload_monitoring_renewal_candidate(**kwargs) == (
+        False,
+        "candidate_upload_conflict",
+    )
+    assert exhausted.calls == 2
+
+    lost_response_after_conflict = CandidateClient(
+        [
+            conditional_error("ConditionalRequestConflict", 409),
+            conditional_error("ConditionalRequestConflict", 409),
+        ],
+        head_result=exact_head,
+    )
+    client.monitoring_renewal_candidate_client = (
+        lambda: lost_response_after_conflict
+    )
+    success, result = client.upload_monitoring_renewal_candidate(**kwargs)
+    assert success is True
+    assert result["reconciled"] is True
+    assert result["version_id"] == "recovered-version"
+    assert lost_response_after_conflict.calls == 2
+    assert lost_response_after_conflict.head_calls == 1
+
+
+def test_s3_unversioned_cleanup_requires_exact_candidate_ownership():
+    from s3_client import S3Client, build_monitoring_renewal_candidate_key
+
+    calls = []
+
+    class CandidateClient:
+        @staticmethod
+        def head_object(**kwargs):
+            calls.append(("head", kwargs))
+            return {
+                "Metadata": {
+                    "renewal-request-id": "different-request",
+                    "renewal-upload-id": "8" * 32,
+                    "renewal-cleanup-id": "9" * 32,
+                }
+            }
+
+        @staticmethod
+        def delete_object(**kwargs):
+            calls.append(("delete", kwargs))
+            return {}
+
+    client = object.__new__(S3Client)
+    client.bucket_name = "renewal-test-bucket"
+    client.monitoring_renewal_candidate_client = lambda: CandidateClient()
+    key = build_monitoring_renewal_candidate_key(
+        "renewal-client",
+        "renewal-request",
+        "6" * 32,
+        "candidate.pdf",
+    )
+    deleted, result = client.delete_monitoring_renewal_candidate(
+        key,
+        expected_request_id="renewal-request",
+        expected_upload_id="6" * 32,
+        expected_cleanup_id="7" * 32,
+    )
+    assert (deleted, result) == (False, "candidate_ownership_mismatch")
+    assert [action for action, _kwargs in calls] == ["head"]
 
 
 def test_s3_upload_admission_is_bounded_and_released_after_completion(

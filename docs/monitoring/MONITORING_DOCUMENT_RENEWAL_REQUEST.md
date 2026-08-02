@@ -11,9 +11,16 @@ of every verification or acceptance decision.
 
 The workflow is controlled by
 `ENABLE_DOCUMENT_RENEWAL_AUTOMATION`. The flag defaults to `OFF` in every
-environment. When it is off, every new mutation fails closed; authenticated
-read-only projections remain available so already-created requests do not
-disappear during a rollback.
+environment. When it is off, all new renewal business mutations fail closed:
+request creation, resend, cancellation, due-date changes, candidate upload,
+automatic eligibility and reminder generation. Authenticated read-only
+projections remain available so already-created requests do not disappear
+during a rollback. The independent artifact-cleanup worker remains active to
+remove or reconcile already-reserved uploads safely, and protected legacy
+workflows retain their existing flag-OFF behaviour.
+When the flag is OFF, the renewal scheduler is not registered; eligibility and
+reminder generation therefore write no requests, notifications, events, audit
+records, or scheduler cursors.
 
 ## Scope
 
@@ -86,7 +93,13 @@ backoff.
 
 Staging and production accept renewal candidates only through S3. Candidate
 keys are deterministic, identity-scoped, and allowlisted; writes use
-`If-None-Match: *`, and cleanup deletes the recorded object version. S3 calls
+`If-None-Match: *`, and cleanup deletes only the recorded object version or an
+unversioned candidate whose request, upload, and cleanup metadata proves exact
+ownership. Conditional-write collisions are retried once where safe and are
+then reconciled by exact request, upload, cleanup, digest, and size metadata.
+An exact match recovers a lost success response; a proven mismatch is finalized
+without deletion, while unavailable ownership evidence remains cleanup-pending.
+S3 calls
 use bounded timeouts, a two-worker executor, and cancellation-safe admission so
 client disconnects cannot create an unbounded queue of upload bodies. No
 redundant local copy is written in deployed environments. The testing/development

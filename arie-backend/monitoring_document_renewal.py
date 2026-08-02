@@ -1308,17 +1308,22 @@ def create_renewal_request(
             due_date_snapshot=due.isoformat(),
         )
         before_sent = dict(request)
-        db.execute(
-            """
-            UPDATE monitoring_document_renewal_requests
-               SET request_status = 'awaiting_upload', sent_at = ?,
-                   updated_at = ?, updated_by = ?, revision = 2
-             WHERE request_id = ? AND request_status = 'created' AND revision = 1
-            """,
-            (timestamp_text, timestamp_text, actor_info["id"], normalized_request_id),
+        _require_single_update(
+            db.execute(
+                """
+                UPDATE monitoring_document_renewal_requests
+                   SET request_status = 'awaiting_upload', sent_at = ?,
+                       updated_at = ?, updated_by = ?, revision = 2
+                 WHERE request_id = ? AND request_status = 'created' AND revision = 1
+                """,
+                (
+                    timestamp_text,
+                    timestamp_text,
+                    actor_info["id"],
+                    normalized_request_id,
+                ),
+            )
         )
-        if _rowcount(db) not in (None, -1, 1):
-            raise RenewalError("stale_request", "Renewal request changed during creation.")
         request.update(
             {
                 "request_status": "awaiting_upload",
@@ -2094,9 +2099,11 @@ def generate_eligible_renewal_requests(
     created_ids: List[str] = []
     already_active_ids: List[str] = []
     blocked: List[Dict[str, str]] = []
+    degraded_failures: List[Dict[str, str]] = []
     business_block_codes = {
         "alert_not_found",
         "alert_not_active",
+        "audit_unavailable",
         "linkage_not_authoritative",
         "unsupported_alert_type",
         "stale_document_alert",
@@ -2104,6 +2111,7 @@ def generate_eligible_renewal_requests(
         "stale_eligibility",
         "not_eligible",
         "missing_expiry_evidence",
+        "notification_unavailable",
         "legacy_request_conflict",
         "duplicate_active_request",
         "active_alert_request_conflict",
@@ -2127,7 +2135,10 @@ def generate_eligible_renewal_requests(
         except RenewalError as exc:
             if exc.code not in business_block_codes:
                 raise
-            blocked.append({"alert_id": str(candidate["id"]), "code": exc.code})
+            failure = {"alert_id": str(candidate["id"]), "code": exc.code}
+            blocked.append(failure)
+            if exc.code in {"audit_unavailable", "notification_unavailable"}:
+                degraded_failures.append(failure)
     if candidates:
         _save_scheduler_cursor(
             db,
@@ -2145,6 +2156,8 @@ def generate_eligible_renewal_requests(
         "request_ids": created_ids,
         "already_active_request_ids": already_active_ids,
         "blocked_alerts": blocked,
+        "degraded": bool(degraded_failures),
+        "degraded_failures": degraded_failures,
     }
 
 
