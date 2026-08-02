@@ -58,6 +58,12 @@ def test_package_has_modules_to_check():
         "edd_divergence.py",
         "screening_defensibility.py",
         "monitoring_requirement.py",
+        # The aggregation package renders every sentence an officer reads. A
+        # clock reaching it would put the run time into review_hash's sibling
+        # hash and make the artifact unreproducible.
+        "engine.py",
+        "checks.py",
+        "limitations.py",
     } <= names
 
 
