@@ -652,6 +652,8 @@ def test_reminders_are_bounded_deterministic_and_atomic(renewal_db):
         "unchanged": 0,
         "request_ids": [request["request_id"]],
         "blocked_requests": [],
+        "degraded": False,
+        "degraded_failures": [],
     }
     assert second == {
         "scanned": 1,
@@ -660,6 +662,8 @@ def test_reminders_are_bounded_deterministic_and_atomic(renewal_db):
         "unchanged": 1,
         "request_ids": [],
         "blocked_requests": [],
+        "degraded": False,
+        "degraded_failures": [],
     }
     assert _scalar(
         renewal_db,
@@ -714,6 +718,119 @@ def test_reads_remain_available_while_flag_is_off(renewal_db):
     assert [item["request_id"] for item in listed] == [request["request_id"]]
     assert len(detailed["events"]) == 2
     assert detailed["uploads"] == []
+
+
+def test_request_listing_defaults_to_active_rows_and_has_bounded_pages(renewal_db):
+    first = _create(renewal_db, request_id="renewal-1")
+    renewal.cancel_renewal_request(
+        renewal_db,
+        first["request_id"],
+        actor=OFFICER,
+        expected_revision=first["revision"],
+        cancel_reason="Replace this request with a corrected request.",
+        now=NOW,
+        feature_flags=Flags(True),
+    )
+    second = _create(renewal_db, request_id="renewal-2")
+
+    active = renewal.list_renewal_requests(
+        renewal_db, application_id="app-1", customer_id="client-1"
+    )
+    first_page = renewal.list_renewal_requests(
+        renewal_db,
+        application_id="app-1",
+        customer_id="client-1",
+        include_cancelled=True,
+        limit=1,
+        offset=0,
+    )
+    second_page = renewal.list_renewal_requests(
+        renewal_db,
+        application_id="app-1",
+        customer_id="client-1",
+        include_cancelled=True,
+        limit=1,
+        offset=1,
+    )
+
+    assert [item["request_id"] for item in active] == [second["request_id"]]
+    assert [item["request_id"] for item in first_page] == [second["request_id"]]
+    assert [item["request_id"] for item in second_page] == [first["request_id"]]
+    assert renewal.count_renewal_requests(
+        renewal_db, application_id="app-1", customer_id="client-1"
+    ) == 1
+    assert renewal.count_renewal_requests(
+        renewal_db,
+        application_id="app-1",
+        customer_id="client-1",
+        include_cancelled=True,
+    ) == 2
+    with pytest.raises(renewal.RenewalError) as exc:
+        renewal.list_renewal_requests(renewal_db, limit=101)
+    assert exc.value.code == "invalid_pagination"
+
+
+def test_request_listing_exposes_every_row_across_page_boundary(renewal_db):
+    first = _create(renewal_db, request_id="renewal-01")
+    expected_ids = {first["request_id"]}
+    for index in range(2, 52):
+        document_id = f"doc-{index}"
+        alert_id = index
+        renewal_db.execute(
+            """
+            INSERT INTO documents(
+                id, application_id, doc_type, slot_key, is_current, version,
+                expiry_date, verification_status, review_status
+            ) VALUES (?, 'app-1', 'passport', ?, 1, 1, '2026-07-01',
+                      'flagged', 'pending')
+            """,
+            (document_id, f"passport:entity:{index}"),
+        )
+        renewal_db.execute(
+            """
+            INSERT INTO monitoring_alerts(
+                id, application_id, client_name, alert_type,
+                source_reference, status
+            ) VALUES (?, 'app-1', 'Renewal Test Ltd', 'document_expired', ?, 'open')
+            """,
+            (alert_id, f"document:{document_id}"),
+        )
+        renewal_db.commit()
+        request = renewal.create_renewal_request(
+            renewal_db,
+            alert_id,
+            reason="expired",
+            actor=OFFICER,
+            now=NOW,
+            request_id=f"renewal-{index:02d}",
+            feature_flags=Flags(True),
+        )
+        expected_ids.add(request["request_id"])
+
+    first_page = renewal.list_renewal_requests(
+        renewal_db,
+        application_id="app-1",
+        customer_id="client-1",
+        limit=50,
+        offset=0,
+    )
+    second_page = renewal.list_renewal_requests(
+        renewal_db,
+        application_id="app-1",
+        customer_id="client-1",
+        limit=50,
+        offset=50,
+    )
+    first_ids = {item["request_id"] for item in first_page}
+    second_ids = {item["request_id"] for item in second_page}
+
+    assert renewal.count_renewal_requests(
+        renewal_db, application_id="app-1", customer_id="client-1"
+    ) == 51
+    assert len(first_ids) == 50
+    assert len(second_ids) == 1
+    assert first_ids.isdisjoint(second_ids)
+    assert first_ids | second_ids == expected_ids
 
 
 def test_stale_canonical_document_version_fails_closed(renewal_db):
@@ -822,6 +939,36 @@ def test_upload_requires_exact_authenticated_customer_identity(renewal_db):
         )
     assert exc.value.code == "insufficient_role"
     assert _scalar(renewal_db, "SELECT COUNT(*) FROM monitoring_document_renewal_uploads") == 0
+
+
+def test_upload_rejects_cross_customer_before_stale_linkage_resolution(
+    renewal_db, monkeypatch
+):
+    request = _create(renewal_db, request_id="renewal-1")
+    renewal_db.execute("UPDATE documents SET version=2 WHERE id='doc-1'")
+    renewal_db.commit()
+
+    def forbidden_after_auth(*_args, **_kwargs):
+        raise AssertionError("cross-customer caller reached write locking or linkage")
+
+    monkeypatch.setattr(renewal, "_begin_write", forbidden_after_auth)
+    monkeypatch.setattr(renewal, "_validate_request_linkage", forbidden_after_auth)
+    with pytest.raises(renewal.RenewalError) as exc:
+        renewal.record_renewal_upload(
+            renewal_db,
+            request["request_id"],
+            actor={"sub": "other-client", "role": "client", "type": "client"},
+            expected_revision=2,
+            artifact_reservation_id="artifact-upload-1",
+            upload_id="upload-1",
+            original_filename="passport.pdf",
+            storage_key="renewals/app-1/renewal-1/upload-1",
+            file_size=1024,
+            mime_type="application/pdf",
+            file_sha256="a" * 64,
+            feature_flags=Flags(True),
+        )
+    assert exc.value.code == "cross_customer_access"
 
 
 def test_mutable_alert_lifecycle_status_is_not_part_of_eligibility_fingerprint(renewal_db):
@@ -1313,6 +1460,104 @@ def test_reminder_cursor_advances_past_blocked_prefix(renewal_db):
         {"request_id": blocked_request["request_id"], "code": "stale_linkage"}
     ]
     assert second["request_ids"] == [valid_request["request_id"]]
+
+
+@pytest.mark.parametrize(
+    "failure_code", ["notification_unavailable", "audit_unavailable"]
+)
+def test_reminder_cursor_advances_past_deferrable_delivery_failure(
+    renewal_db, monkeypatch, failure_code
+):
+    blocked_request = _create(
+        renewal_db,
+        request_id="a-blocked",
+        due_date="2026-08-16",
+        now=NOW - timedelta(days=1),
+    )
+    _add_document_alert(
+        renewal_db,
+        alert_id=2,
+        app_id="app-2",
+        document_id="doc-2",
+    )
+    valid_request = renewal.create_renewal_request(
+        renewal_db,
+        2,
+        reason="expired",
+        actor=OFFICER,
+        request_id="b-valid",
+        due_date="2026-08-16",
+        now=NOW - timedelta(days=1),
+        feature_flags=Flags(True),
+    )
+
+    call_options = {}
+    fail_once = {"pending": True}
+    if failure_code == "notification_unavailable":
+        publish = renewal._publish_portal_notification
+
+        def fail_first_notification(db, request, **kwargs):
+            if (
+                fail_once["pending"]
+                and request["request_id"] == blocked_request["request_id"]
+            ):
+                fail_once["pending"] = False
+                raise renewal.RenewalError(
+                    "notification_unavailable", "Notification unavailable."
+                )
+            return publish(db, request, **kwargs)
+
+        monkeypatch.setattr(
+            renewal, "_publish_portal_notification", fail_first_notification
+        )
+    else:
+        def fail_first_audit(db, **kwargs):
+            if (
+                fail_once["pending"]
+                and kwargs["target"].endswith(blocked_request["request_id"])
+            ):
+                fail_once["pending"] = False
+                raise renewal.RenewalError(
+                    "audit_unavailable", "Audit unavailable."
+                )
+            return append_audit_log(db, **kwargs)
+
+        call_options["audit_writer"] = fail_first_audit
+
+    first = renewal.generate_due_reminders(
+        renewal_db,
+        actor=SCHEDULER,
+        limit=1,
+        now=NOW,
+        feature_flags=Flags(True),
+        **call_options,
+    )
+    second = renewal.generate_due_reminders(
+        renewal_db,
+        actor=SCHEDULER,
+        limit=1,
+        now=NOW,
+        feature_flags=Flags(True),
+        **call_options,
+    )
+    retry = renewal.generate_due_reminders(
+        renewal_db,
+        actor=SCHEDULER,
+        limit=1,
+        now=NOW,
+        feature_flags=Flags(True),
+        **call_options,
+    )
+
+    assert first["blocked_requests"] == [
+        {"request_id": blocked_request["request_id"], "code": failure_code}
+    ]
+    assert first["degraded"] is True
+    assert first["degraded_failures"] == first["blocked_requests"]
+    assert second["request_ids"] == [valid_request["request_id"]]
+    assert second["degraded"] is False
+    assert retry["request_ids"] == [blocked_request["request_id"]]
+    assert retry["degraded"] is False
 
 
 def test_portal_notifications_track_resend_due_change_and_cancellation(renewal_db):

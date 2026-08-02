@@ -135,7 +135,12 @@ The portal list is client-owned and cross-client requests are cloaked as not
 found. Its response includes the evaluated feature state so an existing
 request remains visible but exposes no upload control while the workflow is
 OFF. Responses omit storage keys, file hashes, linkage fingerprints and audit
-payloads.
+payloads. Listing is bounded before linkage projection: `limit` defaults to 50
+and is capped at 100, `offset` is explicitly bounded, and cancelled history is
+excluded unless `include_cancelled=true` is requested. The response includes
+an exact filtered `total`, `has_more` and `next_offset`; the portal displays the
+visible/total count and offers a GET-only **Load more** control until every
+authoritative request has been rendered.
 
 ## Reminder generation
 
@@ -147,6 +152,10 @@ email. A unique event key makes repeated or overlapping scheduler ticks
 idempotent. Cancelled and upload-received requests are excluded. Creation,
 resend, and due-date changes already notify the portal, so an additional
 reminder is suppressed on the same UTC day as the latest request update.
+An audit or portal-notification infrastructure failure rolls back that row,
+records a degraded failure, and advances the bounded fairness cursor so one
+unrecoverable row cannot starve later reminders. The scheduler emits an ERROR
+for the degraded tick and retries the row after the cursor wraps.
 
 The officer projection derives the generated-reminder count and latest
 generation timestamp from the event ledger. It does not label an intent as a
@@ -175,6 +184,9 @@ request status, event, general audit entry, and `attached` lifecycle state then
 commit in one transaction. Any failed recording leaves durable cleanup evidence
 instead of relying on process-local best effort. No network call is made while
 the append-only audit lock or a pooled database connection is held.
+Request-path cleanup uses a separate bounded executor from the periodic sweep,
+and both cleanup marking and inline cleanup are best effort so they cannot mask
+the authoritative upload response; the durable sweep remains the retry owner.
 
 Artifact lifecycle transitions are durably evidenced in the restricted cleanup
 ledger. Reservation, storage, cleanup, and attachment reconciliation also append

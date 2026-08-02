@@ -468,6 +468,10 @@ def test_portal_own_application_list_and_staged_upload_are_safe(renewal_api_serv
     assert body["application_id"] == case["application_id"]
     assert body["feature_enabled"] is True
     assert body["total"] == 1
+    assert body["limit"] == 50
+    assert body["offset"] == 0
+    assert body["has_more"] is False
+    assert body["next_offset"] is None
     public_request = body["renewal_requests"][0]
     assert public_request["request_id"] == request["request_id"]
     subject_ref = hashlib.sha256(
@@ -710,6 +714,34 @@ def test_portal_distinguishes_same_document_type_for_two_people(renewal_api_serv
         assert item["document_type"] == "passport"
         assert "person_id" not in item
         assert "document_id" not in item
+
+    page_ids = set()
+    for offset in (0, 1):
+        page = requests.get(
+            f"{base_url}/api/portal/applications/{case['application_id']}"
+            f"/renewal-requests?limit=1&offset={offset}",
+            headers=_auth_headers(_client_token(case["client_id"])),
+            timeout=10,
+        )
+        assert page.status_code == 200, page.text
+        assert page.json()["limit"] == 1
+        assert page.json()["offset"] == offset
+        assert page.json()["total"] == 2
+        assert page.json()["has_more"] is (offset == 0)
+        assert page.json()["next_offset"] == (1 if offset == 0 else None)
+        assert len(page.json()["renewal_requests"]) == 1
+        page_ids.add(page.json()["renewal_requests"][0]["request_id"])
+    assert page_ids == {
+        first.json()["request"]["request_id"],
+        second.json()["request"]["request_id"],
+    }
+    invalid_page = requests.get(
+        f"{base_url}/api/portal/applications/{case['application_id']}"
+        "/renewal-requests?limit=101",
+        headers=_auth_headers(_client_token(case["client_id"])),
+        timeout=10,
+    )
+    assert invalid_page.status_code == 400
 
 
 def test_feature_off_rejects_every_mutation_before_writes(renewal_api_server):
@@ -973,6 +1005,79 @@ def _request_row(db_module, request_id):
         conn.close()
 
 
+def test_cleanup_bookkeeping_failures_are_best_effort(
+    renewal_api_server, monkeypatch
+):
+    _base_url, _db_module, server_module = renewal_api_server
+    original_get_db = server_module.get_db
+
+    def unavailable_db():
+        raise RuntimeError("simulated cleanup database outage")
+
+    monkeypatch.setattr(server_module, "get_db", unavailable_db)
+    assert server_module._mark_monitoring_renewal_artifact_cleanup_pending(
+        "cleanup-best-effort",
+        error_code="upload_record_failed",
+    ) is False
+
+    monkeypatch.setattr(server_module, "get_db", original_get_db)
+
+    def failed_inline_cleanup(_cleanup_id):
+        raise RuntimeError("simulated inline cleanup outage")
+
+    monkeypatch.setattr(
+        server_module,
+        "_process_monitoring_renewal_upload_artifact",
+        failed_inline_cleanup,
+    )
+    assert asyncio.run(
+        server_module._attempt_monitoring_renewal_inline_cleanup(
+            "cleanup-best-effort"
+        )
+    ) is False
+
+
+def test_inline_cleanup_is_not_queued_behind_periodic_sweep(
+    renewal_api_server, monkeypatch
+):
+    _base_url, _db_module, server_module = renewal_api_server
+    sweep_entered = threading.Event()
+    release_sweep = threading.Event()
+    inline_called = threading.Event()
+
+    def block_sweep_executor():
+        sweep_entered.set()
+        assert release_sweep.wait(timeout=5)
+
+    sweep_future = server_module._DOCUMENT_RENEWAL_CLEANUP_EXECUTOR.submit(
+        block_sweep_executor
+    )
+    assert sweep_entered.wait(timeout=5)
+
+    def inline_cleanup(_cleanup_id):
+        inline_called.set()
+        return {"claimed": False, "cleaned": False, "attached": False}
+
+    monkeypatch.setattr(
+        server_module,
+        "_process_monitoring_renewal_upload_artifact",
+        inline_cleanup,
+    )
+    try:
+        assert asyncio.run(
+            asyncio.wait_for(
+                server_module._attempt_monitoring_renewal_inline_cleanup(
+                    "cleanup-inline"
+                ),
+                timeout=1,
+            )
+        ) is True
+        assert inline_called.is_set()
+    finally:
+        release_sweep.set()
+        sweep_future.result(timeout=5)
+
+
 def test_reserved_artifact_lease_blocks_cleanup_and_retry_runs_with_flag_off(
     renewal_api_server,
 ):
@@ -1092,8 +1197,22 @@ def test_cleanup_claim_fences_concurrent_upload_attachment(
     entered_delete = threading.Event()
     release_delete = threading.Event()
     real_unlink = os.unlink
+    candidate_name = os.path.basename(local_path)
+    candidate_directory_stat = os.stat(os.path.dirname(local_path))
 
     def blocked_unlink(path, *, dir_fd=None):
+        candidate_call = os.fspath(path) == candidate_name and dir_fd is not None
+        if candidate_call:
+            directory_stat = os.fstat(dir_fd)
+            candidate_call = (
+                directory_stat.st_dev,
+                directory_stat.st_ino,
+            ) == (
+                candidate_directory_stat.st_dev,
+                candidate_directory_stat.st_ino,
+            )
+        if not candidate_call:
+            return real_unlink(path, dir_fd=dir_fd)
         entered_delete.set()
         assert release_delete.wait(timeout=5)
         return real_unlink(path, dir_fd=dir_fd)
@@ -2108,6 +2227,17 @@ def test_portal_upload_handler_calls_only_dedicated_renewal_record_service():
         "get_renewal_request",
         "record_renewal_upload",
     }
+    assert region.count("_attempt_monitoring_renewal_inline_cleanup") == 4
+    assert "_DOCUMENT_RENEWAL_CLEANUP_EXECUTOR" not in region
+    inline_cleanup = next(
+        child
+        for child in tree.body
+        if isinstance(child, ast.AsyncFunctionDef)
+        and child.name == "_attempt_monitoring_renewal_inline_cleanup"
+    )
+    inline_region = ast.get_source_segment(source, inline_cleanup)
+    assert "_DOCUMENT_RENEWAL_INLINE_CLEANUP_EXECUTOR" in inline_region
+    assert "except Exception" in inline_region
     for prohibited_call in (
         "_monitoring_document_refresh",
         "_request_monitoring_updated_document",

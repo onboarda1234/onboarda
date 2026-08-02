@@ -55,6 +55,8 @@ MAX_FILENAME_LENGTH = 255
 MAX_STORAGE_KEY_LENGTH = 1000
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_REMINDER_LIMIT = 500
+MAX_LIST_LIMIT = 100
+MAX_LIST_OFFSET = 10_000
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 OFFICER_ROLES = frozenset({"co", "sco", "admin"})
 
@@ -962,14 +964,13 @@ def renewal_request_for_alert(
     return _with_reminder_summary(db, request) if request else None
 
 
-def list_renewal_requests(
-    db: Any,
+def _renewal_request_list_filter(
     *,
-    application_id: Any = None,
-    customer_id: Any = None,
-    monitoring_alert_id: Any = None,
-    include_cancelled: bool = True,
-) -> List[Dict[str, Any]]:
+    application_id: Any,
+    customer_id: Any,
+    monitoring_alert_id: Any,
+    include_cancelled: bool,
+) -> tuple[List[str], List[Any]]:
     clauses: List[str] = []
     params: List[Any] = []
     for field, value in (
@@ -983,10 +984,70 @@ def list_renewal_requests(
     if not include_cancelled:
         clauses.append("request_status <> ?")
         params.append("cancelled")
+    return clauses, params
+
+
+def count_renewal_requests(
+    db: Any,
+    *,
+    application_id: Any = None,
+    customer_id: Any = None,
+    monitoring_alert_id: Any = None,
+    include_cancelled: bool = False,
+) -> int:
+    clauses, params = _renewal_request_list_filter(
+        application_id=application_id,
+        customer_id=customer_id,
+        monitoring_alert_id=monitoring_alert_id,
+        include_cancelled=include_cancelled,
+    )
+    sql = "SELECT COUNT(*) AS request_count FROM monitoring_document_renewal_requests"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    result = _row(db.execute(sql, tuple(params)).fetchone()) or {}
+    return int(result.get("request_count") or 0)
+
+
+def list_renewal_requests(
+    db: Any,
+    *,
+    application_id: Any = None,
+    customer_id: Any = None,
+    monitoring_alert_id: Any = None,
+    include_cancelled: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    try:
+        bounded_limit = int(limit)
+        bounded_offset = int(offset)
+    except (TypeError, ValueError) as exc:
+        raise RenewalError(
+            "invalid_pagination", "limit and offset must be integers.", http_status=400
+        ) from exc
+    if bounded_limit < 1 or bounded_limit > MAX_LIST_LIMIT:
+        raise RenewalError(
+            "invalid_pagination",
+            f"limit must be between 1 and {MAX_LIST_LIMIT}.",
+            http_status=400,
+        )
+    if bounded_offset < 0 or bounded_offset > MAX_LIST_OFFSET:
+        raise RenewalError(
+            "invalid_pagination",
+            f"offset must be between 0 and {MAX_LIST_OFFSET}.",
+            http_status=400,
+        )
+    clauses, params = _renewal_request_list_filter(
+        application_id=application_id,
+        customer_id=customer_id,
+        monitoring_alert_id=monitoring_alert_id,
+        include_cancelled=include_cancelled,
+    )
     sql = "SELECT * FROM monitoring_document_renewal_requests"
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY created_at DESC, request_id DESC"
+    sql += " ORDER BY created_at DESC, request_id DESC LIMIT ? OFFSET ?"
+    params.extend((bounded_limit, bounded_offset))
     return [
         _project_for_read(db, item)
         for item in _rows(db.execute(sql, tuple(params)))
@@ -1703,12 +1764,16 @@ def record_renewal_upload(
         raise RenewalError("invalid_upload", "file_size is outside the approved upload limit.")
     timestamp = _iso_timestamp(_utc_now(now))
     try:
-        _begin_write(db)
         initial = _load_request(db, request_id)
+        # Reject cross-customer callers before they can lock an alert, a
+        # renewal row, or the shared canonical document slot. Re-check the
+        # locked row below as a fail-closed defence against unexpected drift.
+        _require_client(actor_info, initial["customer_id"])
+        _begin_write(db)
         alert = _lock_alert(db, initial["monitoring_alert_id"])
         request = _load_request(db, request_id, lock=True)
-        _validate_request_linkage(db, request, alert, lock_slot=True)
         _require_client(actor_info, request["customer_id"])
+        _validate_request_linkage(db, request, alert, lock_slot=True)
         existing = _row(
             db.execute(
                 "SELECT * FROM monitoring_document_renewal_uploads WHERE request_id = ?",
@@ -2111,6 +2176,7 @@ def generate_due_reminders(
     timestamp = _iso_timestamp(current)
     generated_ids: List[str] = []
     blocked: List[Dict[str, str]] = []
+    degraded_failures: List[Dict[str, str]] = []
     due_dates = [
         (current.date() + timedelta(days=interval)).isoformat()
         for interval in reminder_intervals
@@ -2152,10 +2218,12 @@ def generate_due_reminders(
     # End the bounded read before the first canonical audit writer acquires
     # its transaction-scoped serialization lock.
     db.commit()
-    linkage_block_codes = {
+    deferrable_block_codes = {
         "alert_not_found",
         "alert_not_active",
+        "audit_unavailable",
         "linkage_not_authoritative",
+        "notification_unavailable",
         "unsupported_alert_type",
         "stale_document_alert",
         "stale_linkage",
@@ -2234,11 +2302,15 @@ def generate_due_reminders(
             db.commit()
         except RenewalError as exc:
             _rollback(db)
-            if exc.code not in linkage_block_codes:
+            if exc.code not in deferrable_block_codes:
                 raise
             blocked.append(
                 {"request_id": str(candidate["request_id"]), "code": exc.code}
             )
+            if exc.code in {"audit_unavailable", "notification_unavailable"}:
+                degraded_failures.append(
+                    {"request_id": str(candidate["request_id"]), "code": exc.code}
+                )
         except Exception:
             _rollback(db)
             raise
@@ -2258,6 +2330,8 @@ def generate_due_reminders(
         "unchanged": len(candidates) - len(generated_ids) - len(blocked),
         "request_ids": generated_ids,
         "blocked_requests": blocked,
+        "degraded": bool(degraded_failures),
+        "degraded_failures": degraded_failures,
     }
 
 
@@ -2270,6 +2344,7 @@ __all__ = [
     "ORIGINATING_PR",
     "RenewalError",
     "cancel_renewal_request",
+    "count_renewal_requests",
     "create_renewal_request",
     "generate_eligible_renewal_requests",
     "generate_due_reminders",

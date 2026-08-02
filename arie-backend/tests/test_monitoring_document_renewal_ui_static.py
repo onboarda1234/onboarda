@@ -190,7 +190,7 @@ def test_portal_renewal_uses_dedicated_read_and_staging_upload_contract():
         "function portalEnhancedRequirementTone",
     )
     assert (
-        "apiCall('GET', '/portal/applications/' + encodeURIComponent(requestedApplicationId) + '/renewal-requests')"
+        "apiCall('GET', '/portal/applications/' + encodeURIComponent(requestedApplicationId) + '/renewal-requests?limit=' + PORTAL_DOCUMENT_RENEWAL_PAGE_LIMIT + '&offset=0')"
         in loader
     )
     assert (
@@ -245,6 +245,47 @@ def test_portal_renders_renewal_requests_on_kyc_and_approved_surfaces():
     assert "showView = function(name, options)" in wrapper
     assert "_originalShowView(name, options)" in wrapper
     assert "return enhancedRequirementsLoad" in wrapper
+
+    clear_renewals = _region(
+        html,
+        "function clearPortalDocumentRenewalRequests",
+        "function renderPortalDocumentRenewalUnavailable",
+    )
+    upload_renewal = _region(
+        html,
+        "async function uploadPortalDocumentRenewal",
+        "function portalEnhancedRequirementTone",
+    )
+    load_more = _region(
+        html,
+        "async function loadMorePortalDocumentRenewalRequests",
+        "function selectPortalDocumentRenewalFile",
+    )
+    render_renewals = _region(
+        html,
+        "function renderPortalDocumentRenewalRequests",
+        "async function loadPortalDocumentRenewalRequests",
+    )
+    assert "portalDocumentRenewalBusy = {}" not in clear_renewals
+    assert "portalDocumentRenewalPageBusy = {}" not in clear_renewals
+    assert "portalDocumentRenewalBusy[busyKey] = true" in upload_renewal
+    assert "delete portalDocumentRenewalBusy[busyKey]" in upload_renewal
+    assert "pagination.has_more === true" in render_renewals
+    assert "pagination && pagination.next_offset" in render_renewals
+    assert "loadMorePortalDocumentRenewalRequests(this)" in render_renewals
+    assert "Number(response.offset) !== offset" in load_more
+    assert "apiCall('GET'" in load_more
+    assert "apiCall('POST'" not in load_more
+    assert "generation === portalDocumentRenewalGeneration" in load_more
+    assert "portalDocumentRenewalPageBusy[applicationId] = true" in load_more
+    assert "delete portalDocumentRenewalPageBusy[applicationId]" in load_more
+    initial_loader = _region(
+        html,
+        "async function loadPortalDocumentRenewalRequests",
+        "async function loadMorePortalDocumentRenewalRequests",
+    )
+    assert "portalDocumentRenewalGeneration !== requestedGeneration" in initial_loader
+    assert "portalDocumentRenewalGeneration === requestedGeneration" in initial_loader
 
 
 def test_changed_ui_inline_scripts_parse():

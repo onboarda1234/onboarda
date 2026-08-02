@@ -3058,6 +3058,10 @@ _DOCUMENT_RENEWAL_CLEANUP_EXECUTOR = ThreadPoolExecutor(
     max_workers=1,
     thread_name_prefix="renewal-artifact-cleanup",
 )
+_DOCUMENT_RENEWAL_INLINE_CLEANUP_EXECUTOR = ThreadPoolExecutor(
+    max_workers=2,
+    thread_name_prefix="renewal-artifact-cleanup-inline",
+)
 _DOCUMENT_RENEWAL_SCHEDULER_EXECUTOR = ThreadPoolExecutor(
     max_workers=1,
     thread_name_prefix="renewal-workflow-scheduler",
@@ -38660,8 +38664,9 @@ def _mark_monitoring_renewal_artifact_cleanup_pending(
     *,
     error_code,
 ):
-    db = get_db()
+    db = None
     try:
+        db = get_db()
         db.execute(
             """
             UPDATE monitoring_document_renewal_upload_cleanup
@@ -38679,8 +38684,41 @@ def _mark_monitoring_renewal_artifact_cleanup_pending(
             ),
         )
         db.commit()
+        return True
+    except Exception:
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.exception(
+            "renewal artifact cleanup_pending mark failed cleanup_id=%s",
+            cleanup_id,
+        )
+        # The durable artifact remains in reserved/stored/cleanup_pending and
+        # the periodic sweep selects all three states. Do not replace the
+        # caller's authoritative upload error with bookkeeping failure.
+        return False
     finally:
-        db.close()
+        if db is not None:
+            db.close()
+
+
+async def _attempt_monitoring_renewal_inline_cleanup(cleanup_id):
+    """Best-effort request-path cleanup; the durable sweep remains authoritative."""
+
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            _DOCUMENT_RENEWAL_INLINE_CLEANUP_EXECUTOR,
+            lambda: _process_monitoring_renewal_upload_artifact(cleanup_id),
+        )
+        return True
+    except Exception:
+        logger.exception(
+            "renewal artifact inline cleanup failed cleanup_id=%s",
+            cleanup_id,
+        )
+        return False
 
 
 def _monitoring_renewal_local_artifact_allowed(
@@ -45709,6 +45747,16 @@ class PortalDocumentRenewalRequestsHandler(BaseHandler):
             return
         if user.get("type") != "client":
             return self.error("Only clients can view document renewal requests.", 403)
+        try:
+            limit = int(self.get_argument("limit", "50"))
+            offset = int(self.get_argument("offset", "0"))
+        except (TypeError, ValueError):
+            return self.error("limit and offset must be integers.", 400)
+        include_cancelled_value = str(
+            self.get_argument("include_cancelled", "false") or ""
+        ).strip().lower()
+        if include_cancelled_value not in {"true", "false"}:
+            return self.error("include_cancelled must be true or false.", 400)
         db = get_db()
         try:
             app = db.execute(
@@ -45726,12 +45774,23 @@ class PortalDocumentRenewalRequestsHandler(BaseHandler):
                     {"surface": "portal_document_renewal"},
                 )
                 return self.error("Application not found", 404)
+            include_cancelled = include_cancelled_value == "true"
             rows = _monitoring_document_renewal.list_renewal_requests(
                 db,
                 application_id=app["id"],
                 customer_id=app["client_id"],
-                include_cancelled=True,
+                include_cancelled=include_cancelled,
+                limit=limit,
+                offset=offset,
             )
+            total = _monitoring_document_renewal.count_renewal_requests(
+                db,
+                application_id=app["id"],
+                customer_id=app["client_id"],
+                include_cancelled=include_cancelled,
+            )
+            next_offset = offset + len(rows)
+            has_more = next_offset < total
             self.success({
                 "application_id": app["id"],
                 "application_ref": app["ref"],
@@ -45742,7 +45801,11 @@ class PortalDocumentRenewalRequestsHandler(BaseHandler):
                     _monitoring_renewal_public_projection(row, portal=True)
                     for row in rows
                 ],
-                "total": len(rows),
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": has_more,
+                "next_offset": next_offset if has_more else None,
             })
         except _monitoring_document_renewal.RenewalError as exc:
             _write_monitoring_renewal_error(self, exc)
@@ -45908,12 +45971,7 @@ class PortalDocumentRenewalUploadHandler(BaseHandler):
                             cleanup_id,
                             error_code="durable_upload_rejected",
                         )
-                        await asyncio.get_running_loop().run_in_executor(
-                            _DOCUMENT_RENEWAL_CLEANUP_EXECUTOR,
-                            lambda: _process_monitoring_renewal_upload_artifact(
-                                cleanup_id
-                            ),
-                        )
+                        await _attempt_monitoring_renewal_inline_cleanup(cleanup_id)
                         return self.error(
                             "Document upload failed: unable to store the file "
                             "durably. Please retry.",
@@ -45938,12 +45996,7 @@ class PortalDocumentRenewalUploadHandler(BaseHandler):
                             cleanup_id,
                             error_code="durable_upload_failed",
                         )
-                        await asyncio.get_running_loop().run_in_executor(
-                            _DOCUMENT_RENEWAL_CLEANUP_EXECUTOR,
-                            lambda: _process_monitoring_renewal_upload_artifact(
-                                cleanup_id
-                            ),
-                        )
+                        await _attempt_monitoring_renewal_inline_cleanup(cleanup_id)
                     return self.error(
                         "Document upload failed: unable to store the file "
                         "durably. Please retry.",
@@ -46042,11 +46095,8 @@ class PortalDocumentRenewalUploadHandler(BaseHandler):
                         artifact["cleanup_id"],
                         error_code="upload_record_failed",
                     )
-                    await asyncio.get_running_loop().run_in_executor(
-                        _DOCUMENT_RENEWAL_CLEANUP_EXECUTOR,
-                        lambda: _process_monitoring_renewal_upload_artifact(
-                            artifact["cleanup_id"]
-                        ),
+                    await _attempt_monitoring_renewal_inline_cleanup(
+                        artifact["cleanup_id"]
                     )
             _write_monitoring_renewal_error(self, exc)
         except Exception:
@@ -46061,11 +46111,8 @@ class PortalDocumentRenewalUploadHandler(BaseHandler):
                         artifact["cleanup_id"],
                         error_code="upload_record_failed",
                     )
-                    await asyncio.get_running_loop().run_in_executor(
-                        _DOCUMENT_RENEWAL_CLEANUP_EXECUTOR,
-                        lambda: _process_monitoring_renewal_upload_artifact(
-                            artifact["cleanup_id"]
-                        ),
+                    await _attempt_monitoring_renewal_inline_cleanup(
+                        artifact["cleanup_id"]
                     )
             logger.exception(
                 "portal_document_renewal_upload_failed app_id=%s "
@@ -47716,11 +47763,22 @@ if __name__ == "__main__":
                             _document_renewal_workflow_worker,
                         )
                     )
-                    logger.info(
-                        "document-renewal: run complete eligibility_scanned=%s "
+                    log_method = (
+                        logger.error
+                        if reminder_summary.get("degraded")
+                        else logger.info
+                    )
+                    log_method(
+                        "document-renewal: run %s eligibility_scanned=%s "
                         "requests_created=%s eligibility_blocked=%s "
                         "reminders_scanned=%s reminders_generated=%s "
-                        "reminders_blocked=%s reminders_unchanged=%s",
+                        "reminders_blocked=%s reminders_unchanged=%s "
+                        "reminder_failure_codes=%s",
+                        (
+                            "degraded"
+                            if reminder_summary.get("degraded")
+                            else "complete"
+                        ),
                         eligibility_summary.get("scanned", 0),
                         eligibility_summary.get("created", 0),
                         eligibility_summary.get("blocked", 0),
@@ -47728,6 +47786,15 @@ if __name__ == "__main__":
                         reminder_summary.get("generated", 0),
                         reminder_summary.get("blocked", 0),
                         reminder_summary.get("unchanged", 0),
+                        sorted(
+                            {
+                                str(item.get("code") or "")
+                                for item in reminder_summary.get(
+                                    "degraded_failures", []
+                                )
+                                if item.get("code")
+                            }
+                        ),
                     )
                 except Exception:
                     logger.exception(
