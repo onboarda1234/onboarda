@@ -236,6 +236,43 @@ Nothing here assigns work, sets a due date, or changes state.
 
 ---
 
+## 9.1 Approval-dependent language
+
+Some sentences are only true of a case that reached a decision. "Why was this
+customer approved without a live screening result?" is a fair question about an
+approved file and a **false statement** about a draft one — and it would sit in
+a document an officer may hand to a regulator.
+
+The rule: **approval-dependent wording appears only where the structured bundle
+establishes approval.** Two signals, either sufficient, read defensively in
+`decision_state.approval_established`:
+
+- `application.fields.status == "approved"` (normalised for case and padding)
+- a `decision.records` entry with `decision_type == "approve"`
+
+Everything else — pending, draft, submitted, in review, rejected, withdrawn,
+unknown, or a section that is `None`, a scalar, or otherwise unreadable — is
+**not established**, and the neutral variant is used:
+
+> *approved:* Why was this customer approved without a live, terminal screening
+> result for every required screening subject?
+> *neutral:* What live, terminal screening result exists for every required
+> screening subject, and when was it obtained?
+
+The failure direction is deliberate: a neutral question on an approved file is
+slightly weaker; an approval claim on a rejected file is false.
+
+**Severity is not the gate, and relying on it was the defect.** P-04 raises a
+screening finding to `critical` when the case was approved, so severity
+*correlates* with approval. The first implementation used that correlation for
+the contradiction and used *nothing at all* for the question, which asserted
+approval on draft, in-review, rejected and kyc_documents cases. Both now read the
+decision record. A register entry that says "approved" must declare a neutral
+variant; a static test enforces it, and no group claim may assert a decision at
+all — only the probes, which have their own `is_approved` gate, may do that.
+
+---
+
 ## 10. Regulatory challenges
 
 Rendered from register templates for checks that actually fired. No model, and
@@ -294,6 +331,35 @@ same way from their own content — never from a counter, a clock or a random
 source.
 
 `BUNDLE_SCHEMA_VERSION` and `PROBE_SET_VERSION` are unchanged by this work.
+
+### 12.1 When a template change requires a version bump
+
+Every rendered sentence is inside `aggregation_hash`, so **any wording change
+moves the hash**. That is not the same question as whether the version must
+move, and the two need separating before persistence or a UI exists — once a
+review is stored, a reader comparing a stored hash to a fresh one has to be able
+to tell "the wording was improved" from "the rules changed".
+
+The rule, to be enforced from the moment reviews are persisted:
+
+| Change | `aggregation_hash` | `AGGREGATION_SCHEMA_VERSION` |
+|---|---|---|
+| A section is added, removed or renamed | moves | **bump** |
+| A grouping, status, contradiction, classification or selection rule changes | moves | **bump** |
+| A register entry gains or loses a contradiction type, evidence class or challenge template | moves | **bump** |
+| Template wording changes, same structure and same meaning | moves | **bump** |
+| A typo fix with no change of meaning | moves | **bump** |
+
+The last two rows are the interesting ones, and the answer is deliberately the
+blunt one: **bump on any change that can alter the output bytes.** A rule that
+tried to exempt "cosmetic" changes would require someone to adjudicate whether a
+rewording changed meaning, on every edit, forever — and the failure mode is a
+stored review that no longer reproduces with no version difference to explain
+it. The version is cheap; the ambiguity is not.
+
+Until persistence exists, nothing stores a hash to compare against, so this
+phase does not bump on wording. The rule is recorded here so that the first
+persistence PR inherits it rather than inventing one.
 
 ---
 

@@ -44,6 +44,7 @@ from supervisor_probe_fixtures import (
     seed_application,
 )
 from supervisor_review_fixtures import (
+    APPROVED_BUNDLE,
     MINIMAL_BUNDLE,
     finding,
     real_review,
@@ -157,16 +158,16 @@ def test_an_ordinary_finding_is_not_a_contradiction():
 
 def test_an_undefensible_screening_relied_on_for_approval_is_a_contradiction():
     findings = [screening_subject_finding("s1", severity="critical")]
-    entries = _aggregate(findings)["contradictions"]
+    entries = _aggregate(findings, bundle=APPROVED_BUNDLE)["contradictions"]
     assert [entry["contradiction_type"] for entry in entries] == [
         "approval_on_undefensible_screening"
     ]
 
 
 def test_an_undefensible_screening_on_an_unapproved_case_is_not_a_contradiction():
-    """The probe encodes reliance as severity: high, not critical, when pending."""
-    findings = [screening_subject_finding("s1", severity="high")]
-    assert _aggregate(findings)["contradictions"] == []
+    """Gated on the decision record. A critical severity does not unlock it."""
+    findings = [screening_subject_finding("s1", severity="critical")]
+    assert _aggregate(findings, bundle=MINIMAL_BUNDLE)["contradictions"] == []
 
 
 def test_edd_routing_divergence_is_a_contradiction():
@@ -235,7 +236,7 @@ def test_a_non_hit_never_becomes_a_contradiction():
 
 def test_every_contradiction_carries_its_findings_and_evidence():
     findings = [screening_subject_finding(key, severity="critical") for key in ("s1", "s2")]
-    entry = _aggregate(findings)["contradictions"][0]
+    entry = _aggregate(findings, bundle=APPROVED_BUNDLE)["contradictions"][0]
     assert len(entry["finding_ids"]) == 2
     assert entry["evidence_refs"]
     assert entry["affected_count"] == 2
@@ -699,3 +700,286 @@ def _case_edd_case_present(db) -> str:
     add_periodic_review(db, app_id, status="pending", next_review_date="2020-01-01")
     approve(db, app_id)
     return app_id
+
+
+# ── Approval-dependent language ──────────────────────────────────────
+# The review may say "approved" only where the structured bundle establishes
+# approval. Gated on the decision record, never on severity: severity is another
+# layer's encoding of reliance, and the original code asked the approval
+# question unconditionally — putting a false statement about a decision into a
+# document an officer may hand to a regulator.
+
+APPROVAL_WORDS = ("approved", "approval", "relied on", "reliance was", "accepted the customer")
+
+
+def _screening_case(db, *, status: str, decision: bool = False) -> str:
+    app_id = seed_application(
+        db, status=status, risk_level="HIGH", final_risk_level="HIGH"
+    )
+    add_memo(db, app_id)
+    record = screening_record(api_status="sandbox")
+    add_screening(
+        db,
+        app_id,
+        company=record,
+        directors=[person_entry("Director One", record), person_entry("Director Two", record)],
+    )
+    if decision:
+        approve(db, app_id)
+    return app_id
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["draft", "submitted", "in_review", "under_review", "kyc_documents", "rejected", "withdrawn"],
+)
+def test_no_question_claims_approval_on_an_unapproved_case(db, status):
+    app_id = _screening_case(db, status=status)
+    review, bundle = real_review(db, app_id)
+    output = aggregate_review(review, bundle=bundle)
+
+    assert output["potential_regulatory_challenges"], "the fixture must raise questions"
+    for challenge in output["potential_regulatory_challenges"]:
+        lowered = challenge["question"].lower()
+        assert "approved" not in lowered, (
+            f"status {status!r} produced an approval claim: {challenge['question']}"
+        )
+
+
+@pytest.mark.parametrize("status", ["draft", "in_review", "rejected"])
+def test_no_contradiction_claims_approval_on_an_unapproved_case(db, status):
+    app_id = _screening_case(db, status=status)
+    review, bundle = real_review(db, app_id)
+    output = aggregate_review(review, bundle=bundle)
+    for entry in output["contradictions"]:
+        assert entry["contradiction_type"] != "approval_on_undefensible_screening"
+        assert "approved" not in entry["conflict"].lower()
+
+
+def test_the_neutral_variant_still_asks_something_useful(db):
+    app_id = _screening_case(db, status="in_review")
+    review, bundle = real_review(db, app_id)
+    output = aggregate_review(review, bundle=bundle)
+    questions = [c["question"] for c in output["potential_regulatory_challenges"]]
+    assert any("live, terminal screening result" in q for q in questions)
+
+
+def test_the_approval_question_does_appear_once_approval_is_established(db):
+    """The neutral variant must not simply suppress the question everywhere."""
+    app_id = _screening_case(db, status="approved", decision=True)
+    review, bundle = real_review(db, app_id)
+    output = aggregate_review(review, bundle=bundle)
+    questions = [c["question"] for c in output["potential_regulatory_challenges"]]
+    assert any("approved" in q.lower() for q in questions)
+    types = {entry["contradiction_type"] for entry in output["contradictions"]}
+    assert "approval_on_undefensible_screening" in types
+
+
+def test_a_decision_record_alone_establishes_approval(db):
+    """Status and decision record are independent signals; either is sufficient."""
+    app_id = _screening_case(db, status="in_review", decision=True)
+    review, bundle = real_review(db, app_id)
+    output = aggregate_review(review, bundle=bundle)
+    assert any(
+        "approved" in c["question"].lower()
+        for c in output["potential_regulatory_challenges"]
+    )
+
+
+@pytest.mark.parametrize(
+    "bundle_patch",
+    [
+        {"application": None, "decision": None},
+        {"application": {"fields": None}, "decision": {"records": None}},
+        {"application": "not-a-mapping", "decision": "not-a-mapping"},
+        {"application": {"fields": {}}, "decision": {"records": "not-a-list"}},
+        {"application": {"fields": {"status": None}}, "decision": {"records": [None, 42, "x"]}},
+        {"application": {}, "decision": {}},
+        {"application": {"fields": {"status": "pending"}}, "decision": {"records": []}},
+    ],
+    ids=[
+        "both-none",
+        "fields-none-records-none",
+        "both-scalar",
+        "records-scalar",
+        "status-none-records-junk",
+        "both-empty",
+        "pending-with-no-records",
+    ],
+)
+def test_malformed_decision_evidence_never_establishes_approval(db, bundle_patch):
+    app_id = _screening_case(db, status="approved", decision=True)
+    review, bundle = real_review(db, app_id)
+    damaged = {**bundle, **bundle_patch}
+
+    output = aggregate_review(review, bundle=damaged)
+    for challenge in output["potential_regulatory_challenges"]:
+        assert "approved" not in challenge["question"].lower()
+    for entry in output["contradictions"]:
+        assert entry["contradiction_type"] != "approval_on_undefensible_screening"
+
+
+def test_approval_is_not_inferred_from_severity(db):
+    """A critical finding on an unapproved case must not unlock approval wording."""
+    findings = [
+        screening_subject_finding("s1", severity="critical"),
+        screening_subject_finding("s2", severity="critical"),
+    ]
+    output = aggregate_review(
+        synthetic_review(findings),
+        bundle={"meta": MINIMAL_BUNDLE["meta"], "availability": MINIMAL_BUNDLE["availability"]},
+    )
+    for challenge in output["potential_regulatory_challenges"]:
+        assert "approved" not in challenge["question"].lower()
+    assert output["contradictions"] == []
+
+
+def test_every_approval_template_declares_a_neutral_alternative():
+    """Static guard: a new approval-worded template cannot ship without one."""
+    for (probe_id, key), check in CHECK_REGISTER.items():
+        template = check.regulatory_challenge_template or ""
+        if "approved" in template.lower() and "approved risk-configuration" not in template:
+            if "approved review-frequency" in template:
+                continue  # qualifies the policy version, not the customer
+            assert check.regulatory_challenge_template_unapproved is not None, (
+                f"{probe_id}/{key} asserts approval with no neutral variant"
+            )
+
+
+def test_no_group_claim_asserts_a_decision():
+    """Group claims describe evidence. Only the probes may speak about a decision."""
+    for (probe_id, key), check in CHECK_REGISTER.items():
+        lowered = check.group_claim_template.lower()
+        for word in ("approved", "relied on", "accepted"):
+            assert word not in lowered, f"{probe_id}/{key} group claim says {word!r}"
+
+
+def test_probe_claims_about_approval_are_the_probes_own_gate(db):
+    """The findings' own approval sentences follow the probe's is_approved gate.
+
+    Recorded rather than changed: the probes are merged and this layer copies
+    their claims verbatim. If a probe's gate were wrong, this test fails here
+    instead of the wording quietly reaching an officer through aggregation.
+    """
+    unapproved = _screening_case(db, status="in_review")
+    review, _bundle = real_review(db, unapproved)
+    for item in review["findings"]:
+        assert "was approved" not in str(item["claim"]).lower()
+
+    approved = _screening_case(db, status="approved", decision=True)
+    review, _bundle = real_review(db, approved)
+    assert any("approved" in str(item["claim"]).lower() for item in review["findings"])
+
+
+@pytest.mark.parametrize("status", ["approved", "APPROVED", " approved ", "Approved"])
+def test_a_padded_or_cased_approved_status_still_establishes_approval(db, status):
+    """Normalisation, not leniency: a padded governed value is the same value."""
+    app_id = _screening_case(db, status="in_review")
+    review, bundle = real_review(db, app_id)
+    patched = {**bundle, "application": {"fields": {"status": status}}, "decision": {"records": []}}
+    output = aggregate_review(review, bundle=patched)
+    assert any(
+        "approved" in challenge["question"].lower()
+        for challenge in output["potential_regulatory_challenges"]
+    )
+
+
+# ── Question quality ─────────────────────────────────────────────────
+
+
+def _word_overlap(question: str, claim: str) -> float:
+    question_words = set(question.lower().replace("?", "").split())
+    claim_words = set(claim.lower().replace(".", "").split())
+    return len(question_words & claim_words) / max(1, len(question_words))
+
+
+def test_a_question_is_not_a_restatement_of_its_claim(db):
+    """A question that echoes the finding adds a line and no information.
+
+    Measured as word overlap against the group's own claim, over real probe
+    output. The threshold is loose on purpose — a question *should* share the
+    subject's vocabulary; it must not share the whole sentence.
+    """
+    app_id = _case_with_everything(db)
+    review, bundle = real_review(db, app_id)
+    output = aggregate_review(review, bundle=bundle)
+    claims = {group["group_id"]: group["claim"] for group in output["grouped_findings"]}
+
+    assert output["potential_regulatory_challenges"], "fixture must raise questions"
+    for challenge in output["potential_regulatory_challenges"]:
+        overlap = _word_overlap(challenge["question"], claims[challenge["group_id"]])
+        assert overlap < 0.8, (
+            f"question restates its finding (overlap {overlap:.2f}): "
+            f"{challenge['question']}"
+        )
+
+
+def test_every_question_asks_for_something_the_finding_does_not_state(db):
+    app_id = _case_with_everything(db)
+    review, bundle = real_review(db, app_id)
+    output = aggregate_review(review, bundle=bundle)
+    claims = {group["group_id"]: group["claim"] for group in output["grouped_findings"]}
+    for challenge in output["potential_regulatory_challenges"]:
+        assert challenge["question"] != claims[challenge["group_id"]]
+        assert challenge["question"].rstrip().endswith("?")
+
+
+def test_no_question_implies_the_customer_is_non_compliant(db):
+    app_id = _case_with_everything(db)
+    review, bundle = real_review(db, app_id)
+    output = aggregate_review(review, bundle=bundle)
+    for challenge in output["potential_regulatory_challenges"]:
+        lowered = challenge["question"].lower()
+        for phrase in ("non-compliant", "in breach", "violation of", "illegal", "unlawful"):
+            assert phrase not in lowered
+
+
+def test_questions_are_unique_within_one_review(db):
+    """Two identical questions means grouping failed somewhere upstream."""
+    app_id = _case_with_everything(db)
+    review, bundle = real_review(db, app_id)
+    output = aggregate_review(review, bundle=bundle)
+    questions = [c["question"] for c in output["potential_regulatory_challenges"]]
+    assert len(questions) == len(set(questions))
+
+
+# ── Limitations: absence is as important as presence ─────────────────
+
+
+def test_the_p04_limitation_is_absent_when_p04_found_nothing_and_screening_is_present():
+    bundle = _bundle_with(screening_report="available")
+    findings = [finding(probe_id="P-02", primary_evidence_ref="risk:app-fixture#factor:a")]
+    ids = {entry["limitation_id"] for entry in _aggregate(findings, bundle=bundle)["limitations"]}
+    assert "p04_live_provider_validation" not in ids
+
+
+def test_the_adverse_media_limitation_is_absent_without_an_adverse_media_finding():
+    findings = [screening_subject_finding("s1")]
+    ids = {entry["limitation_id"] for entry in _aggregate(findings)["limitations"]}
+    assert "adverse_media_source_coverage" not in ids
+
+
+def test_the_historic_limitation_is_absent_on_a_fully_current_review():
+    bundle = _bundle_with(public_registry="available")
+    findings = [screening_subject_finding("s1")]
+    ids = {entry["limitation_id"] for entry in _aggregate(findings, bundle=bundle)["limitations"]}
+    assert "historic_snapshot_not_reconstructable" not in ids
+
+
+def test_the_dependency_limitation_is_absent_when_nothing_was_unavailable():
+    findings = [screening_subject_finding("s1")]
+    ids = {entry["limitation_id"] for entry in _aggregate(findings)["limitations"]}
+    assert "probe_dependency_unavailable" not in ids
+
+
+def test_no_limitation_is_worded_as_a_customer_defect():
+    findings = [
+        screening_subject_finding("s1"),
+        finding(probe_id="P-03", primary_evidence_ref="application:app-fixture#edd_route"),
+        finding(probe_id="P-04", category="adverse_media",
+                primary_evidence_ref="risk:app-fixture#factor:adverse_media"),
+    ]
+    for entry in _aggregate(findings)["limitations"]:
+        lowered = entry["statement"].lower()
+        for phrase in ("the customer failed", "the customer did not", "customer defect"):
+            assert phrase not in lowered

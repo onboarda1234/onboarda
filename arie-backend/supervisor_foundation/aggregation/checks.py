@@ -111,10 +111,17 @@ class Check(NamedTuple):
     group_claim_template: str
     missing_evidence_class: str | None = None
     contradiction_type: str | None = None
-    #: Emitted only when the finding is a ``hit`` at or above this severity.
-    #: ``None`` means the contradiction applies to every hit of this check.
-    contradiction_min_severity: str | None = None
+    #: When true, the contradiction exists only where the bundle establishes
+    #: that the case was approved. An undefensible screening result is a defect
+    #: on any case; it is a *contradiction* only where a decision relied on it.
+    #: Gated on the decision record rather than on severity — see
+    #: :mod:`.decision_state` for why severity was not sufficient.
+    contradiction_requires_approval: bool = False
     regulatory_challenge_template: str | None = None
+    #: Used in place of ``regulatory_challenge_template`` where approval is not
+    #: established. Required whenever the primary template says "approved";
+    #: asserted by ``test_approval_language_has_a_neutral_alternative``.
+    regulatory_challenge_template_unapproved: str | None = None
 
 
 def _check(check_id: str, **kwargs: Any) -> Check:
@@ -239,15 +246,19 @@ CHECK_REGISTER: Mapping[tuple[str, str], Check] = {
         anchor_noun="required screening subject",
         anchor_noun_plural="required screening subjects",
         group_claim_template=(
-            "Screening reliance is not defensible for {count} {noun}: the "
-            "results did not come from a live provider."
+            "Screening for {count} {noun} did not come from a live provider, so "
+            "those results are not defensible for reliance."
         ),
         missing_evidence_class=EVIDENCE_NOT_DEFENSIBLE,
         contradiction_type="approval_on_undefensible_screening",
-        contradiction_min_severity="critical",
+        contradiction_requires_approval=True,
         regulatory_challenge_template=(
             "Why was this customer approved without a live, terminal screening "
             "result for every {noun_singular}?"
+        ),
+        regulatory_challenge_template_unapproved=(
+            "What live, terminal screening result exists for every "
+            "{noun_singular}, and when was it obtained?"
         ),
     ),
     ("P-04", "material_hit_disposition"): _check(
@@ -269,8 +280,8 @@ CHECK_REGISTER: Mapping[tuple[str, str], Check] = {
         anchor_noun="screening result",
         anchor_noun_plural="screening results",
         group_claim_template=(
-            "{count} {noun} relied on for this case are outside their recorded "
-            "validity period."
+            "{count} {noun} for this case are outside their recorded validity "
+            "period."
         ),
         missing_evidence_class=EVIDENCE_NOT_DEFENSIBLE,
         regulatory_challenge_template=(
@@ -343,13 +354,17 @@ CHECK_REGISTER: Mapping[tuple[str, str], Check] = {
         anchor_noun="periodic-review schedule",
         anchor_noun_plural="periodic-review schedules",
         group_claim_template=(
-            "The approved customer has no valid periodic-review schedule "
-            "({count} occurrences)."
+            "This customer has no valid periodic-review schedule ({count} "
+            "occurrences)."
         ),
         missing_evidence_class=EVIDENCE_ABSENT,
         regulatory_challenge_template=(
             "Why was no periodic review scheduled for this approved customer "
             "at the frequency its recorded risk level requires?"
+        ),
+        regulatory_challenge_template_unapproved=(
+            "At what frequency will this customer be reviewed, given the "
+            "recorded risk level, and where is that schedule held?"
         ),
     ),
     ("P-06", "next_review_date"): _check(
@@ -388,34 +403,30 @@ CHECK_REGISTER: Mapping[tuple[str, str], Check] = {
             "{count} {noun} were assessed against the monitoring requirement."
         ),
     ),
-    # ── The runner's own probe-failure finding ───────────────────────
-    # Not a compliance check. Registered so a crashed probe is grouped and
-    # surfaced like anything else rather than falling to the unknown-key path,
-    # where it would read as an ordinary singleton finding.
-    ("P-02", "execution"): _check(
-        "P-02.execution",
-        anchor_noun="probe execution",
-        anchor_noun_plural="probe executions",
-        group_claim_template="Probe P-02 could not run ({count} occurrences).",
-    ),
-    ("P-03", "execution"): _check(
-        "P-03.execution",
-        anchor_noun="probe execution",
-        anchor_noun_plural="probe executions",
-        group_claim_template="Probe P-03 could not run ({count} occurrences).",
-    ),
-    ("P-04", "execution"): _check(
-        "P-04.execution",
-        anchor_noun="probe execution",
-        anchor_noun_plural="probe executions",
-        group_claim_template="Probe P-04 could not run ({count} occurrences).",
-    ),
-    ("P-06", "execution"): _check(
-        "P-06.execution",
-        anchor_noun="probe execution",
-        anchor_noun_plural="probe executions",
-        group_claim_template="Probe P-06 could not run ({count} occurrences).",
-    ),
+    # (The runner's own probe-failure check is registered below the table —
+    # one entry per probe, generated rather than pasted four times.)
+}
+
+
+#: The runner's probe-failure finding, one entry per probe. Not a compliance
+#: check: it records that a probe crashed. Registered so a crash is grouped and
+#: surfaced like anything else rather than falling to the unknown-key path,
+#: where it would read as an ordinary singleton finding. Generated because the
+#: entries differ only by probe id, and a fifth probe should not mean a fifth
+#: pasted block.
+CHECK_REGISTER = {
+    **CHECK_REGISTER,
+    **{
+        (probe_id, "execution"): _check(
+            f"{probe_id}.execution",
+            anchor_noun="probe execution",
+            anchor_noun_plural="probe executions",
+            group_claim_template=(
+                f"Probe {probe_id} could not run ({{count}} occurrences)."
+            ),
+        )
+        for probe_id in ("P-02", "P-03", "P-04", "P-06")
+    },
 }
 
 

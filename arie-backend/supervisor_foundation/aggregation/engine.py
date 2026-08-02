@@ -53,6 +53,7 @@ from .checks import (
     lookup,
     owner_for_category,
 )
+from .decision_state import approval_established
 from .limitations import applicable_limitations
 
 # ── Vocabularies ─────────────────────────────────────────────────────
@@ -118,6 +119,16 @@ ACTIONABLE_STATUSES = frozenset(
         FindingStatus.NOT_REPLAYABLE.value,
     }
 )
+
+#: Action texts that are not actions. Filtering on status alone was not enough:
+#: nothing stops a future probe writing "None." on an ``unavailable`` finding,
+#: and one such line teaches an officer that the register contains filler.
+#: Compared case-insensitively after stripping whitespace and a trailing period.
+NON_ACTIONS = frozenset({"", "none", "n/a", "na", "-", "—", "tbc", "tbd", "not applicable"})
+
+
+def _is_real_action(text: str) -> bool:
+    return text.strip().rstrip(".").strip().lower() not in NON_ACTIONS
 
 
 class AggregationInputError(ValueError):
@@ -439,15 +450,23 @@ def _critical_findings(groups: Sequence[Mapping[str, Any]]) -> list[dict[str, An
     ]
 
 
-def _contradictions(groups: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _contradictions(
+    groups: Sequence[Mapping[str, Any]],
+    *,
+    approved: bool,
+) -> list[dict[str, Any]]:
     """Only where two structured facts genuinely conflict.
 
     Driven from the register, so a contradiction exists because a named check
-    fired, not because a finding looked serious. ``contradiction_min_severity``
-    carries the cases where the conflict depends on reliance: an undefensible
-    screening result is a defect on any case and a *contradiction* only where
-    the case was approved on it — which the probe already encodes by raising
-    that finding to critical.
+    fired, not because a finding looked serious.
+
+    ``contradiction_requires_approval`` carries the cases where the conflict
+    depends on a decision having been taken: an undefensible screening result is
+    a defect on any case and a *contradiction* only where the case was approved
+    on it. That gate reads the decision record, not the severity. Severity
+    correlates — P-04 raises the finding to critical on an approved case — but
+    it is another layer's encoding of reliance, and reading approval back out of
+    it would make this layer's grammar depend on that layer's severity policy.
     """
     entries: list[dict[str, Any]] = []
     for group in groups:
@@ -456,8 +475,7 @@ def _contradictions(groups: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
         check = lookup(group["probe_id"], group["primary_evidence_refs"][0])
         if check is None or check.contradiction_type is None:
             continue
-        floor = check.contradiction_min_severity
-        if floor is not None and _severity_rank(group["severity"]) > _severity_rank(floor):
+        if check.contradiction_requires_approval and not approved:
             continue
         entries.append(
             {
@@ -572,7 +590,7 @@ def _required_actions(
             # it.
             continue
         action_text = str(finding.get("required_action") or "")
-        if not action_text:
+        if not _is_real_action(action_text):
             continue
         entry = merged.setdefault(
             action_text,
@@ -629,6 +647,8 @@ def _required_actions(
 def _regulatory_challenges(
     groups: Sequence[Mapping[str, Any]],
     actions: Sequence[Mapping[str, Any]],
+    *,
+    approved: bool,
 ) -> list[dict[str, Any]]:
     """Regulator-style questions, from templates, mapped to evidence.
 
@@ -636,6 +656,13 @@ def _regulatory_challenges(
     register entry for a check that actually fired, and carries the findings,
     evidence and actions that answer it. A question with nothing behind it is
     not a challenge, it is a prompt.
+
+    A question that says "approved" is asked only where the bundle establishes
+    approval. On a draft, pending, rejected or unreadable case the neutral
+    variant is asked instead — "What live, terminal screening result exists…"
+    rather than "Why was this customer approved without…". The original code
+    asked the approval question unconditionally, which put a false statement
+    about a decision into a document an officer may hand to a regulator.
     """
     action_ids_by_finding: dict[str, set[str]] = {}
     for action in actions:
@@ -649,6 +676,9 @@ def _regulatory_challenges(
         check = lookup(group["probe_id"], group["primary_evidence_refs"][0])
         if check is None or check.regulatory_challenge_template is None:
             continue
+        template = check.regulatory_challenge_template
+        if not approved and check.regulatory_challenge_template_unapproved is not None:
+            template = check.regulatory_challenge_template_unapproved
         count = group["affected_count"]
         entries.append(
             {
@@ -664,7 +694,7 @@ def _regulatory_challenges(
                 "evidence_refs": list(group["evidence_refs"]),
                 "finding_ids": list(group["finding_ids"]),
                 "group_id": group["group_id"],
-                "question": check.regulatory_challenge_template.format(
+                "question": template.format(
                     count=count,
                     noun=check.anchor_noun_plural if count != 1 else check.anchor_noun,
                     noun_singular=check.anchor_noun,
@@ -809,6 +839,7 @@ def aggregate_review(
         members = [findings_by_id[fid] for fid in group["finding_ids"] if fid in findings_by_id]
         group["why_it_matters"] = str(members[0].get("why_it_matters") or "") if members else ""
 
+    approved = approval_established(bundle)
     actions = _required_actions(findings, groups)
     evidence_index = _evidence_index(findings, actions)
     material_concerns, material_concern_count = _material_concerns(groups)
@@ -825,7 +856,7 @@ def aggregate_review(
                 for condition in group["close_conditions"]
             }
         ),
-        "contradictions": _contradictions(groups),
+        "contradictions": _contradictions(groups, approved=approved),
         "created_at": as_of,
         "critical_findings": _critical_findings(groups),
         "decision_inconsistencies": [
@@ -873,7 +904,9 @@ def aggregate_review(
             and str(group["status"]) == FindingStatus.HIT.value
         ],
         "policy_version": str(review.get("policy_version") or ""),
-        "potential_regulatory_challenges": _regulatory_challenges(groups, actions),
+        "potential_regulatory_challenges": _regulatory_challenges(
+            groups, actions, approved=approved
+        ),
         "probe_set_version": str(review.get("probe_set_version") or ""),
         "required_actions": actions,
         "review_completeness": _review_completeness(

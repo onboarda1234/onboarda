@@ -150,6 +150,22 @@ def _summarise(rows, connection, *, label: str) -> None:
         if row["ref"] in DETAIL_REFS:
             _print_case(row["ref"], review, output)
 
+    print(f"\n{'=' * 78}\n{label} — per case\n{'=' * 78}")
+    print(
+        f"{'ref':<16}{'find':>5}{'grp':>5}{'mat':>5}{'act':>5}{'q':>4}{'unav':>6}"
+        f"  {'overall status':<20}next action"
+    )
+    for ref, review, output in per_case:
+        actions = output["required_actions"]
+        top = actions[0]["action"] if actions else "(none)"
+        print(
+            f"{ref:<16}{len(review['findings']):>5}{len(output['grouped_findings']):>5}"
+            f"{len(output['material_concerns']):>5}{len(actions):>5}"
+            f"{len(output['potential_regulatory_challenges']):>4}"
+            f"{len(output['unavailable_checks']):>6}  "
+            f"{output['overall_assessment']['overall_status']:<20}{top[:58]}"
+        )
+
     print(f"\n{'=' * 78}\n{label} — corpus summary\n{'=' * 78}")
     print(f"cases                    : {len(per_case)}")
     print(f"overall status spread    : {dict(sorted(statuses.items()))}")

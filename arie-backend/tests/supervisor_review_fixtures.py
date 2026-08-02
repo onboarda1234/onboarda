@@ -50,6 +50,16 @@ MINIMAL_BUNDLE: dict[str, Any] = {
 }
 
 
+#: The same bundle with the decision state that establishes approval. Approval
+#: wording is gated on this, so a test asserting an approval question must say
+#: so in the bundle rather than in a severity.
+APPROVED_BUNDLE: dict[str, Any] = {
+    **{key: value for key, value in MINIMAL_BUNDLE.items()},
+    "application": {"fields": {"status": "approved"}},
+    "decision": {"records": [{"id": 1, "decision_type": "approve"}]},
+}
+
+
 def finding(
     *,
     probe_id: str = "P-04",

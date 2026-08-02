@@ -624,3 +624,209 @@ def test_a_bare_application_produces_a_review_that_says_what_did_not_run(db):
     )
     assert output["unavailable_checks"], "an empty case has checks that could not run"
     assert output["review_completeness"]["unevaluable_count"] > 0
+
+
+# ── Malformed and future reference shapes ────────────────────────────
+# The check key is derived from a reference, so the derivation has to be total.
+# A shape it cannot read must produce a visible singleton, never a crash and
+# never a silent merge with something unrelated.
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "",
+        "#",
+        "###",
+        "no-separator-at-all",
+        "trailing#",
+        "screening:app#subject:s1#",
+        "screening:app#subject:s1#provider_mode#extra",
+        "future_probe:app#brand_new_anchor",
+        "future_probe:app#brand_new_anchor:sub:deep",
+        "weird chars !@£$%^&*()#anchor",
+        "unicode:app#anchor_ünïcødé",
+        "x" * 500 + "#anchor",
+    ],
+)
+def test_any_reference_shape_produces_a_visible_group(reference):
+    output = _aggregate([finding(probe_id="P-99", primary_evidence_ref=reference)])
+    groups = output["grouped_findings"]
+    assert len(groups) == 1
+    assert groups[0]["affected_count"] == 1
+    assert groups[0]["finding_ids"]
+    assert output["finding_ids"] == [groups[0]["finding_ids"][0]]
+
+
+def test_a_future_reference_shape_does_not_merge_with_a_registered_check():
+    """An unregistered anchor must not be absorbed by a registered one."""
+    findings = [
+        screening_subject_finding("s1"),
+        finding(probe_id="P-04", primary_evidence_ref="screening:app-fixture#future_anchor"),
+    ]
+    groups = _aggregate(findings)["grouped_findings"]
+    assert len(groups) == 2
+    registered = {group["check_registered"] for group in groups}
+    assert registered == {True, False}
+
+
+def test_two_unregistered_findings_with_unrelated_anchors_do_not_merge():
+    findings = [
+        finding(probe_id="P-99", primary_evidence_ref="mystery:app#alpha"),
+        finding(probe_id="P-99", primary_evidence_ref="mystery:app#beta"),
+    ]
+    assert len(_aggregate(findings)["grouped_findings"]) == 2
+
+
+# ── Action register, remaining rules ─────────────────────────────────
+
+
+def test_no_action_is_a_placeholder():
+    """"None." must never reach the register, whatever status carried it."""
+    findings = [
+        screening_subject_finding("s1", status="unavailable",
+                                  availability_status="data_absent", required_action="None."),
+        screening_subject_finding("s2", required_action=""),
+    ]
+    actions = _aggregate(findings)["required_actions"]
+    for action in actions:
+        assert action["action"].strip() not in {"", "None.", "None", "N/A", "-", "TBC"}
+
+
+def test_action_priority_is_the_highest_contributing_severity():
+    findings = [
+        screening_subject_finding("s1", severity="low", required_action="Same work."),
+        screening_subject_finding("s2", severity="critical", required_action="Same work."),
+        screening_subject_finding("s3", severity="medium", required_action="Same work."),
+    ]
+    actions = _aggregate(findings)["required_actions"]
+    assert len(actions) == 1
+    assert actions[0]["priority"] == "critical"
+    assert len(actions[0]["finding_ids"]) == 3
+
+
+def test_identical_action_text_with_different_closures_keeps_every_finding():
+    """Merged for presentation, never merged away.
+
+    The same sentence closing on two different pieces of evidence is one piece
+    of work whose completion is judged twice. Both closure conditions and both
+    findings stay attached, so closing one cannot silently close the other.
+    """
+    findings = [
+        screening_subject_finding("s1", required_action="Re-run screening.",
+                                  close_condition="Live result for s1."),
+        screening_subject_finding("s2", required_action="Re-run screening.",
+                                  close_condition="Live result for s2."),
+    ]
+    action = _aggregate(findings)["required_actions"][0]
+    assert action["close_conditions"] == ["Live result for s1.", "Live result for s2."]
+    assert len(action["finding_ids"]) == 2
+    assert len(action["evidence_required"]) >= 2
+
+
+def test_an_unknown_category_stays_visibly_unassigned():
+    findings = [finding(category="not_a_governed_category")]
+    output = _aggregate(findings)
+    assert output["grouped_findings"][0]["owner_roles"] == ["unassigned"]
+    assert output["required_actions"][0]["owner_roles"] == ["unassigned"]
+
+
+# ── Overall status, mixed and degenerate cases ───────────────────────
+
+
+@pytest.mark.parametrize(
+    "severity,expected",
+    [
+        ("critical", CRITICAL_CONCERNS),
+        ("high", MATERIAL_CONCERNS),
+        ("medium", INCOMPLETE_REVIEW),
+        ("low", INCOMPLETE_REVIEW),
+        ("info", INCOMPLETE_REVIEW),
+    ],
+)
+def test_status_when_a_hit_and_an_unavailable_check_coexist(severity, expected):
+    findings = [
+        finding(severity=severity),
+        finding(
+            status="unavailable",
+            availability_status="data_absent",
+            probe_id="P-03",
+            primary_evidence_ref="application:app-fixture#edd_route",
+        ),
+    ]
+    assert _status(findings) == expected
+
+
+def test_only_not_applicable_is_not_incomplete_and_not_a_concern():
+    findings = [
+        finding(status="not_applicable", probe_id="P-06",
+                primary_evidence_ref="application:app-fixture#status"),
+        finding(status="not_applicable", probe_id="P-04"),
+    ]
+    output = _aggregate(findings)
+    assert output["overall_assessment"]["overall_status"] == NO_MATERIAL_FINDINGS
+    assert output["unavailable_checks"] == []
+    assert output["review_completeness"]["probes_not_applicable"] == ["P-04", "P-06"]
+
+
+def test_severity_winning_never_hides_the_incomplete_portion():
+    """The precedence rule may pick a status; it may not quieten the caveat."""
+    findings = [
+        finding(severity="critical"),
+        finding(
+            status="unavailable",
+            availability_status="credentials_absent",
+            probe_id="P-03",
+            primary_evidence_ref="application:app-fixture#edd_route",
+        ),
+        finding(
+            status="not_replayable",
+            availability_status="snapshot_incomplete",
+            probe_id="P-06",
+            primary_evidence_ref="periodic_review:1#next_review_date",
+        ),
+    ]
+    output = _aggregate(findings)
+    assert output["overall_assessment"]["overall_status"] == CRITICAL_CONCERNS
+    # …and the incompleteness is still prominent, in three separate places.
+    assert len(output["unavailable_checks"]) == 2
+    assert output["review_completeness"]["unevaluable_count"] == 2
+    assert output["review_completeness"]["probes_unavailable"] == ["P-03"]
+    assert output["review_completeness"]["probes_not_replayable"] == ["P-06"]
+    assert len(output["missing_evidence"]) >= 2
+
+
+def test_a_probe_runtime_failure_lands_as_an_unavailable_check(db):
+    """A crashed probe must reach the review as a visible could-not-run entry."""
+    from supervisor_foundation import assemble_application_bundle, run_review
+    from supervisor_foundation.policy import unconfigured_policy
+    from supervisor_foundation.probes import PROBES
+
+    def exploding_probe(bundle, policy):
+        raise RuntimeError("probe blew up")
+
+    exploding_probe.__module__ = "supervisor_foundation.probes.risk_resolution"
+
+    app_id = seed_application(db)
+    bundle = assemble_application_bundle(db, app_id, as_of="2026-07-31T00:00:00Z")
+    review = run_review(
+        bundle, policy=unconfigured_policy(), probes=[*PROBES, exploding_probe]
+    )
+    output = aggregate_review(review, bundle=bundle)
+
+    execution = [
+        entry for entry in output["unavailable_checks"] if entry["check_id"].endswith(".execution")
+    ]
+    assert execution, "a crashed probe must appear in unavailable_checks"
+    assert output["overall_assessment"]["overall_status"] in (
+        INCOMPLETE_REVIEW,
+        CONCERNS_IDENTIFIED,
+        MATERIAL_CONCERNS,
+        CRITICAL_CONCERNS,
+    )
+    assert output["review_completeness"]["unevaluable_count"] >= 1
+    # The failure is a platform defect, so it must not read as a customer concern.
+    assert all(
+        "could not run" not in concern["claim"].lower()
+        for concern in output["material_concerns"]
+    )
