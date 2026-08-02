@@ -3591,6 +3591,17 @@
         <div id="portal-party-hydration-errors-detail" style="font-size:12px;line-height:1.5;"></div>
       </div>
 
+      <div class="card portal-document-renewal-card" id="portal-renewal-onboarding-card" data-portal-renewal-surface="onboarding" style="display:none;">
+        <div class="card-header">
+          <div class="card-icon amber">&#8635;</div>
+          <div>
+            <div class="card-title">Document Renewal Requests</div>
+            <div class="card-sub">Upload requested renewal evidence for this application.</div>
+          </div>
+        </div>
+        <div id="portal-renewal-onboarding-container" style="display:grid;gap:12px;"></div>
+      </div>
+
       <!-- Section A: Corporate Documents -->
       <div class="card">
         <div class="card-header">
@@ -4342,6 +4353,17 @@
           <div class="approved-ref-label">Application reference</div>
           <div class="ref-number" id="approved-ref"></div>
         </div>
+      </div>
+
+      <div class="card portal-document-renewal-card" id="portal-renewal-approved-card" data-portal-renewal-surface="approved" style="display:none;">
+        <div class="card-header">
+          <div class="card-icon amber">&#8635;</div>
+          <div>
+            <div class="card-title">Document Renewal Requests</div>
+            <div class="card-sub">Compliance-requested renewal evidence for this application.</div>
+          </div>
+        </div>
+        <div id="portal-renewal-approved-container" style="display:grid;gap:12px;"></div>
       </div>
 
       <div class="card approved-card" style="text-align:center;margin-top:16px;">
@@ -5487,6 +5509,10 @@ let pricingPartyIntegrityErrors = [];
 let currentRMIRequests = [];
 let currentEnhancedRequirements = [];
 let portalEnhancedRequirementBusy = {};
+let portalDocumentRenewalApplicationId = '';
+let portalDocumentRenewalRequests = [];
+let portalDocumentRenewalBusy = {};
+let portalDocumentRenewalFeatureEnabled = false;
 var TOTAL_REQUIRED_DOCS = 11;
 var APP_TABLE_COLSPAN = 7;
 var portalSidebarApplications = [];
@@ -5854,6 +5880,7 @@ function resetPortalApplicationState() {
   setApprovedApplicationRef('');
   currentEnhancedRequirements = [];
   renderPortalEnhancedRequirements([]);
+  clearPortalDocumentRenewalRequests();
   if (autoSaveTimer) {
     clearInterval(autoSaveTimer);
     autoSaveTimer = null;
@@ -6148,7 +6175,9 @@ function showLicenceDocs() {
 // Views where the persistent client sidebar is shown
 const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','pricing','pre-approval-hold','compliance-hold','onboarding','submission-review','docs-review','approved','rejected','withdrawn','client-notifications','account-security','portal-changes'];
 
-function showView(name) {
+function showView(name, options) {
+  var viewOptions = options || {};
+  var enhancedRequirementsLoad = Promise.resolve(false);
   if (name === 'backoffice') {
     console.warn('Staff workspace is not served from the client portal.');
     name = 'landing';
@@ -6176,9 +6205,13 @@ function showView(name) {
   if (name === 'my-apps' || name === 'view-my-apps') {
     loadMyApplications();
   }
-  if (name === 'onboarding' && AUTH_TOKEN && currentApplicationId) {
-    loadPortalEnhancedRequirements();
+  if (viewOptions.skipEnhancedRequirementsLoad !== true && name === 'onboarding' && AUTH_TOKEN && currentApplicationId) {
+    enhancedRequirementsLoad = loadPortalEnhancedRequirements();
   }
+  if ((name === 'onboarding' || name === 'approved') && AUTH_TOKEN && currentApplicationId) {
+    loadPortalDocumentRenewalRequests();
+  }
+  return enhancedRequirementsLoad;
 }
 
 function setSidebarActive(viewName) {
@@ -10874,10 +10907,10 @@ function startAutoSave() {
 
 // Update save bar when entering onboarding view
 var origShowView = showView;
-showView = async function(name) {
+showView = async function(name, options) {
   var canNavigateWithoutConfirm = _confirmDiscardUnsavedChangesForNavigation(name);
   function continueNavigation() {
-    origShowView(name);
+    var enhancedRequirementsLoad = origShowView(name, options);
     if (portalAutosaveAllowedForView(name)) {
       var refDisplay = document.getElementById('save-ref-display');
       if (refDisplay) refDisplay.textContent = appRef ? 'Ref: ' + appRef : '';
@@ -10897,16 +10930,16 @@ showView = async function(name) {
     if (name === 'client-notifications') {
       loadClientNotifications();
     }
+    return enhancedRequirementsLoad;
   }
   if (canNavigateWithoutConfirm) {
-    continueNavigation();
-    return;
+    return continueNavigation();
   }
   try {
     var confirmed = await _showDraftDiscardConfirmDialog('your unsaved draft changes', 'Leave without saving');
     if (!confirmed) return;
     _draftDirty = false;
-    continueNavigation();
+    return continueNavigation();
   } catch (err) {
     console.warn('navigation discard confirmation failed:', err);
   }
@@ -11725,6 +11758,180 @@ function updateClientStatusTracker(status) {
     summary.innerHTML = '<strong>Current Status:</strong> ' + escapeHtml(projection.nextAction);
   } else {
     summary.innerHTML = '<strong>Current Status:</strong> ' + escapeHtml(projection.nextAction || 'Your application is under review.');
+  }
+}
+
+function clearPortalDocumentRenewalRequests() {
+  portalDocumentRenewalApplicationId = '';
+  portalDocumentRenewalRequests = [];
+  portalDocumentRenewalBusy = {};
+  portalDocumentRenewalFeatureEnabled = false;
+  ['onboarding', 'approved'].forEach(function(surface) {
+    var card = document.getElementById('portal-renewal-' + surface + '-card');
+    var container = document.getElementById('portal-renewal-' + surface + '-container');
+    if (card) card.style.display = 'none';
+    if (container) container.innerHTML = '';
+  });
+}
+
+function renderPortalDocumentRenewalUnavailable(applicationId) {
+  if (String(applicationId || '') !== String(currentApplicationId || '')) return false;
+  portalDocumentRenewalApplicationId = String(applicationId || '');
+  portalDocumentRenewalRequests = [];
+  portalDocumentRenewalFeatureEnabled = false;
+  var html = '<div class="doc-item portal-document-renewal-unavailable" role="status" style="color:var(--text2);"><strong>Renewal requests are temporarily unavailable.</strong><div style="font-size:11px;color:var(--text3);margin-top:6px;">Retry by reopening this application. No upload control is available until current request state is confirmed.</div></div>';
+  ['onboarding', 'approved'].forEach(function(surface) {
+    var card = document.getElementById('portal-renewal-' + surface + '-card');
+    var container = document.getElementById('portal-renewal-' + surface + '-container');
+    if (container) container.innerHTML = html;
+    if (card) card.style.display = '';
+  });
+  return true;
+}
+
+function portalDocumentRenewalStatusLabel(status) {
+  var labels = {
+    created: 'Renewal requested',
+    awaiting_upload: 'Awaiting upload',
+    upload_received: 'Upload received',
+    cancelled: 'Cancelled'
+  };
+  var key = String(status || '').trim().toLowerCase();
+  return labels[key] || key.replace(/_/g, ' ').replace(/\b\w/g, function(ch) { return ch.toUpperCase(); });
+}
+
+function portalDocumentRenewalReasonLabel(reason) {
+  var labels = {
+    expired: 'Document expired',
+    expiring_soon: 'Document expiring soon',
+    manual: 'Requested by Compliance'
+  };
+  return labels[String(reason || '').trim().toLowerCase()] || 'Renewal requested';
+}
+
+function portalDocumentRenewalCardHtml(request, applicationId, featureEnabled) {
+  var requestId = String((request && request.request_id) || '');
+  var status = String((request && request.request_status) || '').trim().toLowerCase();
+  var documentLabel = (request && (request.document_type_label || request.document_type)) || 'Requested document';
+  var subjectLabel = (request && request.subject_display_label) || 'Application participant';
+  // due_date is a date-only contract. Rendering it directly prevents a UTC
+  // conversion from showing the prior day in western time zones.
+  var dueDate = request && request.due_date ? String(request.due_date).slice(0, 10) : 'Not set';
+  var uploadControl = '';
+  if (request && request.manual_review_required === true) {
+    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--red-dim);color:var(--red);font-size:11px;font-weight:700;">This request requires Compliance review because its canonical document linkage changed or is unavailable. Upload is disabled.</div>';
+  } else if (status === 'awaiting_upload' && featureEnabled === true && request && request.upload_allowed === true) {
+    uploadControl = '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">' +
+      '<input type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style="display:none;" onchange="uploadPortalDocumentRenewal(this)" />' +
+      '<button type="button" class="btn btn-primary btn-sm" onclick="selectPortalDocumentRenewalFile(this)">Upload Renewal Document</button>' +
+      '<span class="portal-renewal-upload-result" role="status" style="display:block;margin-top:7px;font-size:11px;color:var(--text3);"></span>' +
+    '</div>';
+  } else if (status === 'awaiting_upload') {
+    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--surface2);color:var(--text3);font-size:11px;font-weight:700;">Renewal uploads are currently read-only while the governed workflow is OFF.</div>';
+  } else if (status === 'upload_received') {
+    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--green-dim);color:var(--green);font-size:11px;font-weight:700;">Your upload was received and is awaiting separate Compliance handling.</div>';
+  }
+  return '<div class="doc-item portal-document-renewal-item" data-renewal-application-id="' + escapeHtml(String(applicationId || '')) + '" data-renewal-request-id="' + escapeHtml(requestId) + '">' +
+    '<div class="doc-item-top">' +
+      '<span class="doc-item-icon">&#128196;</span>' +
+      '<div><div class="doc-item-name">' + escapeHtml(documentLabel) + '</div>' +
+      '<div class="doc-item-desc">' + escapeHtml(subjectLabel) + ' · ' + escapeHtml(portalDocumentRenewalReasonLabel(request && request.request_reason)) + '</div></div>' +
+    '</div>' +
+    '<span class="' + (status === 'upload_received' ? 'doc-optional' : 'doc-required') + '">' + escapeHtml(portalDocumentRenewalStatusLabel(status)) + '</span>' +
+    '<div style="font-size:12px;color:var(--text2);margin-top:10px;"><strong>Due date:</strong> ' + escapeHtml(dueDate) + '</div>' +
+    '<div style="font-size:11px;color:var(--text3);margin-top:5px;">Request ID: ' + escapeHtml(requestId) + '</div>' +
+    uploadControl +
+  '</div>';
+}
+
+function renderPortalDocumentRenewalRequests(requests, applicationId, featureEnabled) {
+  var boundApplicationId = String(applicationId || '');
+  if (!boundApplicationId || boundApplicationId !== String(currentApplicationId || '')) return false;
+  portalDocumentRenewalApplicationId = boundApplicationId;
+  portalDocumentRenewalFeatureEnabled = featureEnabled === true;
+  portalDocumentRenewalRequests = (Array.isArray(requests) ? requests : []).filter(function(request) {
+    return request && String(request.application_id || '') === boundApplicationId && request.request_id;
+  });
+  var html = portalDocumentRenewalRequests.map(function(request) {
+    return portalDocumentRenewalCardHtml(request, boundApplicationId, portalDocumentRenewalFeatureEnabled);
+  }).join('');
+  ['onboarding', 'approved'].forEach(function(surface) {
+    var card = document.getElementById('portal-renewal-' + surface + '-card');
+    var container = document.getElementById('portal-renewal-' + surface + '-container');
+    if (container) container.innerHTML = html;
+    if (card) card.style.display = html ? '' : 'none';
+  });
+  return true;
+}
+
+async function loadPortalDocumentRenewalRequests() {
+  if (!AUTH_TOKEN || !currentApplicationId) {
+    clearPortalDocumentRenewalRequests();
+    return false;
+  }
+  var requestedApplicationId = String(currentApplicationId);
+  clearPortalDocumentRenewalRequests();
+  try {
+    var response = await apiCall('GET', '/portal/applications/' + encodeURIComponent(requestedApplicationId) + '/renewal-requests');
+    if (String(currentApplicationId || '') !== requestedApplicationId) return false;
+    if (response && response.application_id && String(response.application_id) !== requestedApplicationId) return false;
+    return renderPortalDocumentRenewalRequests(
+      (response && response.renewal_requests) || [],
+      requestedApplicationId,
+      response && response.feature_enabled === true
+    );
+  } catch (err) {
+    if (String(currentApplicationId || '') === requestedApplicationId) renderPortalDocumentRenewalUnavailable(requestedApplicationId);
+    return false;
+  }
+}
+
+function selectPortalDocumentRenewalFile(button) {
+  var card = button && button.closest ? button.closest('[data-renewal-request-id]') : null;
+  var input = card && card.querySelector('input[type="file"]');
+  if (input) input.click();
+}
+
+async function uploadPortalDocumentRenewal(input) {
+  var card = input && input.closest ? input.closest('[data-renewal-request-id]') : null;
+  var requestId = card && card.getAttribute('data-renewal-request-id');
+  var applicationId = card && card.getAttribute('data-renewal-application-id');
+  var result = card && card.querySelector('.portal-renewal-upload-result');
+  var file = input && input.files && input.files[0];
+  if (!AUTH_TOKEN || !file || !requestId || !applicationId) return;
+  if (!portalDocumentRenewalFeatureEnabled) {
+    if (result) result.textContent = 'Renewal uploads are currently read-only.';
+    return;
+  }
+  if (String(currentApplicationId || '') !== applicationId || portalDocumentRenewalApplicationId !== applicationId) {
+    if (result) result.textContent = 'This request belongs to a different application. Reopen the application and try again.';
+    return;
+  }
+  var request = portalDocumentRenewalRequests.find(function(item) {
+    return String(item.request_id || '') === requestId && String(item.application_id || '') === applicationId;
+  });
+  if (!request || String(request.request_status || '') !== 'awaiting_upload' || request.upload_allowed !== true || request.manual_review_required === true) {
+    if (result) result.textContent = 'This request is no longer awaiting an upload.';
+    return;
+  }
+  var busyKey = applicationId + ':' + requestId;
+  if (portalDocumentRenewalBusy[busyKey]) return;
+  portalDocumentRenewalBusy[busyKey] = true;
+  input.disabled = true;
+  if (result) result.textContent = 'Uploading...';
+  var formData = new FormData();
+  formData.append('file', file, file.name);
+  try {
+    await apiCall('POST', '/portal/applications/' + encodeURIComponent(applicationId) + '/renewal-requests/' + encodeURIComponent(requestId) + '/upload', formData, true);
+    input.value = '';
+    showToast('success', 'Renewal Upload Received', 'Your file has been staged for Compliance. Your canonical document has not been replaced.');
+    await loadPortalDocumentRenewalRequests();
+  } catch (err) {
+    if (result) result.textContent = err.message || 'Upload failed.';
+    showToast('error', 'Upload Failed', err.message || 'Could not upload this renewal document.');
+  } finally {
+    delete portalDocumentRenewalBusy[busyKey];
+    input.disabled = false;
   }
 }
 
@@ -12985,14 +13192,15 @@ async function loadPortalChangeRequests() {
 
 // Load portal changes when that view is shown
 var _originalShowView = showView;
-showView = function(name) {
-  _originalShowView(name);
+showView = function(name, options) {
+  var enhancedRequirementsLoad = _originalShowView(name, options);
   if (name === 'portal-changes') {
     var form = document.getElementById('portal-change-form');
     if (form) form.style.display = '';
     loadPortalChangeApps();
     loadPortalChangeRequests();
   }
+  return enhancedRequirementsLoad;
 };
 
 // ─── Password helpers ────────────────────────────────────────
@@ -15071,6 +15279,10 @@ async function resumeApplication(ref, stage) {
         prefillPortalContactDetailsFromSession();
       }
 
+      // Load special-evidence ownership before any final KYC card or document
+      // hydration. The final view switch below suppresses its duplicate GET.
+      await loadPortalEnhancedRequirements();
+
       // Sync KYC cards now that party rows are populated
       if (typeof syncDirectorsUBOsToKYC === 'function') {
         try { syncDirectorsUBOsToKYC(); } catch(e) { console.warn('syncDirectorsUBOsToKYC on resume:', e); }
@@ -15082,7 +15294,6 @@ async function resumeApplication(ref, stage) {
       restorePepDeclarationList(psDirs);
       restorePepDeclarationList(psUbos);
       renderRMIRequests(app.rmi_requests || []);
-      await loadPortalEnhancedRequirements();
     }
   } catch (err) {
     console.error('Failed to load application detail for resume:', err);
@@ -15090,7 +15301,9 @@ async function resumeApplication(ref, stage) {
     showView('my-apps');
     return;
   }
-  showView(target);
+  // No awaited work may occur between this final rebuild and document
+  // hydration: clients must never interact with provisional KYC cards.
+  showView(target, { skipEnhancedRequirementsLoad: true });
   applyApplicationViewState(target);
   // applyApplicationViewState rebuilds KYC person cards for KYC-facing views.
   // Hydrate persisted documents only after that final rebuild so clean-login

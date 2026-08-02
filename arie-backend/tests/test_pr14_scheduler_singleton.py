@@ -2,7 +2,8 @@
 
 Every task registers the same Tornado PeriodicCallbacks, so before this fix
 each scheduled job (GDPR purge, monitoring automation, document health, memo
-recovery, PRS-6 notifications) executed once PER TASK per interval —
+recovery, PRS-6 notifications, document-renewal reminders) executed once PER
+TASK per interval —
 duplicate purges and duplicate client notifications with 2+ tasks.
 
 The fix: db.acquire_scheduler_lock(name) takes a PostgreSQL session advisory
@@ -12,6 +13,7 @@ non-holders skip. PostgreSQL tests run when TEST_POSTGRES_DSN /
 DATABASE_URL_TEST is set.
 """
 
+import ast
 import os
 import re
 import sys
@@ -183,11 +185,62 @@ def test_singleton_tick_releases_lease_when_tick_raises(monkeypatch):
     assert lease.released is True
 
 
+@pytest.mark.asyncio
+async def test_async_singleton_tick_runs_under_lease_and_releases(monkeypatch):
+    import server
+    import db as db_module
+
+    lease = _FakeLease(acquired=True)
+    monkeypatch.setattr(db_module, "acquire_scheduler_lock", lambda name, dsn=None: lease)
+
+    @server._singleton_tick("document_renewal_upload_cleanup")
+    async def tick():
+        assert lease.released is False
+        return "ran-async"
+
+    assert await tick() == "ran-async"
+    assert lease.released is True
+
+
+@pytest.mark.asyncio
+async def test_async_singleton_tick_skips_without_running(monkeypatch):
+    import server
+    import db as db_module
+
+    lease = _FakeLease(acquired=False)
+    monkeypatch.setattr(db_module, "acquire_scheduler_lock", lambda name, dsn=None: lease)
+    calls = []
+
+    @server._singleton_tick("document_renewal_upload_cleanup")
+    async def tick():
+        calls.append(1)
+
+    assert await tick() is None
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_async_singleton_tick_releases_when_coroutine_raises(monkeypatch):
+    import server
+    import db as db_module
+
+    lease = _FakeLease(acquired=True)
+    monkeypatch.setattr(db_module, "acquire_scheduler_lock", lambda name, dsn=None: lease)
+
+    @server._singleton_tick("document_renewal_upload_cleanup")
+    async def tick():
+        raise RuntimeError("async boom")
+
+    with pytest.raises(RuntimeError, match="async boom"):
+        await tick()
+    assert lease.released is True
+
+
 # ---------------------------------------------------------------------------
-# Static wiring — all five schedulers must be guarded
+# Static wiring — every scheduler must be guarded
 # ---------------------------------------------------------------------------
 
-def test_all_five_schedulers_are_decorated():
+def test_all_schedulers_are_decorated():
     with open(os.path.join(BACKEND, "server.py"), encoding="utf-8") as fh:
         src = fh.read()
 
@@ -209,8 +262,13 @@ def test_all_five_schedulers_are_decorated():
         "_document_health_tick",
         "_memo_recovery_tick",
         "_periodic_review_notification_tick",
+        "_document_renewal_reminder_tick",
     ):
-        m = re.search(rf"^(\s*)def {tick_fn}\(", src, re.MULTILINE)
+        m = re.search(
+            rf"^(\s*)(?:async\s+)?def {tick_fn}\(",
+            src,
+            re.MULTILINE,
+        )
         assert m, f"{tick_fn} not found in server.py"
         before = src[: m.start()].rstrip().splitlines()[-1].strip()
         assert before.startswith("@_singleton_tick("), (
@@ -219,9 +277,37 @@ def test_all_five_schedulers_are_decorated():
         )
 
 
+def test_document_renewal_workflow_db_loop_is_offloaded_from_ioloop():
+    with open(os.path.join(BACKEND, "server.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    tree = ast.parse(src)
+    nodes = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name
+        in {
+            "_document_renewal_workflow_worker",
+            "_document_renewal_reminder_tick",
+        }
+    }
+    worker = nodes["_document_renewal_workflow_worker"]
+    tick = nodes["_document_renewal_reminder_tick"]
+    assert isinstance(worker, ast.FunctionDef)
+    assert isinstance(tick, ast.AsyncFunctionDef)
+    worker_source = ast.get_source_segment(src, worker)
+    tick_source = ast.get_source_segment(src, tick)
+    assert "get_db()" in worker_source
+    assert "generate_eligible_renewal_requests" in worker_source
+    assert "generate_due_reminders" in worker_source
+    assert "get_db()" not in tick_source
+    assert "run_in_executor" in tick_source
+    assert "_DOCUMENT_RENEWAL_SCHEDULER_EXECUTOR" in tick_source
+
+
 def test_every_periodic_callback_registration_is_guarded():
-    """Structural guard: a SIXTH scheduler added without @_singleton_tick must
-    fail this test, not slip past a pinned five-name list (adversarial-review
+    """Structural guard: a new scheduler added without @_singleton_tick must
+    fail this test, not slip past a pinned name list (adversarial-review
     finding). Every function handed to PeriodicCallback — and every *_tick
     handed to call_later for an initial run — must be decorated."""
     with open(os.path.join(BACKEND, "server.py"), encoding="utf-8") as fh:
@@ -243,7 +329,11 @@ def test_every_periodic_callback_registration_is_guarded():
     ]
 
     for fn_name in set(registered) | set(initial_runs):
-        m = re.search(rf"^(\s*)def {fn_name}\(", src, re.MULTILINE)
+        m = re.search(
+            rf"^(\s*)(?:async\s+)?def {fn_name}\(",
+            src,
+            re.MULTILINE,
+        )
         assert m, f"{fn_name} is registered as a scheduler but has no def in server.py"
         before = src[: m.start()].rstrip().splitlines()[-1].strip()
         assert before.startswith("@_singleton_tick("), (

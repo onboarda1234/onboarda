@@ -209,8 +209,8 @@ def test_startup_safety_wires_monitoring_log_once(monkeypatch):
     assert calls == ["logged"]
 
 
-def test_no_monitoring_business_module_consumes_new_flags():
-    """This PR governs state only; future PRs must add every first consumer."""
+def test_only_document_renewal_service_consumes_its_approved_flag():
+    """Each first workflow consumer is explicit and narrowly allowlisted."""
     backend = Path(environment.__file__).resolve().parent
     consumers = []
     for path in backend.rglob("*.py"):
@@ -222,4 +222,9 @@ def test_no_monitoring_business_module_consumes_new_flags():
         used = sorted(flag for flag in EXPECTED_FLAGS if flag in text)
         if used:
             consumers.append((str(path.relative_to(backend)), used))
-    assert consumers == []
+    assert consumers == [
+        (
+            "monitoring_document_renewal.py",
+            ["ENABLE_DOCUMENT_RENEWAL_AUTOMATION"],
+        )
+    ]

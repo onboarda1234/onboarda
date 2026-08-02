@@ -10,7 +10,7 @@ Run:  python server.py
 Env:  PORT=10000 SECRET_KEY=your-secret DB_PATH=./arie.db
 """
 
-import os, sys, json, uuid, time, hashlib, re, base64, logging, secrets, smtplib, math
+import os, sys, json, uuid, time, hashlib, re, base64, logging, secrets, smtplib, math, threading
 from dotenv import load_dotenv
 load_dotenv()  # Load .env before any config reads
 from collections.abc import Mapping
@@ -71,10 +71,20 @@ from document_policy_registry import build_document_policy_payload
 
 # S3 support (optional)
 try:
-    from s3_client import get_s3_client
+    from s3_client import (
+        get_s3_client,
+        build_monitoring_renewal_candidate_key,
+        monitoring_renewal_candidate_key_allowed,
+    )
     HAS_S3 = True
 except ImportError:
     HAS_S3 = False
+
+    def monitoring_renewal_candidate_key_allowed(_key):
+        return False
+
+    def build_monitoring_renewal_candidate_key(*_args, **_kwargs):
+        raise RuntimeError("S3 candidate key builder unavailable")
 
 # Security hardening module — MANDATORY dependency
 # If this import fails, the server MUST NOT start. These modules enforce:
@@ -232,6 +242,7 @@ import monitoring_status as _monitoring_status
 import monitoring_dismissal_control as _mdc
 import monitoring_alert_state_machine as _monitoring_state_machine
 import monitoring_alert_linkage as _monitoring_linkage
+import monitoring_document_renewal as _monitoring_document_renewal
 import monitoring_sla as _monitoring_sla
 import monitoring_followups as _monitoring_followups
 from monitoring_enrollment import (
@@ -3043,6 +3054,36 @@ def _post_commit_worker_count() -> int:
 
 
 _POST_COMMIT_EXECUTOR = ThreadPoolExecutor(max_workers=_post_commit_worker_count())
+_DOCUMENT_RENEWAL_CLEANUP_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="renewal-artifact-cleanup",
+)
+_DOCUMENT_RENEWAL_SCHEDULER_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="renewal-workflow-scheduler",
+)
+_DOCUMENT_RENEWAL_UPLOAD_EXECUTOR = ThreadPoolExecutor(
+    max_workers=2,
+    thread_name_prefix="renewal-candidate-upload",
+)
+_DOCUMENT_RENEWAL_UPLOAD_ADMISSION = threading.BoundedSemaphore(value=2)
+
+
+def _try_acquire_document_renewal_upload_capacity():
+    return _DOCUMENT_RENEWAL_UPLOAD_ADMISSION.acquire(blocking=False)
+
+
+def _submit_document_renewal_upload(upload_callable):
+    """Transfer one acquired admission slot to a concurrent upload future."""
+    future = _DOCUMENT_RENEWAL_UPLOAD_EXECUTOR.submit(upload_callable)
+    # The concurrent future owns the slot once submitted. Cancelling an
+    # asyncio wrapper must not release capacity while the worker still owns
+    # the request body and is performing S3 I/O. A queued source future that
+    # is cancelled still completes and runs this callback.
+    future.add_done_callback(
+        lambda _completed: _DOCUMENT_RENEWAL_UPLOAD_ADMISSION.release()
+    )
+    return future
 
 
 def _submit_ca_poll_timeout_seconds() -> float:
@@ -16681,6 +16722,17 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
             _linked_monitoring_alert_id = (
                 _req_before_dict.get("monitoring_alert_id")
             )
+            if (
+                _linked_monitoring_alert_id not in (None, "")
+                and _monitoring_legacy_document_write_blocked(
+                    db, _linked_monitoring_alert_id
+                )
+            ):
+                return self.error(
+                    "Legacy Monitoring document requests are read-only while "
+                    "a canonical renewal request owns this alert.",
+                    409,
+                )
             _requested_status = (
                 str(data.get("status") or "").strip().lower()
                 if data.get("status") not in (None, "")
@@ -16899,6 +16951,33 @@ class ApplicationEnhancedRequirementRequestHandler(BaseHandler):
 
         db = get_db()
         try:
+            legacy_requirement = db.execute(
+                """
+                SELECT monitoring_alert_id
+                  FROM application_enhanced_requirements
+                 WHERE id = ?
+                   AND application_id IN (
+                       SELECT id FROM applications WHERE id = ? OR ref = ?
+                   )
+                """,
+                (requirement_id, app_id, app_id),
+            ).fetchone()
+            legacy_requirement = (
+                dict(legacy_requirement) if legacy_requirement else None
+            )
+            if (
+                legacy_requirement
+                and legacy_requirement.get("monitoring_alert_id")
+                not in (None, "")
+                and _monitoring_legacy_document_write_blocked(
+                    db, legacy_requirement.get("monitoring_alert_id")
+                )
+            ):
+                return self.error(
+                    "Legacy Monitoring document requests are read-only while "
+                    "a canonical renewal request owns this alert.",
+                    409,
+                )
             result, error, status_code = request_application_enhanced_requirement_from_client(
                 db,
                 app_id,
@@ -17052,6 +17131,18 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
             if str(before.get("status") or "").lower() in ("accepted", "waived", "cancelled"):
                 return self.error("This enhanced requirement is already resolved and cannot accept uploads", 409)
             is_monitoring_refresh = _is_monitoring_document_refresh_requirement(before)
+            if (
+                is_monitoring_refresh
+                and before.get("monitoring_alert_id") not in (None, "")
+                and _monitoring_legacy_document_write_blocked(
+                    db, before.get("monitoring_alert_id")
+                )
+            ):
+                return self.error(
+                    "Legacy Monitoring replacement uploads are disabled while "
+                    "a canonical renewal request owns this alert.",
+                    409,
+                )
             policy_info = enhanced_requirement_document_policy(before.get("requirement_key"))
             mapped_doc_type = policy_info.get("document_type") or "supporting_document"
             if is_monitoring_refresh:
@@ -38136,6 +38227,980 @@ class MonitoringAlertLinkageHandler(BaseHandler):
             db.close()
 
 
+_RENEWAL_REQUEST_PUBLIC_FIELDS = (
+    "request_id",
+    "application_id",
+    "customer_id",
+    "person_id",
+    "person_type",
+    "document_id",
+    "document_type",
+    "subject_display_label",
+    "document_version",
+    "monitoring_alert_id",
+    "request_reason",
+    "request_status",
+    "created_at",
+    "due_date",
+    "created_by",
+    "sent_at",
+    "cancelled_at",
+    "cancelled_by",
+    "cancel_reason",
+    "updated_at",
+    "updated_by",
+    "revision",
+    "contract_version",
+    "reminder_count",
+    "last_reminder_at",
+    "linkage_current",
+    "upload_allowed",
+    "manual_review_required",
+    "linkage_error",
+    "display_status",
+    "milestones",
+    "idempotent",
+)
+
+
+def _monitoring_canonical_renewal_active(db, alert_id):
+    """Return whether a non-cancelled canonical request owns this alert.
+
+    This check protects rollback mode: turning the feature flag OFF makes the
+    canonical request read-only, but must not revive a competing legacy write
+    path while that request still exists. Database errors intentionally
+    propagate so a legacy mutation fails closed.
+    """
+
+    if alert_id in (None, ""):
+        return False
+    return bool(
+        db.execute(
+            """
+            SELECT 1
+              FROM monitoring_document_renewal_requests
+             WHERE monitoring_alert_id = ?
+               AND request_status <> 'cancelled'
+             LIMIT 1
+            """,
+            (alert_id,),
+        ).fetchone()
+    )
+
+
+def _monitoring_legacy_document_request_active(db, alert_id):
+    """Return whether this alert already owns an in-flight legacy request."""
+
+    if alert_id in (None, ""):
+        return False
+    return bool(
+        db.execute(
+            """
+            SELECT 1
+              FROM application_enhanced_requirements
+             WHERE monitoring_alert_id = ?
+               AND active = 1
+               AND LOWER(COALESCE(status, '')) IN (
+                    'requested','uploaded','under_review','rejected'
+               )
+             LIMIT 1
+            """,
+            (alert_id,),
+        ).fetchone()
+    )
+
+
+def _monitoring_legacy_document_write_blocked(db, alert_id):
+    """Preserve in-flight legacy work but prohibit split-brain ownership."""
+
+    def canonical_exists_in_application(application_id):
+        if application_id in (None, ""):
+            return False
+        return bool(
+            db.execute(
+                """
+                SELECT 1 FROM monitoring_document_renewal_requests
+                 WHERE application_id = ?
+                   AND request_status <> 'cancelled'
+                 LIMIT 1
+                """,
+                (application_id,),
+            ).fetchone()
+        )
+
+    if getattr(db, "is_postgres", False):
+        locked = db.execute(
+            """
+            SELECT id, application_id, source_reference
+              FROM monitoring_alerts WHERE id = ? FOR UPDATE
+            """,
+            (alert_id,),
+        ).fetchone()
+    else:
+        raw = getattr(db, "conn", db)
+        if not getattr(raw, "in_transaction", False):
+            db.execute("BEGIN IMMEDIATE")
+        locked = db.execute(
+            "SELECT id, application_id, source_reference FROM monitoring_alerts WHERE id = ?",
+            (alert_id,),
+        ).fetchone()
+    if not locked:
+        return True
+    if _monitoring_canonical_renewal_active(db, alert_id):
+        return True
+    locked = dict(locked)
+    application_id = str(locked.get("application_id") or "").strip()
+    source_reference = str(locked.get("source_reference") or "")
+    document_id = (
+        source_reference[len("document:"):]
+        if source_reference.startswith("document:")
+        else ""
+    )
+    if not application_id or not document_id or "/" in document_id:
+        return bool(
+            canonical_exists_in_application(application_id)
+            or _monitoring_document_renewal.renewal_feature_enabled()
+        )
+    document = db.execute(
+        """
+        SELECT id, slot_key FROM documents
+         WHERE id = ? AND application_id = ?
+        """,
+        (document_id, application_id),
+    ).fetchone()
+    if not document or not str(document["slot_key"] or "").strip():
+        return bool(
+            canonical_exists_in_application(application_id)
+            or _monitoring_document_renewal.renewal_feature_enabled()
+        )
+    if getattr(db, "is_postgres", False):
+        db.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(?)::bigint)",
+            (f"{application_id}:{document['slot_key']}",),
+        )
+    canonical_for_document = db.execute(
+        """
+        SELECT 1 FROM monitoring_document_renewal_requests rr
+         WHERE rr.request_status <> 'cancelled'
+           AND (
+                rr.monitoring_alert_id = ?
+                OR (rr.application_id = ? AND rr.document_slot_key = ?)
+           )
+         LIMIT 1
+        """,
+        (alert_id, application_id, document["slot_key"]),
+    ).fetchone()
+    if canonical_for_document:
+        return True
+    if not _monitoring_document_renewal.renewal_feature_enabled():
+        return False
+    return not _monitoring_legacy_document_request_active(db, alert_id)
+
+
+def _monitoring_renewal_public_projection(request, *, portal=False):
+    """Return renewal state without storage locations, hashes or audit payloads."""
+    source = request if isinstance(request, dict) else {}
+    result = {
+        key: source.get(key)
+        for key in _RENEWAL_REQUEST_PUBLIC_FIELDS
+        if key in source
+    }
+    if portal:
+        for key in (
+            "customer_id",
+            "person_id",
+            "person_type",
+            "document_id",
+            "document_version",
+            "monitoring_alert_id",
+            "created_by",
+            "cancelled_by",
+            "cancel_reason",
+            "updated_by",
+        ):
+            result.pop(key, None)
+    events = []
+    for item in source.get("events") or source.get("history") or []:
+        if not isinstance(item, dict):
+            continue
+        events.append({
+            key: item.get(key)
+            for key in (
+                "event_id",
+                "event_sequence",
+                "event_type",
+                "created_at",
+                "due_date_snapshot",
+                "reminder_interval_days",
+            )
+            if key in item
+        })
+    if events:
+        result["events"] = events
+    uploads = []
+    for item in source.get("uploads") or []:
+        if not isinstance(item, dict):
+            continue
+        uploads.append({
+            key: item.get(key)
+            for key in (
+                "upload_id",
+                "original_filename",
+                "file_size",
+                "mime_type",
+                "uploaded_at",
+            )
+            if key in item
+        })
+    if uploads:
+        result["uploads"] = uploads
+    return result
+
+
+_MONITORING_RENEWAL_LOCAL_STORAGE_PREFIX = (
+    "local://monitoring-renewal-candidates/"
+)
+_MONITORING_RENEWAL_CLEANUP_STATES = (
+    "reserved",
+    "stored",
+    "cleanup_pending",
+)
+
+
+def _monitoring_renewal_rowcount(cursor):
+    value = getattr(cursor, "rowcount", None)
+    if value is None:
+        value = getattr(getattr(cursor, "_cursor", None), "rowcount", None)
+    return value
+
+
+def _monitoring_renewal_artifact_audit(
+    db,
+    artifact,
+    *,
+    action,
+    actor_id,
+    actor_name,
+    actor_role,
+    before_state,
+    after_state,
+):
+    """Append artifact lifecycle evidence without exposing storage locations."""
+
+    from db import append_audit_log
+
+    detail = {
+        "contract_version": _monitoring_document_renewal.CONTRACT_VERSION,
+        "cleanup_id": artifact["cleanup_id"],
+        "upload_id": artifact["upload_id"],
+        "request_id": artifact["request_id"],
+        "backend": artifact["backend"],
+        "artifact_state": after_state,
+    }
+    evidence = append_audit_log(
+        db,
+        action=f"monitoring.document_renewal.artifact_{action}",
+        user_id=str(actor_id or "system:document-renewal-artifact-cleanup"),
+        user_name=str(actor_name or "Document Renewal Artifact Cleanup"),
+        user_role=str(actor_role or "system"),
+        target=f"monitoring_renewal_request:{artifact['request_id']}",
+        detail=json.dumps(detail, sort_keys=True, separators=(",", ":")),
+        before_state={"artifact_state": before_state},
+        after_state={"artifact_state": after_state},
+        application_id=str(artifact["application_id"]),
+        request_id=str(artifact.get("correlation_id") or "") or None,
+        commit=False,
+    )
+    if not isinstance(evidence, str) or not evidence.strip():
+        raise RuntimeError("artifact audit append did not return evidence")
+
+
+def _reserve_monitoring_renewal_upload_artifact(
+    db,
+    *,
+    request,
+    actor,
+    cleanup_id,
+    upload_id,
+    backend,
+    storage_key,
+    file_extension,
+    local_path=None,
+    correlation_id=None,
+):
+    """Commit a deterministic intent before any local or S3 artifact write."""
+
+    artifact = {
+        "cleanup_id": str(cleanup_id),
+        "upload_id": str(upload_id),
+        "request_id": str(request["request_id"]),
+        "application_id": str(request["application_id"]),
+        "customer_id": str(request["customer_id"]),
+        "backend": str(backend),
+        "storage_key": str(storage_key),
+        "file_extension": str(file_extension or ""),
+        "local_path": str(local_path) if local_path else None,
+        "correlation_id": str(correlation_id or "") or None,
+    }
+    if not re.fullmatch(r"(?:\.[a-z0-9]{1,20})?", artifact["file_extension"]):
+        raise RuntimeError("invalid renewal candidate file extension")
+    if artifact["backend"] == "s3":
+        expected_storage_key = build_monitoring_renewal_candidate_key(
+            artifact["customer_id"],
+            artifact["request_id"],
+            artifact["upload_id"],
+            "candidate" + artifact["file_extension"],
+        )
+        if artifact["storage_key"] != expected_storage_key:
+            raise RuntimeError("renewal candidate storage key identity mismatch")
+    elif artifact["backend"] == "local":
+        if not _monitoring_renewal_local_artifact_allowed(
+            artifact["storage_key"],
+            artifact["local_path"],
+            artifact["upload_id"],
+            artifact["file_extension"],
+        ):
+            raise RuntimeError("renewal candidate local path identity mismatch")
+    else:
+        raise RuntimeError("invalid renewal candidate backend")
+    reserved_at = datetime.now(timezone.utc)
+    timestamp = reserved_at.isoformat()
+    upload_lease_owner = f"upload:{artifact['cleanup_id']}"
+    upload_lease_expires = (reserved_at + timedelta(minutes=15)).isoformat()
+    try:
+        db.execute(
+            """
+            INSERT INTO monitoring_document_renewal_upload_cleanup
+                (cleanup_id, upload_id, request_id, application_id, customer_id,
+                 backend, storage_key, file_extension, local_path, artifact_state,
+                 correlation_id, lease_owner, lease_expires_at, next_retry_at,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                artifact["cleanup_id"],
+                artifact["upload_id"],
+                artifact["request_id"],
+                artifact["application_id"],
+                artifact["customer_id"],
+                artifact["backend"],
+                artifact["storage_key"],
+                artifact["file_extension"],
+                artifact["local_path"],
+                artifact["correlation_id"],
+                upload_lease_owner,
+                upload_lease_expires,
+                upload_lease_expires,
+                timestamp,
+                timestamp,
+            ),
+        )
+        _monitoring_renewal_artifact_audit(
+            db,
+            artifact,
+            action="reserved",
+            actor_id=actor.get("sub") or actor.get("id"),
+            actor_name=actor.get("name"),
+            actor_role=actor.get("role"),
+            before_state=None,
+            after_state="reserved",
+        )
+        db.commit()
+        return artifact
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _mark_monitoring_renewal_artifact_stored(
+    db,
+    artifact,
+    *,
+    actor,
+    s3_version_id=None,
+):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    try:
+        cursor = db.execute(
+            """
+            UPDATE monitoring_document_renewal_upload_cleanup
+               SET artifact_state = 'stored', s3_version_id = ?,
+                   stored_at = ?, updated_at = ?
+             WHERE cleanup_id = ? AND upload_id = ?
+               AND artifact_state = 'reserved'
+            """,
+            (
+                str(s3_version_id or "").strip() or None,
+                timestamp,
+                timestamp,
+                artifact["cleanup_id"],
+                artifact["upload_id"],
+            ),
+        )
+        if _monitoring_renewal_rowcount(cursor) not in (-1, 1):
+            raise RuntimeError("artifact reservation changed before storage")
+        _monitoring_renewal_artifact_audit(
+            db,
+            artifact,
+            action="stored",
+            actor_id=actor.get("sub") or actor.get("id"),
+            actor_name=actor.get("name"),
+            actor_role=actor.get("role"),
+            before_state="reserved",
+            after_state="stored",
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _mark_monitoring_renewal_artifact_cleanup_pending(
+    cleanup_id,
+    *,
+    error_code,
+):
+    db = get_db()
+    try:
+        db.execute(
+            """
+            UPDATE monitoring_document_renewal_upload_cleanup
+               SET artifact_state = 'cleanup_pending', last_error_code = ?,
+                   next_retry_at = ?, updated_at = ?,
+                   lease_owner = NULL, lease_expires_at = NULL
+             WHERE cleanup_id = ?
+               AND artifact_state IN ('reserved','stored','cleanup_pending')
+            """,
+            (
+                str(error_code or "cleanup_required")[:64],
+                datetime.now(timezone.utc).isoformat(),
+                datetime.now(timezone.utc).isoformat(),
+                cleanup_id,
+            ),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _monitoring_renewal_local_artifact_allowed(
+    storage_key,
+    local_path,
+    upload_id,
+    file_extension,
+):
+    prefix = _MONITORING_RENEWAL_LOCAL_STORAGE_PREFIX
+    key = str(storage_key or "")
+    path = os.path.abspath(str(local_path or ""))
+    root = os.path.abspath(
+        os.path.join(UPLOAD_DIR, "monitoring-renewal-candidates")
+    )
+    return bool(
+        os.path.dirname(path) == root
+        and key.startswith(prefix)
+        and key == prefix + os.path.basename(path)
+        and os.path.basename(path)
+        == str(upload_id or "") + str(file_extension or "")
+        and not os.path.islink(path)
+        and re.fullmatch(
+            r"[a-f0-9]{32}(?:\.[a-z0-9]{1,20})?",
+            os.path.basename(path),
+        )
+    )
+
+
+def _open_monitoring_renewal_local_candidate_directory(*, create):
+    """Open the local-only candidate directory without following its entry."""
+    upload_root = os.path.abspath(UPLOAD_DIR)
+    if create:
+        os.makedirs(upload_root, mode=0o700, exist_ok=True)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+    root_fd = os.open(upload_root, directory_flags)
+    try:
+        if create:
+            try:
+                os.mkdir(
+                    "monitoring-renewal-candidates",
+                    0o700,
+                    dir_fd=root_fd,
+                )
+            except FileExistsError:
+                pass
+        candidate_fd = os.open(
+            "monitoring-renewal-candidates",
+            directory_flags,
+            dir_fd=root_fd,
+        )
+    finally:
+        os.close(root_fd)
+    try:
+        if create:
+            os.fchmod(candidate_fd, 0o700)
+        return candidate_fd, os.path.join(
+            upload_root,
+            "monitoring-renewal-candidates",
+        )
+    except BaseException:
+        os.close(candidate_fd)
+        raise
+
+
+def _process_monitoring_renewal_upload_artifact(cleanup_id):
+    """Claim and clean one unattached candidate without holding a DB lock over I/O."""
+
+    lease_owner = f"renewal-cleanup:{uuid.uuid4().hex}"
+    now = datetime.now(timezone.utc)
+    now_text = now.isoformat()
+    lease_until = (now + timedelta(minutes=5)).isoformat()
+    db = get_db()
+    try:
+        cursor = db.execute(
+            """
+            UPDATE monitoring_document_renewal_upload_cleanup
+               SET artifact_state = 'cleanup_pending',
+                   lease_owner = ?, lease_expires_at = ?,
+                   attempts = attempts + 1, updated_at = ?
+             WHERE cleanup_id = ?
+               AND artifact_state IN ('reserved','stored','cleanup_pending')
+               AND (next_retry_at IS NULL OR next_retry_at <= ?)
+               AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+            """,
+            (lease_owner, lease_until, now_text, cleanup_id, now_text, now_text),
+        )
+        if _monitoring_renewal_rowcount(cursor) not in (-1, 1):
+            db.rollback()
+            return {"claimed": False, "cleaned": False, "attached": False}
+        row = db.execute(
+            """
+            SELECT * FROM monitoring_document_renewal_upload_cleanup
+             WHERE cleanup_id = ? AND lease_owner = ?
+            """,
+            (cleanup_id, lease_owner),
+        ).fetchone()
+        if not row:
+            db.rollback()
+            return {"claimed": False, "cleaned": False, "attached": False}
+        artifact = dict(row)
+        db.commit()
+    finally:
+        db.close()
+
+    # A canonical row always wins. This recheck covers a process death after
+    # the atomic upload commit but before the caller observed success.
+    db = get_db()
+    try:
+        attached = db.execute(
+            """
+            SELECT 1 FROM monitoring_document_renewal_uploads
+             WHERE upload_id = ? AND request_id = ? AND application_id = ?
+               AND customer_id = ? AND storage_key = ?
+             LIMIT 1
+            """,
+            (
+                artifact["upload_id"],
+                artifact["request_id"],
+                artifact["application_id"],
+                artifact["customer_id"],
+                artifact["storage_key"],
+            ),
+        ).fetchone()
+        if attached:
+            timestamp = datetime.now(timezone.utc).isoformat()
+            cursor = db.execute(
+                """
+                UPDATE monitoring_document_renewal_upload_cleanup
+                   SET artifact_state = 'attached',
+                       stored_at = COALESCE(stored_at, ?), attached_at = ?,
+                       updated_at = ?, lease_owner = NULL,
+                       lease_expires_at = NULL, next_retry_at = NULL,
+                       last_error_code = NULL
+                 WHERE cleanup_id = ? AND lease_owner = ?
+                """,
+                (timestamp, timestamp, timestamp, cleanup_id, lease_owner),
+            )
+            if _monitoring_renewal_rowcount(cursor) not in (-1, 1):
+                raise RuntimeError("artifact attachment reconciliation lost its lease")
+            _monitoring_renewal_artifact_audit(
+                db,
+                artifact,
+                action="attached_reconciled",
+                actor_id=None,
+                actor_name=None,
+                actor_role=None,
+                before_state=artifact["artifact_state"],
+                after_state="attached",
+            )
+            db.commit()
+            return {"claimed": True, "cleaned": False, "attached": True}
+        db.commit()
+    finally:
+        db.close()
+
+    cleaned = False
+    error_code = None
+    if artifact["backend"] == "local":
+        if not _monitoring_renewal_local_artifact_allowed(
+            artifact["storage_key"],
+            artifact.get("local_path"),
+            artifact.get("upload_id"),
+            artifact.get("file_extension"),
+        ):
+            error_code = "invalid_local_candidate_path"
+        else:
+            try:
+                directory_fd, _candidate_dir = (
+                    _open_monitoring_renewal_local_candidate_directory(
+                        create=False
+                    )
+                )
+                try:
+                    try:
+                        os.unlink(
+                            os.path.basename(artifact["local_path"]),
+                            dir_fd=directory_fd,
+                        )
+                    except FileNotFoundError:
+                        pass
+                finally:
+                    os.close(directory_fd)
+                cleaned = True
+            except OSError:
+                error_code = "local_candidate_delete_failed"
+    elif artifact["backend"] == "s3":
+        try:
+            expected_s3_key = build_monitoring_renewal_candidate_key(
+                artifact["customer_id"],
+                artifact["request_id"],
+                artifact["upload_id"],
+                "candidate" + str(artifact.get("file_extension") or ""),
+            )
+        except Exception:
+            expected_s3_key = None
+        if (
+            expected_s3_key != artifact["storage_key"]
+            or not monitoring_renewal_candidate_key_allowed(artifact["storage_key"])
+        ):
+            error_code = "invalid_s3_candidate_key"
+        elif not HAS_S3:
+            error_code = "s3_cleanup_unavailable"
+        else:
+            try:
+                cleaned, result_code = (
+                    get_s3_client().delete_monitoring_renewal_candidate(
+                        artifact["storage_key"],
+                        version_id=artifact.get("s3_version_id"),
+                    )
+                )
+                if not cleaned:
+                    error_code = str(result_code or "s3_candidate_delete_failed")[:64]
+            except Exception:
+                error_code = "s3_candidate_delete_failed"
+    else:
+        error_code = "invalid_candidate_backend"
+
+    timestamp = datetime.now(timezone.utc)
+    db = get_db()
+    try:
+        if cleaned:
+            cursor = db.execute(
+                """
+                UPDATE monitoring_document_renewal_upload_cleanup
+                   SET artifact_state = 'cleaned', cleaned_at = ?,
+                       updated_at = ?, lease_owner = NULL,
+                       lease_expires_at = NULL, next_retry_at = NULL,
+                       last_error_code = NULL
+                 WHERE cleanup_id = ? AND lease_owner = ?
+                   AND artifact_state IN ('reserved','stored','cleanup_pending')
+                """,
+                (timestamp.isoformat(), timestamp.isoformat(), cleanup_id, lease_owner),
+            )
+            if _monitoring_renewal_rowcount(cursor) not in (-1, 1):
+                raise RuntimeError("artifact cleanup lost its lease")
+            _monitoring_renewal_artifact_audit(
+                db,
+                artifact,
+                action="cleaned",
+                actor_id=None,
+                actor_name=None,
+                actor_role=None,
+                before_state=artifact["artifact_state"],
+                after_state="cleaned",
+            )
+        else:
+            retry_at = timestamp + timedelta(
+                seconds=min(3600, 60 * (2 ** min(int(artifact["attempts"]), 6)))
+            )
+            cursor = db.execute(
+                """
+                UPDATE monitoring_document_renewal_upload_cleanup
+                   SET artifact_state = 'cleanup_pending',
+                       last_error_code = ?, next_retry_at = ?, updated_at = ?,
+                       lease_owner = NULL, lease_expires_at = NULL
+                 WHERE cleanup_id = ? AND lease_owner = ?
+                """,
+                (
+                    str(error_code or "candidate_cleanup_failed")[:64],
+                    retry_at.isoformat(),
+                    timestamp.isoformat(),
+                    cleanup_id,
+                    lease_owner,
+                ),
+            )
+            if _monitoring_renewal_rowcount(cursor) not in (-1, 1):
+                raise RuntimeError("artifact cleanup deferral lost its lease")
+        db.commit()
+    finally:
+        db.close()
+    return {"claimed": True, "cleaned": cleaned, "attached": False}
+
+
+def process_monitoring_renewal_upload_cleanup(*, limit=25):
+    """Bounded, idempotent retry that remains active when the feature is OFF."""
+
+    bounded_limit = max(1, min(int(limit), 100))
+    db = get_db()
+    try:
+        rows = db.execute(
+            """
+            SELECT cleanup_id
+              FROM monitoring_document_renewal_upload_cleanup
+             WHERE artifact_state IN ('reserved','stored','cleanup_pending')
+               AND (next_retry_at IS NULL OR next_retry_at <= ?)
+               AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+             ORDER BY created_at ASC, cleanup_id ASC
+             LIMIT ?
+            """,
+            (
+                datetime.now(timezone.utc).isoformat(),
+                datetime.now(timezone.utc).isoformat(),
+                bounded_limit,
+            ),
+        ).fetchall()
+    finally:
+        db.close()
+    summary = {"scanned": len(rows), "cleaned": 0, "attached": 0, "deferred": 0}
+    for row in rows:
+        result = _process_monitoring_renewal_upload_artifact(row["cleanup_id"])
+        if result.get("cleaned"):
+            summary["cleaned"] += 1
+        elif result.get("attached"):
+            summary["attached"] += 1
+        else:
+            summary["deferred"] += 1
+    return summary
+
+
+def _write_monitoring_renewal_error(handler, exc):
+    payload = {
+        "error": exc.public_message,
+        "error_code": exc.code,
+        "contract_version": _monitoring_document_renewal.CONTRACT_VERSION,
+        **({"error_details": exc.details} if exc.details else {}),
+    }
+    handler.set_status(exc.http_status)
+    handler.write(payload)
+
+
+class MonitoringAlertRenewalRequestHandler(BaseHandler):
+    """Officer read/create contract for one exact document-linked alert."""
+
+    def get(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        db = get_db()
+        try:
+            request = _monitoring_document_renewal.renewal_request_for_alert(
+                db,
+                alert_id,
+                include_cancelled=True,
+            )
+            self.success({
+                "feature_enabled": (
+                    _monitoring_document_renewal.renewal_feature_enabled()
+                ),
+                "request": (
+                    _monitoring_renewal_public_projection(request)
+                    if request
+                    else None
+                ),
+            })
+        except _monitoring_document_renewal.RenewalError as exc:
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            logger.exception(
+                "monitoring_renewal_read_failed alert_id=%s request_id=%s",
+                alert_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal status is temporarily unavailable.", 500)
+        finally:
+            db.close()
+
+    def post(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json() or {}
+        db = get_db()
+        try:
+            result = _monitoring_document_renewal.create_renewal_request(
+                db,
+                alert_id,
+                reason=str(data.get("reason") or "").strip(),
+                due_date=data.get("due_date"),
+                manual_reason=str(data.get("manual_reason") or "").strip(),
+                actor=user,
+            )
+            status = 200 if result.get("idempotent") else 201
+            self.success(
+                {"request": _monitoring_renewal_public_projection(result)},
+                status,
+            )
+        except _monitoring_document_renewal.RenewalError as exc:
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception(
+                "monitoring_renewal_create_failed alert_id=%s request_id=%s",
+                alert_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal request could not be created.", 500)
+        finally:
+            db.close()
+
+
+class MonitoringRenewalRequestResendHandler(BaseHandler):
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json() or {}
+        try:
+            expected_revision = int(data.get("expected_revision"))
+        except (TypeError, ValueError):
+            return self.error("expected_revision is required.", 400)
+        db = get_db()
+        try:
+            result = _monitoring_document_renewal.resend_renewal_request(
+                db,
+                request_id,
+                actor=user,
+                expected_revision=expected_revision,
+                correlation_id=(_obs_get_request_id() or ""),
+            )
+            self.success({
+                "request": _monitoring_renewal_public_projection(result)
+            })
+        except _monitoring_document_renewal.RenewalError as exc:
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception(
+                "monitoring_renewal_resend_failed renewal_request_id=%s "
+                "request_id=%s",
+                request_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal request could not be resent.", 500)
+        finally:
+            db.close()
+
+
+class MonitoringRenewalRequestDueDateHandler(BaseHandler):
+    def patch(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json() or {}
+        try:
+            expected_revision = int(data.get("expected_revision"))
+        except (TypeError, ValueError):
+            return self.error("expected_revision is required.", 400)
+        reason = str(data.get("reason") or "").strip()
+        if not reason:
+            return self.error("A due-date change reason is required.", 400)
+        db = get_db()
+        try:
+            result = _monitoring_document_renewal.update_renewal_due_date(
+                db,
+                request_id,
+                actor=user,
+                expected_revision=expected_revision,
+                due_date=data.get("due_date"),
+                reason=reason,
+                correlation_id=(_obs_get_request_id() or ""),
+            )
+            self.success({
+                "request": _monitoring_renewal_public_projection(result)
+            })
+        except _monitoring_document_renewal.RenewalError as exc:
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception(
+                "monitoring_renewal_due_date_failed renewal_request_id=%s "
+                "request_id=%s",
+                request_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal due date could not be changed.", 500)
+        finally:
+            db.close()
+
+
+class MonitoringRenewalRequestCancelHandler(BaseHandler):
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json() or {}
+        try:
+            expected_revision = int(data.get("expected_revision"))
+        except (TypeError, ValueError):
+            return self.error("expected_revision is required.", 400)
+        db = get_db()
+        try:
+            result = _monitoring_document_renewal.cancel_renewal_request(
+                db,
+                request_id,
+                actor=user,
+                expected_revision=expected_revision,
+                cancel_reason=str(data.get("reason") or "").strip(),
+                correlation_id=(_obs_get_request_id() or ""),
+            )
+            self.success({
+                "request": _monitoring_renewal_public_projection(result)
+            })
+        except _monitoring_document_renewal.RenewalError as exc:
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception(
+                "monitoring_renewal_cancel_failed renewal_request_id=%s "
+                "request_id=%s",
+                request_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal request could not be cancelled.", 500)
+        finally:
+            db.close()
+
+
 class MonitoringAlertDetailHandler(BaseHandler):
     """GET/PATCH /api/monitoring/alerts/:id — Get alert detail and update status"""
     def get(self, alert_id):
@@ -38189,6 +39254,34 @@ class MonitoringAlertDetailHandler(BaseHandler):
             result["followups_summary"] = {"open_count": 0, "next_due_at": None}
         result["overdue_escalations"] = _monitoring_alert_overdue_escalations(db, alert_id)
         result["canonical_linkage"] = _monitoring_linkage_safe_envelope(db, alert_id)
+        result["renewal_feature_enabled"] = (
+            _monitoring_document_renewal.renewal_feature_enabled()
+        )
+        try:
+            _renewal_request = (
+                _monitoring_document_renewal.renewal_request_for_alert(
+                    db,
+                    alert_id,
+                    include_cancelled=True,
+                )
+            )
+            result["renewal_request"] = (
+                _monitoring_renewal_public_projection(_renewal_request)
+                if _renewal_request
+                else None
+            )
+        except Exception:
+            logger.exception(
+                "monitoring_document_renewal_projection_failed "
+                "alert_id=%s request_id=%s",
+                alert_id,
+                (_obs_get_request_id() or ""),
+            )
+            result["renewal_request"] = None
+            result["renewal_projection_error"] = {
+                "code": "renewal_projection_unavailable",
+                "message": "Document renewal status is temporarily unavailable.",
+            }
         db.close()
         self.success(result)
 
@@ -38385,6 +39478,13 @@ class MonitoringAlertDetailHandler(BaseHandler):
                     "reject_updated_document",
                     "waive_updated_document",
                 }:
+                    if _monitoring_legacy_document_write_blocked(db, alert_id):
+                        return self.error(
+                            "Legacy Monitoring document actions are disabled "
+                            "because the canonical workflow owns new requests "
+                            "or an active canonical request owns this alert.",
+                            409,
+                        )
                     if not _is_document_refresh_alert(alert_before):
                         return self.error("Document refresh actions are only available for document expiry alerts.", 400)
                     note = str(data.get("note") or data.get("reason") or "").strip()
@@ -39359,6 +40459,13 @@ class MonitoringAlertDocumentReplacementUploadHandler(BaseHandler):
             if not alert:
                 return self.error("Alert not found", 404)
             alert = dict(alert)
+            if _monitoring_legacy_document_write_blocked(db, alert_id):
+                return self.error(
+                    "Legacy Monitoring replacement uploads are disabled while "
+                    "the canonical workflow owns new requests or an active "
+                    "canonical request owns this alert.",
+                    409,
+                )
             if not _is_document_refresh_alert(alert):
                 return self.error("Upload Replacement is only available for document expiry alerts", 400)
             if _monitoring_status.is_action_locked(alert.get("status")):
@@ -44593,6 +45700,386 @@ class PortalApplicationPeriodicReviewAttestationSubmitHandler(BaseHandler):
             db.close()
 
 
+class PortalDocumentRenewalRequestsHandler(BaseHandler):
+    """Client-owned, read-only list of canonical renewal requests."""
+
+    def get(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            return self.error("Only clients can view document renewal requests.", 403)
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT id, ref, client_id FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app = dict(app)
+            if str(app["client_id"]) != str(user.get("sub") or ""):
+                self.log_authz_denial(
+                    user,
+                    "authz_denied_not_owner",
+                    app.get("id", app.get("ref", "")),
+                    {"surface": "portal_document_renewal"},
+                )
+                return self.error("Application not found", 404)
+            rows = _monitoring_document_renewal.list_renewal_requests(
+                db,
+                application_id=app["id"],
+                customer_id=app["client_id"],
+                include_cancelled=True,
+            )
+            self.success({
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "feature_enabled": (
+                    _monitoring_document_renewal.renewal_feature_enabled()
+                ),
+                "renewal_requests": [
+                    _monitoring_renewal_public_projection(row, portal=True)
+                    for row in rows
+                ],
+                "total": len(rows),
+            })
+        except _monitoring_document_renewal.RenewalError as exc:
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            logger.exception(
+                "portal_document_renewal_list_failed app_id=%s request_id=%s",
+                app_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal requests are temporarily unavailable.", 500)
+        finally:
+            db.close()
+
+
+class PortalDocumentRenewalUploadHandler(BaseHandler):
+    """Stage a client renewal upload without touching canonical documents."""
+
+    async def post(self, app_id, request_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            return self.error("Only clients can upload renewal documents.", 403)
+        if not _monitoring_document_renewal.renewal_feature_enabled():
+            return self.error(
+                "Document renewal requests are not enabled.",
+                409,
+            )
+        if not self.check_sensitive_rate_limit(
+            "document_renewal_upload",
+            max_attempts=20,
+            window_seconds=60,
+        ):
+            return
+
+        db = get_db()
+        file_path = None
+        s3_key = None
+        artifact = None
+        renewal_record_committed = False
+        try:
+            app = db.execute(
+                "SELECT id, ref, client_id FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app = dict(app)
+            if str(app["client_id"]) != str(user.get("sub") or ""):
+                self.log_authz_denial(
+                    user,
+                    "authz_denied_not_owner",
+                    app.get("id", app.get("ref", "")),
+                    {"surface": "portal_document_renewal_upload"},
+                )
+                return self.error("Application not found", 404)
+            request = _monitoring_document_renewal.get_renewal_request(
+                db,
+                request_id,
+                include_history=False,
+            )
+            if (
+                str(request.get("application_id") or "") != str(app["id"])
+                or str(request.get("customer_id") or "")
+                != str(app["client_id"])
+            ):
+                # Do not disclose whether a request belongs to another client.
+                return self.error("Document renewal request not found", 404)
+            if request.get("linkage_current") is not True:
+                return self.error(
+                    "This renewal request requires manual review before an upload can be accepted.",
+                    409,
+                )
+            if request.get("upload_allowed") is not True:
+                return self.error(
+                    "This renewal request is not awaiting an upload.",
+                    409,
+                )
+            if "file" not in self.request.files:
+                return self.error("No file provided", 400)
+            file_info = self.request.files["file"][0]
+            filename = os.path.basename(file_info.get("filename") or "")
+            body = file_info.get("body") or b""
+            content_type = file_info.get(
+                "content_type",
+                "application/octet-stream",
+            )
+            if len(body) > MAX_UPLOAD_MB * 1024 * 1024:
+                return self.error(f"File exceeds {MAX_UPLOAD_MB}MB limit", 400)
+            valid, _reason_code, upload_error = (
+                FileUploadValidator.validate_with_reason(
+                    filename,
+                    content_type,
+                    body,
+                )
+            )
+            if not valid:
+                return self.error(f"File rejected: {upload_error}", 400)
+
+            upload_id = uuid.uuid4().hex
+            cleanup_id = uuid.uuid4().hex
+            extension = os.path.splitext(filename)[1].lower()
+            if not re.fullmatch(r"\.[a-z0-9]{1,20}", extension or ""):
+                extension = ""
+            safe_name = f"{upload_id}{extension}"
+            digest = hashlib.sha256(body).hexdigest()
+            correlation_id = (_obs_get_request_id() or "")
+
+            if HAS_S3:
+                if not _try_acquire_document_renewal_upload_capacity():
+                    return self.error(
+                        "Document upload capacity is temporarily busy. Please retry.",
+                        503,
+                    )
+                upload_capacity_owned_by_handler = True
+                try:
+                    s3 = get_s3_client()
+                    s3_key = s3.build_monitoring_renewal_candidate_key(
+                        str(app["client_id"]),
+                        str(request_id),
+                        upload_id,
+                        filename,
+                    )
+                    artifact = _reserve_monitoring_renewal_upload_artifact(
+                        db,
+                        request=request,
+                        actor=user,
+                        cleanup_id=cleanup_id,
+                        upload_id=upload_id,
+                        backend="s3",
+                        storage_key=s3_key,
+                        file_extension=extension,
+                        correlation_id=correlation_id,
+                    )
+                    # Reservation is durable. Release the pooled connection
+                    # before bounded network I/O so concurrent client uploads
+                    # cannot starve unrelated API requests of DB connections.
+                    db.close()
+                    db = None
+                    upload_future = _submit_document_renewal_upload(
+                        lambda: s3.upload_monitoring_renewal_candidate(
+                            key=s3_key,
+                            file_data=body,
+                            customer_id=str(app["client_id"]),
+                            request_id=str(request_id),
+                            upload_id=upload_id,
+                            cleanup_id=cleanup_id,
+                            original_filename=filename,
+                            content_type=content_type,
+                            file_sha256=digest,
+                        ),
+                    )
+                    upload_capacity_owned_by_handler = False
+                    success, upload_result = await asyncio.wrap_future(
+                        upload_future
+                    )
+                    if (
+                        not success
+                        or not isinstance(upload_result, dict)
+                        or str(upload_result.get("key") or "").strip() != s3_key
+                    ):
+                        _mark_monitoring_renewal_artifact_cleanup_pending(
+                            cleanup_id,
+                            error_code="durable_upload_rejected",
+                        )
+                        await asyncio.get_running_loop().run_in_executor(
+                            _DOCUMENT_RENEWAL_CLEANUP_EXECUTOR,
+                            lambda: _process_monitoring_renewal_upload_artifact(
+                                cleanup_id
+                            ),
+                        )
+                        return self.error(
+                            "Document upload failed: unable to store the file "
+                            "durably. Please retry.",
+                            500,
+                        )
+                    db = get_db()
+                    _mark_monitoring_renewal_artifact_stored(
+                        db,
+                        artifact,
+                        actor=user,
+                        s3_version_id=upload_result.get("version_id"),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Renewal candidate durable upload failed "
+                        "renewal_request_id=%s request_id=%s",
+                        request_id,
+                        correlation_id,
+                    )
+                    if artifact:
+                        _mark_monitoring_renewal_artifact_cleanup_pending(
+                            cleanup_id,
+                            error_code="durable_upload_failed",
+                        )
+                        await asyncio.get_running_loop().run_in_executor(
+                            _DOCUMENT_RENEWAL_CLEANUP_EXECUTOR,
+                            lambda: _process_monitoring_renewal_upload_artifact(
+                                cleanup_id
+                            ),
+                        )
+                    return self.error(
+                        "Document upload failed: unable to store the file "
+                        "durably. Please retry.",
+                        500,
+                    )
+                finally:
+                    if upload_capacity_owned_by_handler:
+                        _DOCUMENT_RENEWAL_UPLOAD_ADMISSION.release()
+            elif is_production() or is_staging():
+                return self.error(
+                    "Document upload failed: durable storage is unavailable.",
+                    500,
+                )
+            else:
+                directory_fd, candidate_dir = (
+                    _open_monitoring_renewal_local_candidate_directory(
+                        create=True
+                    )
+                )
+                try:
+                    file_path = os.path.join(candidate_dir, safe_name)
+                    storage_key = (
+                        _MONITORING_RENEWAL_LOCAL_STORAGE_PREFIX + safe_name
+                    )
+                    artifact = _reserve_monitoring_renewal_upload_artifact(
+                        db,
+                        request=request,
+                        actor=user,
+                        cleanup_id=cleanup_id,
+                        upload_id=upload_id,
+                        backend="local",
+                        storage_key=storage_key,
+                        file_extension=extension,
+                        local_path=file_path,
+                        correlation_id=correlation_id,
+                    )
+                    db.close()
+                    db = None
+                    file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                    file_flags |= getattr(os, "O_NOFOLLOW", 0)
+                    descriptor = os.open(
+                        safe_name, file_flags, 0o600, dir_fd=directory_fd
+                    )
+                    try:
+                        os.fchmod(descriptor, 0o600)
+                        with os.fdopen(descriptor, "wb") as handle:
+                            descriptor = -1
+                            handle.write(body)
+                    finally:
+                        if descriptor >= 0:
+                            os.close(descriptor)
+                finally:
+                    os.close(directory_fd)
+                db = get_db()
+                _mark_monitoring_renewal_artifact_stored(
+                    db,
+                    artifact,
+                    actor=user,
+                )
+
+            storage_key = s3_key or artifact["storage_key"]
+            result = _monitoring_document_renewal.record_renewal_upload(
+                db,
+                request_id,
+                actor=user,
+                expected_revision=int(request.get("revision")),
+                artifact_reservation_id=cleanup_id,
+                upload_id=upload_id,
+                original_filename=filename,
+                storage_key=storage_key,
+                file_size=len(body),
+                mime_type=content_type,
+                file_sha256=digest,
+                correlation_id=correlation_id,
+            )
+            renewal_record_committed = True
+            self.success(
+                {
+                    "status": "upload_received",
+                    "request": _monitoring_renewal_public_projection(
+                        result,
+                        portal=True,
+                    ),
+                },
+                201,
+            )
+        except _monitoring_document_renewal.RenewalError as exc:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            if not renewal_record_committed:
+                if artifact:
+                    _mark_monitoring_renewal_artifact_cleanup_pending(
+                        artifact["cleanup_id"],
+                        error_code="upload_record_failed",
+                    )
+                    await asyncio.get_running_loop().run_in_executor(
+                        _DOCUMENT_RENEWAL_CLEANUP_EXECUTOR,
+                        lambda: _process_monitoring_renewal_upload_artifact(
+                            artifact["cleanup_id"]
+                        ),
+                    )
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            if not renewal_record_committed:
+                if artifact:
+                    _mark_monitoring_renewal_artifact_cleanup_pending(
+                        artifact["cleanup_id"],
+                        error_code="upload_record_failed",
+                    )
+                    await asyncio.get_running_loop().run_in_executor(
+                        _DOCUMENT_RENEWAL_CLEANUP_EXECUTOR,
+                        lambda: _process_monitoring_renewal_upload_artifact(
+                            artifact["cleanup_id"]
+                        ),
+                    )
+            logger.exception(
+                "portal_document_renewal_upload_failed app_id=%s "
+                "renewal_request_id=%s request_id=%s",
+                app_id,
+                request_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal upload could not be recorded.", 500)
+        finally:
+            if db is not None:
+                db.close()
+
+
 class PortalApplicationEnhancedRequirementsHandler(BaseHandler):
     """GET /api/portal/applications/:id/enhanced-requirements.
 
@@ -44707,6 +46194,18 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
             ).fetchone()
             raw_req = serialize_application_requirement(requirement_row)
             is_monitoring_refresh = _is_monitoring_document_refresh_requirement(raw_req)
+            if (
+                is_monitoring_refresh
+                and raw_req.get("monitoring_alert_id") not in (None, "")
+                and _monitoring_legacy_document_write_blocked(
+                    db, raw_req.get("monitoring_alert_id")
+                )
+            ):
+                return self.error(
+                    "Legacy Monitoring replacement uploads are disabled while "
+                    "a canonical renewal request owns this alert.",
+                    409,
+                )
             policy_info = enhanced_requirement_document_policy((raw_req or {}).get("requirement_key"))
             mapped_doc_type = policy_info.get("document_type") or "supporting_document"
             if is_monitoring_refresh:
@@ -45431,7 +46930,11 @@ def make_app():
         (r"/api/monitoring/alerts/([^/]+)/escalate-overdue", MonitoringAlertOverdueEscalationHandler),
         (r"/api/monitoring/alerts/([^/]+)/followups/([0-9]+)/resolve", MonitoringAlertFollowupResolveHandler),
         (r"/api/monitoring/alerts/([^/]+)/followups", MonitoringAlertFollowupHandler),
+        (r"/api/monitoring/alerts/([0-9]+)/renewal-request", MonitoringAlertRenewalRequestHandler),
         (r"/api/monitoring/alerts/([0-9]+)/linkage", MonitoringAlertLinkageHandler),
+        (r"/api/monitoring/renewal-requests/([A-Za-z0-9_-]+)/resend", MonitoringRenewalRequestResendHandler),
+        (r"/api/monitoring/renewal-requests/([A-Za-z0-9_-]+)/due-date", MonitoringRenewalRequestDueDateHandler),
+        (r"/api/monitoring/renewal-requests/([A-Za-z0-9_-]+)/cancel", MonitoringRenewalRequestCancelHandler),
         (r"/api/monitoring/alerts/([^/]+)", MonitoringAlertDetailHandler),
         (r"/api/monitoring/alerts", MonitoringAlertCreateHandler),
         # Agents
@@ -45521,6 +47024,10 @@ def make_app():
         (r"/api/applications/([^/]+)/profile-versions/([^/]+)", ApplicationProfileVersionDetailHandler),
         (r"/api/applications/([^/]+)/profile-versions", EntityProfileVersionsHandler),
         (r"/api/profile-versions/([^/]+)", EntityProfileVersionDetailHandler),
+        (r"/api/portal/applications/([^/]+)/renewal-requests/([A-Za-z0-9_-]+)/upload",
+         PortalDocumentRenewalUploadHandler),
+        (r"/api/portal/applications/([^/]+)/renewal-requests",
+         PortalDocumentRenewalRequestsHandler),
         (r"/api/portal/applications/([^/]+)/enhanced-requirements/([^/]+)/upload",
          PortalApplicationEnhancedRequirementUploadHandler),
         (r"/api/portal/applications/([^/]+)/enhanced-requirements/([^/]+)/response",
@@ -45595,6 +47102,23 @@ def _singleton_tick(name):
     """
     def decorate(fn):
         import functools
+
+        if asyncio.iscoroutinefunction(fn):
+            @functools.wraps(fn)
+            async def async_wrapper(*args, **kwargs):
+                from db import acquire_scheduler_lock
+                lease = acquire_scheduler_lock(name)
+                if not lease.acquired:
+                    logger.debug(
+                        "%s: another task holds the scheduler lock — skipping this tick",
+                        name,
+                    )
+                    return None
+                try:
+                    return await fn(*args, **kwargs)
+                finally:
+                    lease.release()
+            return async_wrapper
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
@@ -46004,6 +47528,238 @@ if __name__ == "__main__":
             logger.info("document-health-scheduler: disabled (explicit opt-in required)")
     except Exception:
         logger.exception("document-health-scheduler: startup registration failed")
+        if ENVIRONMENT in ("production", "staging"):
+            raise
+
+    # Candidate-artifact reconciliation is a safety control, not a workflow
+    # consumer. It remains active after the governed feature is turned OFF so
+    # a prior process death cannot strand an unattached regulated upload.
+    try:
+        if ENVIRONMENT != "testing":
+            try:
+                _renewal_cleanup_interval_seconds = int(
+                    os.environ.get(
+                        "DOCUMENT_RENEWAL_UPLOAD_CLEANUP_SECONDS",
+                        "900",
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "DOCUMENT_RENEWAL_UPLOAD_CLEANUP_SECONDS must be an integer"
+                ) from exc
+            _renewal_cleanup_interval_seconds = max(
+                300,
+                _renewal_cleanup_interval_seconds,
+            )
+
+            def _document_renewal_upload_cleanup_worker():
+                return process_monitoring_renewal_upload_cleanup(limit=25)
+
+            @_singleton_tick("document_renewal_upload_cleanup")
+            async def _document_renewal_upload_cleanup_tick():
+                try:
+                    cleanup_summary = await asyncio.get_running_loop().run_in_executor(
+                        _DOCUMENT_RENEWAL_CLEANUP_EXECUTOR,
+                        _document_renewal_upload_cleanup_worker,
+                    )
+                    logger.info(
+                        "document-renewal-upload-cleanup: run complete "
+                        "scanned=%s cleaned=%s attached=%s deferred=%s",
+                        cleanup_summary.get("scanned", 0),
+                        cleanup_summary.get("cleaned", 0),
+                        cleanup_summary.get("attached", 0),
+                        cleanup_summary.get("deferred", 0),
+                    )
+                except Exception:
+                    logger.exception(
+                        "document-renewal-upload-cleanup: scheduled run failed"
+                    )
+
+            _document_renewal_cleanup_cb = tornado.ioloop.PeriodicCallback(
+                _document_renewal_upload_cleanup_tick,
+                _renewal_cleanup_interval_seconds * 1000,
+            )
+            tornado.ioloop.IOLoop.current().call_later(
+                180,
+                lambda: tornado.ioloop.IOLoop.current().spawn_callback(
+                    _document_renewal_upload_cleanup_tick
+                ),
+            )
+            _document_renewal_cleanup_cb.start()
+            logger.info(
+                "document-renewal-upload-cleanup: registered (interval=%ss)",
+                _renewal_cleanup_interval_seconds,
+            )
+    except Exception:
+        logger.exception(
+            "document-renewal-upload-cleanup: startup registration failed"
+        )
+        if ENVIRONMENT in ("production", "staging"):
+            raise
+
+    # PR-MON-DOC-RENEWAL-REQUEST-1 request eligibility + reminder generation.
+    # Registration and execution share the canonical feature gate. The tick
+    # creates only exact, linked request orchestration records and idempotent
+    # reminder intents; it sends no email, invokes no agent, and never mutates
+    # documents or Monitoring Alert lifecycle state.
+    try:
+        if _monitoring_document_renewal.renewal_feature_enabled():
+            try:
+                _renewal_reminder_interval_seconds = int(
+                    os.environ.get(
+                        "DOCUMENT_RENEWAL_REMINDER_SWEEP_SECONDS",
+                        "3600",
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "DOCUMENT_RENEWAL_REMINDER_SWEEP_SECONDS must be an integer"
+                ) from exc
+            _renewal_reminder_interval_seconds = max(
+                300,
+                _renewal_reminder_interval_seconds,
+            )
+            _renewal_reminder_days_raw = os.environ.get(
+                "DOCUMENT_RENEWAL_REMINDER_INTERVAL_DAYS",
+                "14,7,3,1",
+            )
+            try:
+                _renewal_reminder_days = tuple(
+                    sorted(
+                        {
+                            int(value.strip())
+                            for value in _renewal_reminder_days_raw.split(",")
+                            if value.strip()
+                        },
+                        reverse=True,
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "DOCUMENT_RENEWAL_REMINDER_INTERVAL_DAYS must contain "
+                    "comma-separated integers"
+                ) from exc
+            if not _renewal_reminder_days or any(
+                value < 1 or value > 365 for value in _renewal_reminder_days
+            ):
+                raise RuntimeError(
+                    "DOCUMENT_RENEWAL_REMINDER_INTERVAL_DAYS must contain "
+                    "values from 1 to 365"
+                )
+            try:
+                _renewal_reminder_initial_delay = int(
+                    os.environ.get(
+                        "DOCUMENT_RENEWAL_REMINDER_INITIAL_DELAY_SECONDS",
+                        "120",
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "DOCUMENT_RENEWAL_REMINDER_INITIAL_DELAY_SECONDS must be "
+                    "an integer"
+                ) from exc
+            _renewal_reminder_initial_delay = max(
+                0,
+                _renewal_reminder_initial_delay,
+            )
+
+            def _document_renewal_workflow_worker():
+                db = None
+                try:
+                    db = get_db()
+                    eligibility_summary = (
+                        _monitoring_document_renewal.generate_eligible_renewal_requests(
+                            db,
+                            actor={
+                                "sub": "system:document-renewal-eligibility",
+                                "name": "Document Renewal Eligibility Scheduler",
+                                "role": "system",
+                                "type": "system",
+                            },
+                            limit=100,
+                        )
+                    )
+                    reminder_summary = (
+                        _monitoring_document_renewal.generate_due_reminders(
+                            db,
+                            actor={
+                                "sub": "system:document-renewal-reminders",
+                                "name": "Document Renewal Reminder Scheduler",
+                                "role": "system",
+                                "type": "system",
+                            },
+                            intervals=_renewal_reminder_days,
+                            limit=100,
+                        )
+                    )
+                    return eligibility_summary, reminder_summary
+                except Exception:
+                    if db is not None:
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+                    raise
+                finally:
+                    if db is not None:
+                        try:
+                            db.close()
+                        except Exception:
+                            pass
+
+            @_singleton_tick("document_renewal_reminders")
+            async def _document_renewal_reminder_tick():
+                try:
+                    eligibility_summary, reminder_summary = (
+                        await asyncio.get_running_loop().run_in_executor(
+                            _DOCUMENT_RENEWAL_SCHEDULER_EXECUTOR,
+                            _document_renewal_workflow_worker,
+                        )
+                    )
+                    logger.info(
+                        "document-renewal: run complete eligibility_scanned=%s "
+                        "requests_created=%s eligibility_blocked=%s "
+                        "reminders_scanned=%s reminders_generated=%s "
+                        "reminders_blocked=%s reminders_unchanged=%s",
+                        eligibility_summary.get("scanned", 0),
+                        eligibility_summary.get("created", 0),
+                        eligibility_summary.get("blocked", 0),
+                        reminder_summary.get("scanned", 0),
+                        reminder_summary.get("generated", 0),
+                        reminder_summary.get("blocked", 0),
+                        reminder_summary.get("unchanged", 0),
+                    )
+                except Exception:
+                    logger.exception(
+                        "document-renewal-reminders: scheduled run failed"
+                    )
+
+            _document_renewal_reminder_cb = tornado.ioloop.PeriodicCallback(
+                _document_renewal_reminder_tick,
+                _renewal_reminder_interval_seconds * 1000,
+            )
+            tornado.ioloop.IOLoop.current().call_later(
+                _renewal_reminder_initial_delay,
+                lambda: tornado.ioloop.IOLoop.current().spawn_callback(
+                    _document_renewal_reminder_tick
+                ),
+            )
+            _document_renewal_reminder_cb.start()
+            logger.info(
+                "document-renewal-reminders: registered "
+                "(interval=%ss initial_delay=%ss offsets=%s)",
+                _renewal_reminder_interval_seconds,
+                _renewal_reminder_initial_delay,
+                _renewal_reminder_days,
+            )
+        else:
+            logger.info(
+                "document-renewal-reminders: disabled by governed feature flag"
+            )
+    except Exception:
+        logger.exception(
+            "document-renewal-reminders: startup registration failed"
+        )
         if ENVIRONMENT in ("production", "staging"):
             raise
 

@@ -26389,6 +26389,15 @@ function monitoringDocumentRefreshStatusLabel(status) {
 }
 
 function monitoringDocumentRefreshNextAction(alert, ctx) {
+  var renewal = monitoringDocumentRenewalRequest(alert);
+  if (monitoringDocumentRenewalFeatureEnabled(alert) || renewal) {
+    var renewalStatus = monitoringCanonicalToken((renewal && renewal.request_status) || '');
+    if (renewal && !monitoringDocumentRenewalFeatureEnabled(alert)) return 'The governed workflow is OFF. This existing request remains visible and read-only until an approved rollback or activation decision.';
+    if (!renewal || renewalStatus === 'cancelled') return 'Create one authoritative renewal request when the alert is eligible.';
+    if (renewalStatus === 'upload_received') return 'A client upload is available for KYC & Documents; Monitoring does not verify or replace the canonical document.';
+    if (renewalStatus === 'created') return 'Send or resend the renewal request, then monitor the client response.';
+    return 'Await the client upload. Monitoring does not verify the submitted file or close this alert.';
+  }
   ctx = ctx || monitoringDocumentRefreshContext(alert);
   var status = monitoringCanonicalToken((ctx.request && ctx.request.status) || ctx.request_status || alert.statusKey || '');
   if (alert && (alert.statusKey === 'resolved' || alert.statusKey === 'waived')) return 'No further action required.';
@@ -26430,8 +26439,21 @@ function renderMonitoringDocumentExpiryCard(alert, statusBadge, severityBadge) {
   var req = ctx.request || {};
   var linkedDoc = req.linked_document || {};
   var expiryDate = doc.expiry_date || ref.expiry_date || ref.expires_at || ref.document_expiry || raw.expiry_date || '';
-  var uploaded = !!(linkedDoc && (linkedDoc.id || linkedDoc.doc_name));
-  var uploadSource = monitoringDocumentUploadSourceLabel(linkedDoc.upload_source || (uploaded && alert.statusKey === 'client_uploaded' ? 'client_portal' : ''));
+  var renewalRequest = monitoringDocumentRenewalRequest(alert);
+  var renewalOwnsAlert = monitoringDocumentRenewalOwnsAlert(alert);
+  var renewalStatus = monitoringCanonicalToken((renewalRequest && renewalRequest.request_status) || '');
+  var uploaded = renewalOwnsAlert
+    ? renewalStatus === 'upload_received'
+    : !!(linkedDoc && (linkedDoc.id || linkedDoc.doc_name));
+  var uploadSource = renewalOwnsAlert
+    ? (uploaded ? 'Client portal — staged renewal upload' : 'Not uploaded')
+    : monitoringDocumentUploadSourceLabel(linkedDoc.upload_source || (uploaded && alert.statusKey === 'client_uploaded' ? 'client_portal' : ''));
+  var displayedRequestStatus = renewalOwnsAlert
+    ? monitoringDocumentRenewalStatusLabel(renewalStatus || 'not_requested')
+    : monitoringDocumentRefreshStatusLabel(req.status || ctx.request_status || alert.statusKey);
+  var displayedDueDate = renewalOwnsAlert
+    ? ((renewalRequest && renewalRequest.due_date) || '')
+    : (ctx.due_date || req.due_date || '');
   return monitoringDetailCard('Document Expiry Alert',
     monitoringInfoGrid([
       ['Client', monitoringTextValue(alert.client || raw.application_company_name || raw.client_name, 'Not available')],
@@ -26442,18 +26464,18 @@ function renderMonitoringDocumentExpiryCard(alert, statusBadge, severityBadge) {
       ['Days overdue / until expiry', monitoringTextValue(monitoringDocumentRefreshDaysLabel(expiryDate), 'Not available')],
       ['Alert status', statusBadge],
       ['Severity', severityBadge],
-      ['Request status', monitoringTextValue(monitoringDocumentRefreshStatusLabel(req.status || ctx.request_status || alert.statusKey), 'Not available')],
-      ['Due date', monitoringTextValue(ctx.due_date || req.due_date || '', 'Not set')],
+      ['Request status', monitoringTextValue(displayedRequestStatus, 'Not available')],
+      ['Due date', monitoringTextValue(displayedDueDate, 'Not set')],
       ['SLA', renderMonitoringSlaDetailValue(alert.sla)],
       ['SLA due date', monitoringTextValue(monitoringSlaDateLabel(alert.sla), 'Not set')],
       ['Alert age', monitoringTextValue(monitoringSlaAgeLabel(alert.sla), 'Not available')],
-      ['Replacement uploaded', uploaded ? 'Yes' : 'No'],
+      [renewalOwnsAlert ? 'Renewal upload received' : 'Replacement uploaded', uploaded ? 'Yes' : 'No'],
       ['Upload source', monitoringTextValue(uploadSource, 'Not uploaded')],
       ['Officer owner', monitoringTextValue(alert.owner, 'Unassigned')],
-      ['Notification status', monitoringTextValue(monitoringDocumentNotificationLabel(ctx), 'Not attempted')],
+      ['Notification status', monitoringTextValue(renewalOwnsAlert ? ((renewalRequest && renewalRequest.sent_at) ? 'Request sent' : 'Not sent') : monitoringDocumentNotificationLabel(ctx), 'Not attempted')],
       ['Next action', monitoringTextValue(monitoringDocumentRefreshNextAction(alert, ctx), 'Not available')]
     ]) +
-    (linkedDoc && linkedDoc.doc_name ? '<div style="font-size:12px;color:var(--text2);margin-top:10px;">Uploaded replacement: <strong>' + escapeHtml(linkedDoc.doc_name) + '</strong>' + (linkedDoc.source_note ? ' · ' + escapeHtml(linkedDoc.source_note) : '') + '</div>' : '') +
+    (!renewalOwnsAlert && linkedDoc && linkedDoc.doc_name ? '<div style="font-size:12px;color:var(--text2);margin-top:10px;">Uploaded replacement: <strong>' + escapeHtml(linkedDoc.doc_name) + '</strong>' + (linkedDoc.source_note ? ' · ' + escapeHtml(linkedDoc.source_note) : '') + '</div>' : '') +
     renderMonitoringDownstreamLinks(alert) +
     renderMonitoringAssignmentSection(alert)
   );
@@ -26605,7 +26627,191 @@ function renderMonitoringReplacementUploadControl(uploaded) {
   '</details>';
 }
 
+var MONITORING_DOCUMENT_RENEWAL_ALERT_TYPES = [
+  'document_expired',
+  'document_expiring_soon',
+  'document_expiry_missing'
+];
+
+function monitoringDocumentRenewalAlertType(alert) {
+  var raw = (alert && alert.raw) || alert || {};
+  // Match the server contract exactly. Aliases, case folding, trimming and
+  // semantic normalization must never surface a control the service rejects.
+  return String(raw.alert_type || '');
+}
+
+function monitoringDocumentRenewalSupportedAlert(alert) {
+  return MONITORING_DOCUMENT_RENEWAL_ALERT_TYPES.indexOf(monitoringDocumentRenewalAlertType(alert)) >= 0;
+}
+
+function monitoringDocumentRenewalFeatureEnabled(alert) {
+  return monitoringDocumentRenewalSupportedAlert(alert) && monitoringDocumentRenewalFlagEnabled(alert);
+}
+
+function monitoringDocumentRenewalFlagEnabled(alert) {
+  var raw = (alert && alert.raw) || alert || {};
+  return raw.renewal_feature_enabled === true;
+}
+
+function monitoringDocumentRenewalRequest(alert) {
+  var raw = (alert && alert.raw) || alert || {};
+  var request = raw.renewal_request;
+  return request && typeof request === 'object' ? request : null;
+}
+
+function monitoringDocumentRenewalOwnsAlert(alert) {
+  var request = monitoringDocumentRenewalRequest(alert);
+  var status = String((request && request.request_status) || '');
+  return !!request && status !== 'cancelled';
+}
+
+function monitoringDocumentLegacyRequestActive(alert) {
+  var ctx = monitoringDocumentRefreshContext(alert);
+  var request = (ctx && ctx.request) || {};
+  var status = monitoringCanonicalToken(request.status || ctx.request_status || '');
+  return !!(ctx && ctx.has_active_request) || ['requested', 'uploaded', 'under_review', 'rejected'].indexOf(status) >= 0;
+}
+
+function monitoringDocumentRenewalBlocksLegacy(alert) {
+  if (monitoringDocumentRenewalOwnsAlert(alert)) return true;
+  if (!monitoringDocumentRenewalFlagEnabled(alert)) return false;
+  return !monitoringDocumentLegacyRequestActive(alert);
+}
+
+function monitoringDocumentRenewalStatusLabel(status) {
+  var key = monitoringCanonicalToken(status || '');
+  var labels = {
+    not_requested: 'Not Requested',
+    created: 'Renewal Requested',
+    awaiting_upload: 'Awaiting Upload',
+    upload_received: 'Upload Received',
+    cancelled: 'Cancelled'
+  };
+  return labels[key] || normalizeAlertStatusLabel(key || 'not_requested');
+}
+
+function monitoringDocumentRenewalDefaultReason(alert) {
+  var type = monitoringDocumentRenewalAlertType(alert);
+  if (type === 'document_expired') return 'expired';
+  if (type === 'document_expiring_soon') return 'expiring_soon';
+  return 'manual';
+}
+
+function monitoringDocumentRenewalRevision(request) {
+  var raw = request && (request.revision != null ? request.revision : request.request_revision);
+  var parsed = Number(raw);
+  return isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function monitoringDocumentRenewalMilestones(request) {
+  var status = monitoringCanonicalToken((request && request.request_status) || '');
+  var reached = status === 'created' ? 1 : status === 'awaiting_upload' ? 3 : status === 'upload_received' ? 4 : 0;
+  if (status === 'cancelled') reached = request && request.sent_at ? 3 : 1;
+  var labels = ['Renewal Requested', 'Request Sent', 'Awaiting Upload', 'Upload Received'];
+  var milestones = labels.map(function(label, index) {
+    var complete = index + 1 <= reached;
+    var current = index + 1 === reached;
+    var colour = complete ? 'var(--green)' : 'var(--text3)';
+    var background = current ? 'rgba(22,163,74,0.08)' : 'var(--surface2)';
+    return '<div data-renewal-milestone="' + escapeHtml(label.toLowerCase().replace(/\s+/g, '_')) + '" style="padding:9px 10px;border:1px solid var(--border1);border-radius:8px;background:' + background + ';font-size:11px;color:' + colour + ';font-weight:' + (complete ? '800' : '600') + ';">' + (complete ? '&#10003; ' : '') + escapeHtml(label) + '</div>';
+  });
+  if (status === 'cancelled') {
+    milestones.push('<div data-renewal-milestone="cancelled" style="padding:9px 10px;border:1px solid var(--border1);border-radius:8px;background:rgba(220,38,38,0.05);font-size:11px;color:var(--red);font-weight:800;">Cancelled</div>');
+  }
+  return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;">' + milestones.join('') + '</div>';
+}
+
+function renderMonitoringDocumentRenewalCreateControls(alert) {
+  var reason = monitoringDocumentRenewalDefaultReason(alert);
+  var automaticOption = reason === 'expired'
+    ? '<option value="expired" selected>Expired</option>'
+    : (reason === 'expiring_soon' ? '<option value="expiring_soon" selected>Expiring soon</option>' : '');
+  return '<div data-monitoring-renewal-create-controls="true" style="display:grid;gap:10px;padding-top:12px;border-top:1px solid var(--border1);">' +
+    '<div style="font-size:12px;color:var(--text2);line-height:1.5;">Create one renewal request for the exact linked document. This does not replace or verify the canonical KYC document and does not close the Monitoring Alert.</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;align-items:end;">' +
+      '<div><div class="form-label">Request reason</div><select class="form-select" id="monitoring-renewal-reason">' +
+        automaticOption +
+        '<option value="manual"' + (reason === 'manual' ? ' selected' : '') + '>Manual request</option>' +
+      '</select></div>' +
+      '<div><div class="form-label">Due date <span style="color:var(--red);">*</span></div><input class="form-input" id="monitoring-renewal-due-date" type="date" /></div>' +
+    '</div>' +
+    '<div><div class="form-label">Manual rationale</div><textarea class="form-input" id="monitoring-renewal-manual-reason" rows="2" placeholder="Required only for a manual request."></textarea></div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-primary btn-sm" id="monitoring-renewal-create-btn" onclick="createMonitoringDocumentRenewalRequest()">Create Renewal Request</button><span id="monitoring-renewal-action-result" style="font-size:12px;"></span></div>' +
+  '</div>';
+}
+
+function renderMonitoringDocumentRenewalManageControls(request) {
+  var status = monitoringCanonicalToken((request && request.request_status) || '');
+  if (status !== 'created' && status !== 'awaiting_upload' && status !== 'upload_received') return '';
+  var dueDate = String((request && request.due_date) || '').slice(0, 10);
+  var linkageCurrent = request && request.linkage_current === true;
+  var pendingControls = status === 'upload_received' || !linkageCurrent ? '' :
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-outline btn-sm" id="monitoring-renewal-resend-btn" onclick="resendMonitoringDocumentRenewalRequest()">Resend Portal Request</button><span style="font-size:11px;color:var(--text3);">This republishes the request in the client portal notification channel and records the audit event. It sends no email.</span></div>' +
+    '<div style="display:grid;grid-template-columns:minmax(180px,260px) minmax(240px,1fr) auto;gap:8px;align-items:end;"><div><div class="form-label">Due date</div><input class="form-input" id="monitoring-renewal-update-due-date" type="date" value="' + escapeHtml(dueDate) + '" /></div><div><div class="form-label">Change reason <span style="color:var(--red);">*</span></div><input class="form-input" id="monitoring-renewal-due-date-reason" type="text" placeholder="Reason for changing the due date" /></div><button class="btn btn-outline btn-sm" id="monitoring-renewal-update-due-btn" onclick="updateMonitoringDocumentRenewalDueDate()">Change Due Date</button></div>';
+  return '<div data-monitoring-renewal-manage-controls="true" style="display:grid;gap:10px;padding-top:12px;border-top:1px solid var(--border1);">' +
+    pendingControls +
+    (!linkageCurrent ? '<div data-monitoring-renewal-linkage-stale="true" style="font-size:11px;color:var(--red);">The canonical document linkage changed or is unavailable. Resend and due-date controls are disabled; cancellation remains available as the audited escape hatch.</div>' : '') +
+    (status === 'upload_received' ? '<div style="font-size:11px;color:var(--text3);">Cancelling retains the staged upload and audit evidence, and permits a new request. It does not delete or verify the upload.</div>' : '') +
+    '<div><div class="form-label">Cancellation reason <span style="color:var(--red);">*</span></div><textarea class="form-input" id="monitoring-renewal-cancel-reason" rows="2" placeholder="Explain why this request should be cancelled."></textarea></div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="btn btn-outline btn-sm" id="monitoring-renewal-cancel-btn" onclick="cancelMonitoringDocumentRenewalRequest()">Cancel Request</button><span id="monitoring-renewal-action-result" style="font-size:12px;"></span></div>' +
+  '</div>';
+}
+
+function renderMonitoringDocumentRenewalCard(alert) {
+  var raw = (alert && alert.raw) || alert || {};
+  var request = monitoringDocumentRenewalRequest(alert);
+  if (!monitoringDocumentRenewalSupportedAlert(alert) && !request) {
+    if (!monitoringDocumentRenewalFlagEnabled(alert)) return '';
+    return monitoringDetailCard('Document Renewal Request',
+      '<div data-monitoring-renewal-manual-review="true" style="font-size:12px;color:var(--red);line-height:1.55;"><strong>Manual review required.</strong> This alert type is not an exact canonical renewal type. No canonical or legacy renewal control is available.</div>'
+    );
+  }
+  if (raw.renewal_projection_error) {
+    return monitoringDetailCard('Document Renewal Request',
+      '<div data-monitoring-renewal-unavailable="true" style="font-size:12px;color:var(--red);line-height:1.55;"><strong>Renewal status unavailable.</strong> Refresh before taking any renewal action. No request control is available while the authoritative projection cannot be loaded.</div>'
+    );
+  }
+  var enabled = monitoringDocumentRenewalFeatureEnabled(alert);
+  if (!enabled && !request) return '';
+  var legacyActive = monitoringDocumentLegacyRequestActive(alert);
+  var requestStatus = monitoringCanonicalToken((request && request.request_status) || '');
+  var requestDetails = request
+    ? monitoringInfoGrid([
+        ['Request ID', monitoringTextValue(request.request_id, 'Not available')],
+        ['Document', monitoringTextValue(request.document_type, 'Not available')],
+        ['Subject', monitoringTextValue(request.subject_display_label, 'Application participant')],
+        ['Document ID', monitoringTextValue(request.document_id, 'Not available')],
+        ['Document version', monitoringTextValue(request.document_version, 'Not available')],
+        ['Reason', monitoringTextValue(String(request.request_reason || '').replace(/_/g, ' '), 'Not available')],
+        ['Request status', monitoringTextValue(monitoringDocumentRenewalStatusLabel(requestStatus), 'Not available')],
+        ['Created', monitoringTextValue(request.created_at, 'Not available')],
+        ['Sent', monitoringTextValue(request.sent_at, 'Not sent')],
+        ['Due date', monitoringTextValue(request.due_date, 'Not set')],
+        ['Reminder count', monitoringTextValue(request.reminder_count, '0')],
+        ['Last reminder generated', monitoringTextValue(request.last_reminder_at, 'None generated')]
+      ]) + monitoringDocumentRenewalMilestones(request)
+    : '<div data-monitoring-renewal-empty="true" style="font-size:12px;color:var(--text2);line-height:1.5;">No canonical renewal request exists for this alert.</div>';
+  var controls = enabled
+    ? (legacyActive && !monitoringDocumentRenewalOwnsAlert(alert)
+        ? '<div data-monitoring-renewal-legacy-owner="true" style="font-size:12px;color:var(--text2);line-height:1.55;"><strong>Existing request remains on the protected legacy path.</strong> Complete or cancel that in-flight request there. Canonical creation is blocked to prevent duplicate ownership.</div>'
+        : ((!request || requestStatus === 'cancelled')
+          ? renderMonitoringDocumentRenewalCreateControls(alert)
+          : renderMonitoringDocumentRenewalManageControls(request)))
+    : '<div data-monitoring-renewal-feature="off" style="font-size:12px;color:var(--text2);line-height:1.55;"><strong>Document renewal automation is OFF.</strong> This existing request is read-only; no renewal mutation is available.</div>';
+  return monitoringDetailCard('Document Renewal Request',
+    '<div data-monitoring-renewal-feature="' + (enabled ? 'on' : 'off') + '" style="display:grid;gap:12px;">' +
+      requestDetails +
+      controls +
+      '<div style="font-size:11px;color:var(--text3);line-height:1.45;">Monitoring tracks the request only. KYC &amp; Documents remains the owner of document records and verification. Uploads are staged and never replace a canonical document from this view.</div>' +
+    '</div>'
+  );
+}
+
 function renderMonitoringDocumentDecisionSection(alert) {
+  if (monitoringDocumentRenewalOwnsAlert(alert)) return '';
+  if (monitoringDocumentRenewalBlocksLegacy(alert)) {
+    return monitoringDetailCard('Officer Action', '<div data-monitoring-renewal-manual-review="true" style="font-size:13px;color:var(--text3);">The governed canonical renewal workflow owns new actions for this alert. No legacy document-decision control is available.</div>');
+  }
   if (monitoringAlertIsTerminal(alert)) {
     return monitoringDetailCard('Officer Action', '<div style="font-size:13px;color:var(--text3);">This document refresh alert is already closed. Decisions are read-only from this view.</div>');
   }
@@ -27179,6 +27385,7 @@ function renderMonitoringAlertDetailView() {
     body.innerHTML = fixtureBanner +
       renderMonitoringDocumentExpiryCard(alert, statusBadge, severityBadge) +
       renderMonitoringCanonicalOwnerSection(alert) +
+      renderMonitoringDocumentRenewalCard(alert) +
       renderMonitoringDecisionSection(alert) +
       renderMonitoringOverdueEscalationSummary(alert) +
       renderMonitoringAuditHistory(alert, state.auditHistory || []) +
@@ -27305,6 +27512,134 @@ function openMonitoringAlertsForApplication(applicationId, applicationRef, alert
   renderMonitoringAlerts();
   if (alertId != null && alertId !== '') {
     openMonitoringAlertDetail(alertId);
+  }
+}
+
+function monitoringDocumentRenewalActionContext() {
+  var alert = MONITORING_ALERT_DETAIL && MONITORING_ALERT_DETAIL.normalized;
+  var request = monitoringDocumentRenewalRequest(alert);
+  return { alert: alert, request: request };
+}
+
+function setMonitoringDocumentRenewalResult(message, isError) {
+  var resultEl = document.getElementById('monitoring-renewal-action-result');
+  if (resultEl) resultEl.innerHTML = '<span style="color:' + (isError ? 'var(--red)' : 'var(--green)') + ';">' + escapeHtml(message) + '</span>';
+}
+
+async function createMonitoringDocumentRenewalRequest() {
+  var context = monitoringDocumentRenewalActionContext();
+  var alert = context.alert;
+  if (!alert || !alert.id || !monitoringDocumentRenewalFeatureEnabled(alert)) return;
+  var reasonEl = document.getElementById('monitoring-renewal-reason');
+  var dueEl = document.getElementById('monitoring-renewal-due-date');
+  var manualEl = document.getElementById('monitoring-renewal-manual-reason');
+  var reason = reasonEl ? reasonEl.value : monitoringDocumentRenewalDefaultReason(alert);
+  var dueDate = dueEl ? dueEl.value : '';
+  var manualReason = manualEl ? manualEl.value.trim() : '';
+  if (!dueDate) {
+    setMonitoringDocumentRenewalResult('A due date is required.', true);
+    return;
+  }
+  if (reason === 'manual' && !manualReason) {
+    setMonitoringDocumentRenewalResult('A rationale is required for a manual request.', true);
+    return;
+  }
+  var btn = document.getElementById('monitoring-renewal-create-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating...'; }
+  try {
+    await boApiCall('POST', '/monitoring/alerts/' + encodeURIComponent(alert.id) + '/renewal-request', {
+      reason: reason,
+      due_date: dueDate,
+      manual_reason: manualReason
+    });
+    setMonitoringDocumentRenewalResult('Renewal request created.', false);
+    showToast('Renewal request created');
+    await refreshMonitoringAlertDetail();
+  } catch (err) {
+    setMonitoringDocumentRenewalResult(err.message || 'Request creation failed.', true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Create Renewal Request'; }
+  }
+}
+
+async function resendMonitoringDocumentRenewalRequest() {
+  var context = monitoringDocumentRenewalActionContext();
+  var request = context.request;
+  if (!context.alert || !monitoringDocumentRenewalFeatureEnabled(context.alert) || !request || !request.request_id) return;
+  var btn = document.getElementById('monitoring-renewal-resend-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Recording...'; }
+  try {
+    await boApiCall('POST', '/monitoring/renewal-requests/' + encodeURIComponent(request.request_id) + '/resend', {
+      expected_revision: monitoringDocumentRenewalRevision(request)
+    });
+    setMonitoringDocumentRenewalResult('Renewal request resent to the client portal.', false);
+    showToast('Renewal request resent to portal');
+    await refreshMonitoringAlertDetail();
+  } catch (err) {
+    setMonitoringDocumentRenewalResult(err.message || 'Resend failed.', true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Resend Portal Request'; }
+  }
+}
+
+async function updateMonitoringDocumentRenewalDueDate() {
+  var context = monitoringDocumentRenewalActionContext();
+  var request = context.request;
+  var dueEl = document.getElementById('monitoring-renewal-update-due-date');
+  var reasonEl = document.getElementById('monitoring-renewal-due-date-reason');
+  var dueDate = dueEl ? dueEl.value : '';
+  var reason = reasonEl ? reasonEl.value.trim() : '';
+  if (!context.alert || !monitoringDocumentRenewalFeatureEnabled(context.alert) || !request || !request.request_id) return;
+  if (!dueDate) {
+    setMonitoringDocumentRenewalResult('A due date is required.', true);
+    return;
+  }
+  if (!reason) {
+    setMonitoringDocumentRenewalResult('A reason is required for a due-date change.', true);
+    return;
+  }
+  var btn = document.getElementById('monitoring-renewal-update-due-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  try {
+    await boApiCall('PATCH', '/monitoring/renewal-requests/' + encodeURIComponent(request.request_id) + '/due-date', {
+      due_date: dueDate,
+      reason: reason,
+      expected_revision: monitoringDocumentRenewalRevision(request)
+    });
+    setMonitoringDocumentRenewalResult('Due date changed.', false);
+    showToast('Renewal due date changed');
+    await refreshMonitoringAlertDetail();
+  } catch (err) {
+    setMonitoringDocumentRenewalResult(err.message || 'Due-date update failed.', true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Change Due Date'; }
+  }
+}
+
+async function cancelMonitoringDocumentRenewalRequest() {
+  var context = monitoringDocumentRenewalActionContext();
+  var request = context.request;
+  var reasonEl = document.getElementById('monitoring-renewal-cancel-reason');
+  var reason = reasonEl ? reasonEl.value.trim() : '';
+  if (!context.alert || !monitoringDocumentRenewalFeatureEnabled(context.alert) || !request || !request.request_id) return;
+  if (!reason) {
+    setMonitoringDocumentRenewalResult('A cancellation reason is required.', true);
+    return;
+  }
+  var btn = document.getElementById('monitoring-renewal-cancel-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Cancelling...'; }
+  try {
+    await boApiCall('POST', '/monitoring/renewal-requests/' + encodeURIComponent(request.request_id) + '/cancel', {
+      reason: reason,
+      expected_revision: monitoringDocumentRenewalRevision(request)
+    });
+    setMonitoringDocumentRenewalResult('Renewal request cancelled.', false);
+    showToast('Renewal request cancelled');
+    await refreshMonitoringAlertDetail();
+  } catch (err) {
+    setMonitoringDocumentRenewalResult(err.message || 'Cancellation failed.', true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Cancel Request'; }
   }
 }
 

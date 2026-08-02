@@ -116,6 +116,15 @@ def _remove_modern_backfills(db, keep_count):
         db.execute("DROP INDEX IF EXISTS idx_app_enhanced_req_monitoring_doc")
         for column in ("monitoring_alert_id", "monitoring_document_id", "due_date"):
             _drop_column_if_present(db, "application_enhanced_requirements", column)
+    if "058" not in kept_versions:
+        # Migration 058 is additive.  Drop dependants first so a rewound
+        # staging/half-chain fixture really exercises the file migration
+        # instead of succeeding only because init_db already created it.
+        db.execute("DROP TABLE IF EXISTS monitoring_document_renewal_upload_cleanup")
+        db.execute("DROP TABLE IF EXISTS monitoring_document_renewal_uploads")
+        db.execute("DROP TABLE IF EXISTS monitoring_document_renewal_events")
+        db.execute("DROP TABLE IF EXISTS monitoring_document_renewal_requests")
+        db.execute("DROP TABLE IF EXISTS monitoring_document_renewal_scheduler_state")
     db.commit()
 
 

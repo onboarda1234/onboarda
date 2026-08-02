@@ -27,10 +27,10 @@ CLIENT_SAFE_UPLOAD_LATENCY_FLAGS = (
 
 _UPLOAD_LATENCY_DEFAULTS = {flag: False for flag in UPLOAD_LATENCY_FLAGS}
 
-# PR-MON-FEATURE-FLAGS-1: governance-only switches for future Monitoring work.
-# These definitions provide stable operator labels and runtime evaluation, but
-# no business module consumes them in this PR. Every environment defaults OFF;
-# later implementation PRs must deliberately opt in and add their own guards.
+# PR-MON-FEATURE-FLAGS-1 introduced these governed Monitoring switches.  The
+# document-renewal request service is the first deliberately approved consumer:
+# it gates every request/reminder/upload mutation and still defaults OFF in
+# every environment.  The remaining three switches remain governance-only.
 MONITORING_FEATURE_DEFINITIONS = (
     (
         "ENABLE_DOCUMENT_RENEWAL_AUTOMATION",
@@ -567,12 +567,14 @@ FLAG_LIFECYCLE = {
         "compliance", "Remove gate once the KPI dashboard ships to pilot.",
         "Enterprise module; no server route yet."),
 
-    # ── Temporary: future Monitoring workflows, governance only in this PR ──
+    # ── Temporary: governed Monitoring workflows ──
     "ENABLE_DOCUMENT_RENEWAL_AUTOMATION": _temp(
         "compliance",
         "Remove the gate after Document Renewal automation reaches approved GA.",
-        "Future Document Renewal consumer; no workflow is wired in this PR.",
-        introduced="PR-MON-FEATURE-FLAGS-1",
+        "Document Renewal request workflow; every mutation is fail-closed "
+        "behind this flag and the default remains OFF.",
+        introduced="PR-MON-FEATURE-FLAGS-1; first consumer "
+        "PR-MON-DOC-RENEWAL-REQUEST-1",
     ),
     "ENABLE_AGENT1_REFRESH_VERIFICATION": _temp(
         "compliance",
