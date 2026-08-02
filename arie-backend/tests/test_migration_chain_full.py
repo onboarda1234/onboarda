@@ -116,6 +116,10 @@ def _remove_modern_backfills(db, keep_count):
         db.execute("DROP INDEX IF EXISTS idx_app_enhanced_req_monitoring_doc")
         for column in ("monitoring_alert_id", "monitoring_document_id", "due_date"):
             _drop_column_if_present(db, "application_enhanced_requirements", column)
+    if "059" not in kept_versions:
+        # Migration 059 is a dependent additive evidence table. Drop it before
+        # rewinding 058 so legacy-chain replays exercise the file migration.
+        db.execute("DROP TABLE IF EXISTS monitoring_document_renewal_upload_bindings")
     if "058" not in kept_versions:
         # Migration 058 is additive.  Drop dependants first so a rewound
         # staging/half-chain fixture really exercises the file migration

@@ -1,9 +1,9 @@
 """Schema contracts for the staged Monitoring document-renewal workflow.
 
-The request, event, upload, and cleanup tables are additive regulated-evidence
-stores; the fifth table is an operational fairness cursor. They never backfill
-or mutate ``documents`` / ``monitoring_alerts`` and their parent foreign keys
-are deliberately RESTRICT rather than cascade-delete.
+The request, event, upload, authoritative binding, and cleanup tables are
+additive regulated-evidence stores; the sixth table is an operational fairness
+cursor. They never backfill or mutate ``documents`` / ``monitoring_alerts`` and
+their parent foreign keys are deliberately RESTRICT rather than cascade-delete.
 """
 
 from __future__ import annotations
@@ -28,6 +28,12 @@ MIGRATION_PATH = (
     / "migrations"
     / "scripts"
     / "migration_058_monitoring_document_renewal.sql"
+)
+UPLOAD_BINDING_MIGRATION_PATH = (
+    BACKEND_ROOT
+    / "migrations"
+    / "scripts"
+    / "migration_059_monitoring_document_renewal_upload_binding.sql"
 )
 
 REQUEST_COLUMNS = """
@@ -154,11 +160,79 @@ def _table_types(db, table):
     }
 
 
+def _insert_upload(db, *, upload_id="upload-1", request_id="renewal-request-1"):
+    db.execute(
+        """INSERT INTO monitoring_document_renewal_uploads
+               (upload_id, request_id, application_id, customer_id,
+                original_filename, storage_key, file_size, mime_type,
+                file_sha256, uploaded_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            upload_id,
+            request_id,
+            "renewal-app",
+            "renewal-client",
+            "replacement.pdf",
+            f"monitoring-renewals/{request_id}/{upload_id}.pdf",
+            1234,
+            "application/pdf",
+            "b" * 64,
+            "renewal-client",
+        ),
+    )
+
+
+def _insert_binding(
+    db,
+    *,
+    upload_id="upload-1",
+    request_id="renewal-request-1",
+    uploaded_document_id=None,
+    application_id="renewal-app",
+    customer_id="renewal-client",
+    person_id="director-1",
+    person_type="director",
+    original_document_id="renewal-doc-a",
+    original_document_version=1,
+    document_type="passport",
+    binding_status="bound",
+    contract_version="monitoring_document_renewal_upload_binding_v1",
+    binding_fingerprint=None,
+):
+    db.execute(
+        """INSERT INTO monitoring_document_renewal_upload_bindings
+               (upload_id, renewal_request_id, application_id, customer_id,
+                person_id, person_type, original_document_id,
+                original_document_version, uploaded_document_id, document_type,
+                upload_timestamp, uploaded_by, binding_status,
+                contract_version, binding_fingerprint)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            upload_id,
+            request_id,
+            application_id,
+            customer_id,
+            person_id,
+            person_type,
+            original_document_id,
+            original_document_version,
+            uploaded_document_id or f"renewal-candidate:{upload_id}",
+            document_type,
+            "2030-01-01T00:00:00Z",
+            "renewal-client",
+            binding_status,
+            contract_version,
+            binding_fingerprint or ("c" * 64),
+        ),
+    )
+
+
 def test_fresh_sqlite_schema_has_exact_tables_types_and_empty_inventory(renewal_db):
     expected = {
         "monitoring_document_renewal_requests",
         "monitoring_document_renewal_events",
         "monitoring_document_renewal_uploads",
+        "monitoring_document_renewal_upload_bindings",
         "monitoring_document_renewal_upload_cleanup",
         "monitoring_document_renewal_scheduler_state",
     }
@@ -172,6 +246,7 @@ def test_fresh_sqlite_schema_has_exact_tables_types_and_empty_inventory(renewal_
     assert _table_types(renewal_db, "monitoring_document_renewal_requests")["created_at"] == "TEXT"
     assert _table_types(renewal_db, "monitoring_document_renewal_events")["payload"] == "TEXT"
     assert _table_types(renewal_db, "monitoring_document_renewal_uploads")["uploaded_at"] == "TEXT"
+    assert _table_types(renewal_db, "monitoring_document_renewal_upload_bindings")["upload_timestamp"] == "TEXT"
     assert _table_types(renewal_db, "monitoring_document_renewal_upload_cleanup")["lease_expires_at"] == "TEXT"
     assert _table_types(renewal_db, "monitoring_document_renewal_scheduler_state")["updated_at"] == "TEXT"
     for table in expected:
@@ -320,25 +395,7 @@ def test_events_are_idempotent_typed_and_request_restricted(renewal_db):
 
 def test_uploads_are_staged_evidence_with_no_document_fk_or_verification_fields(renewal_db):
     _insert_request(renewal_db)
-    renewal_db.execute(
-        """INSERT INTO monitoring_document_renewal_uploads
-               (upload_id, request_id, application_id, customer_id,
-                original_filename, storage_key, file_size, mime_type,
-                file_sha256, uploaded_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            "upload-1",
-            "renewal-request-1",
-            "renewal-app",
-            "renewal-client",
-            "replacement.pdf",
-            "monitoring-renewals/renewal-request-1/upload-1.pdf",
-            1234,
-            "application/pdf",
-            "b" * 64,
-            "renewal-client",
-        ),
-    )
+    _insert_upload(renewal_db)
     columns = _table_types(renewal_db, "monitoring_document_renewal_uploads")
     assert "document_id" not in columns
     assert "verification_status" not in columns
@@ -361,6 +418,130 @@ def test_uploads_are_staged_evidence_with_no_document_fk_or_verification_fields(
                 "c" * 64,
                 "renewal-client",
             ),
+        )
+
+
+def test_upload_binding_is_exact_immutable_identity_not_a_canonical_document(renewal_db):
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+    _insert_binding(renewal_db)
+
+    columns = set(_table_types(renewal_db, "monitoring_document_renewal_upload_bindings"))
+    assert columns == {
+        "upload_id",
+        "renewal_request_id",
+        "application_id",
+        "customer_id",
+        "person_id",
+        "person_type",
+        "original_document_id",
+        "original_document_version",
+        "uploaded_document_id",
+        "document_type",
+        "upload_timestamp",
+        "uploaded_by",
+        "binding_status",
+        "contract_version",
+        "binding_fingerprint",
+    }
+    assert "verification_status" not in columns
+    assert "review_status" not in columns
+    assert "canonical_replacement_id" not in columns
+
+    foreign_keys = renewal_db.execute(
+        "PRAGMA foreign_key_list(monitoring_document_renewal_upload_bindings)"
+    ).fetchall()
+    assert {
+        (row["from"], row["table"], row["to"])
+        for row in foreign_keys
+    } == {
+        ("upload_id", "monitoring_document_renewal_uploads", "upload_id"),
+        (
+            "renewal_request_id",
+            "monitoring_document_renewal_requests",
+            "request_id",
+        ),
+        ("application_id", "applications", "id"),
+        ("customer_id", "clients", "id"),
+        ("original_document_id", "documents", "id"),
+    }
+    assert {row["on_delete"].upper() for row in foreign_keys} == {"RESTRICT"}
+    assert all(row["from"] != "uploaded_document_id" for row in foreign_keys)
+
+    indexes = renewal_db.execute(
+        "PRAGMA index_list(monitoring_document_renewal_upload_bindings)"
+    ).fetchall()
+    unique_column_sets = {
+        tuple(
+            row["name"]
+            for row in renewal_db.execute(
+                f"PRAGMA index_info({index['name']})"
+            ).fetchall()
+        )
+        for index in indexes
+        if index["unique"]
+    }
+    assert ("renewal_request_id",) in unique_column_sets
+    assert ("uploaded_document_id",) in unique_column_sets
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"binding_status": "verified"},
+        {"contract_version": "monitoring_document_renewal_upload_binding_v0"},
+        {"binding_fingerprint": "C" * 64},
+        {"binding_fingerprint": "z" * 64},
+        {"original_document_version": 0},
+        {"person_type": None},
+        {"uploaded_document_id": "document:guessed"},
+    ],
+)
+def test_upload_binding_constraints_fail_closed(renewal_db, override):
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_binding(renewal_db, **override)
+
+
+def test_upload_binding_uniqueness_and_parent_restriction(renewal_db):
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+    _insert_binding(renewal_db)
+
+    _insert_request(
+        renewal_db,
+        request_id="renewal-request-2",
+        document_id="renewal-doc-b",
+        document_type="proof_of_address",
+        alert_id=58002,
+    )
+    _insert_upload(
+        renewal_db,
+        upload_id="upload-2",
+        request_id="renewal-request-2",
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_binding(
+            renewal_db,
+            upload_id="upload-2",
+            request_id="renewal-request-1",
+            uploaded_document_id="renewal-candidate:upload-2",
+            original_document_id="renewal-doc-b",
+            document_type="proof_of_address",
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        # Use the raw disposable SQLite test connection so the database FK is
+        # exercised beneath the independent regulated-deletion application
+        # guard (which correctly rejects this DELETE even earlier).
+        renewal_db.conn.execute(
+            "DELETE FROM monitoring_document_renewal_uploads WHERE upload_id = ?",
+            ("upload-1",),
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        renewal_db.conn.execute(
+            "DELETE FROM documents WHERE id = ?",
+            ("renewal-doc-a",),
         )
 
 
@@ -460,6 +641,54 @@ def test_migration_is_idempotent_preserves_rows_and_contains_no_backfill(renewal
     }
 
 
+def test_upload_binding_migration_is_additive_idempotent_and_never_guesses_rows(
+    renewal_db,
+):
+    sql = UPLOAD_BINDING_MIGRATION_PATH.read_text(encoding="utf-8")
+    executable_sql = "\n".join(
+        line for line in sql.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert (
+        re.search(
+            r"^\s*(INSERT|UPDATE|DELETE)\b",
+            executable_sql,
+            re.MULTILINE | re.IGNORECASE,
+        )
+        is None
+    )
+
+    renewal_db.execute("DROP TABLE monitoring_document_renewal_upload_bindings")
+    renewal_db.executescript(sql)
+    assert (
+        _table_types(
+            renewal_db, "monitoring_document_renewal_upload_bindings"
+        )["upload_timestamp"]
+        == "TEXT"
+    )
+    assert renewal_db.execute(
+        "SELECT COUNT(*) AS c FROM monitoring_document_renewal_upload_bindings"
+    ).fetchone()["c"] == 0
+
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+    _insert_binding(renewal_db)
+    renewal_db.executescript(sql)
+    renewal_db.executescript(sql)
+    row = renewal_db.execute(
+        """SELECT upload_id, renewal_request_id, original_document_id,
+                         uploaded_document_id, binding_status, contract_version
+              FROM monitoring_document_renewal_upload_bindings"""
+    ).fetchone()
+    assert dict(row) == {
+        "upload_id": "upload-1",
+        "renewal_request_id": "renewal-request-1",
+        "original_document_id": "renewal-doc-a",
+        "uploaded_document_id": "renewal-candidate:upload-1",
+        "binding_status": "bound",
+        "contract_version": "monitoring_document_renewal_upload_binding_v1",
+    }
+
+
 def test_renewal_tables_are_regulated_and_not_unattended_purge_targets():
     from regulated_deletion import EPHEMERAL_TABLES, REGULATED_TABLES
 
@@ -467,6 +696,7 @@ def test_renewal_tables_are_regulated_and_not_unattended_purge_targets():
         "monitoring_document_renewal_requests",
         "monitoring_document_renewal_events",
         "monitoring_document_renewal_uploads",
+        "monitoring_document_renewal_upload_bindings",
         "monitoring_document_renewal_upload_cleanup",
     }
     assert tables <= REGULATED_TABLES
@@ -481,6 +711,7 @@ def test_live_postgres_schema_and_file_migration_types(monkeypatch):
 
     db_module, db = _fresh_pg(monkeypatch)
     try:
+        db.execute("DROP TABLE monitoring_document_renewal_upload_bindings")
         db.execute("DROP TABLE monitoring_document_renewal_upload_cleanup")
         db.execute("DROP TABLE monitoring_document_renewal_uploads")
         db.execute("DROP TABLE monitoring_document_renewal_events")
@@ -488,6 +719,7 @@ def test_live_postgres_schema_and_file_migration_types(monkeypatch):
         db.execute("DROP TABLE monitoring_document_renewal_scheduler_state")
         db.commit()
         db.executescript(MIGRATION_PATH.read_text(encoding="utf-8"))
+        db.executescript(UPLOAD_BINDING_MIGRATION_PATH.read_text(encoding="utf-8"))
         db.commit()
 
         rows = db.execute(
@@ -498,11 +730,12 @@ def test_live_postgres_schema_and_file_migration_types(monkeypatch):
                       'monitoring_document_renewal_requests',
                       'monitoring_document_renewal_events',
                       'monitoring_document_renewal_uploads',
+                      'monitoring_document_renewal_upload_bindings',
                       'monitoring_document_renewal_upload_cleanup',
                       'monitoring_document_renewal_scheduler_state'
                   )
                   AND column_name IN (
-                      'created_at', 'payload', 'uploaded_at', 'stored_at',
+                      'created_at', 'payload', 'uploaded_at', 'upload_timestamp', 'stored_at',
                       'attached_at', 'cleaned_at', 'updated_at',
                       'lease_expires_at', 'next_retry_at'
                   )"""
@@ -514,6 +747,9 @@ def test_live_postgres_schema_and_file_migration_types(monkeypatch):
         assert types[("monitoring_document_renewal_events", "payload")] == "jsonb"
         assert types[("monitoring_document_renewal_requests", "created_at")].startswith("timestamp")
         assert types[("monitoring_document_renewal_uploads", "uploaded_at")].startswith("timestamp")
+        assert types[("monitoring_document_renewal_upload_bindings", "upload_timestamp")].startswith(
+            "timestamp"
+        )
         for column in (
             "created_at",
             "stored_at",
@@ -532,6 +768,7 @@ def test_live_postgres_schema_and_file_migration_types(monkeypatch):
 
         # CREATE TABLE / INDEX IF NOT EXISTS remains a no-op on rerun.
         db.executescript(MIGRATION_PATH.read_text(encoding="utf-8"))
+        db.executescript(UPLOAD_BINDING_MIGRATION_PATH.read_text(encoding="utf-8"))
         db.commit()
     finally:
         db.close()

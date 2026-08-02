@@ -23,6 +23,9 @@ from monitoring_alert_linkage import LinkageError, resolve_alert_linkage
 
 CONTRACT_VERSION = "monitoring_document_renewal_request_v1"
 ORIGINATING_PR = "PR-MON-DOC-RENEWAL-REQUEST-1"
+UPLOAD_BINDING_CONTRACT_VERSION = "monitoring_document_renewal_upload_binding_v1"
+UPLOAD_BINDING_ORIGINATING_PR = "PR-MON-DOC-UPLOAD-BINDING-1"
+UPLOADED_DOCUMENT_ID_PREFIX = "renewal-candidate:"
 FEATURE_FLAG = "ENABLE_DOCUMENT_RENEWAL_AUTOMATION"
 DEFAULT_DUE_DAYS = 14
 EXPIRING_SOON_DAYS = DOCUMENT_EXPIRING_SOON_DAYS
@@ -51,6 +54,7 @@ LEGACY_DOCUMENT_REFRESH_ACTIVE_STATUSES = frozenset(
 )
 MAX_TEXT_LENGTH = 1000
 MAX_IDENTIFIER_LENGTH = 255
+MAX_BINDING_UPLOAD_ID_LENGTH = MAX_IDENTIFIER_LENGTH - len(UPLOADED_DOCUMENT_ID_PREFIX)
 MAX_FILENAME_LENGTH = 255
 MAX_STORAGE_KEY_LENGTH = 1000
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -59,6 +63,7 @@ MAX_LIST_LIMIT = 100
 MAX_LIST_OFFSET = 10_000
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 OFFICER_ROLES = frozenset({"co", "sco", "admin"})
+_EXPECTED_SCOPE_UNSET = object()
 
 
 class RenewalError(RuntimeError):
@@ -266,6 +271,7 @@ def _normalize_persisted_row(row: Mapping[str, Any]) -> Dict[str, Any]:
         "cancelled_at",
         "updated_at",
         "uploaded_at",
+        "upload_timestamp",
         "last_reminder_at",
     ):
         if isinstance(result.get(field), datetime):
@@ -474,6 +480,144 @@ def _event(
     }
 
 
+def _audit_upload_bound(
+    db: Any,
+    request: Mapping[str, Any],
+    binding: Mapping[str, Any],
+    *,
+    actor: Mapping[str, str],
+    correlation_id: Optional[str],
+    audit_writer: Optional[Callable[..., Any]],
+) -> str:
+    """Append the binding audit in the caller's still-open transaction."""
+
+    writer = audit_writer or _canonical_audit_writer()
+    if not callable(writer):
+        raise RenewalError(
+            "audit_unavailable",
+            "Renewal upload-binding audit infrastructure is unavailable.",
+            http_status=503,
+        )
+    detail = {
+        "contract_version": UPLOAD_BINDING_CONTRACT_VERSION,
+        "originating_pr": UPLOAD_BINDING_ORIGINATING_PR,
+        "upload_id": binding["upload_id"],
+        "renewal_request_id": binding["renewal_request_id"],
+        "uploaded_document_id": binding["uploaded_document_id"],
+        "original_document_id": binding["original_document_id"],
+        "binding_status": binding["binding_status"],
+        "binding_fingerprint": binding["binding_fingerprint"],
+    }
+    evidence = writer(
+        db,
+        action="monitoring.document_renewal.upload_bound",
+        user_id=actor["id"],
+        user_name=actor["name"],
+        user_role=actor["role"],
+        target=f"monitoring_renewal_upload_binding:{binding['upload_id']}",
+        detail=_json_dumps(detail),
+        before_state={},
+        after_state=dict(binding),
+        application_id=str(request["application_id"]),
+        request_id=str(correlation_id or "") or None,
+        commit=False,
+    )
+    if not isinstance(evidence, str) or not evidence.strip():
+        raise RenewalError(
+            "audit_unavailable",
+            "Renewal upload-binding audit infrastructure did not return append evidence.",
+            http_status=503,
+        )
+    return evidence
+
+
+_OWNED_UPLOAD_REJECTION_ACTIONS = {
+    "upload_already_received": "monitoring.document_renewal.duplicate_upload",
+    "wrong_document_type": "monitoring.document_renewal.wrong_document_type",
+    "binding_missing": "monitoring.document_renewal.binding_failed",
+    "binding_mismatch": "monitoring.document_renewal.binding_failed",
+    "artifact_reservation_mismatch": "monitoring.document_renewal.binding_failed",
+    "stale_linkage": "monitoring.document_renewal.binding_failed",
+    "stale_eligibility": "monitoring.document_renewal.binding_failed",
+    "alert_not_active": "monitoring.document_renewal.binding_failed",
+    "alert_not_found": "monitoring.document_renewal.binding_failed",
+    "linkage_not_authoritative": "monitoring.document_renewal.binding_failed",
+    "stale_document_alert": "monitoring.document_renewal.binding_failed",
+    "unsupported_alert_type": "monitoring.document_renewal.binding_failed",
+    "protected_state_changed": "monitoring.document_renewal.binding_failed",
+    "binding_failed": "monitoring.document_renewal.binding_failed",
+    "wrong_application": "monitoring.document_renewal.upload_rejected",
+    "wrong_customer": "monitoring.document_renewal.upload_rejected",
+    "wrong_person": "monitoring.document_renewal.upload_rejected",
+    "wrong_document": "monitoring.document_renewal.upload_rejected",
+    "request_cancelled": "monitoring.document_renewal.upload_rejected",
+    "request_expired": "monitoring.document_renewal.upload_rejected",
+    "invalid_request_state": "monitoring.document_renewal.upload_rejected",
+    "stale_request": "monitoring.document_renewal.upload_rejected",
+}
+
+
+def _audit_owned_upload_rejection(
+    db: Any,
+    request: Mapping[str, Any],
+    *,
+    upload_id: str,
+    error: RenewalError,
+    actor: Mapping[str, str],
+    correlation_id: Optional[str],
+    audit_writer: Optional[Callable[..., Any]],
+) -> str:
+    """Durably audit a rejection only after request ownership was proven."""
+
+    # Once exact client ownership has been proved, every controlled failure is
+    # part of the binding audit boundary.  Explicitly classified validation
+    # failures retain their public-safe taxonomy; any future fail-closed
+    # RenewalError defaults to binding_failed rather than silently losing
+    # evidence.
+    action = _OWNED_UPLOAD_REJECTION_ACTIONS.get(
+        error.code,
+        "monitoring.document_renewal.binding_failed",
+    )
+    writer = audit_writer or _canonical_audit_writer()
+    if not callable(writer):
+        raise RenewalError(
+            "audit_unavailable",
+            "Renewal upload-rejection audit infrastructure is unavailable.",
+            http_status=503,
+        )
+    evidence = writer(
+        db,
+        action=action,
+        user_id=actor["id"],
+        user_name=actor["name"],
+        user_role=actor["role"],
+        target=f"monitoring_renewal_request:{request['request_id']}",
+        detail=_json_dumps(
+            {
+                "contract_version": UPLOAD_BINDING_CONTRACT_VERSION,
+                "originating_pr": UPLOAD_BINDING_ORIGINATING_PR,
+                "renewal_request_id": request["request_id"],
+                "upload_id": upload_id,
+                "outcome": "rejected",
+                "reason_code": error.code,
+            }
+        ),
+        before_state={"request_status": request.get("request_status")},
+        after_state={"request_status": request.get("request_status")},
+        application_id=str(request["application_id"]),
+        request_id=str(correlation_id or "") or None,
+        commit=False,
+    )
+    if not isinstance(evidence, str) or not evidence.strip():
+        raise RenewalError(
+            "audit_unavailable",
+            "Renewal upload-rejection audit infrastructure did not return append evidence.",
+            http_status=503,
+        )
+    db.commit()
+    return evidence
+
+
 def _linkage_fingerprint(
     *,
     alert: Mapping[str, Any],
@@ -501,6 +645,47 @@ def _linkage_fingerprint(
     return hashlib.sha256(
         _json_dumps(payload).encode("utf-8")
     ).hexdigest()
+
+
+def _upload_binding_fingerprint(
+    *,
+    upload_id: Any,
+    renewal_request_id: Any,
+    application_id: Any,
+    customer_id: Any,
+    person_id: Any,
+    person_type: Any,
+    original_document_id: Any,
+    original_document_version: Any,
+    uploaded_document_id: Any,
+    document_type: Any,
+    file_sha256: Any,
+    file_size: Any,
+    mime_type: Any,
+    upload_timestamp: Any,
+    uploaded_by: Any,
+) -> str:
+    """Hash the complete immutable upload-binding contract deterministically."""
+
+    payload = {
+        "contract_version": UPLOAD_BINDING_CONTRACT_VERSION,
+        "upload_id": str(upload_id or ""),
+        "renewal_request_id": str(renewal_request_id or ""),
+        "application_id": str(application_id or ""),
+        "customer_id": str(customer_id or ""),
+        "person_id": str(person_id or ""),
+        "person_type": str(person_type or ""),
+        "original_document_id": str(original_document_id or ""),
+        "original_document_version": int(original_document_version),
+        "uploaded_document_id": str(uploaded_document_id or ""),
+        "document_type": str(document_type or ""),
+        "file_sha256": str(file_sha256 or ""),
+        "file_size": int(file_size),
+        "mime_type": str(mime_type or ""),
+        "upload_timestamp": str(upload_timestamp or ""),
+        "uploaded_by": str(uploaded_by or ""),
+    }
+    return hashlib.sha256(_json_dumps(payload).encode("utf-8")).hexdigest()
 
 
 def _lock_document_slot(db: Any, linkage: Mapping[str, Any]) -> None:
@@ -694,6 +879,195 @@ def _validate_request_linkage(
     return linkage
 
 
+def _require_expected_upload_scope(
+    request: Mapping[str, Any],
+    *,
+    expected_application_id: Any = _EXPECTED_SCOPE_UNSET,
+    expected_customer_id: Any = _EXPECTED_SCOPE_UNSET,
+    expected_person_id: Any = _EXPECTED_SCOPE_UNSET,
+    expected_original_document_id: Any = _EXPECTED_SCOPE_UNSET,
+    expected_document_type: Any = _EXPECTED_SCOPE_UNSET,
+) -> None:
+    """Reject a caller's exact scope assertion without normalizing or guessing."""
+
+    comparisons = (
+        (
+            "wrong_application",
+            expected_application_id,
+            request.get("application_id"),
+            "The upload application does not match the renewal request.",
+        ),
+        (
+            "wrong_customer",
+            expected_customer_id,
+            request.get("customer_id"),
+            "The upload customer does not match the renewal request.",
+        ),
+        (
+            "wrong_person",
+            expected_person_id,
+            request.get("person_id") or "",
+            "The upload person or entity does not match the renewal request.",
+        ),
+        (
+            "wrong_document",
+            expected_original_document_id,
+            request.get("document_id"),
+            "The upload document does not match the renewal request.",
+        ),
+        (
+            "wrong_document_type",
+            expected_document_type,
+            request.get("document_type"),
+            "The upload document type does not match the renewal request.",
+        ),
+    )
+    for code, asserted, authoritative, message in comparisons:
+        if asserted is _EXPECTED_SCOPE_UNSET:
+            continue
+        if code == "wrong_person" and asserted is None:
+            asserted = ""
+        if str(asserted) != str(authoritative or ""):
+            raise RenewalError(code, message, http_status=409)
+
+
+def _require_request_accepts_upload(
+    request: Mapping[str, Any],
+    *,
+    today: date,
+) -> None:
+    status = str(request.get("request_status") or "")
+    if status == "cancelled":
+        raise RenewalError(
+            "request_cancelled",
+            "This renewal request was cancelled and cannot accept an upload.",
+        )
+    if status != "awaiting_upload":
+        raise RenewalError(
+            "invalid_request_state", "This renewal request is not awaiting an upload."
+        )
+    due = _timestamp_date(request.get("due_date"), field="due_date")
+    if due < today:
+        raise RenewalError(
+            "request_expired",
+            "This renewal request has expired and cannot accept an upload.",
+        )
+
+
+def _upload_for_request(db: Any, request_id: Any) -> Optional[Dict[str, Any]]:
+    row = _row(
+        db.execute(
+            "SELECT * FROM monitoring_document_renewal_uploads WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+    )
+    return _normalize_persisted_row(row) if row else None
+
+
+def _binding_for_request(db: Any, request_id: Any) -> Optional[Dict[str, Any]]:
+    row = _row(
+        db.execute(
+            """
+            SELECT *
+              FROM monitoring_document_renewal_upload_bindings
+             WHERE renewal_request_id = ?
+            """,
+            (request_id,),
+        ).fetchone()
+    )
+    return _normalize_persisted_row(row) if row else None
+
+
+def _validate_upload_binding(
+    request: Mapping[str, Any],
+    upload: Mapping[str, Any],
+    binding: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Return one exact binding, or fail closed on any persisted inconsistency."""
+
+    expected_uploaded_document_id = (
+        f"{UPLOADED_DOCUMENT_ID_PREFIX}{upload.get('upload_id') or ''}"
+    )
+    comparisons = {
+        "upload_id": (binding.get("upload_id"), upload.get("upload_id")),
+        "renewal_request_id": (
+            binding.get("renewal_request_id"),
+            request.get("request_id"),
+        ),
+        "staged_request_id": (upload.get("request_id"), request.get("request_id")),
+        "application_id": (binding.get("application_id"), request.get("application_id")),
+        "staged_application_id": (
+            upload.get("application_id"),
+            request.get("application_id"),
+        ),
+        "customer_id": (binding.get("customer_id"), request.get("customer_id")),
+        "staged_customer_id": (upload.get("customer_id"), request.get("customer_id")),
+        "person_id": (binding.get("person_id") or "", request.get("person_id") or ""),
+        "person_type": (
+            binding.get("person_type") or "",
+            request.get("person_type") or "",
+        ),
+        "original_document_id": (
+            binding.get("original_document_id"),
+            request.get("document_id"),
+        ),
+        "original_document_version": (
+            str(binding.get("original_document_version")),
+            str(request.get("document_version")),
+        ),
+        "uploaded_document_id": (
+            binding.get("uploaded_document_id"),
+            expected_uploaded_document_id,
+        ),
+        "document_type": (binding.get("document_type"), request.get("document_type")),
+        "upload_timestamp": (
+            str(binding.get("upload_timestamp") or ""),
+            str(upload.get("uploaded_at") or ""),
+        ),
+        "uploaded_by": (binding.get("uploaded_by"), upload.get("uploaded_by")),
+        "binding_status": (binding.get("binding_status"), "bound"),
+        "contract_version": (
+            binding.get("contract_version"),
+            UPLOAD_BINDING_CONTRACT_VERSION,
+        ),
+    }
+    mismatches = [
+        field
+        for field, (persisted, expected) in comparisons.items()
+        if str(persisted or "") != str(expected or "")
+    ]
+    if mismatches:
+        raise RenewalError(
+            "binding_mismatch",
+            "The staged upload binding is inconsistent and requires manual review.",
+            details={"mismatched_fields": mismatches},
+        )
+    expected_fingerprint = _upload_binding_fingerprint(
+        upload_id=upload["upload_id"],
+        renewal_request_id=request["request_id"],
+        application_id=request["application_id"],
+        customer_id=request["customer_id"],
+        person_id=request.get("person_id"),
+        person_type=request.get("person_type"),
+        original_document_id=request["document_id"],
+        original_document_version=request["document_version"],
+        uploaded_document_id=expected_uploaded_document_id,
+        document_type=request["document_type"],
+        file_sha256=upload["file_sha256"],
+        file_size=upload["file_size"],
+        mime_type=upload["mime_type"],
+        upload_timestamp=upload["uploaded_at"],
+        uploaded_by=upload["uploaded_by"],
+    )
+    if str(binding.get("binding_fingerprint") or "") != expected_fingerprint:
+        raise RenewalError(
+            "binding_mismatch",
+            "The staged upload binding fingerprint is invalid and requires manual review.",
+            details={"mismatched_fields": ["binding_fingerprint"]},
+        )
+    return _normalize_persisted_row(binding)
+
+
 def _legacy_conflict(
     db: Any,
     *,
@@ -819,17 +1193,67 @@ def _subject_display_label(db: Any, request: Mapping[str, Any]) -> str:
     return f"{visible} · ref {safe_reference}"
 
 
+def _project_upload_binding_state(
+    db: Any,
+    request: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    upload = _upload_for_request(db, request["request_id"])
+    binding = _binding_for_request(db, request["request_id"])
+    if upload is None and binding is None:
+        if request.get("request_status") == "upload_received":
+            raise RenewalError(
+                "binding_missing",
+                "The received upload has no authoritative binding and requires manual review.",
+            )
+        return None
+    if upload is None or binding is None:
+        raise RenewalError(
+            "binding_missing",
+            "The staged upload has no complete authoritative binding and requires manual review.",
+        )
+    if request.get("request_status") not in {"upload_received", "cancelled"}:
+        raise RenewalError(
+            "binding_mismatch",
+            "The staged upload binding conflicts with the renewal request state.",
+            details={"mismatched_fields": ["request_status"]},
+        )
+    return _validate_upload_binding(request, upload, binding)
+
+
 def _project_for_read(db: Any, row: Mapping[str, Any]) -> Dict[str, Any]:
     """Return a truthful projection after revalidating current owner linkage."""
 
     result = _project(row)
     result["subject_display_label"] = _subject_display_label(db, result)
+    binding_error: Optional[RenewalError] = None
+    try:
+        binding = _project_upload_binding_state(db, result)
+        result["binding_current"] = True if binding else None
+        result["binding_status"] = (
+            binding.get("binding_status") if binding else "not_received"
+        )
+        if binding:
+            result["upload_binding"] = binding
+    except RenewalError as exc:
+        binding_error = exc
+        result.update(
+            {
+                "binding_current": False,
+                "binding_status": "unavailable",
+                "upload_allowed": False,
+                "manual_review_required": True,
+                "binding_error": {
+                    "code": exc.code,
+                    "message": exc.public_message,
+                },
+            }
+        )
     if result.get("request_status") == "cancelled":
         result.update(
             {
                 "linkage_current": None,
                 "upload_allowed": False,
-                "manual_review_required": False,
+                "manual_review_required": binding_error is not None,
             }
         )
         return result
@@ -845,11 +1269,21 @@ def _project_for_read(db: Any, row: Mapping[str, Any]) -> Dict[str, Any]:
                 "alert_not_found", "Monitoring Alert not found.", http_status=404
             )
         _validate_request_linkage(db, result, alert)
+        request_expired = (
+            result.get("request_status") == "awaiting_upload"
+            and _timestamp_date(result.get("due_date"), field="due_date")
+            < _utc_now(None).date()
+        )
         result.update(
             {
                 "linkage_current": True,
-                "upload_allowed": result.get("request_status") == "awaiting_upload",
-                "manual_review_required": False,
+                "upload_allowed": (
+                    binding_error is None
+                    and not request_expired
+                    and result.get("request_status") == "awaiting_upload"
+                ),
+                "manual_review_required": binding_error is not None,
+                "request_expired": request_expired,
             }
         )
     except RenewalError as exc:
@@ -1726,6 +2160,196 @@ def update_renewal_due_date(
         raise
 
 
+def audit_renewal_upload_preflight_rejection(
+    db: Any,
+    request_id: Any,
+    *,
+    rejection_code: Any,
+    actor: Mapping[str, Any],
+    expected_application_id: Any,
+    expected_customer_id: Any,
+    upload_id: Any = None,
+    now: Optional[datetime] = None,
+    correlation_id: Optional[str] = None,
+    feature_flags: Any = None,
+    audit_writer: Optional[Callable[..., Any]] = None,
+) -> Dict[str, Any]:
+    """Audit one proven-owned rejection before artifact storage begins.
+
+    Portal preflight deliberately rejects requests that cannot accept an upload
+    before reading or storing a file.  This narrow service preserves that
+    safety while ensuring the rejection is durable and truthful.  It permits
+    only states the portal can establish without an upload artifact, re-checks
+    ownership under the row lock, and refuses to write an audit record if the
+    persisted state no longer proves the requested reason.
+    """
+
+    _require_feature(feature_flags)
+    actor_info = _actor(actor)
+    normalized_request_id = _required_text(
+        request_id, field="request_id", maximum=MAX_IDENTIFIER_LENGTH
+    )
+    normalized_code = _required_text(
+        rejection_code, field="rejection_code", maximum=80
+    )
+    messages = {
+        "request_cancelled": (
+            "This renewal request was cancelled and cannot accept an upload."
+        ),
+        "request_expired": (
+            "This renewal request has expired and cannot accept an upload."
+        ),
+        "upload_already_received": (
+            "This renewal request already has an uploaded document."
+        ),
+        "wrong_application": (
+            "The upload application does not match the renewal request."
+        ),
+        "binding_missing": (
+            "The staged upload has no authoritative binding and requires manual review."
+        ),
+        "binding_mismatch": (
+            "The staged upload binding is inconsistent and requires manual review."
+        ),
+        "alert_not_active": (
+            "The renewal linkage requires manual review before an upload can be accepted."
+        ),
+        "alert_not_found": (
+            "The renewal linkage requires manual review before an upload can be accepted."
+        ),
+        "linkage_not_authoritative": (
+            "The renewal linkage requires manual review before an upload can be accepted."
+        ),
+        "stale_document_alert": (
+            "The renewal linkage requires manual review before an upload can be accepted."
+        ),
+        "stale_linkage": (
+            "The renewal linkage requires manual review before an upload can be accepted."
+        ),
+        "stale_eligibility": (
+            "The renewal linkage requires manual review before an upload can be accepted."
+        ),
+        "unsupported_alert_type": (
+            "The renewal linkage requires manual review before an upload can be accepted."
+        ),
+        "invalid_request_state": (
+            "This renewal request is not awaiting an upload."
+        ),
+    }
+    if normalized_code not in messages:
+        raise RenewalError(
+            "invalid_input",
+            "rejection_code is not an approved upload preflight rejection.",
+        )
+    normalized_upload_id = str(upload_id or "").strip()
+    if len(normalized_upload_id) > MAX_BINDING_UPLOAD_ID_LENGTH:
+        raise RenewalError(
+            "invalid_input",
+            f"upload_id exceeds the {MAX_BINDING_UPLOAD_ID_LENGTH}-character limit.",
+        )
+    current = _utc_now(now)
+    try:
+        initial = _load_request(db, normalized_request_id)
+        _require_client(actor_info, initial["customer_id"])
+        if normalized_code == "wrong_application":
+            _require_expected_upload_scope(
+                initial,
+                expected_customer_id=expected_customer_id,
+            )
+        else:
+            _require_expected_upload_scope(
+                initial,
+                expected_application_id=expected_application_id,
+                expected_customer_id=expected_customer_id,
+            )
+        _begin_write(db)
+        # Match every renewal mutation path's global lock order. Acquiring the
+        # request first here would deadlock with cancel/resend/upload paths that
+        # already hold the alert while waiting for this request row.
+        alert = _lock_alert(db, initial["monitoring_alert_id"])
+        request = _load_request(db, normalized_request_id, lock=True)
+        if str(request.get("monitoring_alert_id")) != str(alert.get("id")):
+            raise RenewalError(
+                "stale_request",
+                "The renewal request changed before its rejection could be recorded.",
+            )
+        _require_client(actor_info, request["customer_id"])
+        if normalized_code == "wrong_application":
+            _require_expected_upload_scope(
+                request,
+                expected_customer_id=expected_customer_id,
+            )
+        else:
+            _require_expected_upload_scope(
+                request,
+                expected_application_id=expected_application_id,
+                expected_customer_id=expected_customer_id,
+            )
+        status = str(request.get("request_status") or "")
+        proven = False
+        if normalized_code == "request_cancelled":
+            proven = status == "cancelled"
+        elif normalized_code == "request_expired":
+            proven = (
+                status == "awaiting_upload"
+                and _timestamp_date(request.get("due_date"), field="due_date")
+                < current.date()
+            )
+        elif normalized_code == "upload_already_received":
+            if status == "upload_received":
+                # A received state without one valid binding is corruption, not
+                # proof that this is a duplicate upload attempt.
+                _project_upload_binding_state(db, request)
+                proven = True
+        elif normalized_code == "wrong_application":
+            proven = (
+                expected_application_id is not _EXPECTED_SCOPE_UNSET
+                and str(expected_application_id) != str(request["application_id"])
+            )
+        elif normalized_code == "invalid_request_state":
+            proven = status not in {"awaiting_upload", "upload_received", "cancelled"}
+        elif normalized_code in {"binding_missing", "binding_mismatch"}:
+            try:
+                _project_upload_binding_state(db, request)
+            except RenewalError as exc:
+                proven = exc.code == normalized_code
+        else:
+            try:
+                _validate_request_linkage(db, request, alert, lock_slot=True)
+            except RenewalError as exc:
+                proven = exc.code == normalized_code
+        if not proven:
+            raise RenewalError(
+                "stale_request",
+                "The renewal request changed before the upload rejection could be recorded.",
+            )
+        error = RenewalError(normalized_code, messages[normalized_code])
+        evidence = _audit_owned_upload_rejection(
+            db,
+            request,
+            upload_id=normalized_upload_id,
+            error=error,
+            actor=actor_info,
+            correlation_id=correlation_id,
+            audit_writer=audit_writer,
+        )
+        return {
+            "request_id": request["request_id"],
+            "rejection_code": normalized_code,
+            "audit_id": evidence,
+        }
+    except RenewalError:
+        _rollback(db)
+        raise
+    except Exception as exc:
+        _rollback(db)
+        raise RenewalError(
+            "audit_unavailable",
+            "Renewal upload-rejection audit infrastructure is unavailable.",
+            http_status=503,
+        ) from exc
+
+
 def record_renewal_upload(
     db: Any,
     request_id: Any,
@@ -1739,6 +2363,11 @@ def record_renewal_upload(
     file_size: Any,
     mime_type: Any,
     file_sha256: Any,
+    expected_application_id: Any = _EXPECTED_SCOPE_UNSET,
+    expected_customer_id: Any = _EXPECTED_SCOPE_UNSET,
+    expected_person_id: Any = _EXPECTED_SCOPE_UNSET,
+    expected_original_document_id: Any = _EXPECTED_SCOPE_UNSET,
+    expected_document_type: Any = _EXPECTED_SCOPE_UNSET,
     now: Optional[datetime] = None,
     correlation_id: Optional[str] = None,
     feature_flags: Any = None,
@@ -1747,7 +2376,7 @@ def record_renewal_upload(
     _require_feature(feature_flags)
     actor_info = _actor(actor)
     normalized_upload_id = _required_text(
-        upload_id, field="upload_id", maximum=MAX_IDENTIFIER_LENGTH
+        upload_id, field="upload_id", maximum=MAX_BINDING_UPLOAD_ID_LENGTH
     )
     normalized_reservation_id = _required_text(
         artifact_reservation_id,
@@ -1768,33 +2397,75 @@ def record_renewal_upload(
         raise RenewalError("invalid_upload", "file_size must be an integer.") from exc
     if size < 1 or size > MAX_UPLOAD_BYTES:
         raise RenewalError("invalid_upload", "file_size is outside the approved upload limit.")
-    timestamp = _iso_timestamp(_utc_now(now))
+    current = _utc_now(now)
+    timestamp = _iso_timestamp(current)
+    owned_request: Optional[Dict[str, Any]] = None
     try:
         initial = _load_request(db, request_id)
         # Reject cross-customer callers before they can lock an alert, a
         # renewal row, or the shared canonical document slot. Re-check the
         # locked row below as a fail-closed defence against unexpected drift.
         _require_client(actor_info, initial["customer_id"])
+        owned_request = initial
         _begin_write(db)
         alert = _lock_alert(db, initial["monitoring_alert_id"])
         request = _load_request(db, request_id, lock=True)
         _require_client(actor_info, request["customer_id"])
+        owned_request = request
         _validate_request_linkage(db, request, alert, lock_slot=True)
-        existing = _row(
-            db.execute(
-                "SELECT * FROM monitoring_document_renewal_uploads WHERE request_id = ?",
-                (request["request_id"],),
-            ).fetchone()
+        _require_expected_upload_scope(
+            request,
+            expected_application_id=expected_application_id,
+            expected_customer_id=expected_customer_id,
+            expected_person_id=expected_person_id,
+            expected_original_document_id=expected_original_document_id,
+            expected_document_type=expected_document_type,
         )
-        if existing:
-            if (
-                existing.get("upload_id") == normalized_upload_id
-                and existing.get("file_sha256") == digest
-            ):
+        if request.get("request_status") == "cancelled":
+            raise RenewalError(
+                "request_cancelled",
+                "This renewal request was cancelled and cannot accept an upload.",
+            )
+        if request.get("request_status") == "awaiting_upload":
+            _require_request_accepts_upload(request, today=current.date())
+        elif request.get("request_status") != "upload_received":
+            raise RenewalError(
+                "invalid_request_state",
+                "This renewal request is not awaiting an upload.",
+            )
+        existing = _upload_for_request(db, request["request_id"])
+        existing_binding = _binding_for_request(db, request["request_id"])
+        if existing is not None or existing_binding is not None:
+            if existing is None or existing_binding is None:
+                raise RenewalError(
+                    "binding_missing",
+                    "The existing staged upload has no authoritative binding and requires manual review.",
+                )
+            validated_binding = _validate_upload_binding(
+                request, existing, existing_binding
+            )
+            exact_retry = request.get("request_status") == "upload_received" and all(
+                (
+                    existing.get("upload_id") == normalized_upload_id,
+                    existing.get("request_id") == request["request_id"],
+                    existing.get("application_id") == request["application_id"],
+                    existing.get("customer_id") == request["customer_id"],
+                    existing.get("original_filename") == filename,
+                    existing.get("storage_key") == key,
+                    int(existing.get("file_size") or -1) == size,
+                    existing.get("mime_type") == mime,
+                    existing.get("file_sha256") == digest,
+                    existing.get("uploaded_by") == actor_info["id"],
+                    validated_binding.get("uploaded_document_id")
+                    == f"{UPLOADED_DOCUMENT_ID_PREFIX}{normalized_upload_id}",
+                )
+            )
+            if exact_retry:
                 attached = _row(
                     db.execute(
                         """
-                        SELECT cleanup_id, artifact_state, storage_key
+                        SELECT cleanup_id, artifact_state, storage_key,
+                               request_id, application_id, customer_id
                           FROM monitoring_document_renewal_upload_cleanup
                          WHERE cleanup_id = ? AND upload_id = ?
                         """,
@@ -1805,6 +2476,9 @@ def record_renewal_upload(
                     not attached
                     or attached.get("artifact_state") != "attached"
                     or attached.get("storage_key") != key
+                    or attached.get("request_id") != request["request_id"]
+                    or attached.get("application_id") != request["application_id"]
+                    or attached.get("customer_id") != request["customer_id"]
                 ):
                     raise RenewalError(
                         "artifact_reservation_mismatch",
@@ -1812,10 +2486,12 @@ def record_renewal_upload(
                     )
                 result = _project(request)
                 result["idempotent"] = True
-                normalized_existing = _normalize_persisted_row(existing)
+                result["binding_current"] = True
+                result["binding_status"] = "bound"
+                result["upload_binding"] = validated_binding
                 result["uploads"] = [
                     {
-                        field: normalized_existing.get(field)
+                        field: existing.get(field)
                         for field in (
                             "upload_id",
                             "request_id",
@@ -1836,11 +2512,12 @@ def record_renewal_upload(
                 "upload_already_received",
                 "This renewal request already has a staged upload.",
             )
-        _require_revision(request, expected_revision)
-        if request["request_status"] != "awaiting_upload":
+        if request.get("request_status") == "upload_received":
             raise RenewalError(
-                "invalid_request_state", "This renewal request is not awaiting an upload."
+                "binding_missing",
+                "The received upload has no authoritative binding and requires manual review.",
             )
+        _require_revision(request, expected_revision)
         artifact_sql = (
             "SELECT * FROM monitoring_document_renewal_upload_cleanup "
             "WHERE cleanup_id = ?"
@@ -1864,6 +2541,19 @@ def record_renewal_upload(
                 "The staged upload is not backed by an exact stored-artifact reservation.",
             )
         before = dict(request)
+        upload = {
+            "upload_id": normalized_upload_id,
+            "request_id": request["request_id"],
+            "application_id": request["application_id"],
+            "customer_id": request["customer_id"],
+            "original_filename": filename,
+            "storage_key": key,
+            "file_size": size,
+            "mime_type": mime,
+            "file_sha256": digest,
+            "uploaded_at": timestamp,
+            "uploaded_by": actor_info["id"],
+        }
         db.execute(
             """
             INSERT INTO monitoring_document_renewal_uploads
@@ -1873,17 +2563,82 @@ def record_renewal_upload(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                normalized_upload_id,
-                request["request_id"],
-                request["application_id"],
-                request["customer_id"],
-                filename,
-                key,
-                size,
-                mime,
-                digest,
-                timestamp,
-                actor_info["id"],
+                upload["upload_id"],
+                upload["request_id"],
+                upload["application_id"],
+                upload["customer_id"],
+                upload["original_filename"],
+                upload["storage_key"],
+                upload["file_size"],
+                upload["mime_type"],
+                upload["file_sha256"],
+                upload["uploaded_at"],
+                upload["uploaded_by"],
+            ),
+        )
+        uploaded_document_id = (
+            f"{UPLOADED_DOCUMENT_ID_PREFIX}{normalized_upload_id}"
+        )
+        binding_fingerprint = _upload_binding_fingerprint(
+            upload_id=normalized_upload_id,
+            renewal_request_id=request["request_id"],
+            application_id=request["application_id"],
+            customer_id=request["customer_id"],
+            person_id=request.get("person_id"),
+            person_type=request.get("person_type"),
+            original_document_id=request["document_id"],
+            original_document_version=request["document_version"],
+            uploaded_document_id=uploaded_document_id,
+            document_type=request["document_type"],
+            file_sha256=digest,
+            file_size=size,
+            mime_type=mime,
+            upload_timestamp=timestamp,
+            uploaded_by=actor_info["id"],
+        )
+        binding = {
+            "upload_id": normalized_upload_id,
+            "renewal_request_id": request["request_id"],
+            "application_id": request["application_id"],
+            "customer_id": request["customer_id"],
+            "person_id": request.get("person_id"),
+            "person_type": request.get("person_type"),
+            "original_document_id": request["document_id"],
+            "original_document_version": int(request["document_version"]),
+            "uploaded_document_id": uploaded_document_id,
+            "document_type": request["document_type"],
+            "upload_timestamp": timestamp,
+            "uploaded_by": actor_info["id"],
+            "binding_status": "bound",
+            "contract_version": UPLOAD_BINDING_CONTRACT_VERSION,
+            "binding_fingerprint": binding_fingerprint,
+        }
+        db.execute(
+            """
+            INSERT INTO monitoring_document_renewal_upload_bindings
+                (upload_id, renewal_request_id, application_id, customer_id,
+                 person_id, person_type, original_document_id,
+                 original_document_version, uploaded_document_id, document_type,
+                 upload_timestamp, uploaded_by, binding_status,
+                 contract_version, binding_fingerprint)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                binding["upload_id"],
+                binding["renewal_request_id"],
+                binding["application_id"],
+                binding["customer_id"],
+                binding["person_id"],
+                binding["person_type"],
+                binding["original_document_id"],
+                binding["original_document_version"],
+                binding["uploaded_document_id"],
+                binding["document_type"],
+                binding["upload_timestamp"],
+                binding["uploaded_by"],
+                binding["binding_status"],
+                binding["contract_version"],
+                binding["binding_fingerprint"],
             ),
         )
         next_revision = int(request["revision"]) + 1
@@ -1925,6 +2680,8 @@ def record_renewal_upload(
                 "mime_type": mime,
                 "file_sha256": digest,
                 "staged_only": True,
+                "uploaded_document_id": uploaded_document_id,
+                "binding_contract_version": UPLOAD_BINDING_CONTRACT_VERSION,
             },
             actor=actor_info,
             timestamp=timestamp,
@@ -1932,6 +2689,14 @@ def record_renewal_upload(
             audit_writer=audit_writer,
             before_state=before,
             due_date_snapshot=request["due_date"],
+        )
+        _audit_upload_bound(
+            db,
+            request,
+            binding,
+            actor=actor_info,
+            correlation_id=correlation_id,
+            audit_writer=audit_writer,
         )
         _require_single_update(
             db.execute(
@@ -1957,26 +2722,78 @@ def record_renewal_upload(
         )
         if _lock_alert(db, alert["id"])["status"] != alert["status"]:
             raise RenewalError("protected_state_changed", "Monitoring Alert state changed.")
+        _validate_request_linkage(db, request, alert)
         result = _project(request)
+        result["binding_current"] = True
+        result["binding_status"] = "bound"
+        result["upload_binding"] = binding
         result["uploads"] = [
             {
-                "upload_id": normalized_upload_id,
-                "request_id": request["request_id"],
-                "application_id": request["application_id"],
-                "customer_id": request["customer_id"],
-                "original_filename": filename,
-                "file_size": size,
-                "mime_type": mime,
-                "file_sha256": digest,
-                "uploaded_at": timestamp,
-                "uploaded_by": actor_info["id"],
+                field: upload.get(field)
+                for field in (
+                    "upload_id",
+                    "request_id",
+                    "application_id",
+                    "customer_id",
+                    "original_filename",
+                    "file_size",
+                    "mime_type",
+                    "file_sha256",
+                    "uploaded_at",
+                    "uploaded_by",
+                )
             }
         ]
         db.commit()
         return result
-    except Exception:
+    except Exception as exc:
         _rollback(db)
-        raise
+        failure = (
+            exc
+            if isinstance(exc, RenewalError)
+            else RenewalError(
+                "binding_failed",
+                "The renewal upload could not be bound safely. Please retry.",
+                http_status=503,
+            )
+        )
+        if owned_request is not None:
+            try:
+                audited_request = _load_request(
+                    db,
+                    owned_request["request_id"],
+                )
+                _require_client(actor_info, audited_request["customer_id"])
+            except Exception as audit_context_exc:
+                _rollback(db)
+                raise RenewalError(
+                    "audit_unavailable",
+                    "Renewal upload-rejection ownership could not be re-proven.",
+                    http_status=503,
+                ) from audit_context_exc
+            try:
+                _audit_owned_upload_rejection(
+                    db,
+                    audited_request,
+                    upload_id=normalized_upload_id,
+                    error=failure,
+                    actor=actor_info,
+                    correlation_id=correlation_id,
+                    audit_writer=audit_writer,
+                )
+            except RenewalError:
+                _rollback(db)
+                raise
+            except Exception as audit_exc:
+                _rollback(db)
+                raise RenewalError(
+                    "audit_unavailable",
+                    "Renewal upload-rejection audit infrastructure is unavailable.",
+                    http_status=503,
+                ) from audit_exc
+        if failure is exc:
+            raise
+        raise failure from exc
 
 
 def validate_reminder_intervals(values: Iterable[Any]) -> tuple[int, ...]:
@@ -2356,7 +3173,9 @@ __all__ = [
     "DEFAULT_REMINDER_INTERVALS",
     "FEATURE_FLAG",
     "ORIGINATING_PR",
+    "UPLOAD_BINDING_CONTRACT_VERSION",
     "RenewalError",
+    "audit_renewal_upload_preflight_rejection",
     "cancel_renewal_request",
     "count_renewal_requests",
     "create_renewal_request",

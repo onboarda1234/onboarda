@@ -323,6 +323,25 @@ def _db_counts(db_module, case):
                     WHERE r.monitoring_alert_id = ?""",
                 (case["alert_id"],),
             ).fetchone()["c"],
+            "bindings": conn.execute(
+                """SELECT COUNT(*) AS c
+                     FROM monitoring_document_renewal_upload_bindings b
+                     JOIN monitoring_document_renewal_requests r
+                       ON r.request_id = b.renewal_request_id
+                    WHERE r.monitoring_alert_id = ?""",
+                (case["alert_id"],),
+            ).fetchone()["c"],
+            "bound_audits": conn.execute(
+                """SELECT COUNT(*) AS c
+                     FROM audit_log a
+                     JOIN monitoring_document_renewal_upload_bindings b
+                       ON a.target = 'monitoring_renewal_upload_binding:' || b.upload_id
+                     JOIN monitoring_document_renewal_requests r
+                       ON r.request_id = b.renewal_request_id
+                    WHERE r.monitoring_alert_id = ?
+                      AND a.action = 'monitoring.document_renewal.upload_bound'""",
+                (case["alert_id"],),
+            ).fetchone()["c"],
             "documents": conn.execute(
                 "SELECT COUNT(*) AS c FROM documents WHERE application_id = ?",
                 (case["application_id"],),
@@ -342,6 +361,52 @@ def _db_counts(db_module, case):
                 (case["alert_id"],),
             ).fetchone()["status"],
         }
+    finally:
+        conn.close()
+
+
+def _upload_rejection_audits(db_module, request_id):
+    conn = db_module.get_db()
+    try:
+        return [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT action, target, detail
+                  FROM audit_log
+                 WHERE target = ?
+                   AND action IN (
+                       'monitoring.document_renewal.upload_rejected',
+                       'monitoring.document_renewal.duplicate_upload',
+                       'monitoring.document_renewal.wrong_document_type',
+                       'monitoring.document_renewal.binding_failed'
+                   )
+                 ORDER BY id
+                """,
+                (f"monitoring_renewal_request:{request_id}",),
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def _authz_denial_audits(db_module, *, user_id, target):
+    conn = db_module.get_db()
+    try:
+        return [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT action, target, detail
+                  FROM audit_log
+                 WHERE user_id = ?
+                   AND action = 'authz_denied_not_owner'
+                   AND target = ?
+                 ORDER BY id
+                """,
+                (user_id, target),
+            ).fetchall()
+        ]
     finally:
         conn.close()
 
@@ -512,12 +577,30 @@ def test_portal_own_application_list_and_staged_upload_are_safe(renewal_api_serv
     upload_body = uploaded.json()
     assert upload_body["status"] == "upload_received"
     assert upload_body["request"]["request_status"] == "upload_received"
+    assert upload_body["binding"] == upload_body["request"]["upload_binding"]
+    assert upload_body["binding"]["binding_status"] == "bound"
+    assert upload_body["binding"]["contract_version"] == (
+        "monitoring_document_renewal_upload_binding_v1"
+    )
+    assert upload_body["binding"]["document_type"] == "passport"
     serialized = json.dumps(upload_body)
-    assert "storage_key" not in serialized
-    assert "file_sha256" not in serialized
+    for protected_field in (
+        "storage_key",
+        "file_sha256",
+        "binding_fingerprint",
+        "customer_id",
+        "person_id",
+        "person_type",
+        "original_document_id",
+        "original_document_version",
+        "uploaded_document_id",
+    ):
+        assert protected_field not in serialized
 
     after = _db_counts(db_module, case)
     assert after["uploads"] == before["uploads"] + 1
+    assert after["bindings"] == before["bindings"] + 1
+    assert after["bound_audits"] == before["bound_audits"] + 1
     assert after["documents"] == before["documents"] == 1
     assert after["executions"] == before["executions"] == 0
     assert after["legacy"] == before["legacy"] == 0
@@ -532,6 +615,19 @@ def test_portal_own_application_list_and_staged_upload_are_safe(renewal_api_serv
                   FROM monitoring_document_renewal_upload_cleanup
                  WHERE request_id = ?
                 """,
+                (request["request_id"],),
+            ).fetchone()
+        )
+        binding = dict(
+            conn.execute(
+                """SELECT upload_id, renewal_request_id, application_id,
+                          customer_id, person_id, person_type,
+                          original_document_id, original_document_version,
+                          uploaded_document_id, document_type,
+                          binding_status, contract_version,
+                          binding_fingerprint
+                     FROM monitoring_document_renewal_upload_bindings
+                    WHERE renewal_request_id = ?""",
                 (request["request_id"],),
             ).fetchone()
         )
@@ -553,6 +649,23 @@ def test_portal_own_application_list_and_staged_upload_are_safe(renewal_api_serv
     assert artifact["storage_key"].startswith(
         "local://monitoring-renewal-candidates/"
     )
+    assert binding["renewal_request_id"] == request["request_id"]
+    assert binding["application_id"] == case["application_id"]
+    assert binding["customer_id"] == case["client_id"]
+    assert binding["person_id"] == case["person_id"]
+    assert binding["person_type"] == "director"
+    assert binding["original_document_id"] == case["document_id"]
+    assert binding["original_document_version"] == 1
+    assert binding["uploaded_document_id"] == (
+        "renewal-candidate:" + binding["upload_id"]
+    )
+    assert binding["document_type"] == "passport"
+    assert binding["binding_status"] == "bound"
+    assert binding["contract_version"] == (
+        "monitoring_document_renewal_upload_binding_v1"
+    )
+    assert len(binding["binding_fingerprint"]) == 64
+    assert binding["binding_fingerprint"] == binding["binding_fingerprint"].lower()
     assert (os.stat(artifact["local_path"]).st_mode & 0o777) == 0o600
     assert "Director portal" in notification["documents_list"]
     assert "Director portal" in notification["message"]
@@ -599,6 +712,16 @@ def test_cross_client_routes_return_404_and_do_not_leak_request(renewal_api_serv
 
     assert _db_counts(db_module, owned)["uploads"] == 0
     assert _db_counts(db_module, foreign)["uploads"] == 0
+    assert _upload_rejection_audits(db_module, foreign_request["request_id"]) == []
+    denials = _authz_denial_audits(
+        db_module,
+        user_id="renewal_client_a",
+        target=owned["application_id"],
+    )
+    assert len(denials) == 1
+    denial_detail = json.loads(denials[0]["detail"])
+    assert denial_detail["resource_scope"] == "renewal_request"
+    assert foreign_request["request_id"] not in denials[0]["detail"]
     assert owned_request["request_id"] != foreign_request["request_id"]
 
 
@@ -627,7 +750,214 @@ def test_same_client_cannot_swap_request_between_applications(renewal_api_server
     assert second_request["request_id"] not in swapped.text
     assert _db_counts(db_module, first)["uploads"] == 0
     assert _db_counts(db_module, second)["uploads"] == 0
+    rejection_audits = _upload_rejection_audits(
+        db_module,
+        second_request["request_id"],
+    )
+    assert len(rejection_audits) == 1
+    assert rejection_audits[0]["action"] == (
+        "monitoring.document_renewal.upload_rejected"
+    )
+    assert json.loads(rejection_audits[0]["detail"])["reason_code"] == (
+        "wrong_application"
+    )
+    denials = _authz_denial_audits(
+        db_module,
+        user_id="renewal_client_a",
+        target=first["application_id"],
+    )
+    assert len(denials) == 1
+    assert second_request["request_id"] not in denials[0]["detail"]
     assert first_request["request_id"] != second_request["request_id"]
+
+
+def test_missing_request_is_cloaked_and_security_audited(renewal_api_server):
+    base_url, db_module, _server_module = renewal_api_server
+    case = _seed_case(db_module, "missing-request")
+    missing_request_id = "missing-renewal-request"
+
+    response = requests.post(
+        f"{base_url}/api/portal/applications/{case['application_id']}"
+        f"/renewal-requests/{missing_request_id}/upload",
+        headers=_auth_headers(_client_token(case["client_id"])),
+        files={
+            "file": (
+                "missing.pdf",
+                b"%PDF-1.4\n% missing request must fail\n%%EOF",
+                "application/pdf",
+            )
+        },
+        timeout=10,
+    )
+
+    assert response.status_code == 404
+    assert missing_request_id not in response.text
+    denials = _authz_denial_audits(
+        db_module,
+        user_id=case["client_id"],
+        target=case["application_id"],
+    )
+    assert len(denials) == 1
+    assert missing_request_id not in denials[0]["detail"]
+    assert _db_counts(db_module, case)["uploads"] == 0
+
+
+@pytest.mark.parametrize(
+    ("case_suffix", "preflight_state", "expected_code"),
+    (
+        ("preflight-cancelled", "cancelled", "request_cancelled"),
+        ("preflight-expired", "expired", "request_expired"),
+    ),
+)
+def test_owned_cancelled_and_expired_upload_preflights_are_audited(
+    renewal_api_server,
+    case_suffix,
+    preflight_state,
+    expected_code,
+):
+    base_url, db_module, _server_module = renewal_api_server
+    case = _seed_case(db_module, case_suffix)
+    request = _create(base_url, case).json()["request"]
+    if preflight_state == "cancelled":
+        cancelled = requests.post(
+            f"{base_url}/api/monitoring/renewal-requests/{request['request_id']}/cancel",
+            headers=_json_headers(_admin_token()),
+            json={
+                "expected_revision": request["revision"],
+                "reason": "Owned preflight rejection contract test.",
+            },
+            timeout=10,
+        )
+        assert cancelled.status_code == 200, cancelled.text
+    else:
+        conn = db_module.get_db()
+        try:
+            conn.execute(
+                """UPDATE monitoring_document_renewal_requests
+                      SET due_date = ?
+                    WHERE request_id = ?""",
+                (
+                    (date.today() - timedelta(days=1)).isoformat(),
+                    request["request_id"],
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    rejected = requests.post(
+        f"{base_url}/api/portal/applications/{case['application_id']}"
+        f"/renewal-requests/{request['request_id']}/upload",
+        headers=_auth_headers(_client_token(case["client_id"])),
+        files={
+            "file": (
+                "owned-rejected.pdf",
+                b"%PDF-1.4\n% no storage on preflight rejection\n%%EOF",
+                "application/pdf",
+            )
+        },
+        timeout=10,
+    )
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["error_code"] == expected_code
+    audits = _upload_rejection_audits(db_module, request["request_id"])
+    assert len(audits) == 1
+    assert audits[0]["action"] == "monitoring.document_renewal.upload_rejected"
+    assert json.loads(audits[0]["detail"])["reason_code"] == expected_code
+    assert _db_counts(db_module, case)["uploads"] == 0
+    assert _db_counts(db_module, case)["bindings"] == 0
+
+
+def test_duplicate_upload_preflight_is_audited_without_second_binding(
+    renewal_api_server,
+):
+    base_url, db_module, _server_module = renewal_api_server
+    case = _seed_case(db_module, "preflight-duplicate")
+    request = _create(base_url, case).json()["request"]
+    endpoint = (
+        f"{base_url}/api/portal/applications/{case['application_id']}"
+        f"/renewal-requests/{request['request_id']}/upload"
+    )
+    headers = _auth_headers(_client_token(case["client_id"]))
+    first = requests.post(
+        endpoint,
+        headers=headers,
+        files={
+            "file": (
+                "first.pdf",
+                b"%PDF-1.4\n% first authoritative upload\n%%EOF",
+                "application/pdf",
+            )
+        },
+        timeout=10,
+    )
+    assert first.status_code == 201, first.text
+
+    duplicate = requests.post(
+        endpoint,
+        headers=headers,
+        files={
+            "file": (
+                "second.pdf",
+                b"%PDF-1.4\n% duplicate must be rejected\n%%EOF",
+                "application/pdf",
+            )
+        },
+        timeout=10,
+    )
+    assert duplicate.status_code == 409, duplicate.text
+    assert duplicate.json()["error_code"] == "upload_already_received"
+    audits = _upload_rejection_audits(db_module, request["request_id"])
+    assert len(audits) == 1
+    assert audits[0]["action"] == "monitoring.document_renewal.duplicate_upload"
+    assert json.loads(audits[0]["detail"])["reason_code"] == (
+        "upload_already_received"
+    )
+    counts = _db_counts(db_module, case)
+    assert counts["uploads"] == 1
+    assert counts["bindings"] == 1
+
+
+def test_upload_preflight_audit_failure_fails_closed(renewal_api_server):
+    base_url, db_module, server_module = renewal_api_server
+    case = _seed_case(db_module, "preflight-audit-failure")
+    request = _create(base_url, case).json()["request"]
+    cancelled = requests.post(
+        f"{base_url}/api/monitoring/renewal-requests/{request['request_id']}/cancel",
+        headers=_json_headers(_admin_token()),
+        json={
+            "expected_revision": request["revision"],
+            "reason": "Audit failure contract test.",
+        },
+        timeout=10,
+    )
+    assert cancelled.status_code == 200, cancelled.text
+
+    renewal = server_module._monitoring_document_renewal
+    original_writer_factory = renewal._canonical_audit_writer
+    renewal._canonical_audit_writer = lambda: (lambda *_args, **_kwargs: None)
+    try:
+        rejected = requests.post(
+            f"{base_url}/api/portal/applications/{case['application_id']}"
+            f"/renewal-requests/{request['request_id']}/upload",
+            headers=_auth_headers(_client_token(case["client_id"])),
+            files={
+                "file": (
+                    "audit-failure.pdf",
+                    b"%PDF-1.4\n% audit failure must fail closed\n%%EOF",
+                    "application/pdf",
+                )
+            },
+            timeout=10,
+        )
+    finally:
+        renewal._canonical_audit_writer = original_writer_factory
+
+    assert rejected.status_code == 503, rejected.text
+    assert rejected.json()["error_code"] == "audit_unavailable"
+    assert _upload_rejection_audits(db_module, request["request_id"]) == []
+    assert _db_counts(db_module, case)["uploads"] == 0
+    assert _db_counts(db_module, case)["bindings"] == 0
 
 
 def test_portal_distinguishes_same_document_type_for_two_people(renewal_api_server):
@@ -895,6 +1225,7 @@ def test_stale_document_linkage_disables_portal_upload_before_storage(
     projected = listed.json()["renewal_requests"][0]
     assert projected["manual_review_required"] is True
     assert projected["upload_allowed"] is False
+    linkage_code = projected["linkage_error"]["code"]
 
     upload = requests.post(
         f"{base_url}/api/portal/applications/{case['application_id']}"
@@ -910,6 +1241,11 @@ def test_stale_document_linkage_disables_portal_upload_before_storage(
         timeout=10,
     )
     assert upload.status_code == 409
+    assert upload.json()["error_code"] == linkage_code
+    audits = _upload_rejection_audits(db_module, request["request_id"])
+    assert len(audits) == 1
+    assert audits[0]["action"] == "monitoring.document_renewal.binding_failed"
+    assert json.loads(audits[0]["detail"])["reason_code"] == linkage_code
     conn = db_module.get_db()
     try:
         assert conn.execute(

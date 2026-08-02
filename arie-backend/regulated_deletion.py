@@ -65,6 +65,7 @@ REGULATED_TABLES = frozenset({
     "monitoring_document_renewal_events",
     "monitoring_document_renewal_requests",
     "monitoring_document_renewal_upload_cleanup",
+    "monitoring_document_renewal_upload_bindings",
     "monitoring_document_renewal_uploads",
     "periodic_review_evidence_links",
     "periodic_review_memos",

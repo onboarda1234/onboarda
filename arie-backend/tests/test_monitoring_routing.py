@@ -1644,6 +1644,13 @@ class TestProtectedDomainOwnershipBoundary:
             "request_id", "s3_version_id", "storage_key", "stored_at",
             "updated_at", "upload_id",
         },
+        "monitoring_document_renewal_upload_bindings": {
+            "application_id", "binding_fingerprint", "binding_status",
+            "contract_version", "customer_id", "document_type",
+            "original_document_id", "original_document_version", "person_id",
+            "person_type", "renewal_request_id", "upload_id",
+            "upload_timestamp", "uploaded_by", "uploaded_document_id",
+        },
         "monitoring_document_renewal_uploads": {
             "application_id", "customer_id", "file_sha256", "file_size",
             "mime_type", "original_filename", "request_id", "storage_key",

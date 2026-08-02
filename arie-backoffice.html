@@ -26721,6 +26721,22 @@ function monitoringDocumentRenewalMilestones(request) {
   return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;">' + milestones.join('') + '</div>';
 }
 
+function monitoringDocumentRenewalUploadBinding(request) {
+  if (!request || typeof request !== 'object') return null;
+  if (request.upload_binding && typeof request.upload_binding === 'object') return request.upload_binding;
+  var uploads = Array.isArray(request.uploads) ? request.uploads : [];
+  return uploads.length && uploads[0] && typeof uploads[0] === 'object' ? uploads[0] : null;
+}
+
+function monitoringDocumentRenewalBindingStatusLabel(binding, requestStatus) {
+  var status = monitoringCanonicalToken((binding && binding.binding_status) || '');
+  if (status === 'bound') return 'Bound';
+  if (status) return normalizeAlertStatusLabel(status);
+  return requestStatus === 'upload_received'
+    ? 'Binding unavailable — manual review required'
+    : 'Not bound';
+}
+
 function renderMonitoringDocumentRenewalCreateControls(alert) {
   var reason = monitoringDocumentRenewalDefaultReason(alert);
   var automaticOption = reason === 'expired'
@@ -26775,6 +26791,7 @@ function renderMonitoringDocumentRenewalCard(alert) {
   if (!enabled && !request) return '';
   var legacyActive = monitoringDocumentLegacyRequestActive(alert);
   var requestStatus = monitoringCanonicalToken((request && request.request_status) || '');
+  var uploadBinding = monitoringDocumentRenewalUploadBinding(request);
   var requestDetails = request
     ? monitoringInfoGrid([
         ['Request ID', monitoringTextValue(request.request_id, 'Not available')],
@@ -26788,7 +26805,10 @@ function renderMonitoringDocumentRenewalCard(alert) {
         ['Sent', monitoringTextValue(request.sent_at, 'Not sent')],
         ['Due date', monitoringTextValue(request.due_date, 'Not set')],
         ['Reminder count', monitoringTextValue(request.reminder_count, '0')],
-        ['Last reminder generated', monitoringTextValue(request.last_reminder_at, 'None generated')]
+        ['Last reminder generated', monitoringTextValue(request.last_reminder_at, 'None generated')],
+        ['Upload binding', monitoringDocumentRenewalBindingStatusLabel(uploadBinding, requestStatus)],
+        ['Uploaded document reference', monitoringTextValue(uploadBinding && uploadBinding.uploaded_document_id, 'Not uploaded')],
+        ['Upload received', monitoringTextValue(uploadBinding && (uploadBinding.upload_timestamp || uploadBinding.uploaded_at), 'Not uploaded')]
       ]) + monitoringDocumentRenewalMilestones(request)
     : '<div data-monitoring-renewal-empty="true" style="font-size:12px;color:var(--text2);line-height:1.5;">No canonical renewal request exists for this alert.</div>';
   var controls = enabled

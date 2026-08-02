@@ -167,6 +167,10 @@ def test_portal_renewal_cards_are_application_bound_and_upload_only():
     assert "data-renewal-request-id" in renderer
     assert "request.request_status || '') !== 'awaiting_upload'" in renderer
     assert "Upload Renewal Document" in renderer
+    assert "upload_received: 'Uploaded'" in renderer
+    assert "Awaiting Verification" in renderer
+    assert "Compliance has not verified or accepted it" in renderer
+    assert "canonical document has not been replaced" in renderer
     assert "status === 'awaiting_upload' && featureEnabled === true" in renderer
     assert "portalDocumentRenewalFeatureEnabled = featureEnabled === true" in renderer
     assert "Renewal uploads are currently read-only while the governed workflow is OFF" in renderer
@@ -178,6 +182,8 @@ def test_portal_renewal_cards_are_application_bound_and_upload_only():
         "Waive",
         "Close Alert",
         "replace-canonical",
+        "Invoke Agent 1",
+        "Verify Renewal Document",
     ):
         assert prohibited not in renderer
 
