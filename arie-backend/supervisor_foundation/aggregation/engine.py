@@ -206,13 +206,21 @@ def _build_groups(findings: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
     identifier as the final tie-break, so the same finding set always produces
     the same sequence regardless of the order it arrived in.
     """
-    buckets: dict[tuple[str, str, str, str], list[Mapping[str, Any]]] = {}
+    buckets: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
     for finding in findings:
-        buckets.setdefault(_group_key(finding), []).append(finding)
+        key = _group_key(finding)
+        if lookup(str(finding.get("probe_id") or ""),
+                  str(finding.get("primary_evidence_ref") or "")) is None:
+            # Unregistered: the derived key is exactly what is not trusted here,
+            # so it must not be used to merge. One finding, one group, its own
+            # words. Grouping on an unverified key is the failure the register
+            # exists to prevent.
+            key = (*key, str(finding.get("finding_id") or ""))
+        buckets.setdefault(key, []).append(finding)
 
     groups: list[dict[str, Any]] = []
     for key, members in buckets.items():
-        probe_id, status, availability, key_fragment = key
+        probe_id, status, availability, key_fragment = key[:4]
         ordered = sorted(
             members,
             key=lambda finding: (
@@ -254,6 +262,12 @@ def _build_groups(findings: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
         groups.append(
             {
                 "affected_count": count,
+                # The control consequence is a property of the check, so every
+                # member carries the same sentence. Set here so a group is
+                # complete the moment it is built — a caller using
+                # ``_build_groups`` directly gets a usable group, not a KeyError
+                # three functions later.
+                "why_it_matters": str(ordered[0].get("why_it_matters") or ""),
                 "availability_status": availability,
                 "categories": categories,
                 "check_id": check_id,
@@ -830,15 +844,6 @@ def aggregate_review(
     review_hash = str(review.get("review_hash") or "")
 
     groups = _build_groups(findings)
-    # ``why_it_matters`` is the one group field copied from a member rather than
-    # derived: the control consequence is a property of the check, so every
-    # member of a group carries the same sentence. Attached after construction
-    # so ``_build_groups`` stays about grouping.
-    findings_by_id = {str(finding.get("finding_id") or ""): finding for finding in findings}
-    for group in groups:
-        members = [findings_by_id[fid] for fid in group["finding_ids"] if fid in findings_by_id]
-        group["why_it_matters"] = str(members[0].get("why_it_matters") or "") if members else ""
-
     approved = approval_established(bundle)
     actions = _required_actions(findings, groups)
     evidence_index = _evidence_index(findings, actions)
@@ -848,11 +853,15 @@ def aggregate_review(
         "aggregation_schema_version": AGGREGATION_SCHEMA_VERSION,
         "as_of": as_of,
         "bundle_schema_version": bundle_schema_version,
+        # Same rule as the action register: a clear or not-applicable check has
+        # nothing outstanding, so its "Already satisfied." is not a condition
+        # anyone is waiting on. Filtering only ``clear`` left not-applicable
+        # conditions in a list of open items.
         "close_conditions": sorted(
             {
                 condition
                 for group in groups
-                if str(group["status"]) != FindingStatus.CLEAR.value
+                if str(group["status"]) in ACTIONABLE_STATUSES
                 for condition in group["close_conditions"]
             }
         ),

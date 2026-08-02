@@ -120,7 +120,7 @@ therefore `review_hash` for every stored review. The key is derived from
 `primary_evidence_ref`, which every probe already sets to the field the check
 examined:
 
-```
+```text
 screening:{app}#subject:{key}#provider_mode   ->  "provider_mode"
 risk:{app}#factor:country_of_incorporation    ->  "factor"
 periodic_review:{id}                          ->  ""
@@ -207,7 +207,7 @@ encodes by raising that finding to critical.
 |---|---|
 | `evidence_absent` | `unavailable` / `data_absent`, or a hit on a check whose register entry says the evidence is missing |
 | `evidence_malformed` | `unavailable` / `snapshot_incomplete` |
-| `check_unavailable` | `unavailable` / `credentials_absent`, `dependency_gated`, `policy_not_configured` |
+| `check_unavailable` | `unavailable` with `credentials_absent`, `dependency_gated`, `policy_not_configured`, or an unrecognised availability value |
 | `evidence_present_not_defensible` | a hit on a check whose register entry says so |
 | `evidence_not_replayable` | `not_replayable` |
 
@@ -288,11 +288,19 @@ bug go away. Counts belong in group claims, where they carry information.
 
 ## 11. Limitations
 
-Each entry declares a kind: `product_boundary` (something the platform
-deliberately does not claim), `environment_gap` (a dependency absent here that
-could be present elsewhere), or `historic_replay`. Collapsing the two would be
-dishonest in both directions — presenting a scope decision as a fault, and a
-missing credential as a design.
+Each entry declares one of three kinds: `product_boundary` (something the
+platform deliberately does not claim), `environment_gap` (a dependency absent
+here that could be present elsewhere), or `historic_replay` (state that was
+never snapshotted). Collapsing them would be dishonest in every direction —
+presenting a scope decision as a fault, a missing credential as a design, and an
+unrecoverable past as either.
+
+An environment gap is asserted only where the bundle *positively records* the
+dependency as unavailable. A missing or unreadable availability section
+establishes nothing, so it produces no gap claim — the same standard applied to
+approval, and a correction: the two dependency predicates previously disagreed,
+producing a live-provider limitation and no registry limitation from the same
+absent data.
 
 Disclosed: the P-03 asymmetric-replay boundary, P-04 live-provider validation,
 adverse-media source coverage, historic snapshot reconstruction, the

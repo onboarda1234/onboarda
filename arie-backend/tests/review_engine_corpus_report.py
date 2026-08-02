@@ -26,6 +26,7 @@ is emitted, and nothing here says a customer is compliant or non-compliant.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from collections import Counter, defaultdict
@@ -49,7 +50,10 @@ def _enable_tier0_contract(monkeypatch):
     flag = risk_controlled_values.ACTIVATION_FLAG
     monkeypatch.setenv(flag, "true")
     for manager in (environment.flags, risk_controlled_values.flags):
-        manager._cache[flag] = True
+        # ``setitem`` rather than a bare write: the cache mutation is reverted at
+        # teardown too, so running this module inside a wider session cannot
+        # leave the flag enabled for everything after it.
+        monkeypatch.setitem(manager._cache, flag, True)
 
 
 def _print_case(ref: str, review, output) -> None:
@@ -206,13 +210,12 @@ def report(temp_db, monkeypatch, capsys=None):
     _enable_tier0_contract(monkeypatch)
     seed_pilot_canonical_dataset(dry_run=False)
 
-    connection = sqlite3.connect(temp_db)
-    connection.row_factory = sqlite3.Row
-    rows = connection.execute(
-        "SELECT id, ref FROM applications WHERE ref LIKE 'RM-PILOT-%' ORDER BY ref"
-    ).fetchall()
-    _summarise(rows, connection, label="STAGE 1 — stored fixture evidence")
-    connection.close()
+    with contextlib.closing(sqlite3.connect(temp_db)) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            "SELECT id, ref FROM applications WHERE ref LIKE 'RM-PILOT-%' ORDER BY ref"
+        ).fetchall()
+        _summarise(rows, connection, label="STAGE 1 — stored fixture evidence")
 
 
 def production_path(temp_db, monkeypatch, sample=8):

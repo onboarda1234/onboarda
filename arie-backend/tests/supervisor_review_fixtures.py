@@ -18,11 +18,24 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+import pytest
+
 from supervisor_foundation import assemble_application_bundle, run_review
 from supervisor_foundation.hashing import compute_finding_id
 from supervisor_foundation.policy import unconfigured_policy
 from supervisor_foundation.probes import PROBES
-from supervisor_probe_fixtures import AS_OF
+from supervisor_probe_fixtures import (
+    AS_OF,
+    add_memo,
+    add_periodic_review,
+    add_screening,
+    approve,
+    factor,
+    person_entry,
+    risk_dimensions,
+    screening_record,
+    seed_application,
+)
 
 SUBJECT_TYPE = "application"
 SUBJECT_ID = "app-fixture"
@@ -162,3 +175,40 @@ def real_review(db, application_id: str, *, as_of: str = AS_OF):
     bundle = assemble_application_bundle(db, application_id, as_of=as_of)
     review = run_review(bundle, policy=unconfigured_policy(), probes=PROBES)
     return review, bundle
+
+
+@pytest.fixture
+def busy_case(db):
+    """One approved case that trips all four probes at once.
+
+    Shared rather than copied. Two suites previously built their own, and the
+    copies had already diverged by one risk factor — so a change to either
+    silently changed what only one suite exercised.
+    """
+    app_id = seed_application(
+        db,
+        risk_level="HIGH",
+        final_risk_level="HIGH",
+        base_risk_level="MEDIUM",
+        risk_config_version=None,
+        elevation_reason_text=None,
+        risk_dimensions=risk_dimensions(
+            [
+                factor("country_of_incorporation", rule_score=4, resolution_status="unresolved"),
+                factor("service_selection", rule_score=4, resolution_status="unmatched"),
+                factor("adverse_media", rule_score=1),
+            ]
+        ),
+    )
+    add_memo(db, app_id)
+    record = screening_record(api_status="sandbox")
+    add_screening(
+        db,
+        app_id,
+        company=record,
+        directors=[person_entry("Director One", record), person_entry("Director Two", record)],
+        ubos=[person_entry("Ubo One", record, has_pep_hit=True)],
+    )
+    add_periodic_review(db, app_id, status="completed")
+    approve(db, app_id)
+    return app_id

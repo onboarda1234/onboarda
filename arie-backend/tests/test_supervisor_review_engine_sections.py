@@ -9,6 +9,9 @@ officer to stop reading it.
 
 from __future__ import annotations
 
+import copy
+import json
+
 import pytest
 
 from supervisor_foundation.aggregation import aggregate_review
@@ -60,7 +63,7 @@ def _aggregate(findings, bundle=None):
 
 
 def _bundle_with(**dependencies):
-    bundle = {key: dict(value) for key, value in MINIMAL_BUNDLE.items()}
+    bundle = copy.deepcopy(MINIMAL_BUNDLE)
     bundle["availability"] = {
         "dependencies": {**MINIMAL_BUNDLE["availability"]["dependencies"], **dependencies}
     }
@@ -610,12 +613,16 @@ def test_the_index_links_references_to_actions():
     assert any(record["action_ids"] for record in index)
 
 
-def test_a_real_case_index_exposes_no_person_name(db):
-    """Subject keys, never names. Asserted against real probe output."""
+def test_a_real_case_review_exposes_no_person_name(db):
+    """Subject keys, never names — across the whole review, not just the index.
+
+    Scanning only ``evidence_index`` would pass while a name sat in a group
+    claim, a required action or a regulator question. The guarantee is about the
+    artifact, so the scan is over the serialised artifact.
+    """
     app_id = _case_with_everything(db)
     review, bundle = real_review(db, app_id)
-    output = aggregate_review(review, bundle=bundle)
-    blob = " ".join(record["evidence_ref"] for record in output["evidence_index"]).lower()
+    blob = json.dumps(aggregate_review(review, bundle=bundle)).lower()
     for name in ("director one", "director two", "ubo one"):
         assert name not in blob
 

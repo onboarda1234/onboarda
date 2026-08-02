@@ -20,8 +20,8 @@ That derivation is a rule about reference *shape*, and shapes drift. So it is
 never trusted on its own: a ``(probe_id, check_key)`` pair absent from the table
 below produces a **singleton group** — the finding alone, ungrouped, fully
 visible. The failure mode of a stale table is less aggregation, never wrong
-aggregation. ``test_supervisor_review_engine_registry`` asserts the table covers
-every pair the four probes actually emit across the corpus, so drift is caught
+aggregation. ``test_the_register_covers_every_check_the_real_probes_emit`` asserts the
+table covers every pair the four probes actually emit across five case shapes, so drift is caught
 as a test failure rather than as silently degraded output.
 """
 

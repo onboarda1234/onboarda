@@ -43,9 +43,22 @@ def _probe_present(findings: Sequence[Mapping[str, Any]], probe_id: str) -> bool
     return any(str(finding.get("probe_id") or "") == probe_id for finding in findings)
 
 
-def _dependency(bundle: Mapping[str, Any], name: str) -> str:
-    dependencies = ((bundle.get("availability") or {}).get("dependencies") or {})
-    return str(dependencies.get(name) or "")
+def _dependency_known_absent(bundle: Mapping[str, Any], name: str) -> bool:
+    """Whether the bundle *positively records* this dependency as unavailable.
+
+    One rule for every dependency. An absent or unreadable availability section
+    establishes nothing, so it reports ``False`` rather than an environment gap
+    the review cannot evidence — the same standard applied to approval. The two
+    predicates below previously disagreed on this: a bundle with no availability
+    section produced a live-provider limitation and no registry limitation, from
+    the same missing data.
+    """
+    availability = bundle.get("availability") if isinstance(bundle, Mapping) else None
+    dependencies = (availability or {}).get("dependencies") if isinstance(availability, Mapping) else None
+    if not isinstance(dependencies, Mapping):
+        return False
+    recorded = str(dependencies.get(name) or "")
+    return recorded not in ("", "available")
 
 
 #: Ordered by identifier at emit time, not here. Every entry names the exact
@@ -76,8 +89,9 @@ LIMITATIONS: tuple[Limitation, ...] = (
             "clear result from it is worth has not been established against a "
             "live provider response."
         ),
-        applies=lambda findings, bundle: _dependency(bundle, "screening_report")
-        != "available"
+        applies=lambda findings, bundle: _dependency_known_absent(
+            bundle, "screening_report"
+        )
         or _any_finding(findings, probe_id="P-04", category="screening", status="hit"),
     ),
     Limitation(
@@ -125,8 +139,9 @@ LIMITATIONS: tuple[Limitation, ...] = (
             "No public-registry credentials are configured in this deployment, "
             "so registry corroboration contributed nothing to this review."
         ),
-        applies=lambda findings, bundle: _dependency(bundle, "public_registry")
-        not in ("", "available"),
+        applies=lambda findings, bundle: _dependency_known_absent(
+            bundle, "public_registry"
+        ),
     ),
     Limitation(
         limitation_id="probe_dependency_unavailable",

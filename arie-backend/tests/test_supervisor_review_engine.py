@@ -20,19 +20,10 @@ from supervisor_foundation.aggregation.engine import (
     OVERALL_STATUSES,
     AggregationInputError,
 )
-from supervisor_probe_fixtures import (
-    add_memo,
-    add_periodic_review,
-    add_screening,
-    approve,
-    factor,
-    person_entry,
-    risk_dimensions,
-    screening_record,
-    seed_application,
-)
+from supervisor_probe_fixtures import seed_application
 from supervisor_review_fixtures import (
     MINIMAL_BUNDLE,
+    busy_case,  # noqa: F401 - pytest fixture, used by name
     finding,
     real_review,
     screening_subject_finding,
@@ -349,16 +340,21 @@ def test_a_single_finding_keeps_its_own_claim():
 
 
 def test_an_unregistered_check_becomes_a_singleton_group():
-    """A stale register degrades to less grouping, never to wrong grouping."""
+    """A stale register degrades to less grouping, never to wrong grouping.
+
+    These two share a derived key. That key is exactly what is not trusted for
+    an unregistered check, so it must not be used to merge them: one finding,
+    one group, its own words.
+    """
     findings = [
         finding(probe_id="P-99", primary_evidence_ref="mystery:app-fixture#unknown_field:a"),
         finding(probe_id="P-99", primary_evidence_ref="mystery:app-fixture#unknown_field:b"),
     ]
     groups = _aggregate(findings)["grouped_findings"]
-    # Same derived key, but no register entry: they still share a group, and the
-    # group is flagged as unregistered and speaks in the finding's own words.
+    assert len(groups) == 2, "an unverified key must never merge two findings"
     assert all(group["check_registered"] is False for group in groups)
-    assert groups[0]["claim"] == findings[0]["claim"]
+    assert all(group["affected_count"] == 1 for group in groups)
+    assert {group["claim"] for group in groups} == {item["claim"] for item in findings}
 
 
 def test_group_ordering_is_deterministic_regardless_of_input_order():
@@ -460,7 +456,9 @@ def test_criticals_displace_highs_from_the_capped_summary():
     assert output["overall_assessment"]["material_concern_count"] == 10
     assert len(concerns) == MATERIAL_CONCERN_LIMIT
     assert sum(1 for concern in concerns if concern["severity"] == "critical") == 5
-    assert output["overall_assessment"]["material_concerns_omitted"] == 3
+    assert output["overall_assessment"]["material_concerns_omitted"] == (
+        10 - MATERIAL_CONCERN_LIMIT
+    )
 
 
 def test_every_material_concern_links_to_findings_and_evidence():
@@ -536,38 +534,6 @@ def test_a_review_without_findings_is_refused():
 
 
 # ── Against the real probes ──────────────────────────────────────────
-
-
-@pytest.fixture
-def busy_case(db):
-    """One approved case that trips all four probes at once."""
-    app_id = seed_application(
-        db,
-        risk_level="HIGH",
-        final_risk_level="HIGH",
-        base_risk_level="MEDIUM",
-        risk_config_version=None,
-        elevation_reason_text=None,
-        risk_dimensions=risk_dimensions(
-            [
-                factor("country_of_incorporation", rule_score=4, resolution_status="unresolved"),
-                factor("service_selection", rule_score=4, resolution_status="unmatched"),
-                factor("adverse_media", rule_score=1),
-            ]
-        ),
-    )
-    add_memo(db, app_id)
-    record = screening_record(api_status="sandbox")
-    add_screening(
-        db,
-        app_id,
-        company=record,
-        directors=[person_entry("Director One", record), person_entry("Director Two", record)],
-        ubos=[person_entry("Ubo One", record, has_pep_hit=True)],
-    )
-    add_periodic_review(db, app_id, status="completed")
-    approve(db, app_id)
-    return app_id
 
 
 def test_real_case_groups_fewer_than_it_finds(busy_case, db):
@@ -830,3 +796,15 @@ def test_a_probe_runtime_failure_lands_as_an_unavailable_check(db):
         "could not run" not in concern["claim"].lower()
         for concern in output["material_concerns"]
     )
+
+
+def test_close_conditions_list_only_outstanding_work():
+    """A satisfied check's "Already satisfied." is not something to wait on."""
+    findings = [
+        screening_subject_finding("s1", close_condition="A live result exists."),
+        screening_subject_finding("s2", status="clear", availability_status="available",
+                                  close_condition="Already satisfied."),
+        screening_subject_finding("s3", status="not_applicable",
+                                  close_condition="Not applicable."),
+    ]
+    assert _aggregate(findings)["close_conditions"] == ["A live result exists."]

@@ -31,20 +31,10 @@ from supervisor_foundation.contracts import (
     PROBE_SET_VERSION,
     REVIEW_SCHEMA_VERSION,
 )
-from supervisor_probe_fixtures import (
-    AS_OF,
-    add_memo,
-    add_periodic_review,
-    add_screening,
-    approve,
-    factor,
-    person_entry,
-    risk_dimensions,
-    screening_record,
-    seed_application,
-)
+from supervisor_probe_fixtures import AS_OF
 from supervisor_review_fixtures import (
     MINIMAL_BUNDLE,
+    busy_case,  # noqa: F401 - pytest fixture, used by name
     finding,
     real_review,
     screening_subject_finding,
@@ -58,36 +48,6 @@ BACKEND_ROOT = PACKAGE_ROOT.parent
 
 def _aggregate(findings, **kwargs):
     return aggregate_review(synthetic_review(findings, **kwargs), bundle=MINIMAL_BUNDLE)
-
-
-@pytest.fixture
-def busy_case(db):
-    app_id = seed_application(
-        db,
-        risk_level="HIGH",
-        final_risk_level="HIGH",
-        base_risk_level="MEDIUM",
-        risk_config_version=None,
-        elevation_reason_text=None,
-        risk_dimensions=risk_dimensions(
-            [
-                factor("country_of_incorporation", rule_score=4, resolution_status="unresolved"),
-                factor("adverse_media", rule_score=1),
-            ]
-        ),
-    )
-    add_memo(db, app_id)
-    record = screening_record(api_status="sandbox")
-    add_screening(
-        db,
-        app_id,
-        company=record,
-        directors=[person_entry("Director One", record), person_entry("Director Two", record)],
-        ubos=[person_entry("Ubo One", record, has_pep_hit=True)],
-    )
-    add_periodic_review(db, app_id, status="completed")
-    approve(db, app_id)
-    return app_id
 
 
 # ── Determinism ──────────────────────────────────────────────────────
@@ -253,6 +213,8 @@ def test_the_output_is_stable_across_processes_and_hash_seeds(busy_case, db, tmp
             text=True,
             env={"PYTHONHASHSEED": seed, "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
             check=False,
+            # A blocked child would otherwise stall CI with no diagnostic.
+            timeout=300,
         )
         assert result.returncode == 0, result.stderr[-2000:]
         digests.add(result.stdout.strip())
@@ -365,18 +327,34 @@ def test_the_aggregation_package_imports_only_audited_modules(path):
 
 def test_no_authoritative_module_imports_the_aggregation_package():
     """The one-way boundary. Authoritative behaviour cannot depend on advice."""
+    # Recursive: authoritative code lives in sub-packages too, and a top-level
+    # glob would have exempted every one of them. The foundation itself and the
+    # tests are excluded — they are the two places that may import it.
+    exempt = {PACKAGE_ROOT, BACKEND_ROOT / "tests"}
     importers = []
-    for path in sorted(BACKEND_ROOT.glob("*.py")):
+    for path in sorted(BACKEND_ROOT.rglob("*.py")):
+        if any(parent in exempt for parent in path.parents):
+            continue
         source = path.read_text(encoding="utf-8", errors="ignore")
         if "supervisor_foundation.aggregation" in source or "from .aggregation" in source:
-            importers.append(path.name)
-    assert not importers, f"authoritative modules import the review engine: {importers}"
+            importers.append(str(path.relative_to(BACKEND_ROOT)))
+    assert importers == [], f"authoritative modules import the review engine: {importers}"
+    assert len(list(BACKEND_ROOT.rglob("*.py"))) > 100, "the scan found almost nothing"
 
 
 def test_the_probe_runner_does_not_import_the_aggregation_package():
-    """Aggregation consumes the runner, never the reverse."""
-    source = (PACKAGE_ROOT / "review.py").read_text(encoding="utf-8")
-    assert "aggregation" not in source
+    """Aggregation consumes the runner, never the reverse.
+
+    Checked by AST rather than by substring: the word may legitimately appear in
+    a docstring, and a test that fails on prose is a test people delete.
+    """
+    tree = ast.parse((PACKAGE_ROOT / "review.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert "aggregation" not in (node.module or "")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                assert "aggregation" not in alias.name
 
 
 def test_aggregating_writes_nothing(busy_case, db):
