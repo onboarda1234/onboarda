@@ -28,7 +28,28 @@ from enum import Enum
 #: consumer can refuse a version it does not understand.
 BUNDLE_SCHEMA_VERSION = "supervisor-bundle-v2"
 
+#: The finding contract: what a finding record carries and what ``review_hash``
+#: is computed over. Owned by the probe runner.
 REVIEW_SCHEMA_VERSION = "supervisor-review-v1"
+
+#: The aggregation contract: the shape of a ``SupervisorReview`` — its sections,
+#: its grouping rules, its status vocabulary. Versioned **separately** from
+#: ``REVIEW_SCHEMA_VERSION`` because the two change for different reasons: how a
+#: review is presented can be revised without the underlying findings changing
+#: at all, and the finding contract must be able to move without invalidating
+#: every stored presentation.
+#:
+#: Three hashes, three questions, and they are not interchangeable:
+#:
+#: * ``input_bundle_hash`` — what evidence was read
+#: * ``review_hash``       — what the probes concluded from it
+#: * ``aggregation_hash``  — how that was assembled into one review
+#:
+#: A change here moves ``aggregation_hash`` and leaves ``review_hash`` alone,
+#: which is exactly the discrimination an auditor needs: it distinguishes "the
+#: findings changed" from "the presentation changed".
+AGGREGATION_SCHEMA_VERSION = "supervisor-aggregation-v1"
+
 POLICY_CONTRACT_VERSION = "policy-contract-v1"
 
 #: The Phase 0B-2 probe set: P-02 risk factor resolution integrity, P-03 EDD

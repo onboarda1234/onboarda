@@ -76,8 +76,13 @@ def assert_no_excluded_keys(value: Any, *, path: str = "$") -> None:
             assert_no_excluded_keys(item, path=f"{path}[{index}]")
 
 
-def _sha256_hex(payload: bytes) -> str:
+def sha256_hex(payload: bytes) -> str:
+    """Hex SHA-256. The one hash primitive; there is no second one anywhere."""
     return hashlib.sha256(payload).hexdigest()
+
+
+#: Retained for the call sites in this module, which predate the public name.
+_sha256_hex = sha256_hex
 
 
 def compute_input_bundle_hash(bundle: Mapping[str, Any]) -> str:
