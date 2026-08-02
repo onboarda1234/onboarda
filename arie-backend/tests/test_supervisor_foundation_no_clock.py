@@ -39,12 +39,26 @@ FORBIDDEN_NAMES = {"monotonic", "perf_counter", "time_ns"}
 
 
 def _module_paths() -> list[pathlib.Path]:
-    return sorted(PACKAGE_ROOT.glob("*.py"))
+    """Every module in the package, including the ``probes`` sub-package.
+
+    Recursive by design: a probe is the code most likely to want a clock, and a
+    non-recursive glob would have quietly exempted the whole probe set.
+    """
+    return sorted(PACKAGE_ROOT.rglob("*.py"))
 
 
 def test_package_has_modules_to_check():
     """Guard against the static scan silently passing on an empty file list."""
-    assert len(_module_paths()) >= 6
+    names = {path.name for path in _module_paths()}
+    assert len(names) >= 6
+    # Named explicitly so a probe module dropping out of the scan is a failure,
+    # not a silently smaller list.
+    assert {
+        "risk_resolution.py",
+        "edd_divergence.py",
+        "screening_defensibility.py",
+        "monitoring_requirement.py",
+    } <= names
 
 
 @pytest.mark.parametrize("path", _module_paths(), ids=lambda p: p.name)
@@ -127,6 +141,14 @@ def test_assemble_and_review_complete_with_every_clock_disabled(db, monkeypatch)
 
     assert review["as_of"] == AS_OF
     assert review["review_hash"]
+
+    # And again with the real probe set: the shipped probes must complete with
+    # no clock available at all, not merely avoid one in their source text.
+    from supervisor_foundation.probes import PROBES
+
+    with_probes = run_review(bundle, probes=PROBES)
+    assert with_probes["finding_count"] == len(PROBES)
+    assert with_probes["review_hash"]
 
 
 def test_memo_supervisor_clock_cannot_influence_the_bundle(db, monkeypatch):

@@ -31,11 +31,20 @@ BUNDLE_SCHEMA_VERSION = "supervisor-bundle-v2"
 REVIEW_SCHEMA_VERSION = "supervisor-review-v1"
 POLICY_CONTRACT_VERSION = "policy-contract-v1"
 
-#: Phase 0B-2 still ships **no probes** — this PR is a bundle-contract change
-#: only. The version is bumped solely to represent "the empty probe set running
-#: against a v2 bundle", so a review computed now is distinguishable from one
-#: computed against v1. The first real probes will bump it again.
-PROBE_SET_VERSION = "probe-set-0b2-empty"
+#: The Phase 0B-2 probe set: P-02 risk factor resolution integrity, P-03 EDD
+#: routing divergence, P-04 screening reliance defensibility, P-06 monitoring
+#: requirement not established. See ``supervisor_foundation.probes.PROBES``.
+#:
+#: This identifies the *set*, not any one probe. Adding, removing or re-versioning
+#: a probe changes what a review means and must bump this value, which changes
+#: ``review_hash`` for every subject — that is the point: a stored review names
+#: the probe set that produced it and cannot be silently reinterpreted under a
+#: different one.
+#:
+#: Versioned independently of ``BUNDLE_SCHEMA_VERSION``. The bundle contract and
+#: the questions asked of it change for different reasons and on different
+#: schedules.
+PROBE_SET_VERSION = "probe-set-0b2-v1"
 
 
 class SubjectType(str, Enum):

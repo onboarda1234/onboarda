@@ -53,26 +53,37 @@ def test_schema_version_is_v2():
     assert BUNDLE_SCHEMA_VERSION == "supervisor-bundle-v2"
 
 
-def test_probe_set_version_still_represents_an_empty_set():
-    """v2 is a bundle change. No probes ship in this PR."""
-    from supervisor_foundation import PROBE_SET_VERSION
+def test_probe_set_version_is_versioned_independently_of_the_bundle():
+    """Two contracts, two versions, changed for different reasons.
 
-    assert PROBE_SET_VERSION == "probe-set-0b2-empty"
-    assert "empty" in PROBE_SET_VERSION
+    The bundle says what evidence is available; the probe set says what
+    questions are asked of it. Coupling them would force a hash-invalidating
+    bundle bump every time a probe changed, and vice versa.
+    """
+    from supervisor_foundation import BUNDLE_SCHEMA_VERSION, PROBE_SET_VERSION
+
+    assert BUNDLE_SCHEMA_VERSION == "supervisor-bundle-v2"
+    assert PROBE_SET_VERSION == "probe-set-0b2-v1"
+    assert BUNDLE_SCHEMA_VERSION not in PROBE_SET_VERSION
 
 
-def test_no_probe_module_exists_yet():
-    """Guard against probe code arriving in the bundle-contract PR."""
+def test_probe_modules_live_in_their_own_package():
+    """Probes are a package, not loose modules beside the foundation.
+
+    The separation is what lets the import-boundary guard state a simple rule:
+    nothing authoritative imports ``supervisor_foundation.probes``.
+    """
     package_root = BUNDLE_SOURCE.parent
-    assert not (package_root / "probes").exists()
-    modules = {path.name for path in package_root.glob("*.py")}
-    for forbidden in (
+    assert (package_root / "probes" / "__init__.py").exists()
+    loose = {path.name for path in package_root.glob("*.py")}
+    for probe_module in (
         "risk_resolution.py",
         "edd_divergence.py",
         "screening_defensibility.py",
         "monitoring_requirement.py",
     ):
-        assert forbidden not in modules
+        assert probe_module not in loose
+        assert (package_root / "probes" / probe_module).exists()
 
 
 def test_v2_additions_are_declared_in_source():

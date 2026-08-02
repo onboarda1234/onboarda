@@ -10,11 +10,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
+import ast
+import inspect
 
 import pytest
 
 from supervisor_foundation import (
     POLICY_KEYS,
+    PROBE_SET_VERSION,
     AvailabilityStatus,
     FindingStatus,
     PolicyProfile,
@@ -317,11 +320,31 @@ def _draft(**overrides):
     return draft
 
 
-def test_phase_0b1_default_runs_no_probes():
+def test_runner_knows_nothing_about_the_probe_set():
+    """``probes`` defaults to empty and the runner never imports the package.
+
+    Keeping the runner ignorant of which questions are asked is what lets the
+    probe set be versioned, replaced or emptied without touching hashing or
+    finding identity.
+    """
+    import supervisor_foundation.review as review_module
+
     review = run_review(_bundle())
     assert review["finding_count"] == 0
-    assert review["probe_set_version"] == "probe-set-0b2-empty"
     assert review["review_completeness"]["probes_run"] == 0
+    assert review["probe_set_version"] == PROBE_SET_VERSION
+
+    imported = {
+        node.module
+        for node in ast.walk(ast.parse(inspect.getsource(review_module)))
+        if isinstance(node, ast.ImportFrom)
+    } | {
+        alias.name
+        for node in ast.walk(ast.parse(inspect.getsource(review_module)))
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert not any("probes" in str(name) for name in imported), imported
 
 
 def test_runner_rejects_a_draft_missing_required_fields():

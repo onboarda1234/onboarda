@@ -1280,6 +1280,78 @@ no frozen-module guard test regresses; findings are advisory-only and provably
 cannot reach an approval gate — enforced by a guard test asserting no write path
 exists to any authority listed in §2.3.
 
+##### 0B-2 as implemented — `probe-set-0b2-v1`
+
+Package `supervisor_foundation/probes/`, exit criteria met. Real-case results,
+the three defects the corpus exposed and the SHIP/REVISE/DROP calls are in
+[`supervisor-0b2-real-case-validation.md`](supervisor-0b2-real-case-validation.md).
+Six deviations from the specification above are worth recording here, because
+each was a decision rather than an omission. Items 1 and 5 were found in the
+pre-merge closure review, not during implementation:
+
+1. **P-03 compares routes in one direction only.** ``evaluate_edd_routing``
+   reads ten fact keys; ``REQUIRED_FACT_KEYS`` — the policy's *completeness*
+   contract — names eight, and the bundle projects those. The two it reads but
+   does not require are ``sector_label`` and
+   ``supervisor_mandatory_escalation_reasons``. The reasons list is recoverable
+   from the supervisor-verdict section and is now supplied; ``sector_label`` is
+   not carried and doing so is a bundle-contract change.
+
+   An absent input can only *remove* a trigger, so the recomputed route can only
+   under-trigger. P-03 therefore reports divergence only where stored is
+   ``standard`` and the re-run says ``edd`` — the direction no absent key can
+   manufacture. The opposite direction is reported ``not_replayable``, and the
+   conservative-over-routing check was removed because it rested entirely on the
+   unsafe direction. Measured on the canonical corpus: 15 of 38 evaluable cases
+   diverged in trigger set before the reasons fix, 1 after (the crypto case,
+   route unaffected); 0 route mismatches either way.
+
+2. **P-04 ships four checks, not five.** A terminality check was implemented and
+   removed. `screening_state.derive_screening_state()` derives the state from the
+   same provider record `provider_mode_from_record()` reads, so a non-terminal
+   state is entailed by a non-live provider mode and the two checks reported one
+   fact twice. The derived state is named in the provider finding instead. The
+   entailment is asserted across the whole provider-mode vocabulary by
+   `test_terminality_is_entailed_by_provider_mode`; if `screening_state` ever
+   lets the two diverge, the check is reinstated deliberately.
+
+3. **Findings declare their identity anchor.** §10.6 derives `finding_id` from a
+   *primary evidence reference*, which the 0B-1 runner took to be the
+   lowest-sorting reference. Every P-04 finding cites the same application-level
+   approval references, so several findings on one case collapsed onto a single
+   identifier. A probe that can fire more than once per subject now declares
+   `primary_evidence_ref` explicitly, naming the field the check examined; the
+   runner validates it is one of the finding's own references and records it on
+   the output. The fallback is unchanged for single-hit probes.
+
+4. **P-03 calls `evaluate_edd_routing()`.** The clock-hazard register above
+   previously said it would not be called in Phase 0B. Re-running the governed
+   policy *is* the probe, and its one clock-bearing field is cosmetic and
+   excluded from comparison. The register row is updated accordingly.
+
+5. **P-06 governs on open periodic reviews only.** Completing a review inserts
+   the next cycle as a new ``pending`` row, so a reviewed customer accumulates
+   closed rows whose ``next_review_date`` is in the past. Selecting the earliest
+   date across *all* rows — as the first implementation did — would grade a
+   closed historical cycle from the second cycle onward and report ``clear``
+   while the live schedule went unexamined: a systematic false negative across
+   the entire reviewed population. A file holding only closed reviews is now the
+   same control gap as a file holding none.
+
+6. **Two silent authoritative fallbacks are refused, not inherited.**
+   `periodic_review_policy.parse_review_date()` (§10.4.3) returns today for
+   unreadable input, and `periodic_review_policy.normalize_risk_level()` maps any
+   unrecognised level to `MEDIUM`. Inheriting either would convert a defective
+   record into a compliant-looking one — a corrupt date read as "scheduled
+   today", or a governed 24-month cycle attributed to an ungoverned level. P-06
+   parses dates itself and refuses the frequency lookup for a level outside
+   `RISK_FREQUENCY_MONTHS`. The second is reachable in practice:
+   `applications.risk_level` carries a CHECK constraint on the four governed
+   levels and `final_risk_level`, the column the probe reads, does not.
+
+**Not addressed, by instruction:** the five-field cross-section duplication and
+the risk/decision null-versus-absent inconsistency deferred at bundle v2.
+
 ---
 
 #### 0B-3 — Policy-dependent probes
@@ -1418,7 +1490,7 @@ Two distinct severities matter here, and conflating them is the trap:
 |---|---|---|---|
 | `evaluate_document_reliance_gate()` | **Material** | Calls `datetime.now(timezone.utc)` for `generated_at` **and derives the `stale_verification` blocker from it** | **Do not call.** Assemble `build_required_document_expectations()` output plus per-document reliance state; derive staleness from `as_of` |
 | `build_screening_truth_summary()` | **Material** | Reaches a clock transitively via `screening_state._timestamp_is_past`, which compares `screening_valid_until` against `datetime.now(timezone.utc)`. This feeds **`freshness`, `stale` and `approval_blocking`** | **Do not call.** Assemble the stored screening report and officer dispositions; derive freshness from `as_of` |
-| `evaluate_edd_routing()` | Cosmetic (but out of scope) | Emits `evaluated_at` | Not called in Phase 0B — re-running the policy is probe P-03 |
+| `evaluate_edd_routing()` | Cosmetic | Emits `evaluated_at` | **Called in Phase 0B-2** by probe P-03, which re-runs the policy on the stored fact contract. `evaluated_at` is excluded from every comparison the probe makes (`edd_divergence.COSMETIC_KEYS`) and never reaches a finding. The route and triggers the probe compares are pure functions of the facts |
 | `run_memo_supervisor()` | Cosmetic | Emits `"checked_at": datetime.now().isoformat()` | Call behind a stripping adapter; strip before hashing |
 | `periodic_review_policy.parse_review_date()` | **Material — silent** | Falls back to `datetime.now(timezone.utc).date()` on malformed or missing input, and `add_months()` / `_interval_days()` inherit it | **Do not call on unvalidated input.** Parse dates in the probe; report malformed or missing dates explicitly. See §10.4.3 |
 | `Finding.created_at` | Cosmetic | Would make every run unique | Set from the injected `as_of`, never wall-clock |
@@ -1617,8 +1689,10 @@ Within a version the invariant is unchanged: identical bundle + identical policy
 version ⇒ identical findings and review hash.
 
 `probe_set_version` and `BUNDLE_SCHEMA_VERSION` are **separate contracts** and
-move independently. v2 pairs with `probe-set-0b2-empty` — the bundle contract
-changed; the probe set is still empty.
+move independently. v2 was introduced alongside `probe-set-0b2-empty` — the
+bundle contract changed while the probe set was still empty — and Phase 0B-2
+moved the probe set to `probe-set-0b2-v1` against an unchanged v2 bundle. Each
+version moves when its own contract does.
 
 #### 10.9.2 Across environments
 
@@ -1633,6 +1707,40 @@ system of record*, and `screening_review:{id}` is a pointer to a specific
 persisted record, not a content descriptor. It is stated here because the
 tempting misuse — comparing a staging hash against a production hash to assert
 "same case" — would silently always report a difference.
+
+#### 10.9.3 Deployment configuration is never review input
+
+The two subsections above describe hashes that legitimately differ. This one
+describes a difference that would be a defect.
+
+Every field of a finding is hashed. **No finding field may derive from
+deployment configuration** — not the brand (`branding.BRAND`), not an
+environment variable, not a hostname, not a locale. Within a bundle schema
+version the invariant is absolute:
+
+> identical canonical bundle + identical policy version
+> ⇒ identical findings + identical `review_hash`
+
+Configuration is not part of the canonical input contract, so a finding that
+reads it makes the hash a function of something the bundle does not record. Two
+deployments would then disagree on the hash for the same evidence, and a single
+deployment would change its own historical hashes by renaming itself — with
+nothing in the artifact to explain why.
+
+This is recorded because the violation arrived disguised as a fix. Phase 0B-2's
+adverse-media coverage note hard-coded a product name; correcting it to read
+`BRAND["platform_name"]` satisfied the project's branding rule and broke this
+one. Officer-facing finding text is therefore **product-neutral by design**, and
+the neutral wording is also the more accurate one — the limit it describes
+belongs to the configured screening source, not to the platform reading it.
+Enforced by `test_supervisor_probe_determinism_under_branding.py` and by the
+absence of `branding` from the foundation's audited import allowlist.
+
+Where the deployment's capability genuinely *is* review input — whether a
+provider is configured, whether a gated package would serve — it is recorded in
+the bundle's `availability` section and hashed as part of the bundle. That is the
+supported path: such facts become canonical input, rather than leaking into
+finding text downstream of it.
 
 ---
 

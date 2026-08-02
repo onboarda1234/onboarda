@@ -4,16 +4,16 @@ Bundle in, deterministic finding list and review hash out. The runner takes no
 database handle, opens no connection, reads no clock, calls no external
 service, and triggers no authoritative function.
 
-Phase 0B-1 ships **no probes**. ``probes`` defaults to empty, so a review of any
-bundle produces an empty finding set and a hash determined entirely by the
-bundle and the version constants. The parameter exists so the reproducibility
-harness can inject synthetic probes and prove that finding identifiers and the
-review hash are stable — it is not a probe framework, and adding a real probe
-is Phase 0B-2 work.
+``probes`` defaults to empty, so a review of a bundle with no probes produces an
+empty finding set and a hash determined entirely by the bundle and the version
+constants. The Phase 0B-2 probe set is ``supervisor_foundation.probes.PROBES``;
+callers pass it explicitly, and this module never imports it — the runner knows
+nothing about which questions are being asked.
 """
 
 from __future__ import annotations
 
+import sys
 from typing import Any, Callable, Mapping, Sequence
 
 from .contracts import (
@@ -76,9 +76,20 @@ def _validate_draft(draft: Mapping[str, Any], index: int) -> None:
             "'unavailable' or 'not_replayable', never 'clear'"
         )
 
-    if not isinstance(draft.get("evidence_refs"), (list, tuple)):
+    refs = draft.get("evidence_refs")
+    if not isinstance(refs, (list, tuple)):
         raise ProbeContractError(
             f"probe draft {index} must supply evidence_refs as a list"
+        )
+
+    # An explicitly declared primary reference must be one the finding actually
+    # cites. A phantom reference would give the finding an identity that points
+    # at nothing.
+    declared = draft.get("primary_evidence_ref")
+    if declared is not None and str(declared) not in {str(ref) for ref in refs}:
+        raise ProbeContractError(
+            f"probe draft {index} declares primary_evidence_ref "
+            f"{declared!r}, which is not among its evidence_refs"
         )
 
 
@@ -88,6 +99,7 @@ def _normalise_draft(
     subject_type: str,
     subject_id: str,
     policy_version: str,
+    as_of: str,
 ) -> dict[str, Any]:
     finding = dict(draft)
 
@@ -102,9 +114,25 @@ def _normalise_draft(
     )
 
     # The primary reference is what separates two hits of the same probe on the
-    # same subject. Lowest sorted ref is deterministic; a probe that can hit
-    # more than once must therefore give each hit a distinct reference set.
-    primary = finding["evidence_refs"][0] if finding["evidence_refs"] else ""
+    # same subject.
+    #
+    # A probe that can hit more than once per subject **declares** it, because
+    # the fallback below is not sufficient on its own: two checks of the same
+    # probe on two different parties routinely share their lowest-sorting
+    # reference (the application status ref cited for severity), which would
+    # collapse two genuinely different findings onto one identifier. Declaring
+    # the reference makes identity depend on the field the check actually
+    # examined instead of on lexicographic luck.
+    #
+    # The fallback — lowest sorted ref — remains for single-hit probes, where it
+    # is unambiguous, and is recorded on the finding either way so the identity
+    # is always auditable from the output alone.
+    declared = finding.pop("primary_evidence_ref", None)
+    if declared is not None:
+        primary = str(declared)
+    else:
+        primary = finding["evidence_refs"][0] if finding["evidence_refs"] else ""
+    finding["primary_evidence_ref"] = primary
 
     finding["finding_id"] = compute_finding_id(
         subject_type=subject_type,
@@ -117,7 +145,69 @@ def _normalise_draft(
     finding["subject_type"] = subject_type
     finding["subject_id"] = subject_id
     finding["policy_version"] = policy_version
+    # Stamped by the runner, never by a probe, and always from the injected
+    # ``as_of`` — a probe reaching for a clock is the failure this prevents.
+    finding["created_at"] = as_of
     return finding
+
+
+def _validated(draft: Mapping[str, Any], index: int) -> Mapping[str, Any]:
+    _validate_draft(draft, index)
+    return draft
+
+
+def _probe_failure_draft(probe: Probe, error: Exception) -> dict[str, Any]:
+    """A finding recording that a probe could not run.
+
+    The identifier of the failing probe is taken from its module rather than
+    from a draft, because a probe that raised may never have produced one. The
+    exception *type* is reported and its message is not: a message can carry
+    record content, and this finding travels with the review.
+    """
+    module_name = getattr(probe, "__module__", "") or ""
+    module = sys.modules.get(module_name)
+    probe_id = (
+        getattr(module, "PROBE_ID", "")
+        or module_name.rsplit(".", 1)[-1]
+        or "unknown"
+    )
+    probe_version = getattr(module, "PROBE_VERSION", "") or "unknown"
+    # A governed category from framework §5.2 rather than an invented one: the
+    # register is closed, and a probe crash is not a new kind of compliance
+    # defect. Each probe declares its primary category for exactly this.
+    category = getattr(module, "PROBE_CATEGORY", "") or "policy"
+
+    return {
+        "probe_id": str(probe_id),
+        "probe_version": str(probe_version),
+        "category": str(category),
+        "severity": "medium",
+        "status": FindingStatus.UNAVAILABLE,
+        "availability_status": AvailabilityStatus.SNAPSHOT_INCOMPLETE,
+        "confidence": 1.0,
+        "claim": (
+            f"Probe {probe_id} could not run against this subject: it raised "
+            f"{type(error).__name__}. Its checks were not evaluated."
+        ),
+        "evidence_refs": [f"supervisor_probe:{probe_id}#execution"],
+        "primary_evidence_ref": f"supervisor_probe:{probe_id}#execution",
+        "source_modules": [module or "supervisor_foundation.review"],
+        "why_it_matters": (
+            "A probe that failed has answered nothing. Recording the failure "
+            "keeps it out of the clear count and stops one probe's defect from "
+            "silently removing its questions from the review."
+        ),
+        "regulatory_or_policy_basis": "internal_policy_only",
+        "officer_question": (
+            "None for this case — the failure is a platform defect, not a "
+            "finding about the customer."
+        ),
+        "required_action": (
+            f"Report the {probe_id} execution failure to the platform team and "
+            "re-run the review once it is fixed."
+        ),
+        "close_condition": f"Probe {probe_id} completes against this subject.",
+    }
 
 
 def run_review(
@@ -132,8 +222,9 @@ def run_review(
     Args:
         bundle: Output of :func:`assemble_application_bundle`. Never mutated.
         policy: Institution policy contract. Defaults to fully unconfigured.
-        probes: Probe callables. **Empty in Phase 0B-1.**
-        probe_set_version: Version identifier folded into ``review_hash``.
+        probes: Probe callables — normally ``supervisor_foundation.probes.PROBES``.
+        probe_set_version: Version identifier folded into ``review_hash``. Must
+            describe the probe set actually passed in ``probes``.
 
     Returns:
         The review: hashes, ordered findings, and the completeness counts that
@@ -151,17 +242,43 @@ def run_review(
 
     findings: list[dict[str, Any]] = []
     for probe in probes:
-        drafts = probe(bundle, resolved_policy) or []
-        for index, draft in enumerate(drafts):
-            _validate_draft(draft, index)
-            findings.append(
+        try:
+            drafts = probe(bundle, resolved_policy) or []
+            normalised = [
                 _normalise_draft(
-                    draft,
+                    _validated(draft, index),
                     subject_type=subject_type,
                     subject_id=subject_id,
                     policy_version=resolved_policy.policy_version,
+                    as_of=str(meta.get("as_of") or ""),
+                )
+                for index, draft in enumerate(drafts)
+            ]
+        except ProbeContractError:
+            # Deliberately not contained. A malformed draft is a defect in the
+            # probe's own code, and the contract exists to make that loud during
+            # development rather than to degrade into "could not run" in
+            # production, where it would look like a data problem.
+            raise
+        except Exception as error:  # noqa: BLE001 - deliberate isolation boundary
+            # Everything else is contained. One probe must not silence three
+            # others; a probe that raises has
+            # answered nothing, so its failure becomes a finding that says so —
+            # never a missing finding, and never a `clear`. Normalisation runs
+            # inside the same try so a malformed draft is contained too, and
+            # findings are only committed once the whole probe succeeds, so a
+            # probe cannot contribute half its output.
+            findings.append(
+                _normalise_draft(
+                    _probe_failure_draft(probe, error),
+                    subject_type=subject_type,
+                    subject_id=subject_id,
+                    policy_version=resolved_policy.policy_version,
+                    as_of=str(meta.get("as_of") or ""),
                 )
             )
+            continue
+        findings.extend(normalised)
 
     ordered = sort_findings(findings)
 

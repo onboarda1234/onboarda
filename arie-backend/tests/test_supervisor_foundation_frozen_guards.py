@@ -1,8 +1,8 @@
-"""Proof that Phase 0B-1 changed no authoritative output.
+"""Proof that the Supervisor changed no authoritative output.
 
-The foundation is additive: a new package and new tests, no edit to any
-authoritative module. These guards assert that positively rather than relying
-on review of the diff.
+The foundation and the probe set are additive: new packages and new tests, no
+edit to any authoritative module. These guards assert that positively rather
+than relying on review of the diff.
 
 Two kinds of evidence:
 
@@ -50,6 +50,35 @@ PROTECTED_FILES = (
 # commit would omit three test/document paths from the proof.
 PHASE_0B1_BASE = "85c70431a2d2a2f4bd6dd3078257d5f22d92bad4"
 PHASE_0B1_HEAD = "901265f9cbfb45bac62358da6a453e24c052078e"
+
+# Immutable historical bounds for PR #916 / Phase 0B-2, pinned at final closure.
+# The base is the merge of PR #914 (bundle v2). The head is the founder-approved
+# head, the commit whose CI run gated the merge decision.
+#
+# **The one-commit residual, stated rather than hidden.** A commit cannot contain
+# its own hash, so the commit that writes this pin necessarily comes after the
+# head it names. It touches this file and the phase documentation only, and both
+# ``arie-backend/tests/test_supervisor_`` and ``docs/`` are inside
+# ``PHASE_0B2_ALLOWED_PREFIXES``, so nothing authoritative can hide in the gap.
+#
+# **Why that residual is documented rather than asserted.** A test diffing
+# ``PHASE_0B2_HEAD..HEAD`` was written, passed locally, and failed CI: Actions
+# checks out the pull request's *merge ref*, so ``HEAD`` there is this branch
+# merged with ``main`` and the diff swept in every unrelated change ``main`` had
+# made since the base. "Commits after the pinned head on this branch" is not a
+# well-defined set once a merge ref or a descendant branch is involved, so it
+# cannot be soundly asserted — which is the same reason both bounds are pinned
+# in the first place. The immutable range below is the proof; the residual is a
+# reading of the diff.
+#
+# **Merge-commit only.** Both this guard and the Phase 0B-1 guard above require
+# the pinned head to remain reachable from later branches, which a merge commit
+# preserves. Squashing or rebasing this pull request would rewrite these commits
+# out of history and make both proofs fail for everyone afterwards — not
+# silently pass, which is the one thing worse. This pull request must be landed
+# with a merge commit.
+PHASE_0B2_BASE = "c667f95ff8ae892bcc8cafe27efa1151cc7d92f6"
+PHASE_0B2_HEAD = "623a456241fbc1750b6ee619fcaf1728f6c49169"
 
 
 def _git(*args: str) -> str:
@@ -115,6 +144,82 @@ def _phase_0b1_changed_paths() -> list[str]:
 
 
 # ── File identity ────────────────────────────────────────────────────
+
+
+def _phase_0b2_changed_paths() -> list[str]:
+    """Return the complete file set changed by PR #916 / Phase 0B-2.
+
+    Both bounds are pinned, for the reason the 0B-1 proof pins both: once the
+    phase merges, ``origin/main...HEAD`` describes some later pull request and
+    the historical claim would silently evaporate. Pinned bounds keep the proof
+    meaningful on every descendant branch.
+
+    Missing history is a hard failure rather than a skip. A guard that quietly
+    passes when it cannot run is worse than no guard.
+    """
+    for commit in (PHASE_0B2_BASE, PHASE_0B2_HEAD):
+        try:
+            _git("cat-file", "-e", f"{commit}^{{commit}}")
+        except subprocess.CalledProcessError as exc:  # pragma: no cover - CI guard
+            pytest.fail(
+                "Phase 0B-2 history is unavailable; checkout must use "
+                f"fetch-depth: 0 before this proof can run. git error: "
+                f"{exc.stderr.strip()}"
+            )
+
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", PHASE_0B2_HEAD, "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if ancestor.returncode == 1:
+        pytest.fail(
+            f"HEAD does not descend from Phase 0B-2 head {PHASE_0B2_HEAD}; "
+            "the historical proof does not apply to this branch."
+        )
+    if ancestor.returncode != 0:
+        pytest.fail(
+            "Phase 0B-2 ancestry could not be verified; git merge-base failed "
+            f"with exit {ancestor.returncode}: {ancestor.stderr.strip()}"
+        )
+    return _git("diff", "--name-only", PHASE_0B2_BASE, PHASE_0B2_HEAD).split()
+
+
+def test_protected_files_unchanged_by_phase_0b2():
+    """The probe set changed no authoritative or frozen file.
+
+    The load-bearing claim of the whole Supervisor: it observes the platform and
+    the platform does not change to accommodate it. A probe that needed
+    ``rule_engine`` edited to work would have crossed the line Phase 0A drew.
+    """
+    changed = _phase_0b2_changed_paths()
+    touched = sorted(set(changed) & set(PROTECTED_FILES))
+    assert not touched, f"Phase 0B-2 modified protected files: {touched}"
+
+
+#: Paths Phase 0B-2 was authorised to touch. Everything else is out of scope by
+#: construction, which is what makes "no workflow changed" a proof and not a
+#: claim.
+PHASE_0B2_ALLOWED_PREFIXES = (
+    "arie-backend/supervisor_foundation/",
+    "arie-backend/tests/supervisor_probe_fixtures.py",
+    "arie-backend/tests/probe_corpus_report.py",
+    "arie-backend/tests/test_supervisor_foundation_",
+    "arie-backend/tests/test_supervisor_probe_",
+    "docs/",
+)
+
+
+def test_phase_0b2_adds_only_foundation_paths():
+    changed = _phase_0b2_changed_paths()
+    unexpected = sorted(
+        path
+        for path in changed
+        if not path.startswith(PHASE_0B2_ALLOWED_PREFIXES)
+    )
+    assert not unexpected, f"unexpected paths changed in Phase 0B-2: {unexpected}"
 
 
 def test_protected_files_unchanged_by_phase_0b1():
@@ -292,4 +397,4 @@ def test_importing_the_foundation_has_no_side_effects():
 
     reloaded = importlib.reload(supervisor_foundation)
     assert reloaded.BUNDLE_SCHEMA_VERSION == "supervisor-bundle-v2"
-    assert reloaded.PROBE_SET_VERSION == "probe-set-0b2-empty"
+    assert reloaded.PROBE_SET_VERSION == "probe-set-0b2-v1"
