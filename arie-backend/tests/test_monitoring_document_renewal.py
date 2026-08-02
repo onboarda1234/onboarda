@@ -1735,6 +1735,41 @@ def test_stale_linkage_reads_truthfully_and_cancellation_remains_available(renew
     assert '"linkage_error_code":"stale_linkage"' in payload
 
 
+@pytest.mark.parametrize("cancel_after_upload", [False, True])
+def test_parent_drift_suppresses_previously_valid_bound_projection(
+    renewal_db, cancel_after_upload
+):
+    request = _create(renewal_db, request_id="renewal-bound-parent-drift")
+    uploaded = renewal.record_renewal_upload(
+        renewal_db,
+        request["request_id"],
+        **_upload_kwargs(renewal_db, request),
+    )
+    if cancel_after_upload:
+        renewal.cancel_renewal_request(
+            renewal_db,
+            request["request_id"],
+            actor=OFFICER,
+            expected_revision=uploaded["revision"],
+            cancel_reason="Replacement upload no longer required.",
+            now=NOW,
+            feature_flags=Flags(True),
+        )
+    renewal_db.execute("UPDATE documents SET version=2 WHERE id='doc-1'")
+    renewal_db.commit()
+
+    projection = renewal.get_renewal_request(
+        renewal_db, request["request_id"], include_history=False
+    )
+
+    assert projection["linkage_current"] is False
+    assert projection["binding_current"] is False
+    assert projection["binding_status"] == "unavailable"
+    assert projection["manual_review_required"] is True
+    assert projection["linkage_error"]["code"] == "stale_linkage"
+    assert "upload_binding" not in projection
+
+
 def test_terminal_alert_does_not_trap_active_request_cancellation(renewal_db):
     request = _create(renewal_db, request_id="renewal-terminal")
     renewal_db.execute("UPDATE monitoring_alerts SET status='resolved' WHERE id=1")

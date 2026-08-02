@@ -1261,7 +1261,11 @@ def _project_for_read(db: Any, row: Mapping[str, Any]) -> Dict[str, Any]:
                 },
             }
         )
-    if result.get("request_status") == "cancelled":
+    if (
+        result.get("request_status") == "cancelled"
+        and binding_error is None
+        and "upload_binding" not in result
+    ):
         result.update(
             {
                 "linkage_current": None,
@@ -1300,8 +1304,14 @@ def _project_for_read(db: Any, row: Mapping[str, Any]) -> Dict[str, Any]:
             }
         )
     except RenewalError as exc:
+        # A binding tuple is only authoritative while its owner linkage still
+        # resolves.  Parent metadata can change outside this orchestration
+        # layer; never retain a public ``Bound`` projection after that drift.
+        result.pop("upload_binding", None)
         result.update(
             {
+                "binding_current": False,
+                "binding_status": "unavailable",
                 "linkage_current": False,
                 "upload_allowed": False,
                 "manual_review_required": True,

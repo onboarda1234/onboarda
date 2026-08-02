@@ -470,68 +470,36 @@ def test_upload_binding_is_exact_immutable_identity_not_a_canonical_document(ren
         ("customer_id", "clients", "id"),
         ("original_document_id", "documents", "id"),
     }
-    grouped_foreign_keys = {}
-    for row in foreign_keys:
-        grouped_foreign_keys.setdefault(row["id"], []).append(row)
-    composite_identities = {
-        (
-            rows[0]["table"],
-            tuple(item["from"] for item in sorted(rows, key=lambda item: item["seq"])),
-            tuple(item["to"] for item in sorted(rows, key=lambda item: item["seq"])),
-        )
-        for rows in grouped_foreign_keys.values()
-    }
-    assert (
-        "monitoring_document_renewal_uploads",
-        ("upload_id", "renewal_request_id", "application_id", "customer_id"),
-        ("upload_id", "request_id", "application_id", "customer_id"),
-    ) in composite_identities
-    assert (
-        "monitoring_document_renewal_requests",
-        (
-            "renewal_request_id",
-            "application_id",
-            "customer_id",
-            "original_document_id",
-            "original_document_version",
-            "document_type",
-        ),
-        (
-            "request_id",
-            "application_id",
-            "customer_id",
-            "document_id",
-            "document_version",
-            "document_type",
-        ),
-    ) in composite_identities
-    assert (
-        "monitoring_document_renewal_requests",
-        ("renewal_request_id", "person_id", "person_type"),
-        ("request_id", "person_id", "person_type"),
-    ) in composite_identities
-    assert (
-        "applications",
-        ("application_id", "customer_id"),
-        ("id", "client_id"),
-    ) in composite_identities
-    assert (
-        "documents",
-        (
-            "original_document_id",
-            "application_id",
-            "document_type",
-            "original_document_version",
-        ),
-        ("id", "application_id", "doc_type", "version"),
-    ) in composite_identities
-    assert (
-        "documents",
-        ("original_document_id", "application_id", "person_id", "person_type"),
-        ("id", "application_id", "person_id", "person_type"),
-    ) in composite_identities
     assert {row["on_delete"].upper() for row in foreign_keys} == {"RESTRICT"}
     assert all(row["from"] != "uploaded_document_id" for row in foreign_keys)
+
+    identity_indexes = renewal_db.execute(
+        """SELECT name
+             FROM sqlite_master
+            WHERE type = 'index'
+              AND name IN (
+                    'uq_monitoring_doc_renewal_app_customer',
+                    'uq_monitoring_doc_renewal_upload_identity',
+                    'uq_monitoring_doc_renewal_request_identity',
+                    'uq_monitoring_doc_renewal_request_person',
+                    'uq_monitoring_doc_renewal_document_identity',
+                    'uq_monitoring_doc_renewal_document_person'
+               )"""
+    ).fetchall()
+    assert identity_indexes == []
+    guard_names = {
+        row["name"]
+        for row in renewal_db.execute(
+            """SELECT name
+                 FROM sqlite_master
+                WHERE type = 'trigger'
+                  AND name LIKE 'trg_monitoring_doc_renewal_binding_identity_%'"""
+        ).fetchall()
+    }
+    assert guard_names == {
+        "trg_monitoring_doc_renewal_binding_identity_insert",
+        "trg_monitoring_doc_renewal_binding_identity_update",
+    }
 
     indexes = renewal_db.execute(
         "PRAGMA index_list(monitoring_document_renewal_upload_bindings)"
@@ -632,7 +600,7 @@ def test_upload_binding_identity_trigger_rejects_null_safe_or_upload_mismatch(
     person_type = None if column == "person_id" else "director"
     with pytest.raises(sqlite3.IntegrityError):
         renewal_db.execute(
-            f"""INSERT INTO monitoring_document_renewal_upload_bindings
+            """INSERT INTO monitoring_document_renewal_upload_bindings
                     (upload_id, renewal_request_id, application_id, customer_id,
                      person_id, person_type, original_document_id,
                      original_document_version, uploaded_document_id, document_type,
@@ -863,6 +831,74 @@ def test_upload_binding_migration_is_additive_idempotent_and_never_guesses_rows(
     }
 
 
+def test_runner_059_installs_tuple_guard_before_recording_version(renewal_db):
+    from migrations.runner import run_migration
+
+    renewal_db.execute("DROP TABLE monitoring_document_renewal_upload_bindings")
+    renewal_db.execute("DELETE FROM schema_version WHERE version = ?", ("059",))
+    renewal_db.commit()
+
+    run_migration(
+        renewal_db,
+        "059",
+        UPLOAD_BINDING_MIGRATION_PATH,
+        "monitoring document renewal upload binding",
+    )
+    trigger_names = {
+        row["name"]
+        for row in renewal_db.execute(
+            """SELECT name
+                 FROM sqlite_master
+                WHERE type = 'trigger'
+                  AND name LIKE 'trg_monitoring_doc_renewal_binding_identity_%'"""
+        ).fetchall()
+    }
+    assert trigger_names == {
+        "trg_monitoring_doc_renewal_binding_identity_insert",
+        "trg_monitoring_doc_renewal_binding_identity_update",
+    }
+    assert renewal_db.execute(
+        "SELECT 1 FROM schema_version WHERE version = ?", ("059",)
+    ).fetchone() is not None
+
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_binding(
+            renewal_db,
+            original_document_id="renewal-doc-b",
+            document_type="proof_of_address",
+        )
+    renewal_db.rollback()
+
+
+def test_migration_059_avoids_redundant_parent_identity_indexes():
+    sql = UPLOAD_BINDING_MIGRATION_PATH.read_text(encoding="utf-8")
+    assert "CREATE UNIQUE INDEX" not in sql.upper()
+    import db as db_module
+    postgres_schema = db_module._get_postgres_schema()
+    sqlite_schema = db_module._get_sqlite_schema()
+    for prohibited in (
+        "uq_monitoring_doc_renewal_app_customer",
+        "uq_monitoring_doc_renewal_upload_identity",
+        "uq_monitoring_doc_renewal_request_identity",
+        "uq_monitoring_doc_renewal_request_person",
+        "uq_monitoring_doc_renewal_document_identity",
+        "uq_monitoring_doc_renewal_document_person",
+    ):
+        assert prohibited not in sql
+        assert prohibited not in postgres_schema
+        assert prohibited not in sqlite_schema
+
+    runner_source = (
+        BACKEND_ROOT / "migrations" / "runner.py"
+    ).read_text(encoding="utf-8")
+    assert 'if version == "059"' in runner_source
+    assert "ensure_monitoring_document_renewal_upload_binding_guard(db)" in (
+        runner_source
+    )
+
+
 def test_renewal_tables_are_regulated_and_not_unattended_purge_targets():
     from regulated_deletion import EPHEMERAL_TABLES, REGULATED_TABLES
 
@@ -891,10 +927,24 @@ def test_live_postgres_schema_and_file_migration_types(monkeypatch):
         db.execute("DROP TABLE monitoring_document_renewal_events")
         db.execute("DROP TABLE monitoring_document_renewal_requests")
         db.execute("DROP TABLE monitoring_document_renewal_scheduler_state")
+        db.execute("DELETE FROM schema_version WHERE version = ?", ("059",))
         db.commit()
         db.executescript(MIGRATION_PATH.read_text(encoding="utf-8"))
-        db.executescript(UPLOAD_BINDING_MIGRATION_PATH.read_text(encoding="utf-8"))
-        db.commit()
+        from migrations.runner import run_migration
+        run_migration(
+            db,
+            "059",
+            UPLOAD_BINDING_MIGRATION_PATH,
+            "monitoring document renewal upload binding",
+        )
+
+        trigger = db.execute(
+            """SELECT 1
+                 FROM pg_trigger
+                WHERE tgname = 'trg_monitoring_doc_renewal_binding_identity'
+                  AND NOT tgisinternal"""
+        ).fetchone()
+        assert trigger is not None
 
         rows = db.execute(
             """SELECT table_name, column_name, data_type
@@ -943,6 +993,10 @@ def test_live_postgres_schema_and_file_migration_types(monkeypatch):
         # CREATE TABLE / INDEX IF NOT EXISTS remains a no-op on rerun.
         db.executescript(MIGRATION_PATH.read_text(encoding="utf-8"))
         db.executescript(UPLOAD_BINDING_MIGRATION_PATH.read_text(encoding="utf-8"))
+        from monitoring_document_renewal_schema import (
+            ensure_monitoring_document_renewal_upload_binding_guard,
+        )
+        ensure_monitoring_document_renewal_upload_binding_guard(db)
         db.commit()
     finally:
         db.close()
@@ -1010,6 +1064,91 @@ def test_live_postgres_binding_identity_guard_rejects_cross_wired_rows(monkeypat
                 ("upload-1",),
             ).fetchone()["upload_timestamp"]
         ).startswith("2030-01-01 00:00:00")
+    finally:
+        db.close()
+        db_module.close_pg_pool()
+
+
+def test_live_postgres_guard_install_does_not_lock_app_or_document_writers(
+    monkeypatch,
+):
+    dsn = os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("DATABASE_URL_TEST")
+    if not dsn:
+        pytest.skip("Set TEST_POSTGRES_DSN or DATABASE_URL_TEST for PostgreSQL validation")
+
+    import psycopg2
+    from monitoring_document_renewal_schema import (
+        ensure_monitoring_document_renewal_upload_binding_guard,
+    )
+    from tests.test_migration_chain_full import _fresh_pg
+
+    db_module, db = _fresh_pg(monkeypatch)
+    blocker = None
+    try:
+        db.execute(
+            "DROP TRIGGER trg_monitoring_doc_renewal_binding_identity "
+            "ON monitoring_document_renewal_upload_bindings"
+        )
+        db.commit()
+
+        blocker = psycopg2.connect(dsn)
+        with blocker.cursor() as cursor:
+            cursor.execute("LOCK TABLE applications IN ROW EXCLUSIVE MODE")
+            cursor.execute("LOCK TABLE documents IN ROW EXCLUSIVE MODE")
+
+        db.execute("SET LOCAL lock_timeout = '500ms'")
+        ensure_monitoring_document_renewal_upload_binding_guard(db)
+        db.commit()
+
+        assert db.execute(
+            """SELECT 1
+                 FROM pg_trigger
+                WHERE tgname = 'trg_monitoring_doc_renewal_binding_identity'
+                  AND NOT tgisinternal"""
+        ).fetchone() is not None
+    finally:
+        if blocker is not None:
+            blocker.rollback()
+            blocker.close()
+        db.close()
+        db_module.close_pg_pool()
+
+
+def test_live_postgres_guard_convergence_repairs_incomplete_trigger(monkeypatch):
+    dsn = os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("DATABASE_URL_TEST")
+    if not dsn:
+        pytest.skip("Set TEST_POSTGRES_DSN or DATABASE_URL_TEST for PostgreSQL validation")
+
+    from monitoring_document_renewal_schema import (
+        ensure_monitoring_document_renewal_upload_binding_guard,
+    )
+    from tests.test_migration_chain_full import _fresh_pg
+
+    db_module, db = _fresh_pg(monkeypatch)
+    try:
+        db.execute(
+            "DROP TRIGGER trg_monitoring_doc_renewal_binding_identity "
+            "ON monitoring_document_renewal_upload_bindings"
+        )
+        db.execute(
+            """CREATE TRIGGER trg_monitoring_doc_renewal_binding_identity
+               BEFORE INSERT ON monitoring_document_renewal_upload_bindings
+               FOR EACH STATEMENT
+               EXECUTE FUNCTION monitoring_document_renewal_binding_identity_guard()"""
+        )
+        db.commit()
+
+        ensure_monitoring_document_renewal_upload_binding_guard(db)
+        db.commit()
+
+        definition = db.execute(
+            """SELECT pg_get_triggerdef(t.oid) AS definition
+                 FROM pg_trigger t
+                WHERE t.tgname = 'trg_monitoring_doc_renewal_binding_identity'
+                  AND NOT t.tgisinternal"""
+        ).fetchone()["definition"].upper()
+        assert "BEFORE INSERT OR UPDATE" in definition
+        assert "FOR EACH ROW" in definition
     finally:
         db.close()
         db_module.close_pg_pool()

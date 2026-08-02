@@ -39,13 +39,22 @@ the locked renewal request. The portal supplies only the request route and file
 body. It never supplies raw customer, person or document identifiers as
 binding authority.
 
-The database independently rejects cross-wired identities. Composite foreign
-keys bind the candidate upload, renewal request, application/customer and
-original document/version/type as one tuple rather than accepting unrelated
-but individually valid IDs. Engine-specific INSERT/UPDATE guards additionally
-compare the nullable person/entity pair, upload timestamp and uploader with
-null-safe semantics. These constraints protect future or operator SQL paths;
-the service remains the only approved application writer.
+The database independently rejects cross-wired identities. One dialect-aware
+INSERT/UPDATE guard joins the candidate upload, renewal request,
+application/customer and original document/version/type and compares the
+nullable person/entity pair, upload timestamp and uploader with null-safe
+semantics. It rejects unrelated but individually valid IDs. The guard is
+installed both by consolidated startup and the migration-059 runner hook before
+the migration is recorded as applied.
+
+The design deliberately does not add redundant composite indexes to the
+existing Applications or Documents tables (or to the renewal tables): every
+proposed tuple began with an already-unique primary key, while a normal index
+build could block regulated writes. Existing simple foreign keys retain parent
+existence protection. Current owner linkage is revalidated on every read; later
+parent drift suppresses the public binding and requires manual review instead
+of displaying a stale **Bound** state. The service remains the only approved
+application writer.
 
 ## Fail-closed validation
 

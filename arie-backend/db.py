@@ -1484,30 +1484,6 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_uploads_application
         ON monitoring_document_renewal_uploads(application_id);
 
-    -- The binding contract is authoritative at the database boundary as well
-    -- as in the service.  These identity indexes let the composite foreign
-    -- keys below prove that independently valid IDs belong to the same upload,
-    -- renewal request, application/customer and original document.
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_app_customer
-        ON applications(id, client_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_upload_identity
-        ON monitoring_document_renewal_uploads(
-            upload_id, request_id, application_id, customer_id
-        );
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_request_identity
-        ON monitoring_document_renewal_requests(
-            request_id, application_id, customer_id, document_id,
-            document_version, document_type
-        );
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_request_person
-        ON monitoring_document_renewal_requests(
-            request_id, person_id, person_type
-        );
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_document_identity
-        ON documents(id, application_id, doc_type, version);
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_document_person
-        ON documents(id, application_id, person_id, person_type);
-
     CREATE TABLE IF NOT EXISTS monitoring_document_renewal_upload_bindings (
         upload_id TEXT PRIMARY KEY
             REFERENCES monitoring_document_renewal_uploads(upload_id) ON DELETE RESTRICT,
@@ -1538,77 +1514,8 @@ def _get_postgres_schema() -> str:
         CHECK(contract_version = 'monitoring_document_renewal_upload_binding_v1'),
         CHECK(length(binding_fingerprint) = 64),
         CHECK(binding_fingerprint = lower(binding_fingerprint)),
-        CHECK(length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(binding_fingerprint, '0', ''), '1', ''), '2', ''), '3', ''), '4', ''), '5', ''), '6', ''), '7', ''), '8', ''), '9', ''), 'a', ''), 'b', ''), 'c', ''), 'd', ''), 'e', ''), 'f', '')) = 0),
-        FOREIGN KEY(application_id, customer_id)
-            REFERENCES applications(id, client_id) ON DELETE RESTRICT,
-        FOREIGN KEY(upload_id, renewal_request_id, application_id, customer_id)
-            REFERENCES monitoring_document_renewal_uploads(
-                upload_id, request_id, application_id, customer_id
-            ) ON DELETE RESTRICT,
-        FOREIGN KEY(
-            renewal_request_id, application_id, customer_id,
-            original_document_id, original_document_version, document_type
-        ) REFERENCES monitoring_document_renewal_requests(
-            request_id, application_id, customer_id,
-            document_id, document_version, document_type
-        ) ON DELETE RESTRICT,
-        FOREIGN KEY(renewal_request_id, person_id, person_type)
-            REFERENCES monitoring_document_renewal_requests(
-                request_id, person_id, person_type
-            ) ON DELETE RESTRICT,
-        FOREIGN KEY(
-            original_document_id, application_id, document_type,
-            original_document_version
-        ) REFERENCES documents(id, application_id, doc_type, version)
-            ON DELETE RESTRICT,
-        FOREIGN KEY(original_document_id, application_id, person_id, person_type)
-            REFERENCES documents(id, application_id, person_id, person_type)
-            ON DELETE RESTRICT
+        CHECK(length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(binding_fingerprint, '0', ''), '1', ''), '2', ''), '3', ''), '4', ''), '5', ''), '6', ''), '7', ''), '8', ''), '9', ''), 'a', ''), 'b', ''), 'c', ''), 'd', ''), 'e', ''), 'f', '')) = 0)
     );
-    CREATE OR REPLACE FUNCTION monitoring_document_renewal_binding_identity_guard()
-    RETURNS TRIGGER AS $$
-    BEGIN
-        IF NOT EXISTS (
-            SELECT 1
-              FROM monitoring_document_renewal_uploads u
-              JOIN monitoring_document_renewal_requests r
-                ON r.request_id = u.request_id
-               AND r.application_id = u.application_id
-               AND r.customer_id = u.customer_id
-              JOIN applications a
-                ON a.id = r.application_id
-               AND a.client_id = r.customer_id
-              JOIN documents d
-                ON d.id = r.document_id
-               AND d.application_id = r.application_id
-             WHERE u.upload_id = NEW.upload_id
-               AND r.request_id = NEW.renewal_request_id
-               AND r.application_id = NEW.application_id
-               AND r.customer_id = NEW.customer_id
-               AND r.person_id IS NOT DISTINCT FROM NEW.person_id
-               AND r.person_type IS NOT DISTINCT FROM NEW.person_type
-               AND r.document_id = NEW.original_document_id
-               AND r.document_version = NEW.original_document_version
-               AND r.document_type = NEW.document_type
-               AND d.person_id IS NOT DISTINCT FROM NEW.person_id
-               AND d.person_type IS NOT DISTINCT FROM NEW.person_type
-               AND d.doc_type = NEW.document_type
-               AND d.version = NEW.original_document_version
-               AND u.uploaded_at = NEW.upload_timestamp
-               AND u.uploaded_by = NEW.uploaded_by
-        ) THEN
-            RAISE EXCEPTION 'monitoring renewal upload binding identity mismatch'
-                USING ERRCODE = '23503';
-        END IF;
-        RETURN NEW;
-    END;
-    $$ LANGUAGE plpgsql;
-    DROP TRIGGER IF EXISTS trg_monitoring_doc_renewal_binding_identity
-        ON monitoring_document_renewal_upload_bindings;
-    CREATE TRIGGER trg_monitoring_doc_renewal_binding_identity
-        BEFORE INSERT OR UPDATE ON monitoring_document_renewal_upload_bindings
-        FOR EACH ROW
-        EXECUTE FUNCTION monitoring_document_renewal_binding_identity_guard();
     CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_binding_application
         ON monitoring_document_renewal_upload_bindings(application_id);
     CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_binding_customer
@@ -3283,28 +3190,6 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_uploads_application
         ON monitoring_document_renewal_uploads(application_id);
 
-    -- Mirror PostgreSQL's authoritative composite identity contract in the
-    -- disposable SQLite schema used by development and focused tests.
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_app_customer
-        ON applications(id, client_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_upload_identity
-        ON monitoring_document_renewal_uploads(
-            upload_id, request_id, application_id, customer_id
-        );
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_request_identity
-        ON monitoring_document_renewal_requests(
-            request_id, application_id, customer_id, document_id,
-            document_version, document_type
-        );
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_request_person
-        ON monitoring_document_renewal_requests(
-            request_id, person_id, person_type
-        );
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_document_identity
-        ON documents(id, application_id, doc_type, version);
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_document_person
-        ON documents(id, application_id, person_id, person_type);
-
     CREATE TABLE IF NOT EXISTS monitoring_document_renewal_upload_bindings (
         upload_id TEXT PRIMARY KEY
             REFERENCES monitoring_document_renewal_uploads(upload_id) ON DELETE RESTRICT,
@@ -3335,101 +3220,8 @@ def _get_sqlite_schema() -> str:
         CHECK(contract_version = 'monitoring_document_renewal_upload_binding_v1'),
         CHECK(length(binding_fingerprint) = 64),
         CHECK(binding_fingerprint = lower(binding_fingerprint)),
-        CHECK(length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(binding_fingerprint, '0', ''), '1', ''), '2', ''), '3', ''), '4', ''), '5', ''), '6', ''), '7', ''), '8', ''), '9', ''), 'a', ''), 'b', ''), 'c', ''), 'd', ''), 'e', ''), 'f', '')) = 0),
-        FOREIGN KEY(application_id, customer_id)
-            REFERENCES applications(id, client_id) ON DELETE RESTRICT,
-        FOREIGN KEY(upload_id, renewal_request_id, application_id, customer_id)
-            REFERENCES monitoring_document_renewal_uploads(
-                upload_id, request_id, application_id, customer_id
-            ) ON DELETE RESTRICT,
-        FOREIGN KEY(
-            renewal_request_id, application_id, customer_id,
-            original_document_id, original_document_version, document_type
-        ) REFERENCES monitoring_document_renewal_requests(
-            request_id, application_id, customer_id,
-            document_id, document_version, document_type
-        ) ON DELETE RESTRICT,
-        FOREIGN KEY(renewal_request_id, person_id, person_type)
-            REFERENCES monitoring_document_renewal_requests(
-                request_id, person_id, person_type
-            ) ON DELETE RESTRICT,
-        FOREIGN KEY(
-            original_document_id, application_id, document_type,
-            original_document_version
-        ) REFERENCES documents(id, application_id, doc_type, version)
-            ON DELETE RESTRICT,
-        FOREIGN KEY(original_document_id, application_id, person_id, person_type)
-            REFERENCES documents(id, application_id, person_id, person_type)
-            ON DELETE RESTRICT
+        CHECK(length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(binding_fingerprint, '0', ''), '1', ''), '2', ''), '3', ''), '4', ''), '5', ''), '6', ''), '7', ''), '8', ''), '9', ''), 'a', ''), 'b', ''), 'c', ''), 'd', ''), 'e', ''), 'f', '')) = 0)
     );
-    CREATE TRIGGER IF NOT EXISTS trg_monitoring_doc_renewal_binding_identity_insert
-    BEFORE INSERT ON monitoring_document_renewal_upload_bindings
-    WHEN NOT EXISTS (
-        SELECT 1
-          FROM monitoring_document_renewal_uploads u
-          JOIN monitoring_document_renewal_requests r
-            ON r.request_id = u.request_id
-           AND r.application_id = u.application_id
-           AND r.customer_id = u.customer_id
-          JOIN applications a
-            ON a.id = r.application_id
-           AND a.client_id = r.customer_id
-          JOIN documents d
-            ON d.id = r.document_id
-           AND d.application_id = r.application_id
-         WHERE u.upload_id = NEW.upload_id
-           AND r.request_id = NEW.renewal_request_id
-           AND r.application_id = NEW.application_id
-           AND r.customer_id = NEW.customer_id
-           AND r.person_id IS NEW.person_id
-           AND r.person_type IS NEW.person_type
-           AND r.document_id = NEW.original_document_id
-           AND r.document_version = NEW.original_document_version
-           AND r.document_type = NEW.document_type
-           AND d.person_id IS NEW.person_id
-           AND d.person_type IS NEW.person_type
-           AND d.doc_type = NEW.document_type
-           AND d.version = NEW.original_document_version
-           AND u.uploaded_at = NEW.upload_timestamp
-           AND u.uploaded_by = NEW.uploaded_by
-    )
-    BEGIN
-        SELECT RAISE(ABORT, 'monitoring renewal upload binding identity mismatch');
-    END;
-    CREATE TRIGGER IF NOT EXISTS trg_monitoring_doc_renewal_binding_identity_update
-    BEFORE UPDATE ON monitoring_document_renewal_upload_bindings
-    WHEN NOT EXISTS (
-        SELECT 1
-          FROM monitoring_document_renewal_uploads u
-          JOIN monitoring_document_renewal_requests r
-            ON r.request_id = u.request_id
-           AND r.application_id = u.application_id
-           AND r.customer_id = u.customer_id
-          JOIN applications a
-            ON a.id = r.application_id
-           AND a.client_id = r.customer_id
-          JOIN documents d
-            ON d.id = r.document_id
-           AND d.application_id = r.application_id
-         WHERE u.upload_id = NEW.upload_id
-           AND r.request_id = NEW.renewal_request_id
-           AND r.application_id = NEW.application_id
-           AND r.customer_id = NEW.customer_id
-           AND r.person_id IS NEW.person_id
-           AND r.person_type IS NEW.person_type
-           AND r.document_id = NEW.original_document_id
-           AND r.document_version = NEW.original_document_version
-           AND r.document_type = NEW.document_type
-           AND d.person_id IS NEW.person_id
-           AND d.person_type IS NEW.person_type
-           AND d.doc_type = NEW.document_type
-           AND d.version = NEW.original_document_version
-           AND u.uploaded_at = NEW.upload_timestamp
-           AND u.uploaded_by = NEW.uploaded_by
-    )
-    BEGIN
-        SELECT RAISE(ABORT, 'monitoring renewal upload binding identity mismatch');
-    END;
     CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_binding_application
         ON monitoring_document_renewal_upload_bindings(application_id);
     CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_binding_customer
@@ -4384,11 +4176,10 @@ def init_db():
         logger.info("startup: completed supervisor evidence schema preflight (v2.52)")
 
         # Migration 024 compatibility preflight.  The authoritative renewal
-        # binding DDL below exposes documents.version through a composite
-        # identity key.  Long-lived databases created before document
-        # versioning must receive those additive columns before the consolidated
-        # schema can create that key; the full repair still runs later in the
-        # normal inline-migration sequence.
+        # binding trigger resolves documents.version/person ownership. Long-
+        # lived databases created before those fields existed must receive the
+        # additive columns before the guard is installed; the full repair still
+        # runs later in the normal inline-migration sequence.
         if _safe_table_exists(db, "documents"):
             logger.info("startup: entering document versioning schema preflight")
             _ensure_kyc_party_document_integrity_columns(db)
@@ -4402,6 +4193,11 @@ def init_db():
             schema = _get_sqlite_schema()
         logger.info("startup: executing schema DDL (%d chars)…", len(schema))
         db.executescript(schema)
+        logger.info("startup: converging renewal upload-binding identity guard")
+        from monitoring_document_renewal_schema import (
+            ensure_monitoring_document_renewal_upload_binding_guard,
+        )
+        ensure_monitoring_document_renewal_upload_binding_guard(db)
         db.commit()
         logger.info("startup: schema DDL committed — Database schema initialized")
 

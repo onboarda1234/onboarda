@@ -9,27 +9,11 @@
 -- review by the application service instead of being guessed into this
 -- contract.
 
--- Composite parent identities make it impossible to assemble one binding from
--- otherwise valid IDs belonging to different uploads, requests, customers or
--- documents.  Each leading ID is already unique; these indexes expose the
--- complete authoritative tuples to both PostgreSQL and SQLite foreign keys.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_app_customer
-    ON applications(id, client_id);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_upload_identity
-    ON monitoring_document_renewal_uploads(
-        upload_id, request_id, application_id, customer_id
-    );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_request_identity
-    ON monitoring_document_renewal_requests(
-        request_id, application_id, customer_id, document_id,
-        document_version, document_type
-    );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_request_person
-    ON monitoring_document_renewal_requests(request_id, person_id, person_type);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_document_identity
-    ON documents(id, application_id, doc_type, version);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_document_person
-    ON documents(id, application_id, person_id, person_type);
+-- Do not add redundant composite indexes to the existing Applications,
+-- Documents or renewal tables. Every proposed composite began with an already
+-- unique primary key, while normal index builds can block regulated writes.
+-- The migration runner installs the dialect-specific, null-safe tuple guard
+-- immediately after this script and before recording version 059 as applied.
 
 CREATE TABLE IF NOT EXISTS monitoring_document_renewal_upload_bindings (
     upload_id TEXT PRIMARY KEY
@@ -61,32 +45,7 @@ CREATE TABLE IF NOT EXISTS monitoring_document_renewal_upload_bindings (
     CHECK(contract_version = 'monitoring_document_renewal_upload_binding_v1'),
     CHECK(length(binding_fingerprint) = 64),
     CHECK(binding_fingerprint = lower(binding_fingerprint)),
-    CHECK(length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(binding_fingerprint, '0', ''), '1', ''), '2', ''), '3', ''), '4', ''), '5', ''), '6', ''), '7', ''), '8', ''), '9', ''), 'a', ''), 'b', ''), 'c', ''), 'd', ''), 'e', ''), 'f', '')) = 0),
-    FOREIGN KEY(application_id, customer_id)
-        REFERENCES applications(id, client_id) ON DELETE RESTRICT,
-    FOREIGN KEY(upload_id, renewal_request_id, application_id, customer_id)
-        REFERENCES monitoring_document_renewal_uploads(
-            upload_id, request_id, application_id, customer_id
-        ) ON DELETE RESTRICT,
-    FOREIGN KEY(
-        renewal_request_id, application_id, customer_id,
-        original_document_id, original_document_version, document_type
-    ) REFERENCES monitoring_document_renewal_requests(
-        request_id, application_id, customer_id,
-        document_id, document_version, document_type
-    ) ON DELETE RESTRICT,
-    FOREIGN KEY(renewal_request_id, person_id, person_type)
-        REFERENCES monitoring_document_renewal_requests(
-            request_id, person_id, person_type
-        ) ON DELETE RESTRICT,
-    FOREIGN KEY(
-        original_document_id, application_id, document_type,
-        original_document_version
-    ) REFERENCES documents(id, application_id, doc_type, version)
-        ON DELETE RESTRICT,
-    FOREIGN KEY(original_document_id, application_id, person_id, person_type)
-        REFERENCES documents(id, application_id, person_id, person_type)
-        ON DELETE RESTRICT
+    CHECK(length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(binding_fingerprint, '0', ''), '1', ''), '2', ''), '3', ''), '4', ''), '5', ''), '6', ''), '7', ''), '8', ''), '9', ''), 'a', ''), 'b', ''), 'c', ''), 'd', ''), 'e', ''), 'f', '')) = 0)
 );
 
 CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_binding_application
@@ -96,13 +55,11 @@ CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_binding_customer
 CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_binding_document
     ON monitoring_document_renewal_upload_bindings(original_document_id);
 
--- The consolidated startup schema additionally installs an engine-specific,
--- null-safe INSERT/UPDATE identity trigger.  It proves the person/entity pair,
--- upload timestamp and uploader against the joined request/upload/document
--- records.  The trigger is required because SQL composite foreign keys use
--- MATCH SIMPLE semantics and therefore cannot prove a nullable person tuple.
--- Production startup always converges the PostgreSQL trigger before serving;
--- the SQLite schema installs the equivalent trigger for focused tests.
+-- The migration runner and consolidated startup both install the same
+-- engine-specific null-safe INSERT/UPDATE identity guard before serving. It
+-- proves the complete upload/request/application/customer/person/document
+-- tuple, timestamp and uploader against authoritative rows. Guard installation
+-- failure leaves migration 059 unrecorded and startup fails closed.
 
 -- Rollback is schema-only and is permitted only while this table is empty:
 --
