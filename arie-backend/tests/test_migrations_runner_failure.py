@@ -113,6 +113,34 @@ class TestRunnerHealthyRun(_RunnerFixtureBase):
         # Should not contain a FAILED line.
         self.assertFalse(any("FAILED migration" in m for m in cm.output))
 
+    def test_059_guard_failure_is_not_recorded_as_applied(self):
+        path = _write_sql(
+            self._tmp_dir,
+            "059",
+            "CREATE TABLE monitoring_document_renewal_upload_bindings (id TEXT);",
+        )
+        self._runner.ensure_schema_version_table(self._conn)
+
+        with mock.patch(
+            "monitoring_document_renewal_schema."
+            "ensure_monitoring_document_renewal_upload_binding_guard",
+            side_effect=RuntimeError("injected binding guard failure"),
+        ):
+            with self.assertLogs("arie.migrations", level="ERROR") as cm:
+                with self.assertRaisesRegex(
+                    RuntimeError, "injected binding guard failure"
+                ):
+                    self._runner.run_migration(
+                        self._conn, "059", path, "binding guard test"
+                    )
+
+        self.assertTrue(any("FAILED migration 059" in line for line in cm.output))
+        self.assertIsNone(
+            self._conn.execute(
+                "SELECT 1 FROM schema_version WHERE version = ?", ("059",)
+            ).fetchone()
+        )
+
 
 class TestRunnerFailClosedDefault(_RunnerFixtureBase):
     def test_failed_migration_logs_failed_at_error_with_traceback(self):

@@ -82,6 +82,13 @@ legacy request cannot split ownership across versions.
 
 ## Upload boundary
 
+The authoritative identity and validation rules for this boundary are versioned
+separately in
+[`MONITORING_DOCUMENT_RENEWAL_UPLOAD_BINDING.md`](MONITORING_DOCUMENT_RENEWAL_UPLOAD_BINDING.md).
+The request remains the source of the exact application, customer,
+person/entity, original-document and document-type identifiers. The client does
+not select or guess those identities.
+
 Portal uploads are validated and stored as renewal candidate artifacts in
 `monitoring_document_renewal_uploads`. A pre-write durable artifact reservation
 records the exact request/application/customer identity before bytes are sent

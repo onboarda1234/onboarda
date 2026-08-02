@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import os
 import sqlite3
 import sys
@@ -183,6 +184,27 @@ def renewal_db():
             uploaded_at TEXT NOT NULL,
             uploaded_by TEXT NOT NULL
         );
+        CREATE TABLE monitoring_document_renewal_upload_bindings (
+            upload_id TEXT PRIMARY KEY,
+            renewal_request_id TEXT NOT NULL UNIQUE,
+            application_id TEXT NOT NULL,
+            customer_id TEXT NOT NULL,
+            person_id TEXT,
+            person_type TEXT,
+            original_document_id TEXT NOT NULL,
+            original_document_version INTEGER NOT NULL,
+            uploaded_document_id TEXT NOT NULL UNIQUE,
+            document_type TEXT NOT NULL,
+            upload_timestamp TEXT NOT NULL,
+            uploaded_by TEXT NOT NULL,
+            binding_status TEXT NOT NULL CHECK (binding_status = 'bound'),
+            contract_version TEXT NOT NULL,
+            binding_fingerprint TEXT NOT NULL,
+            CHECK (
+                (person_id IS NULL AND person_type IS NULL)
+                OR (person_id IS NOT NULL AND person_type IS NOT NULL)
+            )
+        );
         CREATE TABLE monitoring_document_renewal_upload_cleanup (
             cleanup_id TEXT PRIMARY KEY,
             upload_id TEXT NOT NULL UNIQUE,
@@ -303,6 +325,92 @@ def _create(db, **overrides):
 def _scalar(db, sql, params=()):
     row = db.execute(sql, params).fetchone()
     return next(iter(row.values()))
+
+
+def _upload_state(db, request_id):
+    return {
+        "request": dict(
+            db.execute(
+                "SELECT request_status, revision FROM monitoring_document_renewal_requests WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+        ),
+        "uploads": _scalar(
+            db,
+            "SELECT COUNT(*) FROM monitoring_document_renewal_uploads WHERE request_id = ?",
+            (request_id,),
+        ),
+        "bindings": _scalar(
+            db,
+            "SELECT COUNT(*) FROM monitoring_document_renewal_upload_bindings WHERE renewal_request_id = ?",
+            (request_id,),
+        ),
+        "received_events": _scalar(
+            db,
+            "SELECT COUNT(*) FROM monitoring_document_renewal_events WHERE request_id = ? AND event_type = 'upload_received'",
+            (request_id,),
+        ),
+        "bound_audits": _scalar(
+            db,
+            """SELECT COUNT(*)
+                 FROM audit_log a
+                 JOIN monitoring_document_renewal_upload_bindings b
+                   ON a.target = 'monitoring_renewal_upload_binding:' || b.upload_id
+                WHERE a.action = 'monitoring.document_renewal.upload_bound'
+                  AND b.renewal_request_id = ?""",
+            (request_id,),
+        ),
+    }
+
+
+def _upload_failure_audits(db, request_id):
+    return [
+        dict(row)
+        for row in db.execute(
+            """
+            SELECT action, detail
+              FROM audit_log
+             WHERE target = ?
+               AND action IN (
+                   'monitoring.document_renewal.upload_rejected',
+                   'monitoring.document_renewal.wrong_document_type',
+                   'monitoring.document_renewal.duplicate_upload',
+                   'monitoring.document_renewal.binding_failed'
+               )
+             ORDER BY id
+            """,
+            (f"monitoring_renewal_request:{request_id}",),
+        ).fetchall()
+    ]
+
+
+def _upload_kwargs(db, request, **overrides):
+    values = {
+        "actor": CLIENT,
+        "expected_revision": request["revision"],
+        "upload_id": "upload-1",
+        "original_filename": "passport.pdf",
+        "storage_key": f"renewals/{request['application_id']}/{request['request_id']}/upload-1",
+        "file_size": 1024,
+        "mime_type": "application/pdf",
+        "file_sha256": "a" * 64,
+        "now": NOW,
+        "feature_flags": Flags(True),
+        "expected_application_id": request["application_id"],
+        "expected_customer_id": request["customer_id"],
+        "expected_person_id": request.get("person_id"),
+        "expected_original_document_id": request["document_id"],
+        "expected_document_type": request["document_type"],
+    }
+    values.update(overrides)
+    values["artifact_reservation_id"] = _stored_upload_artifact(
+        db,
+        request,
+        upload_id=values["upload_id"],
+        storage_key=values["storage_key"],
+        cleanup_id=values.pop("cleanup_id", None),
+    )
+    return values
 
 
 def _add_document_alert(
@@ -591,24 +699,7 @@ def test_upload_is_staged_only_and_idempotent(renewal_db):
         renewal_db.execute("SELECT * FROM documents WHERE id='doc-1'").fetchone()
     )
     request = _create(renewal_db, request_id="renewal-1")
-    kwargs = {
-        "actor": CLIENT,
-        "expected_revision": 2,
-        "upload_id": "upload-1",
-        "original_filename": "passport.pdf",
-        "storage_key": "renewals/app-1/renewal-1/upload-1",
-        "file_size": 1024,
-        "mime_type": "application/pdf",
-        "file_sha256": "a" * 64,
-        "now": NOW,
-        "feature_flags": Flags(True),
-    }
-    kwargs["artifact_reservation_id"] = _stored_upload_artifact(
-        renewal_db,
-        request,
-        upload_id=kwargs["upload_id"],
-        storage_key=kwargs["storage_key"],
-    )
+    kwargs = _upload_kwargs(renewal_db, request)
     uploaded = renewal.record_renewal_upload(
         renewal_db, request["request_id"], **kwargs
     )
@@ -628,9 +719,59 @@ def test_upload_is_staged_only_and_idempotent(renewal_db):
     )
     assert retried["idempotent"] is True
     assert _scalar(renewal_db, "SELECT COUNT(*) FROM monitoring_document_renewal_uploads") == 1
+    binding = dict(
+        renewal_db.execute(
+            "SELECT * FROM monitoring_document_renewal_upload_bindings WHERE upload_id = ?",
+            (kwargs["upload_id"],),
+        ).fetchone()
+    )
+    assert binding == {
+        "upload_id": "upload-1",
+        "renewal_request_id": request["request_id"],
+        "application_id": request["application_id"],
+        "customer_id": request["customer_id"],
+        "person_id": request["person_id"],
+        "person_type": request["person_type"],
+        "original_document_id": request["document_id"],
+        "original_document_version": request["document_version"],
+        "uploaded_document_id": "renewal-candidate:upload-1",
+        "document_type": request["document_type"],
+        "upload_timestamp": "2026-08-02T12:00:00Z",
+        "uploaded_by": CLIENT["sub"],
+        "binding_status": "bound",
+        "contract_version": "monitoring_document_renewal_upload_binding_v1",
+        "binding_fingerprint": binding["binding_fingerprint"],
+    }
+    assert len(binding["binding_fingerprint"]) == 64
+    assert binding["binding_fingerprint"] == binding["binding_fingerprint"].lower()
+    assert binding["binding_fingerprint"] == renewal._upload_binding_fingerprint(
+        upload_id=kwargs["upload_id"],
+        renewal_request_id=request["request_id"],
+        application_id=request["application_id"],
+        customer_id=request["customer_id"],
+        person_id=request["person_id"],
+        person_type=request["person_type"],
+        original_document_id=request["document_id"],
+        original_document_version=request["document_version"],
+        uploaded_document_id=binding["uploaded_document_id"],
+        document_type=request["document_type"],
+        file_sha256=kwargs["file_sha256"],
+        file_size=kwargs["file_size"],
+        mime_type=kwargs["mime_type"],
+        uploaded_by=CLIENT["sub"],
+        upload_timestamp=binding["upload_timestamp"],
+    )
     assert _scalar(
         renewal_db,
         "SELECT COUNT(*) FROM monitoring_document_renewal_events WHERE event_type='upload_received'",
+    ) == 1
+    assert _scalar(
+        renewal_db,
+        "SELECT COUNT(*) FROM monitoring_document_renewal_upload_bindings",
+    ) == 1
+    assert _scalar(
+        renewal_db,
+        "SELECT COUNT(*) FROM audit_log WHERE action='monitoring.document_renewal.upload_bound'",
     ) == 1
 
     cancelled = renewal.cancel_renewal_request(
@@ -652,6 +793,316 @@ def test_upload_is_staged_only_and_idempotent(renewal_db):
     assert dict(
         renewal_db.execute("SELECT * FROM documents WHERE id='doc-1'").fetchone()
     ) == document_before
+
+
+@pytest.mark.parametrize(
+    "field,value,error_code",
+    [
+        ("expected_application_id", "app-other", "wrong_application"),
+        ("expected_customer_id", "client-other", "wrong_customer"),
+        ("expected_person_id", "person-other", "wrong_person"),
+        ("expected_original_document_id", "doc-other", "wrong_document"),
+        ("expected_document_type", "proof_of_address", "wrong_document_type"),
+    ],
+)
+def test_upload_binding_rejects_every_stale_preflight_identity_without_partial_write(
+    renewal_db, field, value, error_code
+):
+    request = _create(renewal_db, request_id="renewal-identity")
+    before = _upload_state(renewal_db, request["request_id"])
+    kwargs = _upload_kwargs(
+        renewal_db,
+        request,
+        **{field: value, "upload_id": f"upload-{field}"},
+    )
+
+    with pytest.raises(renewal.RenewalError) as exc:
+        renewal.record_renewal_upload(
+            renewal_db,
+            request["request_id"],
+            **kwargs,
+        )
+
+    assert exc.value.code == error_code
+    assert _upload_state(renewal_db, request["request_id"]) == before
+    audits = _upload_failure_audits(renewal_db, request["request_id"])
+    assert len(audits) == 1
+    assert audits[0]["action"] == (
+        "monitoring.document_renewal.wrong_document_type"
+        if error_code == "wrong_document_type"
+        else "monitoring.document_renewal.upload_rejected"
+    )
+    assert json.loads(audits[0]["detail"])["reason_code"] == error_code
+    artifact = dict(
+        renewal_db.execute(
+            "SELECT artifact_state, attached_at FROM monitoring_document_renewal_upload_cleanup WHERE cleanup_id = ?",
+            (kwargs["artifact_reservation_id"],),
+        ).fetchone()
+    )
+    assert artifact == {"artifact_state": "stored", "attached_at": None}
+
+
+def test_cancelled_request_rejects_upload_binding_without_partial_write(renewal_db):
+    request = _create(renewal_db, request_id="renewal-cancelled-upload")
+    cancelled = renewal.cancel_renewal_request(
+        renewal_db,
+        request["request_id"],
+        actor=OFFICER,
+        expected_revision=request["revision"],
+        cancel_reason="The request is no longer required.",
+        now=NOW,
+        feature_flags=Flags(True),
+    )
+    before = _upload_state(renewal_db, request["request_id"])
+    kwargs = _upload_kwargs(
+        renewal_db,
+        cancelled,
+        upload_id="upload-cancelled",
+    )
+
+    with pytest.raises(renewal.RenewalError) as exc:
+        renewal.record_renewal_upload(
+            renewal_db,
+            request["request_id"],
+            **kwargs,
+        )
+
+    assert exc.value.code == "request_cancelled"
+    assert _upload_state(renewal_db, request["request_id"]) == before
+
+
+def test_overdue_request_rejects_but_due_date_is_inclusive_in_utc(renewal_db):
+    due_today = _create(
+        renewal_db,
+        request_id="renewal-due-today",
+        due_date=NOW.date().isoformat(),
+    )
+    today_kwargs = _upload_kwargs(
+        renewal_db,
+        due_today,
+        upload_id="upload-due-today",
+        now=NOW.replace(hour=23, minute=59, second=59),
+    )
+    accepted = renewal.record_renewal_upload(
+        renewal_db,
+        due_today["request_id"],
+        **today_kwargs,
+    )
+    assert accepted["request_status"] == "upload_received"
+
+    _add_document_alert(
+        renewal_db,
+        alert_id=2,
+        app_id="app-expired-request",
+        document_id="doc-expired-request",
+    )
+    overdue = renewal.create_renewal_request(
+        renewal_db,
+        2,
+        reason="expired",
+        actor=OFFICER,
+        due_date=NOW.date().isoformat(),
+        now=NOW,
+        request_id="renewal-overdue",
+        feature_flags=Flags(True),
+    )
+    before = _upload_state(renewal_db, overdue["request_id"])
+    overdue_kwargs = _upload_kwargs(
+        renewal_db,
+        overdue,
+        upload_id="upload-overdue",
+        now=NOW + timedelta(days=1),
+    )
+    with pytest.raises(renewal.RenewalError) as exc:
+        renewal.record_renewal_upload(
+            renewal_db,
+            overdue["request_id"],
+            **overdue_kwargs,
+        )
+    assert exc.value.code == "request_expired"
+    assert _upload_state(renewal_db, overdue["request_id"]) == before
+
+
+def test_distinct_duplicate_upload_is_rejected_and_first_binding_is_unchanged(
+    renewal_db,
+):
+    request = _create(renewal_db, request_id="renewal-duplicate")
+    first_kwargs = _upload_kwargs(
+        renewal_db,
+        request,
+        upload_id="upload-first",
+    )
+    first = renewal.record_renewal_upload(
+        renewal_db,
+        request["request_id"],
+        **first_kwargs,
+    )
+    before = _upload_state(renewal_db, request["request_id"])
+    duplicate_kwargs = _upload_kwargs(
+        renewal_db,
+        first,
+        upload_id="upload-second",
+        file_sha256="b" * 64,
+    )
+
+    with pytest.raises(renewal.RenewalError) as exc:
+        renewal.record_renewal_upload(
+            renewal_db,
+            request["request_id"],
+            **duplicate_kwargs,
+        )
+
+    assert exc.value.code in {"upload_already_received", "duplicate_upload"}
+    assert _upload_state(renewal_db, request["request_id"]) == before
+    bound = renewal_db.execute(
+        "SELECT upload_id, uploaded_document_id FROM monitoring_document_renewal_upload_bindings WHERE renewal_request_id = ?",
+        (request["request_id"],),
+    ).fetchall()
+    assert [dict(row) for row in bound] == [
+        {
+            "upload_id": "upload-first",
+            "uploaded_document_id": "renewal-candidate:upload-first",
+        }
+    ]
+
+
+def test_second_binding_audit_failure_rolls_back_upload_binding_and_request(
+    renewal_db,
+):
+    request = _create(renewal_db, request_id="renewal-binding-audit-failure")
+    kwargs = _upload_kwargs(
+        renewal_db,
+        request,
+        upload_id="upload-binding-audit-failure",
+    )
+    before = _upload_state(renewal_db, request["request_id"])
+    calls = []
+
+    def fail_bound_audit(db, **audit_kwargs):
+        calls.append(audit_kwargs["action"])
+        if audit_kwargs["action"] == "monitoring.document_renewal.upload_bound":
+            raise RuntimeError("injected upload binding audit failure")
+        return append_audit_log(db, **audit_kwargs)
+
+    with pytest.raises(renewal.RenewalError) as exc:
+        renewal.record_renewal_upload(
+            renewal_db,
+            request["request_id"],
+            audit_writer=fail_bound_audit,
+            **kwargs,
+        )
+
+    assert exc.value.code == "binding_failed"
+    assert calls == [
+        "monitoring.document_renewal.upload_received",
+        "monitoring.document_renewal.upload_bound",
+        "monitoring.document_renewal.binding_failed",
+    ]
+    assert _upload_state(renewal_db, request["request_id"]) == before
+    assert _scalar(
+        renewal_db,
+        "SELECT COUNT(*) FROM audit_log WHERE action IN ('monitoring.document_renewal.upload_received', 'monitoring.document_renewal.upload_bound')",
+    ) == 0
+    audits = _upload_failure_audits(renewal_db, request["request_id"])
+    assert len(audits) == 1
+    assert audits[0]["action"] == "monitoring.document_renewal.binding_failed"
+    assert json.loads(audits[0]["detail"])["reason_code"] == "binding_failed"
+    assert _scalar(
+        renewal_db,
+        "SELECT COUNT(*) FROM monitoring_document_renewal_upload_cleanup WHERE cleanup_id = ? AND artifact_state = 'stored'",
+        (kwargs["artifact_reservation_id"],),
+    ) == 1
+
+
+def test_binding_insert_failure_rolls_back_upload_event_request_and_attachment(
+    renewal_db,
+):
+    request = _create(renewal_db, request_id="renewal-binding-write-failure")
+    kwargs = _upload_kwargs(
+        renewal_db,
+        request,
+        upload_id="upload-binding-write-failure",
+    )
+    before = _upload_state(renewal_db, request["request_id"])
+    renewal_db.execute(
+        """
+        CREATE TRIGGER fail_upload_binding_insert
+        BEFORE INSERT ON monitoring_document_renewal_upload_bindings
+        BEGIN
+            SELECT RAISE(ABORT, 'injected upload binding write failure');
+        END
+        """
+    )
+    renewal_db.commit()
+
+    with pytest.raises(renewal.RenewalError) as exc:
+        renewal.record_renewal_upload(
+            renewal_db,
+            request["request_id"],
+            **kwargs,
+        )
+
+    assert exc.value.code == "binding_failed"
+    assert _upload_state(renewal_db, request["request_id"]) == before
+    audits = _upload_failure_audits(renewal_db, request["request_id"])
+    assert len(audits) == 1
+    assert audits[0]["action"] == "monitoring.document_renewal.binding_failed"
+    assert json.loads(audits[0]["detail"])["reason_code"] == "binding_failed"
+    assert _scalar(
+        renewal_db,
+        "SELECT COUNT(*) FROM monitoring_document_renewal_upload_cleanup WHERE cleanup_id = ? AND artifact_state = 'stored'",
+        (kwargs["artifact_reservation_id"],),
+    ) == 1
+
+
+def test_unbound_legacy_upload_projects_manual_review_instead_of_false_success(
+    renewal_db,
+):
+    request = _create(renewal_db, request_id="renewal-unbound-legacy")
+    renewal_db.execute(
+        """
+        INSERT INTO monitoring_document_renewal_uploads
+            (upload_id, request_id, application_id, customer_id,
+             original_filename, storage_key, file_size, mime_type,
+             file_sha256, uploaded_at, uploaded_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "legacy-unbound-upload",
+            request["request_id"],
+            request["application_id"],
+            request["customer_id"],
+            "legacy.pdf",
+            "renewals/legacy-unbound-upload",
+            100,
+            "application/pdf",
+            "c" * 64,
+            NOW.isoformat(),
+            CLIENT["sub"],
+        ),
+    )
+    renewal_db.execute(
+        """
+        UPDATE monitoring_document_renewal_requests
+           SET request_status = 'upload_received', revision = revision + 1
+         WHERE request_id = ?
+        """,
+        (request["request_id"],),
+    )
+    renewal_db.commit()
+
+    projected = renewal.get_renewal_request(renewal_db, request["request_id"])
+
+    assert projected["manual_review_required"] is True
+    assert projected["upload_allowed"] is False
+    assert projected["binding_current"] is False
+    assert "upload_binding" not in projected
+    assert projected["binding_error"]["code"] == "binding_missing"
+    assert projected["request_status"] == "upload_received"
+    assert _scalar(
+        renewal_db,
+        "SELECT COUNT(*) FROM monitoring_document_renewal_upload_bindings",
+    ) == 0
 
 
 def test_reminders_are_bounded_deterministic_and_atomic(renewal_db):
@@ -1284,6 +1735,41 @@ def test_stale_linkage_reads_truthfully_and_cancellation_remains_available(renew
     assert '"linkage_error_code":"stale_linkage"' in payload
 
 
+@pytest.mark.parametrize("cancel_after_upload", [False, True])
+def test_parent_drift_suppresses_previously_valid_bound_projection(
+    renewal_db, cancel_after_upload
+):
+    request = _create(renewal_db, request_id="renewal-bound-parent-drift")
+    uploaded = renewal.record_renewal_upload(
+        renewal_db,
+        request["request_id"],
+        **_upload_kwargs(renewal_db, request),
+    )
+    if cancel_after_upload:
+        renewal.cancel_renewal_request(
+            renewal_db,
+            request["request_id"],
+            actor=OFFICER,
+            expected_revision=uploaded["revision"],
+            cancel_reason="Replacement upload no longer required.",
+            now=NOW,
+            feature_flags=Flags(True),
+        )
+    renewal_db.execute("UPDATE documents SET version=2 WHERE id='doc-1'")
+    renewal_db.commit()
+
+    projection = renewal.get_renewal_request(
+        renewal_db, request["request_id"], include_history=False
+    )
+
+    assert projection["linkage_current"] is False
+    assert projection["binding_current"] is False
+    assert projection["binding_status"] == "unavailable"
+    assert projection["manual_review_required"] is True
+    assert projection["linkage_error"]["code"] == "stale_linkage"
+    assert "upload_binding" not in projection
+
+
 def test_terminal_alert_does_not_trap_active_request_cancellation(renewal_db):
     request = _create(renewal_db, request_id="renewal-terminal")
     renewal_db.execute("UPDATE monitoring_alerts SET status='resolved' WHERE id=1")
@@ -1822,6 +2308,115 @@ def test_live_postgres_create_reminder_and_jsonb_history(monkeypatch):
         assert reminder["payload"]["delivery_channel"] == "client_portal"
         assert reminder["payload"]["portal_notification_id"]
         assert reminder["payload"]["days_until_due"] == 14
+
+        client_actor = {
+            "sub": "renewal-pg-client",
+            "name": "PG Renewal Client",
+            "role": "client",
+            "type": "client",
+        }
+        upload_kwargs = {
+            "actor": client_actor,
+            "expected_revision": request["revision"],
+            "upload_id": "renewal-pg-upload",
+            "original_filename": "renewed-passport.pdf",
+            "storage_key": (
+                "renewals/renewal-pg-app/renewal-pg-request/renewal-pg-upload"
+            ),
+            "file_size": 2048,
+            "mime_type": "application/pdf",
+            "file_sha256": "d" * 64,
+            "expected_application_id": "renewal-pg-app",
+            "expected_customer_id": "renewal-pg-client",
+            "expected_person_id": None,
+            "expected_original_document_id": "renewal-pg-doc",
+            "expected_document_type": "passport",
+            "now": NOW,
+            "feature_flags": Flags(True),
+        }
+        upload_kwargs["artifact_reservation_id"] = _stored_upload_artifact(
+            db,
+            request,
+            upload_id=upload_kwargs["upload_id"],
+            storage_key=upload_kwargs["storage_key"],
+            cleanup_id="renewal-pg-artifact",
+        )
+
+        uploaded = renewal.record_renewal_upload(
+            db,
+            request["request_id"],
+            **upload_kwargs,
+        )
+        assert uploaded["request_status"] == "upload_received"
+        assert uploaded["binding_current"] is True
+        binding = dict(
+            db.execute(
+                """SELECT *
+                     FROM monitoring_document_renewal_upload_bindings
+                    WHERE renewal_request_id = ?""",
+                (request["request_id"],),
+            ).fetchone()
+        )
+        assert binding["upload_id"] == "renewal-pg-upload"
+        assert binding["renewal_request_id"] == "renewal-pg-request"
+        assert binding["application_id"] == "renewal-pg-app"
+        assert binding["customer_id"] == "renewal-pg-client"
+        assert binding["person_id"] is None
+        assert binding["person_type"] is None
+        assert binding["original_document_id"] == "renewal-pg-doc"
+        assert binding["original_document_version"] == 1
+        assert binding["uploaded_document_id"] == (
+            "renewal-candidate:renewal-pg-upload"
+        )
+        assert binding["document_type"] == "passport"
+        assert binding["binding_status"] == "bound"
+        assert binding["contract_version"] == (
+            "monitoring_document_renewal_upload_binding_v1"
+        )
+        assert len(binding["binding_fingerprint"]) == 64
+        assert binding["binding_fingerprint"] == binding["binding_fingerprint"].lower()
+
+        assert db.execute(
+            """SELECT COUNT(*) AS c
+                 FROM monitoring_document_renewal_events
+                WHERE request_id = ? AND event_type = 'upload_received'""",
+            (request["request_id"],),
+        ).fetchone()["c"] == 1
+        assert db.execute(
+            """SELECT COUNT(*) AS c
+                 FROM audit_log
+                WHERE action = 'monitoring.document_renewal.upload_bound'
+                  AND target = ?""",
+            ("monitoring_renewal_upload_binding:renewal-pg-upload",),
+        ).fetchone()["c"] == 1
+
+        retried = renewal.record_renewal_upload(
+            db,
+            request["request_id"],
+            **upload_kwargs,
+        )
+        assert retried["idempotent"] is True
+        for table in (
+            "monitoring_document_renewal_uploads",
+            "monitoring_document_renewal_upload_bindings",
+        ):
+            assert db.execute(
+                f"SELECT COUNT(*) AS c FROM {table} WHERE upload_id = ?",
+                ("renewal-pg-upload",),
+            ).fetchone()["c"] == 1
+        assert db.execute(
+            """SELECT COUNT(*) AS c
+                 FROM monitoring_document_renewal_events
+                WHERE request_id = ? AND event_type = 'upload_received'""",
+            (request["request_id"],),
+        ).fetchone()["c"] == 1
+        assert db.execute(
+            """SELECT COUNT(*) AS c
+                 FROM audit_log
+                WHERE action = 'monitoring.document_renewal.upload_bound'
+                  AND target = ?""",
+            ("monitoring_renewal_upload_binding:renewal-pg-upload",),
+        ).fetchone()["c"] == 1
     finally:
         db.close()
         db_module.close_pg_pool()

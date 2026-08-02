@@ -194,6 +194,15 @@ def run_migration(db, version, filepath, description=""):
 
     try:
         db.executescript(sql)
+        if version == "059":
+            # The shared migration deliberately avoids redundant composite
+            # indexes on protected Applications/Documents tables. Converge the
+            # dialect-specific tuple guard before recording 059 as applied so
+            # a direct runner invocation is as fail-closed as init_db startup.
+            from monitoring_document_renewal_schema import (
+                ensure_monitoring_document_renewal_upload_binding_guard,
+            )
+            ensure_monitoring_document_renewal_upload_binding_guard(db)
         db.execute(
             "INSERT INTO schema_version (version, filename, description, checksum) VALUES (?, ?, ?, ?)",
             (version, filepath.name, description, checksum)

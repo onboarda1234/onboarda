@@ -38258,9 +38258,12 @@ _RENEWAL_REQUEST_PUBLIC_FIELDS = (
     "reminder_count",
     "last_reminder_at",
     "linkage_current",
+    "binding_current",
     "upload_allowed",
+    "request_expired",
     "manual_review_required",
     "linkage_error",
+    "binding_error",
     "display_status",
     "milestones",
     "idempotent",
@@ -38441,21 +38444,65 @@ def _monitoring_renewal_public_projection(request, *, portal=False):
         })
     if events:
         result["events"] = events
-    uploads = []
-    for item in source.get("uploads") or []:
+
+    def public_upload_binding(item):
+        """Project an immutable binding without storage or integrity secrets."""
+
         if not isinstance(item, dict):
-            continue
-        uploads.append({
+            return None
+        binding = {
             key: item.get(key)
             for key in (
                 "upload_id",
+                "renewal_request_id",
+                "application_id",
+                "customer_id",
+                "person_id",
+                "person_type",
+                "original_document_id",
+                "original_document_version",
+                "uploaded_document_id",
+                "document_type",
+                "upload_timestamp",
+                "uploaded_by",
+                "binding_status",
+                "contract_version",
                 "original_filename",
                 "file_size",
                 "mime_type",
                 "uploaded_at",
             )
             if key in item
-        })
+        }
+        # Compatibility aliases are populated only from authoritative service
+        # output. The browser never supplies or selects binding identities.
+        if "renewal_request_id" not in binding and item.get("request_id") is not None:
+            binding["renewal_request_id"] = item.get("request_id")
+        if "upload_timestamp" not in binding and item.get("uploaded_at") is not None:
+            binding["upload_timestamp"] = item.get("uploaded_at")
+        if "contract_version" not in binding and item.get("binding_contract_version") is not None:
+            binding["contract_version"] = item.get("binding_contract_version")
+        if portal:
+            for key in (
+                "customer_id",
+                "person_id",
+                "person_type",
+                "original_document_id",
+                "original_document_version",
+                "uploaded_document_id",
+                "uploaded_by",
+            ):
+                binding.pop(key, None)
+        return binding
+
+    binding = public_upload_binding(source.get("upload_binding"))
+    if binding:
+        result["upload_binding"] = binding
+    uploads = []
+    for item in source.get("uploads") or []:
+        projected = public_upload_binding(item)
+        if projected:
+            uploads.append(projected)
     if uploads:
         result["uploads"] = uploads
     return result
@@ -39124,6 +39171,109 @@ def _write_monitoring_renewal_error(handler, exc):
     }
     handler.set_status(exc.http_status)
     handler.write(payload)
+
+
+def _write_monitoring_renewal_rejection(
+    handler,
+    code,
+    message,
+    status=409,
+    *,
+    db,
+    request_id,
+    actor,
+    expected_application_id,
+    expected_customer_id,
+    correlation_id,
+):
+    """Audit then write one proven-owned, public-safe preflight rejection.
+
+    This helper is deliberately fail-closed.  The service rolls back and
+    converts any audit-writer failure to the sanitized ``audit_unavailable``
+    RenewalError (503); the upload handler's RenewalError branch writes that
+    response.  A rejection without its durable audit evidence must never be
+    reported as successful or silently downgraded to a fail-open response.
+    """
+
+    _monitoring_document_renewal.audit_renewal_upload_preflight_rejection(
+        db,
+        request_id,
+        rejection_code=code,
+        actor=actor,
+        expected_application_id=expected_application_id,
+        expected_customer_id=expected_customer_id,
+        correlation_id=correlation_id,
+    )
+
+    handler.set_status(status)
+    handler.write({
+        "error": message,
+        "error_code": code,
+        "contract_version": _monitoring_document_renewal.CONTRACT_VERSION,
+    })
+
+
+def _monitoring_renewal_public_rejection_code(value, *, allowed, default):
+    """Keep projected service failures inside the reviewed public contract."""
+
+    code = str(value or "").strip()
+    return code if code in allowed else default
+
+
+def _log_monitoring_renewal_upload_authz_denial(handler, user, application_id):
+    """Audit a cloaked request probe without persisting its supplied ID/path."""
+
+    from db import append_audit_log
+
+    safe_application_id = str(application_id or "")
+    safe_client_id = str((user or {}).get("sub") or "")
+    detail = {
+        "event": "authz_denied_not_owner",
+        "client_id": safe_client_id,
+        "attempted_resource_id": safe_application_id,
+        "path": (
+            "/api/portal/applications/:application_id/"
+            "renewal-requests/:request_id/upload"
+        ),
+        "surface": "portal_document_renewal_upload",
+        "resource_scope": "renewal_request",
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    audit_db = None
+    try:
+        audit_db = get_db()
+        evidence = append_audit_log(
+            audit_db,
+            action="authz_denied_not_owner",
+            user_id=safe_client_id,
+            user_name=str((user or {}).get("name") or ""),
+            user_role=str((user or {}).get("role") or ""),
+            target=safe_application_id,
+            detail=json.dumps(detail, sort_keys=True, separators=(",", ":")),
+            before_state={},
+            after_state={},
+            application_id=safe_application_id,
+            request_id=(_obs_get_request_id() or None),
+            commit=False,
+        )
+        if not isinstance(evidence, str) or not evidence.strip():
+            raise RuntimeError("authorization audit append returned no evidence")
+        audit_db.commit()
+    except Exception:
+        if audit_db is not None:
+            try:
+                audit_db.rollback()
+            except Exception:
+                pass
+        logger.exception(
+            "monitoring_renewal_upload_authz_audit_fallback=true "
+            "client_id=%s application_id=%s",
+            safe_client_id,
+            safe_application_id,
+        )
+    finally:
+        if audit_db is not None:
+            audit_db.close()
 
 
 class MonitoringAlertRenewalRequestHandler(BaseHandler):
@@ -45955,27 +46105,158 @@ class PortalDocumentRenewalUploadHandler(BaseHandler):
                     {"surface": "portal_document_renewal_upload"},
                 )
                 return self.error("Application not found", 404)
+            request_scope = db.execute(
+                """
+                SELECT request_id, application_id, customer_id
+                  FROM monitoring_document_renewal_requests
+                 WHERE request_id = ?
+                """,
+                (request_id,),
+            ).fetchone()
+            if not request_scope:
+                # Keep the supplied request identifier outside durable
+                # evidence. The owned route application is sufficient to
+                # correlate this cloaked object probe.
+                _log_monitoring_renewal_upload_authz_denial(
+                    self,
+                    user,
+                    app["id"],
+                )
+                return self.error("Document renewal request not found", 404)
+            request_scope = dict(request_scope)
+            request_customer_matches = (
+                str(request_scope.get("customer_id") or "")
+                == str(app["client_id"])
+            )
+            request_application_matches = (
+                str(request_scope.get("application_id") or "") == str(app["id"])
+            )
+            if not request_customer_matches:
+                # Cross-client request identifiers stay outside the foreign
+                # request's domain history. Record only a sanitized security
+                # denial against the caller-owned route scope.
+                _log_monitoring_renewal_upload_authz_denial(
+                    self,
+                    user,
+                    app["id"],
+                )
+                return self.error("Document renewal request not found", 404)
+            if not request_application_matches:
+                # Both applications are owned by this client, so the exact
+                # cross-application mismatch can be audited without leaking
+                # another customer's request. Preserve the public 404 cloak.
+                _log_monitoring_renewal_upload_authz_denial(
+                    self,
+                    user,
+                    app["id"],
+                )
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    "wrong_application",
+                    "Document renewal request not found",
+                    404,
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
+                )
             request = _monitoring_document_renewal.get_renewal_request(
                 db,
                 request_id,
                 include_history=False,
             )
+            if request.get("request_status") == "cancelled":
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    "request_cancelled",
+                    "This renewal request was cancelled and cannot accept an upload.",
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
+                )
             if (
-                str(request.get("application_id") or "") != str(app["id"])
-                or str(request.get("customer_id") or "")
-                != str(app["client_id"])
+                request.get("request_status") == "upload_received"
+                and request.get("binding_current") is False
             ):
-                # Do not disclose whether a request belongs to another client.
-                return self.error("Document renewal request not found", 404)
-            if request.get("linkage_current") is not True:
-                return self.error(
+                binding_error = request.get("binding_error") or {}
+                binding_code = _monitoring_renewal_public_rejection_code(
+                    binding_error.get("code"),
+                    allowed=(
+                        _monitoring_document_renewal.UPLOAD_BINDING_REJECTION_CODES
+                    ),
+                    default="binding_missing",
+                )
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    binding_code,
                     "This renewal request requires manual review before an upload can be accepted.",
-                    409,
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
+                )
+            if request.get("request_status") == "upload_received":
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    "upload_already_received",
+                    "This renewal request already has an uploaded document.",
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
+                )
+            if request.get("request_expired") is True:
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    "request_expired",
+                    "This renewal request has expired and cannot accept an upload.",
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
+                )
+            if request.get("linkage_current") is not True:
+                linkage_error = request.get("linkage_error") or {}
+                linkage_code = _monitoring_renewal_public_rejection_code(
+                    linkage_error.get("code"),
+                    allowed=(
+                        _monitoring_document_renewal.UPLOAD_LINKAGE_REJECTION_CODES
+                    ),
+                    default="linkage_not_authoritative",
+                )
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    linkage_code,
+                    "This renewal request requires manual review before an upload can be accepted.",
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
                 )
             if request.get("upload_allowed") is not True:
-                return self.error(
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    "invalid_request_state",
                     "This renewal request is not awaiting an upload.",
-                    409,
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
                 )
             if "file" not in self.request.files:
                 return self.error("No file provided", 400)
@@ -46173,6 +46454,11 @@ class PortalDocumentRenewalUploadHandler(BaseHandler):
                 request_id,
                 actor=user,
                 expected_revision=int(request.get("revision")),
+                expected_application_id=app["id"],
+                expected_customer_id=app["client_id"],
+                expected_person_id=request.get("person_id"),
+                expected_original_document_id=request.get("document_id"),
+                expected_document_type=request.get("document_type"),
                 artifact_reservation_id=cleanup_id,
                 upload_id=upload_id,
                 original_filename=filename,
@@ -46183,14 +46469,18 @@ class PortalDocumentRenewalUploadHandler(BaseHandler):
                 correlation_id=correlation_id,
             )
             renewal_record_committed = True
+            public_request = _monitoring_renewal_public_projection(
+                result,
+                portal=True,
+            )
+            response = {
+                "status": "upload_received",
+                "request": public_request,
+            }
+            if public_request.get("upload_binding"):
+                response["binding"] = public_request["upload_binding"]
             self.success(
-                {
-                    "status": "upload_received",
-                    "request": _monitoring_renewal_public_projection(
-                        result,
-                        portal=True,
-                    ),
-                },
+                response,
                 201,
             )
         except _monitoring_document_renewal.RenewalError as exc:

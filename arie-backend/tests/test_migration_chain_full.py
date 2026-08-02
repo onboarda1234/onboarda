@@ -62,6 +62,11 @@ def _drop_column_if_present(db, table, column):
 
 def _remove_modern_backfills(db, keep_count):
     kept_versions = {v for v, _ in _CHAIN_FILES[:keep_count]}
+    if "059" not in kept_versions:
+        # Migration 059 adds the dependent binding table. Remove it before
+        # older migrations rewind document/version or renewal tables; SQLite
+        # otherwise refuses those DROP COLUMN operations.
+        db.execute("DROP TABLE IF EXISTS monitoring_document_renewal_upload_bindings")
     if "014" not in kept_versions:
         db.execute("DROP INDEX IF EXISTS idx_periodic_reviews_status")
         for column in ("status", "due_date"):

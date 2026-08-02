@@ -26721,6 +26721,46 @@ function monitoringDocumentRenewalMilestones(request) {
   return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;">' + milestones.join('') + '</div>';
 }
 
+function monitoringDocumentRenewalUploadBinding(request) {
+  if (!request || typeof request !== 'object') return null;
+  if (request.upload_binding && typeof request.upload_binding === 'object') return request.upload_binding;
+  var uploads = Array.isArray(request.uploads) ? request.uploads : [];
+  return uploads.length && uploads[0] && typeof uploads[0] === 'object' ? uploads[0] : null;
+}
+
+function monitoringDocumentRenewalBindingStatusLabel(binding, requestStatus) {
+  if (!binding || typeof binding !== 'object') {
+    var unboundRequestStatuses = ['created', 'awaiting_upload', 'cancelled'];
+    return unboundRequestStatuses.indexOf(requestStatus) >= 0
+      ? 'Not bound'
+      : 'Binding unavailable — manual review required';
+  }
+  var status = monitoringCanonicalToken(binding.binding_status || '');
+  var uploadId = String(binding.upload_id || '').trim();
+  var personId = String(binding.person_id || '').trim();
+  var personType = String(binding.person_type || '').trim();
+  var version = Number(binding.original_document_version);
+  var timestamp = String(binding.upload_timestamp || '').trim();
+  var requiredText = [
+    binding.renewal_request_id,
+    binding.application_id,
+    binding.customer_id,
+    binding.original_document_id,
+    binding.uploaded_document_id,
+    binding.document_type,
+    binding.uploaded_by
+  ].every(function(value) { return String(value || '').trim().length > 0; });
+  var complete = status === 'bound'
+    && uploadId.length > 0
+    && requiredText
+    && String(binding.uploaded_document_id) === 'renewal-candidate:' + uploadId
+    && Number.isInteger(version) && version >= 1
+    && timestamp.length > 0 && !Number.isNaN(Date.parse(timestamp))
+    && (personId.length > 0) === (personType.length > 0)
+    && binding.contract_version === 'monitoring_document_renewal_upload_binding_v1';
+  return complete ? 'Bound' : 'Binding unavailable — manual review required';
+}
+
 function renderMonitoringDocumentRenewalCreateControls(alert) {
   var reason = monitoringDocumentRenewalDefaultReason(alert);
   var automaticOption = reason === 'expired'
@@ -26775,6 +26815,7 @@ function renderMonitoringDocumentRenewalCard(alert) {
   if (!enabled && !request) return '';
   var legacyActive = monitoringDocumentLegacyRequestActive(alert);
   var requestStatus = monitoringCanonicalToken((request && request.request_status) || '');
+  var uploadBinding = monitoringDocumentRenewalUploadBinding(request);
   var requestDetails = request
     ? monitoringInfoGrid([
         ['Request ID', monitoringTextValue(request.request_id, 'Not available')],
@@ -26788,7 +26829,10 @@ function renderMonitoringDocumentRenewalCard(alert) {
         ['Sent', monitoringTextValue(request.sent_at, 'Not sent')],
         ['Due date', monitoringTextValue(request.due_date, 'Not set')],
         ['Reminder count', monitoringTextValue(request.reminder_count, '0')],
-        ['Last reminder generated', monitoringTextValue(request.last_reminder_at, 'None generated')]
+        ['Last reminder generated', monitoringTextValue(request.last_reminder_at, 'None generated')],
+        ['Upload binding', monitoringDocumentRenewalBindingStatusLabel(uploadBinding, requestStatus)],
+        ['Uploaded document reference', monitoringTextValue(uploadBinding && uploadBinding.uploaded_document_id, 'Not uploaded')],
+        ['Upload received', monitoringTextValue(uploadBinding && (uploadBinding.upload_timestamp || uploadBinding.uploaded_at), 'Not uploaded')]
       ]) + monitoringDocumentRenewalMilestones(request)
     : '<div data-monitoring-renewal-empty="true" style="font-size:12px;color:var(--text2);line-height:1.5;">No canonical renewal request exists for this alert.</div>';
   var controls = enabled

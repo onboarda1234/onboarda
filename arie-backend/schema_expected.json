@@ -895,6 +895,23 @@
    "scheduler_key",
    "updated_at"
   ],
+  "monitoring_document_renewal_upload_bindings": [
+   "application_id",
+   "binding_fingerprint",
+   "binding_status",
+   "contract_version",
+   "customer_id",
+   "document_type",
+   "original_document_id",
+   "original_document_version",
+   "person_id",
+   "person_type",
+   "renewal_request_id",
+   "upload_id",
+   "upload_timestamp",
+   "uploaded_by",
+   "uploaded_document_id"
+  ],
   "monitoring_document_renewal_upload_cleanup": [
    "application_id",
    "artifact_state",

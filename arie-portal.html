@@ -11802,7 +11802,7 @@ function portalDocumentRenewalStatusLabel(status) {
   var labels = {
     created: 'Renewal requested',
     awaiting_upload: 'Awaiting upload',
-    upload_received: 'Upload received',
+    upload_received: 'Uploaded',
     cancelled: 'Cancelled'
   };
   var key = String(status || '').trim().toLowerCase();
@@ -11835,10 +11835,14 @@ function portalDocumentRenewalCardHtml(request, applicationId, featureEnabled) {
       '<button type="button" class="btn btn-primary btn-sm" onclick="selectPortalDocumentRenewalFile(this)">Upload Renewal Document</button>' +
       '<span class="portal-renewal-upload-result" role="status" style="display:block;margin-top:7px;font-size:11px;color:var(--text3);"></span>' +
     '</div>';
-  } else if (status === 'awaiting_upload') {
+  } else if (status === 'awaiting_upload' && request && request.request_expired === true) {
+    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--red-dim);color:var(--red);font-size:11px;font-weight:700;">This renewal request has expired. Contact Compliance if a new due date or replacement request is required.</div>';
+  } else if (status === 'awaiting_upload' && featureEnabled !== true) {
     uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--surface2);color:var(--text3);font-size:11px;font-weight:700;">Renewal uploads are currently read-only while the governed workflow is OFF.</div>';
+  } else if (status === 'awaiting_upload') {
+    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--red-dim);color:var(--red);font-size:11px;font-weight:700;">Upload is unavailable until Compliance confirms the authoritative request binding.</div>';
   } else if (status === 'upload_received') {
-    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--green-dim);color:var(--green);font-size:11px;font-weight:700;">Your upload was received and is awaiting separate Compliance handling.</div>';
+    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--green-dim);color:var(--green);font-size:11px;font-weight:700;"><strong>Awaiting Verification</strong><div style="margin-top:4px;font-weight:600;">Your upload is securely bound to this renewal request. Compliance has not verified or accepted it, and your canonical document has not been replaced.</div></div>';
   }
   return '<div class="doc-item portal-document-renewal-item" data-renewal-application-id="' + escapeHtml(String(applicationId || '')) + '" data-renewal-request-id="' + escapeHtml(requestId) + '">' +
     '<div class="doc-item-top">' +
@@ -12011,7 +12015,7 @@ async function uploadPortalDocumentRenewal(input) {
   try {
     await apiCall('POST', '/portal/applications/' + encodeURIComponent(applicationId) + '/renewal-requests/' + encodeURIComponent(requestId) + '/upload', formData, true);
     input.value = '';
-    showToast('success', 'Renewal Upload Received', 'Your file has been staged for Compliance. Your canonical document has not been replaced.');
+    showToast('success', 'Renewal Upload Bound', 'Uploaded and awaiting verification. Your canonical document has not been replaced.');
     await loadPortalDocumentRenewalRequests();
   } catch (err) {
     if (result) result.textContent = err.message || 'Upload failed.';
