@@ -1,5 +1,6 @@
 """PR-MON-FEATURE-FLAGS-1 Monitoring feature-governance contracts."""
 
+import ast
 import json
 import logging
 from pathlib import Path
@@ -209,8 +210,8 @@ def test_startup_safety_wires_monitoring_log_once(monkeypatch):
     assert calls == ["logged"]
 
 
-def test_no_monitoring_business_module_consumes_new_flags():
-    """This PR governs state only; future PRs must add every first consumer."""
+def test_only_document_renewal_service_consumes_its_approved_flag():
+    """Each first workflow consumer is explicit and narrowly allowlisted."""
     backend = Path(environment.__file__).resolve().parent
     consumers = []
     for path in backend.rglob("*.py"):
@@ -218,8 +219,57 @@ def test_no_monitoring_business_module_consumes_new_flags():
             continue
         if path.name == "environment.py":
             continue
-        text = path.read_text(encoding="utf-8")
-        used = sorted(flag for flag in EXPECTED_FLAGS if flag in text)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        flag_bindings = {}
+        for statement in tree.body:
+            if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                value = statement.value
+                targets = (
+                    statement.targets
+                    if isinstance(statement, ast.Assign)
+                    else [statement.target]
+                )
+                if (
+                    isinstance(value, ast.Constant)
+                    and isinstance(value.value, str)
+                    and value.value in EXPECTED_FLAGS
+                ):
+                    for target in targets:
+                        if isinstance(target, ast.Name):
+                            flag_bindings[target.id] = value.value
+            elif (
+                isinstance(statement, ast.ImportFrom)
+                and statement.module == "monitoring_document_renewal"
+            ):
+                for imported in statement.names:
+                    if imported.name == "FEATURE_FLAG":
+                        flag_bindings[imported.asname or imported.name] = (
+                            "ENABLE_DOCUMENT_RENEWAL_AUTOMATION"
+                        )
+
+        used = set()
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "is_enabled"
+                and node.args
+            ):
+                continue
+            argument = node.args[0]
+            if (
+                isinstance(argument, ast.Constant)
+                and isinstance(argument.value, str)
+                and argument.value in EXPECTED_FLAGS
+            ):
+                used.add(argument.value)
+            elif isinstance(argument, ast.Name) and argument.id in flag_bindings:
+                used.add(flag_bindings[argument.id])
         if used:
-            consumers.append((str(path.relative_to(backend)), used))
-    assert consumers == []
+            consumers.append((str(path.relative_to(backend)), sorted(used)))
+    assert consumers == [
+        (
+            "monitoring_document_renewal.py",
+            ["ENABLE_DOCUMENT_RENEWAL_AUTOMATION"],
+        )
+    ]
