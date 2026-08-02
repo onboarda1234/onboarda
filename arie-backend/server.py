@@ -45747,11 +45747,18 @@ class PortalDocumentRenewalRequestsHandler(BaseHandler):
             return
         if user.get("type") != "client":
             return self.error("Only clients can view document renewal requests.", 403)
+        limit_value = self.get_argument("limit", "50")
+        offset_value = self.get_argument("offset", "0")
         try:
-            limit = int(self.get_argument("limit", "50"))
-            offset = int(self.get_argument("offset", "0"))
+            limit = int(limit_value)
+            offset = int(offset_value)
         except (TypeError, ValueError):
             return self.error("limit and offset must be integers.", 400)
+        if not (
+            1 <= limit <= _monitoring_document_renewal.MAX_LIST_LIMIT
+            and 0 <= offset <= _monitoring_document_renewal.MAX_LIST_OFFSET
+        ):
+            return self.error("limit or offset is outside the allowed range.", 400)
         include_cancelled_value = str(
             self.get_argument("include_cancelled", "false") or ""
         ).strip().lower()
