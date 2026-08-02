@@ -46,6 +46,19 @@ ACTIVE_ALERT_STATUSES = MONITORING_ACTIVE_STATUSES
 ACTIVE_REQUEST_STATUSES = frozenset(
     {"created", "awaiting_upload", "upload_received"}
 )
+UPLOAD_BINDING_REJECTION_CODES = frozenset({
+    "binding_missing",
+    "binding_mismatch",
+})
+UPLOAD_LINKAGE_REJECTION_CODES = frozenset({
+    "alert_not_active",
+    "alert_not_found",
+    "linkage_not_authoritative",
+    "stale_document_alert",
+    "stale_linkage",
+    "stale_eligibility",
+    "unsupported_alert_type",
+})
 # Protected legacy contract from monitoring_document_refresh. This duplicate is
 # deliberate: the canonical service must not import or call the legacy module.
 # A guard test requires the vocabularies to remain exactly aligned.

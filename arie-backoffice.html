@@ -26729,12 +26729,35 @@ function monitoringDocumentRenewalUploadBinding(request) {
 }
 
 function monitoringDocumentRenewalBindingStatusLabel(binding, requestStatus) {
-  var status = monitoringCanonicalToken((binding && binding.binding_status) || '');
-  if (status === 'bound') return 'Bound';
-  if (status) return normalizeAlertStatusLabel(status);
-  return requestStatus === 'upload_received'
-    ? 'Binding unavailable — manual review required'
-    : 'Not bound';
+  if (!binding || typeof binding !== 'object') {
+    return requestStatus === 'upload_received'
+      ? 'Binding unavailable — manual review required'
+      : 'Not bound';
+  }
+  var status = monitoringCanonicalToken(binding.binding_status || '');
+  var uploadId = String(binding.upload_id || '').trim();
+  var personId = String(binding.person_id || '').trim();
+  var personType = String(binding.person_type || '').trim();
+  var version = Number(binding.original_document_version);
+  var timestamp = String(binding.upload_timestamp || '').trim();
+  var requiredText = [
+    binding.renewal_request_id,
+    binding.application_id,
+    binding.customer_id,
+    binding.original_document_id,
+    binding.uploaded_document_id,
+    binding.document_type,
+    binding.uploaded_by
+  ].every(function(value) { return String(value || '').trim().length > 0; });
+  var complete = status === 'bound'
+    && uploadId.length > 0
+    && requiredText
+    && String(binding.uploaded_document_id) === 'renewal-candidate:' + uploadId
+    && Number.isInteger(version) && version >= 1
+    && timestamp.length > 0 && !Number.isNaN(Date.parse(timestamp))
+    && (personId.length > 0) === (personType.length > 0)
+    && binding.contract_version === 'monitoring_document_renewal_upload_binding_v1';
+  return complete ? 'Bound' : 'Binding unavailable — manual review required';
 }
 
 function renderMonitoringDocumentRenewalCreateControls(alert) {

@@ -960,6 +960,35 @@ def test_upload_preflight_audit_failure_fails_closed(renewal_api_server):
     assert _db_counts(db_module, case)["bindings"] == 0
 
 
+def test_projected_upload_rejection_codes_are_clamped_to_public_contract(
+    renewal_api_server,
+):
+    _base_url, _db_module, server_module = renewal_api_server
+    renewal = server_module._monitoring_document_renewal
+    clamp = server_module._monitoring_renewal_public_rejection_code
+
+    assert clamp(
+        "binding_mismatch",
+        allowed=renewal.UPLOAD_BINDING_REJECTION_CODES,
+        default="binding_missing",
+    ) == "binding_mismatch"
+    assert clamp(
+        "future_internal_detail",
+        allowed=renewal.UPLOAD_BINDING_REJECTION_CODES,
+        default="binding_missing",
+    ) == "binding_missing"
+    assert clamp(
+        "stale_linkage",
+        allowed=renewal.UPLOAD_LINKAGE_REJECTION_CODES,
+        default="linkage_not_authoritative",
+    ) == "stale_linkage"
+    assert clamp(
+        None,
+        allowed=renewal.UPLOAD_LINKAGE_REJECTION_CODES,
+        default="linkage_not_authoritative",
+    ) == "linkage_not_authoritative"
+
+
 def test_portal_distinguishes_same_document_type_for_two_people(renewal_api_server):
     base_url, db_module, _server_module = renewal_api_server
     case = _seed_case(db_module, "two-people")

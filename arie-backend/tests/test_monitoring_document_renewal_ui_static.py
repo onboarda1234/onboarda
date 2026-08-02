@@ -22,6 +22,53 @@ while ((match = re.exec(html)) !== null) {
 if (!found) throw new Error('No inline script found');
 """
 
+BINDING_STATUS_BEHAVIOUR = r"""
+const fs = require('fs');
+const vm = require('vm');
+const html = fs.readFileSync(process.argv[1], 'utf8');
+const start = html.indexOf('function monitoringDocumentRenewalBindingStatusLabel');
+const end = html.indexOf('function renderMonitoringDocumentRenewalCreateControls', start);
+if (start < 0 || end < 0) throw new Error('binding status helper not found');
+const sandbox = {
+  monitoringCanonicalToken: value => String(value || '').trim().toLowerCase(),
+};
+vm.createContext(sandbox);
+vm.runInContext(html.slice(start, end), sandbox);
+const label = sandbox.monitoringDocumentRenewalBindingStatusLabel;
+const valid = {
+  upload_id: 'upload-1',
+  renewal_request_id: 'request-1',
+  application_id: 'app-1',
+  customer_id: 'customer-1',
+  person_id: 'person-1',
+  person_type: 'director',
+  original_document_id: 'document-1',
+  original_document_version: 1,
+  uploaded_document_id: 'renewal-candidate:upload-1',
+  document_type: 'passport',
+  upload_timestamp: '2030-01-01T00:00:00Z',
+  uploaded_by: 'customer-1',
+  binding_status: 'bound',
+  contract_version: 'monitoring_document_renewal_upload_binding_v1',
+};
+if (label(valid, 'upload_received') !== 'Bound') throw new Error('valid binding not bound');
+if (label(null, 'awaiting_upload') !== 'Not bound') throw new Error('valid unbound state failed');
+if (!label(null, 'upload_received').includes('manual review')) throw new Error('missing received binding did not fail closed');
+for (const invalid of [
+  {...valid, application_id: ''},
+  {...valid, uploaded_document_id: 'document-1'},
+  {...valid, original_document_version: 0},
+  {...valid, upload_timestamp: 'not-a-timestamp'},
+  {...valid, person_type: ''},
+  {...valid, binding_status: 'verified'},
+  {...valid, contract_version: 'monitoring_document_renewal_upload_binding_v0'},
+]) {
+  if (!label(invalid, 'upload_received').includes('manual review')) {
+    throw new Error('malformed binding did not fail closed');
+  }
+}
+"""
+
 
 def _region(source: str, start: str, end: str) -> str:
     start_index = source.index(start)
@@ -121,6 +168,31 @@ def test_backoffice_renewal_controls_are_orchestration_only():
         "renderMonitoringDocumentRenewalCreateControls"
     )
 
+    binding_label = _region(
+        html,
+        "function monitoringDocumentRenewalBindingStatusLabel",
+        "function renderMonitoringDocumentRenewalCreateControls",
+    )
+    for required in (
+        "renewal_request_id",
+        "application_id",
+        "customer_id",
+        "original_document_id",
+        "original_document_version",
+        "uploaded_document_id",
+        "document_type",
+        "upload_timestamp",
+        "uploaded_by",
+        "monitoring_document_renewal_upload_binding_v1",
+        "renewal-candidate:",
+        "Binding unavailable — manual review required",
+    ):
+        assert required in binding_label
+    assert "Number.isInteger(version) && version >= 1" in binding_label
+    assert "!Number.isNaN(Date.parse(timestamp))" in binding_label
+    assert "return complete ? 'Bound'" in binding_label
+    assert "normalizeAlertStatusLabel(status)" not in binding_label
+
 
 def test_backoffice_renewal_actions_use_only_dedicated_endpoints():
     html = BACKOFFICE_HTML.read_text(encoding="utf-8")
@@ -174,6 +246,10 @@ def test_portal_renewal_cards_are_application_bound_and_upload_only():
     assert "status === 'awaiting_upload' && featureEnabled === true" in renderer
     assert "portalDocumentRenewalFeatureEnabled = featureEnabled === true" in renderer
     assert "Renewal uploads are currently read-only while the governed workflow is OFF" in renderer
+    assert (
+        "This renewal request has expired. Contact Compliance if a new due date "
+        "or replacement request is required."
+    ) in renderer
 
     for prohibited in (
         "Approve",
@@ -211,6 +287,10 @@ def test_portal_renewal_uses_dedicated_read_and_staging_upload_contract():
     assert "new FormData()" in upload
     assert "formData.append('file', file, file.name)" in upload
     assert "if (!portalDocumentRenewalFeatureEnabled)" in upload
+    assert (
+        "showToast('success', 'Renewal Upload Bound', 'Uploaded and awaiting "
+        "verification. Your canonical document has not been replaced.')"
+    ) in upload
     for prohibited in (
         "/enhanced-requirements/",
         "/documents?doc_type=",
@@ -312,3 +392,17 @@ def test_changed_ui_inline_scripts_parse():
             timeout=30,
         )
         assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_backoffice_binding_status_helper_fails_closed_on_public_shapes():
+    node = shutil.which("node")
+    assert node, "Node.js is required for binding-status behavior validation"
+    result = subprocess.run(
+        [node, "-e", BINDING_STATUS_BEHAVIOUR, str(BACKOFFICE_HTML)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout

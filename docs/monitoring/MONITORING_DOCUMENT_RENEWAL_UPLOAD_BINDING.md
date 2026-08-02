@@ -39,6 +39,14 @@ the locked renewal request. The portal supplies only the request route and file
 body. It never supplies raw customer, person or document identifiers as
 binding authority.
 
+The database independently rejects cross-wired identities. Composite foreign
+keys bind the candidate upload, renewal request, application/customer and
+original document/version/type as one tuple rather than accepting unrelated
+but individually valid IDs. Engine-specific INSERT/UPDATE guards additionally
+compare the nullable person/entity pair, upload timestamp and uploader with
+null-safe semantics. These constraints protect future or operator SQL paths;
+the service remains the only approved application writer.
+
 ## Fail-closed validation
 
 The upload must resolve to one existing renewal request whose exact state is

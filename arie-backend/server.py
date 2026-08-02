@@ -39186,7 +39186,14 @@ def _write_monitoring_renewal_rejection(
     expected_customer_id,
     correlation_id,
 ):
-    """Audit then write one proven-owned, public-safe preflight rejection."""
+    """Audit then write one proven-owned, public-safe preflight rejection.
+
+    This helper is deliberately fail-closed.  The service rolls back and
+    converts any audit-writer failure to the sanitized ``audit_unavailable``
+    RenewalError (503); the upload handler's RenewalError branch writes that
+    response.  A rejection without its durable audit evidence must never be
+    reported as successful or silently downgraded to a fail-open response.
+    """
 
     _monitoring_document_renewal.audit_renewal_upload_preflight_rejection(
         db,
@@ -39204,6 +39211,13 @@ def _write_monitoring_renewal_rejection(
         "error_code": code,
         "contract_version": _monitoring_document_renewal.CONTRACT_VERSION,
     })
+
+
+def _monitoring_renewal_public_rejection_code(value, *, allowed, default):
+    """Keep projected service failures inside the reviewed public contract."""
+
+    code = str(value or "").strip()
+    return code if code in allowed else default
 
 
 def _log_monitoring_renewal_upload_authz_denial(handler, user, application_id):
@@ -46170,7 +46184,13 @@ class PortalDocumentRenewalUploadHandler(BaseHandler):
                 and request.get("binding_current") is False
             ):
                 binding_error = request.get("binding_error") or {}
-                binding_code = str(binding_error.get("code") or "binding_missing")
+                binding_code = _monitoring_renewal_public_rejection_code(
+                    binding_error.get("code"),
+                    allowed=(
+                        _monitoring_document_renewal.UPLOAD_BINDING_REJECTION_CODES
+                    ),
+                    default="binding_missing",
+                )
                 return _write_monitoring_renewal_rejection(
                     self,
                     binding_code,
@@ -46208,8 +46228,12 @@ class PortalDocumentRenewalUploadHandler(BaseHandler):
                 )
             if request.get("linkage_current") is not True:
                 linkage_error = request.get("linkage_error") or {}
-                linkage_code = str(
-                    linkage_error.get("code") or "linkage_not_authoritative"
+                linkage_code = _monitoring_renewal_public_rejection_code(
+                    linkage_error.get("code"),
+                    allowed=(
+                        _monitoring_document_renewal.UPLOAD_LINKAGE_REJECTION_CODES
+                    ),
+                    default="linkage_not_authoritative",
                 )
                 return _write_monitoring_renewal_rejection(
                     self,

@@ -65,11 +65,14 @@ def test_record_service_has_one_atomic_binding_path_and_no_protected_writes():
         "monitoring_document_renewal_uploads",
         "monitoring_document_renewal_upload_bindings",
         "_audit_upload_bound",
-        "monitoring.document_renewal.upload_bound",
         "db.commit()",
         "_rollback(db)",
     ):
-        assert required in region or required in source
+        assert required in region
+
+    audit_node = _function(tree, "_audit_upload_bound")
+    audit_region = ast.get_source_segment(source, audit_node)
+    assert "monitoring.document_renewal.upload_bound" in audit_region
 
     assert region.index("INSERT INTO monitoring_document_renewal_upload_bindings") < (
         region.index("_audit_upload_bound")

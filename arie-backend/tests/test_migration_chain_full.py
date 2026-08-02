@@ -62,6 +62,21 @@ def _drop_column_if_present(db, table, column):
 
 def _remove_modern_backfills(db, keep_count):
     kept_versions = {v for v, _ in _CHAIN_FILES[:keep_count]}
+    if "059" not in kept_versions:
+        # Migration 059 adds parent identity indexes as well as the dependent
+        # binding table. Remove all of them before older migrations rewind
+        # document/version or renewal tables; SQLite otherwise refuses those
+        # DROP COLUMN operations and the replay later collides on ADD COLUMN.
+        db.execute("DROP TABLE IF EXISTS monitoring_document_renewal_upload_bindings")
+        for index in (
+            "uq_monitoring_doc_renewal_app_customer",
+            "uq_monitoring_doc_renewal_upload_identity",
+            "uq_monitoring_doc_renewal_request_identity",
+            "uq_monitoring_doc_renewal_request_person",
+            "uq_monitoring_doc_renewal_document_identity",
+            "uq_monitoring_doc_renewal_document_person",
+        ):
+            db.execute(f"DROP INDEX IF EXISTS {index}")
     if "014" not in kept_versions:
         db.execute("DROP INDEX IF EXISTS idx_periodic_reviews_status")
         for column in ("status", "due_date"):
@@ -116,10 +131,6 @@ def _remove_modern_backfills(db, keep_count):
         db.execute("DROP INDEX IF EXISTS idx_app_enhanced_req_monitoring_doc")
         for column in ("monitoring_alert_id", "monitoring_document_id", "due_date"):
             _drop_column_if_present(db, "application_enhanced_requirements", column)
-    if "059" not in kept_versions:
-        # Migration 059 is a dependent additive evidence table. Drop it before
-        # rewinding 058 so legacy-chain replays exercise the file migration.
-        db.execute("DROP TABLE IF EXISTS monitoring_document_renewal_upload_bindings")
     if "058" not in kept_versions:
         # Migration 058 is additive.  Drop dependants first so a rewound
         # staging/half-chain fixture really exercises the file migration
