@@ -41,6 +41,14 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 
 
+# Reviewed data-only manifests that deliberately do not participate in the
+# legacy ``seed_all`` operation. Each has its own staging gate and seeder so a
+# general fixture apply can never create workflow-validation substrate.
+GOVERNED_STAGING_FIXTURE_MANIFESTS = {
+    "document-renewal-expired-v1": "document_renewal_staging_fixture_v1.json",
+}
+
+
 # ---------------------------------------------------------------------
 # Deterministic application ids for the original SCEN-01..11 fixtures.
 # Item 36 deliberately does not rely on globally fixed primary keys.

@@ -1,0 +1,929 @@
+name: document-renewal-staging-harness
+
+# Manual, main-only validation of the one governed synthetic renewal fixture.
+# The live backend revision is captured before any mutation, the worker is
+# never changed, and the exact backend revision is restored in an always step.
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_release_sha:
+        description: "Exact deployed main SHA (40 lowercase hex characters)"
+        required: true
+        type: string
+      confirmation:
+        description: "Enter I-UNDERSTAND-STAGING-DOCUMENT-RENEWAL-HARNESS"
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: af-south-1
+  ECS_CLUSTER: regmind-staging
+  ECS_BACKEND_SERVICE: regmind-backend
+  ECS_WORKER_SERVICE: regmind-verification-worker
+  HARNESS_EVIDENCE_DIR: ${{ github.workspace }}/harness-evidence
+  HARNESS_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    environment: staging
+    defaults:
+      run:
+        shell: bash
+        working-directory: arie-backend
+
+    steps:
+      - name: Checkout exact reviewed release
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+
+      - name: Initialize sanitized evidence
+        run: |
+          set -euo pipefail
+          rm -rf "$HARNESS_EVIDENCE_DIR"
+          mkdir -p "$HARNESS_EVIDENCE_DIR"
+          printf '%s\n' '{"schema_version":"document_renewal_staging_harness_v1","ok":false,"status":"incomplete"}' \
+            > "$HARNESS_EVIDENCE_DIR/workflow-status.json"
+
+      - name: Validate main-only release and operator gates
+        env:
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_REF: ${{ github.ref }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT: >-
+            ${{ secrets.DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_document_renewal_activation.py validate-context \
+            --sha "$RELEASE_SHA" \
+            --ref "$RELEASE_REF" \
+            --confirm "$CONFIRMATION"
+          if [ "$EXPECTED_RELEASE_SHA" != "$RELEASE_SHA" ]; then
+            echo "FAIL: operator-reviewed SHA does not equal github.sha" >&2
+            exit 2
+          fi
+          if [ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]; then
+            echo "FAIL: checkout does not equal github.sha" >&2
+            exit 2
+          fi
+          python3 - <<'PY'
+          import os, re
+          value = os.environ.get(
+              "DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT", ""
+          )
+          if not re.fullmatch(r"[0-9a-f]{64}", value):
+              raise SystemExit(
+                  "FAIL: approved staging database fingerprint secret is missing or invalid"
+              )
+          PY
+
+      - name: Configure AWS credentials
+        id: aws
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Capture exact healthy staging state
+        id: state
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_deployment_control.py capture-predeploy \
+            --region "$AWS_REGION" \
+            --cluster "$ECS_CLUSTER" \
+            --output "$HARNESS_EVIDENCE_DIR/predeploy.json"
+          python3 - "$HARNESS_EVIDENCE_DIR/predeploy.json" "$RELEASE_SHA" "$GITHUB_OUTPUT" <<'PY'
+          import json, re, sys
+          path, sha, output = sys.argv[1:]
+          evidence = json.load(open(path, encoding="utf-8"))
+          rollback = evidence.get("rollback") or {}
+          services = evidence.get("services") or {}
+          backend = (services.get("backend") or {}).get("task_definition_arn", "")
+          worker = (services.get("worker") or {}).get("task_definition_arn", "")
+          digest = rollback.get("image_digest", "")
+          if (
+              evidence.get("ok") is not True
+              or rollback.get("image_tag") != sha
+              or rollback.get("backend_task_definition") != backend
+              or rollback.get("worker_task_definition") != worker
+              or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
+          ):
+              raise SystemExit("FAIL: live staging state is not the exact reviewed release")
+          with open(output, "a", encoding="utf-8") as handle:
+              handle.write(f"backend_task_definition={backend}\n")
+              handle.write(f"worker_task_definition={worker}\n")
+              handle.write(f"image_digest={digest}\n")
+          PY
+
+      - name: Verify all governed flags are OFF before activation
+        env:
+          ORIGINAL_BACKEND_TASK_DEFINITION: ${{ steps.state.outputs.backend_task_definition }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          aws ecs describe-task-definition \
+            --task-definition "$ORIGINAL_BACKEND_TASK_DEFINITION" \
+            --region "$AWS_REGION" \
+            --query taskDefinition \
+            --output json > "$RUNNER_TEMP/original-backend-task-definition.json"
+          python3 scripts/qa/staging_document_renewal_activation.py inspect \
+            --task-definition "$RUNNER_TEMP/original-backend-task-definition.json" \
+            --expected-sha "$RELEASE_SHA" \
+            --expected-mode off \
+            --output "$HARNESS_EVIDENCE_DIR/flags-before.json"
+
+      - name: Prove no prior harness lease or running task exists
+        id: residue_preflight
+        run: |
+          set -euo pipefail
+          aws resourcegroupstaggingapi get-resources \
+            --resource-type-filters ecs:task-definition \
+            --tag-filters "Key=RegMindHarness,Values=document-renewal-staging-harness-v1" \
+            --region "$AWS_REGION" \
+            --output json > "$RUNNER_TEMP/preflight-tagged.json"
+          python3 - "$RUNNER_TEMP/preflight-tagged.json" \
+            "$RUNNER_TEMP/preflight-candidates.json" <<'PY'
+          import json, sys
+          rows = json.load(open(sys.argv[1], encoding="utf-8")).get(
+              "ResourceTagMappingList"
+          ) or []
+          if rows:
+              raise SystemExit(
+                  "FAIL: a prior globally tagged harness task definition remains"
+              )
+          json.dump(
+              {"task_definitions": []},
+              open(sys.argv[2], "w", encoding="utf-8"),
+              sort_keys=True,
+          )
+          PY
+          aws ecs list-tasks \
+            --cluster "$ECS_CLUSTER" \
+            --family regmind-staging \
+            --desired-status RUNNING \
+            --region "$AWS_REGION" \
+            --output json > "$RUNNER_TEMP/preflight-running-arns.json"
+          python3 - "$RUNNER_TEMP/preflight-running-arns.json" \
+            "$RUNNER_TEMP/preflight-running.json" <<'PY'
+          import json, subprocess, sys
+          task_arns = json.load(open(sys.argv[1], encoding="utf-8")).get(
+              "taskArns"
+          ) or []
+          task_definition_arns = []
+          definitions = []
+          if task_arns:
+              payload = json.loads(
+                  subprocess.check_output(
+                      [
+                          "aws", "ecs", "describe-tasks",
+                          "--cluster", "regmind-staging",
+                          "--tasks", *task_arns,
+                          "--region", "af-south-1",
+                          "--output", "json",
+                      ],
+                      text=True,
+                  )
+              )
+              tasks = payload.get("tasks") or []
+              returned_task_arns = [str(row.get("taskArn") or "") for row in tasks]
+              if (
+                  payload.get("failures")
+                  or len(tasks) != len(task_arns)
+                  or len(set(returned_task_arns)) != len(returned_task_arns)
+                  or set(returned_task_arns) != set(task_arns)
+              ):
+                  raise SystemExit(
+                      "FAIL: ECS did not describe every listed running task"
+                  )
+              task_definition_arns = [
+                  str(row.get("taskDefinitionArn") or "")
+                  for row in tasks
+              ]
+              for arn in sorted(set(task_definition_arns)):
+                  item = json.loads(
+                      subprocess.check_output(
+                          [
+                              "aws", "ecs", "describe-task-definition",
+                              "--task-definition", arn,
+                              "--include", "TAGS",
+                              "--region", "af-south-1",
+                              "--output", "json",
+                          ],
+                          text=True,
+                      )
+                  )
+                  definition = item.get("taskDefinition") or {}
+                  definition["tags"] = item.get("tags") or []
+                  definitions.append(definition)
+          json.dump(
+              {
+                  "task_definition_arns": task_definition_arns,
+                  "task_definitions": definitions,
+              },
+              open(sys.argv[2], "w", encoding="utf-8"),
+              sort_keys=True,
+          )
+          PY
+          python3 scripts/qa/staging_document_renewal_activation.py \
+            verify-recovery-residue-clear \
+            --current "$RUNNER_TEMP/original-backend-task-definition.json" \
+            --candidates "$RUNNER_TEMP/preflight-candidates.json" \
+            --running "$RUNNER_TEMP/preflight-running.json" \
+            --output "$HARNESS_EVIDENCE_DIR/preflight-residue-proof.json"
+
+      - name: Install exact temporary cleanup permission
+        id: iam_install
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_document_renewal_iam.py install \
+            --output "$HARNESS_EVIDENCE_DIR/temporary-iam-install.json"
+          python3 scripts/qa/staging_document_renewal_iam.py verify \
+            --output "$HARNESS_EVIDENCE_DIR/temporary-iam-verify.json"
+
+      - name: Seed or verify the one permanent governed fixture
+        id: seed
+        env:
+          ORIGINAL_BACKEND_TASK_DEFINITION: ${{ steps.state.outputs.backend_task_definition }}
+          RELEASE_SHA: ${{ github.sha }}
+          DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT: >-
+            ${{ secrets.DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_document_renewal_ecs_task.py \
+            --task-definition "$ORIGINAL_BACKEND_TASK_DEFINITION" \
+            --operation seed \
+            --expected-sha "$RELEASE_SHA" \
+            --run-id "$HARNESS_RUN_ID" \
+            --output "$HARNESS_EVIDENCE_DIR/fixture-seed-task.json"
+
+      - name: Capture clean baseline fingerprint
+        env:
+          ORIGINAL_BACKEND_TASK_DEFINITION: ${{ steps.state.outputs.backend_task_definition }}
+          RELEASE_SHA: ${{ github.sha }}
+          DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT: >-
+            ${{ secrets.DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_document_renewal_ecs_task.py \
+            --task-definition "$ORIGINAL_BACKEND_TASK_DEFINITION" \
+            --operation snapshot-off \
+            --expected-sha "$RELEASE_SHA" \
+            --run-id "$HARNESS_RUN_ID" \
+            --output "$HARNESS_EVIDENCE_DIR/before-task.json" \
+            --evidence-output "$HARNESS_EVIDENCE_DIR/before-fingerprint.json"
+          python3 - "$HARNESS_EVIDENCE_DIR/before-fingerprint.json" <<'PY'
+          import json, re, sys
+          evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+          relations = evidence.get("relations") or {}
+          operational = (
+              "renewal_requests",
+              "renewal_events",
+              "renewal_uploads",
+              "renewal_upload_bindings",
+              "renewal_upload_cleanup",
+              "renewal_notifications",
+              "harness_rate_limit",
+          )
+          core_expected = {
+              "fixture_client": 1,
+              "fixture_application": 1,
+              "fixture_person": 1,
+              "fixture_document": 1,
+              "fixture_monitoring_alert": 1,
+              "fixture_application_directors": 1,
+              "fixture_application_ubos": 0,
+              "fixture_application_intermediaries": 0,
+              "fixture_application_documents": 1,
+              "fixture_application_monitoring_alerts": 1,
+              "fixture_application_other_notifications": 0,
+              "fixture_agent_executions": 0,
+              "fixture_verification_jobs": 0,
+              "fixture_legacy_requirements": 0,
+              "other_harness_rate_limits": 0,
+          }
+          fingerprints = (
+              "core_fingerprint",
+              "operational_fingerprint",
+              "isolation_fingerprint",
+              "scheduler_fingerprint",
+              "audit_evidence_fingerprint",
+          )
+          audit_actions = evidence.get("fixture_audit_actions")
+          audit_relation_count = int(
+              (relations.get("fixture_audit") or {}).get("row_count", -1)
+          )
+          audit_chained = int(evidence.get("fixture_audit_chained_count", -1))
+          audit_unchained = int(evidence.get("fixture_audit_unchained_count", -1))
+          chain = evidence.get("audit_chain") or {}
+          audit_metadata_valid = (
+              isinstance(audit_actions, dict)
+              and all(
+                  isinstance(action, str)
+                  and action.startswith("monitoring.document_renewal.")
+                  and isinstance(count, int)
+                  and not isinstance(count, bool)
+                  and count > 0
+                  for action, count in audit_actions.items()
+              )
+              and sum(audit_actions.values()) == audit_relation_count
+              and audit_chained == audit_relation_count
+              and audit_unchained == 0
+              and chain.get("verified") is True
+              and chain.get("coverage_complete") is True
+              and int(chain.get("coverage_gaps", -1)) == 0
+              and int(chain.get("broken_link_count", -1)) == 0
+              and int(chain.get("entries_checked", -1))
+                  == int(chain.get("chained_rows", -2))
+              and int(chain.get("chained_rows", -1))
+                  + int(chain.get("legacy_rows", -1))
+                  == int(chain.get("total_entries", -2))
+          )
+          if (
+              evidence.get("contract_version")
+              != "monitoring_document_renewal_staging_cleanup_v1"
+              or evidence.get("run_id") != __import__("os").environ["HARNESS_RUN_ID"]
+              or evidence.get("all_monitoring_flags_off") is not True
+              or any(bool(value) for value in (evidence.get("feature_state") or {}).values())
+              or any(int((relations.get(name) or {}).get("row_count", -1)) != 0 for name in operational)
+              or any(int((relations.get(name) or {}).get("row_count", -1)) != count for name, count in core_expected.items())
+              or any(not re.fullmatch(r"[0-9a-f]{64}", str(evidence.get(name) or "")) for name in fingerprints)
+              or not audit_metadata_valid
+              or "scheduler_state" not in relations
+              or not any(name.startswith("nonfixture_") for name in relations)
+          ):
+              raise SystemExit("FAIL: governed fixture baseline is not clean and exact")
+          PY
+
+      - name: Register bounded temporary backend activation
+        id: temporary_task_definition
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ISSUED_AT_EPOCH="$(date -u '+%s')"
+          LEASE_SECONDS=1680
+          EXPIRES_AT_EPOCH="$((ISSUED_AT_EPOCH + LEASE_SECONDS))"
+          ISSUED_AT="$(date -u -d "@$ISSUED_AT_EPOCH" '+%Y-%m-%dT%H:%M:%SZ')"
+          EXPIRES_AT="$(date -u -d "@$EXPIRES_AT_EPOCH" '+%Y-%m-%dT%H:%M:%SZ')"
+          MANIFEST_SHA="$(python3 -c 'from fixtures.document_renewal_staging import manifest_sha256; print(manifest_sha256())')"
+          python3 scripts/qa/staging_document_renewal_activation.py render \
+            --source "$RUNNER_TEMP/original-backend-task-definition.json" \
+            --sha "$RELEASE_SHA" \
+            --run-id "$HARNESS_RUN_ID" \
+            --issued-at "$ISSUED_AT" \
+            --expires-at "$EXPIRES_AT" \
+            --manifest-sha256 "$MANIFEST_SHA" \
+            --output "$RUNNER_TEMP/temporary-backend-task-definition.json"
+          TEMPORARY_ARN="$(aws ecs register-task-definition \
+            --cli-input-json "file://$RUNNER_TEMP/temporary-backend-task-definition.json" \
+            --region "$AWS_REGION" \
+            --query taskDefinition.taskDefinitionArn \
+            --output text)"
+          if [[ ! "$TEMPORARY_ARN" =~ ^arn:aws:ecs:af-south-1:782913119880:task-definition/regmind-staging:[1-9][0-9]*$ ]]; then
+            echo "FAIL: temporary task definition ARN is invalid" >&2
+            exit 2
+          fi
+          aws ecs describe-task-definition \
+            --task-definition "$TEMPORARY_ARN" \
+            --include TAGS \
+            --region "$AWS_REGION" \
+            --output json > "$RUNNER_TEMP/registered-temporary-payload.json"
+          python3 - "$RUNNER_TEMP/registered-temporary-payload.json" \
+            "$RUNNER_TEMP/registered-temporary-task-definition.json" <<'PY'
+          import json, sys
+          source, target = sys.argv[1:]
+          payload = json.load(open(source, encoding="utf-8"))
+          definition = payload.get("taskDefinition") or {}
+          definition["tags"] = payload.get("tags") or []
+          json.dump(definition, open(target, "w", encoding="utf-8"), sort_keys=True)
+          PY
+          python3 scripts/qa/staging_document_renewal_activation.py inspect \
+            --task-definition "$RUNNER_TEMP/registered-temporary-task-definition.json" \
+            --expected-sha "$RELEASE_SHA" \
+            --expected-mode active \
+            --expected-run-id "$HARNESS_RUN_ID" \
+            --output "$HARNESS_EVIDENCE_DIR/registered-recovery-metadata.json"
+          echo "task_definition=$TEMPORARY_ARN" >> "$GITHUB_OUTPUT"
+          echo "expires_at=$EXPIRES_AT" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "{\"task_definition\":\"$TEMPORARY_ARN\",\"lease_seconds\":$LEASE_SECONDS}" \
+            > "$HARNESS_EVIDENCE_DIR/temporary-task-definition.json"
+
+      - name: Activate temporary backend lease only
+        id: activate
+        env:
+          TEMPORARY_TASK_DEFINITION: ${{ steps.temporary_task_definition.outputs.task_definition }}
+        run: |
+          set -euo pipefail
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_BACKEND_SERVICE" \
+            --task-definition "$TEMPORARY_TASK_DEFINITION" \
+            --force-new-deployment \
+            --region "$AWS_REGION" > /dev/null
+          echo "activation_requested=true" >> "$GITHUB_OUTPUT"
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_BACKEND_SERVICE" \
+            --region "$AWS_REGION"
+
+      - name: Prove exact active runtime and untouched worker
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_DIGEST: ${{ steps.state.outputs.image_digest }}
+          TEMPORARY_TASK_DEFINITION: ${{ steps.temporary_task_definition.outputs.task_definition }}
+          ORIGINAL_WORKER_TASK_DEFINITION: ${{ steps.state.outputs.worker_task_definition }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_deployment_control.py verify-runtime \
+            --sha "$RELEASE_SHA" \
+            --digest "$RELEASE_DIGEST" \
+            --backend-task-definition "$TEMPORARY_TASK_DEFINITION" \
+            --worker-task-definition "$ORIGINAL_WORKER_TASK_DEFINITION" \
+            --region "$AWS_REGION" \
+            --cluster "$ECS_CLUSTER" \
+            --output "$HARNESS_EVIDENCE_DIR/runtime-active.json"
+          aws ecs describe-task-definition \
+            --task-definition "$TEMPORARY_TASK_DEFINITION" \
+            --include TAGS \
+            --region "$AWS_REGION" \
+            --output json > "$RUNNER_TEMP/active-backend-task-payload.json"
+          python3 - "$RUNNER_TEMP/active-backend-task-payload.json" \
+            "$RUNNER_TEMP/active-backend-task-definition.json" <<'PY'
+          import json, sys
+          source, target = sys.argv[1:]
+          payload = json.load(open(source, encoding="utf-8"))
+          definition = payload.get("taskDefinition") or {}
+          definition["tags"] = payload.get("tags") or []
+          json.dump(definition, open(target, "w", encoding="utf-8"), sort_keys=True)
+          PY
+          python3 scripts/qa/staging_document_renewal_activation.py inspect \
+            --task-definition "$RUNNER_TEMP/active-backend-task-definition.json" \
+            --expected-sha "$RELEASE_SHA" \
+            --expected-mode active \
+            --expected-run-id "$HARNESS_RUN_ID" \
+            --output "$HARNESS_EVIDENCE_DIR/flags-active.json"
+
+      - name: Run fixture-only eligibility scheduler
+        env:
+          TEMPORARY_TASK_DEFINITION: ${{ steps.temporary_task_definition.outputs.task_definition }}
+          RELEASE_SHA: ${{ github.sha }}
+          DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT: >-
+            ${{ secrets.DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_document_renewal_ecs_task.py \
+            --task-definition "$TEMPORARY_TASK_DEFINITION" \
+            --operation eligibility \
+            --expected-sha "$RELEASE_SHA" \
+            --run-id "$HARNESS_RUN_ID" \
+            --output "$HARNESS_EVIDENCE_DIR/eligibility-task.json" \
+            --evidence-output "$HARNESS_EVIDENCE_DIR/eligibility.json"
+
+      - name: Exercise the real portal upload and Monitoring projection
+        env:
+          SECRET_ID: regmind/staging
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          set +x
+          SECRET_JSON="$(aws secretsmanager get-secret-value \
+            --secret-id "$SECRET_ID" \
+            --region "$AWS_REGION" \
+            --query SecretString \
+            --output text)"
+          DOCUMENT_RENEWAL_STAGING_SECRET_JSON="$SECRET_JSON" \
+            python3 scripts/qa/staging_document_renewal_http_validation.py \
+              --mode full \
+              --base-url https://staging.regmind.co \
+              --expected-sha "$RELEASE_SHA" \
+              --run-id "$HARNESS_RUN_ID" \
+              --output "$HARNESS_EVIDENCE_DIR/http-validation.json"
+          unset SECRET_JSON
+
+      - name: Capture expected synthetic after fingerprint
+        env:
+          TEMPORARY_TASK_DEFINITION: ${{ steps.temporary_task_definition.outputs.task_definition }}
+          RELEASE_SHA: ${{ github.sha }}
+          DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT: >-
+            ${{ secrets.DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_document_renewal_ecs_task.py \
+            --task-definition "$TEMPORARY_TASK_DEFINITION" \
+            --operation snapshot-active \
+            --expected-sha "$RELEASE_SHA" \
+            --run-id "$HARNESS_RUN_ID" \
+            --output "$HARNESS_EVIDENCE_DIR/after-task.json" \
+            --evidence-output "$HARNESS_EVIDENCE_DIR/after-fingerprint.json"
+
+      - name: Open bounded read-only browser QA window
+        env:
+          HARNESS_EXPIRES_AT: ${{ steps.temporary_task_definition.outputs.expires_at }}
+        run: |
+          set -euo pipefail
+          REMAINING_SECONDS="$(python3 - "$HARNESS_EXPIRES_AT" <<'PY'
+          from datetime import datetime, timezone
+          import sys
+          expires = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+          print(int((expires - datetime.now(timezone.utc)).total_seconds()))
+          PY
+          )"
+          if [[ ! "$REMAINING_SECONDS" =~ ^[0-9]+$ ]] || [ "$REMAINING_SECONDS" -lt 240 ]; then
+            echo "FAIL: insufficient governed lease remains for browser QA" >&2
+            exit 2
+          fi
+          {
+            echo "## Document Renewal synthetic browser window"
+            echo "- Fixture application: FX-DOC-RENEWAL-001"
+            echo "- Monitoring alert: governed fixture only"
+            echo "- Window: 180 seconds; read-only browser inspection only"
+            echo "- The backend restores automatically when this window closes."
+          } >> "$GITHUB_STEP_SUMMARY"
+          for _minute in 1 2 3; do
+            sleep 60
+          done
+
+      - name: Restore exact original backend and verify worker unchanged
+        id: restore
+        if: ${{ always() && steps.state.outputs.backend_task_definition != '' }}
+        env:
+          ORIGINAL_BACKEND_TASK_DEFINITION: ${{ steps.state.outputs.backend_task_definition }}
+          ORIGINAL_WORKER_TASK_DEFINITION: ${{ steps.state.outputs.worker_task_definition }}
+          RELEASE_DIGEST: ${{ steps.state.outputs.image_digest }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_BACKEND_SERVICE" \
+            --task-definition "$ORIGINAL_BACKEND_TASK_DEFINITION" \
+            --force-new-deployment \
+            --region "$AWS_REGION" > /dev/null
+          if ! aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_BACKEND_SERVICE" \
+            --region "$AWS_REGION"; then
+            aws ecs wait services-stable \
+              --cluster "$ECS_CLUSTER" \
+              --services "$ECS_BACKEND_SERVICE" \
+              --region "$AWS_REGION"
+          fi
+          python3 scripts/qa/staging_deployment_control.py verify-runtime \
+            --sha "$RELEASE_SHA" \
+            --digest "$RELEASE_DIGEST" \
+            --backend-task-definition "$ORIGINAL_BACKEND_TASK_DEFINITION" \
+            --worker-task-definition "$ORIGINAL_WORKER_TASK_DEFINITION" \
+            --region "$AWS_REGION" \
+            --cluster "$ECS_CLUSTER" \
+            --output "$HARNESS_EVIDENCE_DIR/runtime-restored.json"
+          python3 scripts/qa/staging_document_renewal_activation.py inspect \
+            --task-definition "$RUNNER_TEMP/original-backend-task-definition.json" \
+            --expected-sha "$RELEASE_SHA" \
+            --expected-mode off \
+            --output "$HARNESS_EVIDENCE_DIR/flags-restored.json"
+
+      - name: Verify restored HTTP feature state is all OFF
+        id: restored_http
+        if: ${{ always() && steps.restore.outcome == 'success' }}
+        env:
+          SECRET_ID: regmind/staging
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          set +x
+          SECRET_JSON="$(aws secretsmanager get-secret-value \
+            --secret-id "$SECRET_ID" \
+            --region "$AWS_REGION" \
+            --query SecretString \
+            --output text)"
+          DOCUMENT_RENEWAL_STAGING_SECRET_JSON="$SECRET_JSON" \
+            python3 scripts/qa/staging_document_renewal_http_validation.py \
+              --mode restored-off \
+              --base-url https://staging.regmind.co \
+              --expected-sha "$RELEASE_SHA" \
+              --run-id "$HARNESS_RUN_ID" \
+              --output "$HARNESS_EVIDENCE_DIR/http-restored-off.json"
+          unset SECRET_JSON
+
+      - name: Clean exact synthetic operational graph and restore baseline
+        id: cleanup
+        if: >-
+          ${{ always() && steps.seed.outcome == 'success' &&
+              steps.restore.outcome == 'success' }}
+        env:
+          ORIGINAL_BACKEND_TASK_DEFINITION: ${{ steps.state.outputs.backend_task_definition }}
+          RELEASE_SHA: ${{ github.sha }}
+          DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT: >-
+            ${{ secrets.DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_document_renewal_iam.py verify \
+            --output "$HARNESS_EVIDENCE_DIR/temporary-iam-before-cleanup.json"
+          python3 scripts/qa/staging_document_renewal_ecs_task.py \
+            --task-definition "$ORIGINAL_BACKEND_TASK_DEFINITION" \
+            --operation cleanup \
+            --expected-sha "$RELEASE_SHA" \
+            --run-id "$HARNESS_RUN_ID" \
+            --output "$HARNESS_EVIDENCE_DIR/cleanup-task.json" \
+            --evidence-output "$HARNESS_EVIDENCE_DIR/cleanup.json"
+
+      - name: Reconcile before, after and final fingerprints
+        id: reconciliation
+        if: ${{ always() && steps.cleanup.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_document_renewal_activation.py compare-fingerprints \
+            --before "$HARNESS_EVIDENCE_DIR/before-fingerprint.json" \
+            --after "$HARNESS_EVIDENCE_DIR/after-fingerprint.json" \
+            --cleanup "$HARNESS_EVIDENCE_DIR/cleanup.json" \
+            --output "$HARNESS_EVIDENCE_DIR/reconciliation.json"
+
+      - name: Collect bounded CloudWatch review
+        if: ${{ always() && steps.state.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_deployment_control.py collect-cloudwatch \
+            --predeploy-evidence "$HARNESS_EVIDENCE_DIR/predeploy.json" \
+            --log-group /ecs/regmind-staging \
+            --region "$AWS_REGION" \
+            --output "$HARNESS_EVIDENCE_DIR/cloudwatch.json"
+
+      - name: Remove exact temporary cleanup permission
+        id: iam_remove
+        if: ${{ always() && steps.aws.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/qa/staging_document_renewal_iam.py remove \
+            --output "$HARNESS_EVIDENCE_DIR/temporary-iam-remove.json"
+
+      - name: Retire exact temporary task definition after complete cleanup proof
+        id: retire_temporary
+        if: >-
+          ${{ always() && steps.restore.outcome == 'success' &&
+              steps.cleanup.outcome == 'success' &&
+              steps.reconciliation.outcome == 'success' &&
+              steps.iam_remove.outcome == 'success' &&
+              steps.temporary_task_definition.outputs.task_definition != '' }}
+        env:
+          TEMPORARY_TASK_DEFINITION: ${{ steps.temporary_task_definition.outputs.task_definition }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          describe_candidate() {
+            local payload="$1"
+            local definition="$2"
+            local evidence="$3"
+            aws ecs describe-task-definition \
+              --task-definition "$TEMPORARY_TASK_DEFINITION" \
+              --include TAGS \
+              --region "$AWS_REGION" \
+              --output json > "$payload"
+            python3 - "$payload" "$definition" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding="utf-8"))
+          definition = value.get("taskDefinition") or {}
+          definition["tags"] = value.get("tags") or []
+          json.dump(definition, open(sys.argv[2], "w", encoding="utf-8"), sort_keys=True)
+          PY
+            python3 scripts/qa/staging_document_renewal_activation.py recovery-candidate \
+              --task-definition "$definition" \
+              --output "$evidence"
+          }
+          describe_candidate \
+            "$RUNNER_TEMP/main-retire-initial-payload.json" \
+            "$RUNNER_TEMP/main-retire-initial.json" \
+            "$HARNESS_EVIDENCE_DIR/main-retire-initial.json"
+          readarray -t INITIAL < <(python3 - \
+            "$HARNESS_EVIDENCE_DIR/main-retire-initial.json" \
+            "$TEMPORARY_TASK_DEFINITION" "$HARNESS_RUN_ID" "$RELEASE_SHA" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding="utf-8"))
+          if (
+              value.get("current_task_definition") != sys.argv[2]
+              or value.get("run_id") != sys.argv[3]
+              or value.get("release_sha") != sys.argv[4]
+              or value.get("action") not in {"wait", "restore"}
+          ):
+              raise SystemExit("FAIL: main harness retirement identity is invalid")
+          print(value.get("action"))
+          print(int(value.get("wait_seconds") or 0))
+          PY
+          )
+          if [ "${#INITIAL[@]}" -ne 2 ]; then
+            echo "FAIL: main harness retirement evidence is incomplete" >&2
+            exit 2
+          fi
+          if [ "${INITIAL[0]}" = "wait" ]; then
+            WAIT_SECONDS="${INITIAL[1]}"
+            if [[ ! "$WAIT_SECONDS" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$WAIT_SECONDS" -gt 1802 ]; then
+              echo "FAIL: main harness retirement wait is unsafe" >&2
+              exit 2
+            fi
+            sleep "$WAIT_SECONDS"
+          fi
+          describe_candidate \
+            "$RUNNER_TEMP/main-retire-final-payload.json" \
+            "$RUNNER_TEMP/main-retire-final.json" \
+            "$HARNESS_EVIDENCE_DIR/main-retire-final.json"
+          python3 - "$HARNESS_EVIDENCE_DIR/main-retire-final.json" \
+            "$TEMPORARY_TASK_DEFINITION" "$HARNESS_RUN_ID" "$RELEASE_SHA" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding="utf-8"))
+          if (
+              value.get("action") != "restore"
+              or value.get("current_task_definition") != sys.argv[2]
+              or value.get("run_id") != sys.argv[3]
+              or value.get("release_sha") != sys.argv[4]
+          ):
+              raise SystemExit("FAIL: main harness lease is not exactly expired")
+          PY
+          STATUS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["taskDefinition"]["status"])' \
+            "$RUNNER_TEMP/main-retire-final-payload.json")"
+          if [ "$STATUS" = "ACTIVE" ]; then
+            aws ecs deregister-task-definition \
+              --task-definition "$TEMPORARY_TASK_DEFINITION" \
+              --region "$AWS_REGION" > /dev/null
+          elif [ "$STATUS" != "INACTIVE" ]; then
+            echo "FAIL: temporary task definition has an unexpected state" >&2
+            exit 2
+          fi
+          aws ecs untag-resource \
+            --resource-arn "$TEMPORARY_TASK_DEFINITION" \
+            --tag-keys RegMindHarness HarnessRunId HarnessOriginalTaskDefinition \
+              HarnessExpiresAt HarnessReleaseSha \
+            --region "$AWS_REGION"
+
+      - name: Prove zero tagged or running harness residue after retirement
+        id: final_residue
+        if: ${{ always() && steps.retire_temporary.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          CURRENT_TASK_DEFINITION="$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_BACKEND_SERVICE" \
+            --region "$AWS_REGION" \
+            --query 'services[0].taskDefinition' \
+            --output text)"
+          aws ecs describe-task-definition \
+            --task-definition "$CURRENT_TASK_DEFINITION" \
+            --include TAGS \
+            --region "$AWS_REGION" \
+            --output json > "$RUNNER_TEMP/main-proof-current-payload.json"
+          python3 - "$RUNNER_TEMP/main-proof-current-payload.json" \
+            "$RUNNER_TEMP/main-proof-current.json" <<'PY'
+          import json, sys
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          definition = payload.get("taskDefinition") or {}
+          definition["tags"] = payload.get("tags") or []
+          json.dump(
+              definition,
+              open(sys.argv[2], "w", encoding="utf-8"),
+              sort_keys=True,
+          )
+          PY
+          for attempt in $(seq 1 20); do
+            aws resourcegroupstaggingapi get-resources \
+              --resource-type-filters ecs:task-definition \
+              --tag-filters "Key=RegMindHarness,Values=document-renewal-staging-harness-v1" \
+              --region "$AWS_REGION" \
+              --output json > "$RUNNER_TEMP/main-proof-tagged.json"
+            COUNT="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("ResourceTagMappingList") or []))' \
+              "$RUNNER_TEMP/main-proof-tagged.json")"
+            [ "$COUNT" = "0" ] && break
+            [ "$attempt" = "20" ] && {
+              echo "FAIL: harness tags remain after primary teardown" >&2
+              exit 2
+            }
+            sleep 15
+          done
+          printf '%s\n' '{"task_definitions":[]}' \
+            > "$RUNNER_TEMP/main-proof-candidates.json"
+          aws ecs list-tasks \
+            --cluster "$ECS_CLUSTER" \
+            --family regmind-staging \
+            --desired-status RUNNING \
+            --region "$AWS_REGION" \
+            --output json > "$RUNNER_TEMP/main-proof-running-arns.json"
+          python3 - "$RUNNER_TEMP/main-proof-running-arns.json" \
+            "$RUNNER_TEMP/main-proof-running.json" <<'PY'
+          import json, subprocess, sys
+          task_arns = json.load(open(sys.argv[1], encoding="utf-8")).get(
+              "taskArns"
+          ) or []
+          task_definition_arns = []
+          definitions = []
+          if task_arns:
+              payload = json.loads(
+                  subprocess.check_output(
+                      [
+                          "aws", "ecs", "describe-tasks",
+                          "--cluster", "regmind-staging",
+                          "--tasks", *task_arns,
+                          "--region", "af-south-1",
+                          "--output", "json",
+                      ],
+                      text=True,
+                  )
+              )
+              tasks = payload.get("tasks") or []
+              returned_task_arns = [str(row.get("taskArn") or "") for row in tasks]
+              if (
+                  payload.get("failures")
+                  or len(tasks) != len(task_arns)
+                  or len(set(returned_task_arns)) != len(returned_task_arns)
+                  or set(returned_task_arns) != set(task_arns)
+              ):
+                  raise SystemExit(
+                      "FAIL: ECS did not describe every listed running task"
+                  )
+              task_definition_arns = [
+                  str(row.get("taskDefinitionArn") or "")
+                  for row in tasks
+              ]
+              for arn in sorted(set(task_definition_arns)):
+                  item = json.loads(
+                      subprocess.check_output(
+                          [
+                              "aws", "ecs", "describe-task-definition",
+                              "--task-definition", arn,
+                              "--include", "TAGS",
+                              "--region", "af-south-1",
+                              "--output", "json",
+                          ],
+                          text=True,
+                      )
+                  )
+                  definition = item.get("taskDefinition") or {}
+                  definition["tags"] = item.get("tags") or []
+                  definitions.append(definition)
+          json.dump(
+              {
+                  "task_definition_arns": task_definition_arns,
+                  "task_definitions": definitions,
+              },
+              open(sys.argv[2], "w", encoding="utf-8"),
+              sort_keys=True,
+          )
+          PY
+          python3 scripts/qa/staging_document_renewal_activation.py \
+            verify-recovery-residue-clear \
+            --current "$RUNNER_TEMP/main-proof-current.json" \
+            --candidates "$RUNNER_TEMP/main-proof-candidates.json" \
+            --running "$RUNNER_TEMP/main-proof-running.json" \
+            --output "$HARNESS_EVIDENCE_DIR/final-residue-proof.json"
+
+      - name: Finalize successful harness evidence
+        if: ${{ success() && steps.final_residue.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' '{"schema_version":"document_renewal_staging_harness_v1","ok":true,"status":"complete"}' \
+            > "$HARNESS_EVIDENCE_DIR/workflow-status.json"
+
+      - name: Upload sanitized harness evidence
+        id: upload_evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: document-renewal-staging-harness-${{ github.sha }}-${{ github.run_attempt }}
+          path: harness-evidence/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Final harness summary
+        if: ${{ always() }}
+        env:
+          RESTORE_OUTCOME: ${{ steps.restore.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
+          IAM_REMOVE_OUTCOME: ${{ steps.iam_remove.outcome }}
+          ARTIFACT_OUTCOME: ${{ steps.upload_evidence.outcome }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo "## Controlled Document Renewal staging harness"
+            echo "- Release SHA: $RELEASE_SHA"
+            echo "- Exact backend restoration: $RESTORE_OUTCOME"
+            echo "- Synthetic cleanup: $CLEANUP_OUTCOME"
+            echo "- Temporary IAM removal: $IAM_REMOVE_OUTCOME"
+            echo "- Sanitized evidence upload: $ARTIFACT_OUTCOME"
+            echo "- Worker service: never modified"
+            echo "- Agent 1 / document replacement / alert closure: prohibited"
+          } >> "$GITHUB_STEP_SUMMARY"

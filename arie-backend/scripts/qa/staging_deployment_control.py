@@ -519,6 +519,21 @@ def render_task_definition(
         raise StagingControlError("unexpected release service")
     if _image_tag(image) != sha:
         raise StagingControlError("new task-definition image must use the exact SHA tag")
+    source_container = _release_container(source_task_definition)
+    source_environment = source_container.get("environment") or []
+    if not isinstance(source_environment, list):
+        raise StagingControlError("source task-definition environment is malformed")
+    for item in source_environment:
+        if not isinstance(item, Mapping):
+            raise StagingControlError("source task-definition environment is malformed")
+        name = str(item.get("name") or "")
+        if name == "DOCUMENT_RENEWAL_STAGING_HARNESS" or name.startswith(
+            "DOCUMENT_RENEWAL_STAGING_HARNESS_"
+        ):
+            raise StagingControlError(
+                "source task definition is a temporary document-renewal harness lease; "
+                "recover it before deployment"
+            )
     # Round-trip through JSON to create a deterministic deep copy.
     task_definition = json.loads(json.dumps(source_task_definition))
     container = _release_container(task_definition)

@@ -2984,9 +2984,40 @@ def test_portal_upload_handler_calls_only_dedicated_renewal_record_service():
     }
     assert renewal_calls == {
         "renewal_feature_enabled",
+        "renewal_feature_enabled_for_application",
+        "renewal_feature_enabled_for_request",
         "get_renewal_request",
         "record_renewal_upload",
     }
+    request_scope_call = region.index("renewal_feature_enabled_for_request")
+    rate_limit_call = region.index("check_sensitive_rate_limit")
+    rejection_call = region.index("_write_monitoring_renewal_rejection")
+    artifact_reservation = region.index("_reserve_monitoring_renewal_upload_artifact")
+    durable_upload = region.index("upload_monitoring_renewal_candidate")
+    assert request_scope_call < min(
+        rejection_call,
+        artifact_reservation,
+        durable_upload,
+    )
+    ordinary_flag_call = region.index("renewal_feature_enabled()")
+    ordinary_rate_limit = region.index("check_sensitive_rate_limit")
+    database_open = region.index("db = get_db()")
+    assert ordinary_flag_call < ordinary_rate_limit < database_open
+    harness_marker = region.index(
+        'os.environ.get("DOCUMENT_RENEWAL_STAGING_HARNESS")'
+    )
+    harness_import = region.index("import document_renewal_staging_activation")
+    assert harness_marker < harness_import < ordinary_flag_call
+    assert "Document renewal requests are temporarily unavailable." in region
+    assert "document_renewal_harness_initialization_failed=true" in region
+    assert region.count("document_renewal_harness_denied=true") == 2
+    # The fixture path has its own second rate-limit call after exact request
+    # scope, while the non-harness path retains the protected pre-DB order.
+    assert region.count("check_sensitive_rate_limit") == 2
+    assert '"fixture_request": str(request_id)' in region
+    assert '"harness_run": renewal_harness_state.run_id' in region
+    assert "include_ip=False" in region
+    assert "include_user=True" in region
     assert region.count("_attempt_monitoring_renewal_inline_cleanup") == 4
     assert "_DOCUMENT_RENEWAL_CLEANUP_EXECUTOR" not in region
     inline_cleanup = next(

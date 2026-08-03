@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
+import os
 import re
 import uuid
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
@@ -77,6 +78,7 @@ MAX_LIST_OFFSET = 10_000
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 OFFICER_ROLES = frozenset({"co", "sco", "admin"})
 _EXPECTED_SCOPE_UNSET = object()
+_STAGING_HARNESS_MODE_ENV = "DOCUMENT_RENEWAL_STAGING_HARNESS"
 
 
 class RenewalError(RuntimeError):
@@ -113,16 +115,128 @@ def renewal_feature_enabled(feature_flags: Any = None) -> bool:
     if feature_flags is None:
         from environment import flags as feature_flags
 
-    return bool(feature_flags.is_enabled(FEATURE_FLAG))
+    enabled = bool(feature_flags.is_enabled(FEATURE_FLAG))
+    # Keep the protected ordinary runtime independent from the staging-only
+    # harness module. Only an explicitly configured marker may narrow the
+    # governed feature flag through the bounded activation lease.
+    if os.environ.get(_STAGING_HARNESS_MODE_ENV) in (None, ""):
+        return enabled
+    # Custom flag objects are used by focused tests and operator tooling, so
+    # enforce the same staging lease even when the environment singleton is
+    # not the supplied object.
+    from document_renewal_staging_activation import (
+        effective_renewal_flag,
+        harness_mode_configured,
+    )
+
+    try:
+        configured = harness_mode_configured()
+    except Exception:
+        return False
+    return effective_renewal_flag(enabled) if configured else enabled
 
 
-def _require_feature(feature_flags: Any) -> None:
+def _require_feature(
+    feature_flags: Any,
+    *,
+    db: Any = None,
+    alert_id: Any = None,
+    request_id: Any = None,
+    application_id: Any = None,
+    customer_id: Any = None,
+    operation: str = "write",
+) -> None:
     if not renewal_feature_enabled(feature_flags):
         raise RenewalError(
             "feature_disabled",
             "Document renewal automation is not enabled.",
             http_status=409,
         )
+    if os.environ.get(_STAGING_HARNESS_MODE_ENV) in (None, ""):
+        return
+    from document_renewal_staging_activation import (
+        StagingHarnessActivationError,
+        require_fixture_write_scope,
+    )
+
+    try:
+        require_fixture_write_scope(
+            db,
+            alert_id=alert_id,
+            request_id=request_id,
+            application_id=application_id,
+            customer_id=customer_id,
+            operation=operation,
+        )
+    except StagingHarnessActivationError as exc:
+        raise RenewalError(
+            "staging_fixture_scope_required",
+            "Document renewal is limited to the governed staging fixture.",
+            http_status=403,
+        ) from exc
+
+
+def renewal_feature_enabled_for_alert(db: Any, alert_id: Any) -> bool:
+    """Project enabled controls only for an in-scope harness alert."""
+
+    if not renewal_feature_enabled():
+        return False
+    if os.environ.get(_STAGING_HARNESS_MODE_ENV) in (None, ""):
+        return True
+    from document_renewal_staging_activation import (
+        fixture_alert_matches,
+        harness_mode_configured,
+    )
+
+    try:
+        return fixture_alert_matches(db, alert_id) if harness_mode_configured() else True
+    except Exception:
+        return False
+
+
+def renewal_feature_enabled_for_application(
+    db: Any,
+    application_id: Any,
+    *,
+    customer_id: Any = None,
+) -> bool:
+    """Project/upload-enable only the one in-scope fixture application."""
+
+    if not renewal_feature_enabled():
+        return False
+    if os.environ.get(_STAGING_HARNESS_MODE_ENV) in (None, ""):
+        return True
+    from document_renewal_staging_activation import (
+        fixture_application_matches,
+        harness_mode_configured,
+    )
+
+    try:
+        return (
+            fixture_application_matches(db, application_id, customer_id=customer_id)
+            if harness_mode_configured()
+            else True
+        )
+    except Exception:
+        return False
+
+
+def renewal_feature_enabled_for_request(db: Any, request_id: Any) -> bool:
+    """Project enabled controls only for an in-scope harness request."""
+
+    if not renewal_feature_enabled():
+        return False
+    if os.environ.get(_STAGING_HARNESS_MODE_ENV) in (None, ""):
+        return True
+    from document_renewal_staging_activation import (
+        fixture_request_matches,
+        harness_mode_configured,
+    )
+
+    try:
+        return fixture_request_matches(db, request_id) if harness_mode_configured() else True
+    except Exception:
+        return False
 
 
 def _utc_now(value: Optional[datetime]) -> datetime:
@@ -1525,7 +1639,7 @@ def create_renewal_request(
     feature_flags: Any = None,
     audit_writer: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, Any]:
-    _require_feature(feature_flags)
+    _require_feature(feature_flags, db=db, alert_id=alert_id)
     normalized_reason = str(reason or "").strip()
     if normalized_reason not in REQUEST_REASONS:
         raise RenewalError("invalid_reason", "Unsupported renewal request reason.")
@@ -1877,7 +1991,7 @@ def resend_renewal_request(
     feature_flags: Any = None,
     audit_writer: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, Any]:
-    _require_feature(feature_flags)
+    _require_feature(feature_flags, db=db, request_id=request_id)
     actor_info = _actor(actor)
     _require_officer(actor_info)
     timestamp = _iso_timestamp(_utc_now(now))
@@ -1962,7 +2076,7 @@ def cancel_renewal_request(
     feature_flags: Any = None,
     audit_writer: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, Any]:
-    _require_feature(feature_flags)
+    _require_feature(feature_flags, db=db, request_id=request_id)
     actor_info = _actor(actor)
     _require_officer(actor_info)
     reason = _required_text(cancel_reason, field="cancel_reason")
@@ -2080,7 +2194,7 @@ def update_renewal_due_date(
     feature_flags: Any = None,
     audit_writer: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, Any]:
-    _require_feature(feature_flags)
+    _require_feature(feature_flags, db=db, request_id=request_id)
     actor_info = _actor(actor)
     _require_officer(actor_info)
     rationale = _required_text(reason, field="reason")
@@ -2207,7 +2321,7 @@ def audit_renewal_upload_preflight_rejection(
     persisted state no longer proves the requested reason.
     """
 
-    _require_feature(feature_flags)
+    _require_feature(feature_flags, db=db, request_id=request_id)
     actor_info = _actor(actor)
     normalized_request_id = _required_text(
         request_id, field="request_id", maximum=MAX_IDENTIFIER_LENGTH
@@ -2396,7 +2510,7 @@ def record_renewal_upload(
     feature_flags: Any = None,
     audit_writer: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, Any]:
-    _require_feature(feature_flags)
+    _require_feature(feature_flags, db=db, request_id=request_id)
     actor_info = _actor(actor)
     normalized_upload_id = _required_text(
         upload_id, field="upload_id", maximum=MAX_BINDING_UPLOAD_ID_LENGTH
@@ -2887,7 +3001,7 @@ def generate_eligible_renewal_requests(
     and reports ambiguous/stale rows without changing alerts or documents.
     """
 
-    _require_feature(feature_flags)
+    _require_feature(feature_flags, operation="global_scheduler")
     actor_info = _actor(actor)
     _require_system(actor_info)
     try:
@@ -3001,6 +3115,291 @@ def generate_eligible_renewal_requests(
     }
 
 
+def run_fixture_only_renewal_eligibility(
+    db: Any,
+    *,
+    actor: Mapping[str, Any],
+    now: Optional[datetime] = None,
+    feature_flags: Any = None,
+    audit_writer: Optional[Callable[..., Any]] = None,
+) -> Dict[str, Any]:
+    """Create a request for the one reviewed staging fixture, or fail closed.
+
+    This is not a caller-filterable version of the global scheduler. It loads
+    the repository-owned manifest internally and proves every scope boundary
+    before delegating the one write to :func:`create_renewal_request`.
+    It deliberately does not read or advance the global scheduler cursor.
+    """
+
+    environment = str(os.environ.get("ENVIRONMENT") or "").strip().lower()
+    if environment not in {"staging", "test", "testing"}:
+        raise RenewalError(
+            "fixture_scope_forbidden",
+            "Fixture-only renewal eligibility is unavailable in this environment.",
+            http_status=403,
+        )
+    _require_feature(feature_flags, operation="fixture_scheduler")
+    actor_info = _actor(actor)
+    _require_system(actor_info)
+
+    from fixtures.document_renewal_staging import fixture_spec, load_manifest
+
+    spec = fixture_spec()
+    manifest = load_manifest()
+    expected_identity = {
+        "fixture_key": spec["fixture_key"],
+        "fixture_marker": spec["fixture_marker"],
+        "fixture_contract_version": spec["fixture_contract_version"],
+        "manifest_sha256": spec["manifest_sha256"],
+        "synthetic": True,
+        "non_production": True,
+        "source": spec["source"],
+    }
+
+    def scope_error(reason: str) -> RenewalError:
+        return RenewalError(
+            "fixture_scope_invalid",
+            "The governed Document Renewal fixture scope is unavailable.",
+            details={"reason": reason},
+        )
+
+    def object_value(value: Any) -> Dict[str, Any]:
+        if isinstance(value, Mapping):
+            return dict(value)
+        try:
+            parsed = json.loads(str(value or "{}"))
+        except (TypeError, ValueError):
+            return {}
+        return dict(parsed) if isinstance(parsed, Mapping) else {}
+
+    def true_value(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value == 1
+        return str(value or "").strip().lower() in {"1", "true", "t"}
+
+    application_rows = _rows(
+        db.execute(
+            """
+            SELECT a.id, a.ref, a.client_id, a.status, a.is_fixture,
+                   a.prescreening_data, c.id AS linked_customer_id,
+                   c.status AS customer_status
+              FROM applications a
+         LEFT JOIN clients c ON c.id = a.client_id
+             WHERE a.id = ? OR a.ref = ?
+             ORDER BY a.id
+            """,
+            (spec["application_id"], spec["application_ref"]),
+        )
+    )
+    if len(application_rows) != 1:
+        raise scope_error("fixture_application_count_mismatch")
+    application = application_rows[0]
+    identity = object_value(application.get("prescreening_data"))
+    if (
+        str(application.get("id")) != spec["application_id"]
+        or str(application.get("ref")) != spec["application_ref"]
+        or str(application.get("client_id")) != spec["customer_id"]
+        or str(application.get("linked_customer_id")) != spec["customer_id"]
+        or str(application.get("status")) != manifest["application"]["status"]
+        or str(application.get("customer_status")) != manifest["client"]["status"]
+        or not true_value(application.get("is_fixture"))
+        or any(identity.get(key) != value for key, value in expected_identity.items())
+    ):
+        raise scope_error("fixture_application_identity_mismatch")
+
+    people = _rows(
+        db.execute(
+            """
+            SELECT id, application_id, person_key
+              FROM directors
+             WHERE id = ? OR person_key = ?
+             ORDER BY id
+            """,
+            (spec["person_id"], spec["person_key"]),
+        )
+    )
+    if len(people) != 1 or any(
+        str(people[0].get(field)) != str(expected)
+        for field, expected in {
+            "id": spec["person_id"],
+            "application_id": spec["application_id"],
+            "person_key": spec["person_key"],
+        }.items()
+    ):
+        raise scope_error("fixture_person_identity_mismatch")
+
+    documents = _rows(
+        db.execute(
+            """
+            SELECT id, application_id, person_id, person_type, doc_type,
+                   file_path, slot_key, is_current, version, expiry_date,
+                   superseded_at, superseded_by_document_id
+              FROM documents
+             WHERE id = ? OR file_path = ?
+             ORDER BY id
+            """,
+            (spec["document_id"], manifest["document"]["file_path"]),
+        )
+    )
+    if len(documents) != 1:
+        raise scope_error("fixture_document_count_mismatch")
+    document = documents[0]
+    expected_document = {
+        "id": spec["document_id"],
+        "application_id": spec["application_id"],
+        "person_id": spec["person_id"],
+        "person_type": spec["person_type"],
+        "doc_type": spec["document_type"],
+        "file_path": manifest["document"]["file_path"],
+        "slot_key": spec["document_slot_key"],
+        "version": spec["document_version"],
+    }
+    if (
+        any(
+            str(document.get(field) if document.get(field) is not None else "")
+            != str(expected if expected is not None else "")
+            for field, expected in expected_document.items()
+        )
+        or not true_value(document.get("is_current"))
+        or document.get("superseded_at") not in (None, "")
+        or document.get("superseded_by_document_id") not in (None, "")
+        or _timestamp_date(
+            document.get("expiry_date"), field="fixture_expiry_date"
+        )
+        != _timestamp_date(
+            spec["document_expiry_date"], field="fixture_expiry_date"
+        )
+    ):
+        raise scope_error("fixture_document_identity_mismatch")
+
+    alert_manifest = manifest["alert"]
+    alerts = _rows(
+        db.execute(
+            """
+            SELECT id, application_id, alert_type, source_reference, status,
+                   detected_by, discovered_via
+              FROM monitoring_alerts
+             WHERE application_id = ?
+               AND source_reference = ?
+             ORDER BY id
+             LIMIT 2
+            """,
+            (spec["application_id"], spec["alert_source_reference"]),
+        )
+    )
+    if len(alerts) != 1:
+        raise scope_error("fixture_alert_count_mismatch")
+    alert = alerts[0]
+    expected_alert = {
+        "application_id": spec["application_id"],
+        "alert_type": spec["alert_type"],
+        "source_reference": spec["alert_source_reference"],
+        "status": spec["alert_status"],
+        "detected_by": alert_manifest["detected_by"],
+        "discovered_via": alert_manifest["discovered_via"],
+    }
+    if any(
+        str(alert.get(field) if alert.get(field) is not None else "")
+        != str(expected if expected is not None else "")
+        for field, expected in expected_alert.items()
+    ):
+        raise scope_error("fixture_alert_identity_mismatch")
+    alert_id = int(alert["id"])
+
+    existing_requests = _rows(
+        db.execute(
+            """
+            SELECT request_id, application_id, customer_id, person_id,
+                   document_id, document_type, document_slot_key,
+                   monitoring_alert_id, request_reason, request_status
+              FROM monitoring_document_renewal_requests
+             WHERE request_id = ?
+                OR monitoring_alert_id = ?
+                OR (
+                    application_id = ?
+                    AND COALESCE(person_id, '') = ?
+                    AND document_slot_key = ?
+                )
+             ORDER BY request_id
+             LIMIT 2
+            """,
+            (
+                spec["request_id"],
+                alert_id,
+                spec["application_id"],
+                spec["person_id"],
+                spec["document_slot_key"],
+            ),
+        )
+    )
+    if len(existing_requests) > 1:
+        raise scope_error("fixture_request_count_mismatch")
+    if existing_requests:
+        request = existing_requests[0]
+        exact_request = {
+            "request_id": spec["request_id"],
+            "application_id": spec["application_id"],
+            "customer_id": spec["customer_id"],
+            "person_id": spec["person_id"],
+            "document_id": spec["document_id"],
+            "document_type": spec["document_type"],
+            "document_slot_key": spec["document_slot_key"],
+            "monitoring_alert_id": alert_id,
+            "request_reason": spec["request_reason"],
+        }
+        if any(
+            str(request.get(field) if request.get(field) is not None else "")
+            != str(expected if expected is not None else "")
+            for field, expected in exact_request.items()
+        ) or request.get("request_status") not in ACTIVE_REQUEST_STATUSES:
+            raise scope_error("fixture_request_identity_mismatch")
+
+    result = create_renewal_request(
+        db,
+        alert_id,
+        reason=spec["request_reason"],
+        actor=actor_info,
+        now=now,
+        request_id=spec["request_id"],
+        feature_flags=feature_flags,
+        audit_writer=audit_writer,
+    )
+    if (
+        str(result.get("request_id")) != spec["request_id"]
+        or str(result.get("application_id")) != spec["application_id"]
+        or str(result.get("customer_id")) != spec["customer_id"]
+        or str(result.get("person_id")) != spec["person_id"]
+        or str(result.get("document_id")) != spec["document_id"]
+        or str(result.get("monitoring_alert_id")) != str(alert_id)
+    ):
+        raise RenewalError(
+            "fixture_scope_result_mismatch",
+            "Fixture-only renewal eligibility returned an unexpected scope.",
+        )
+    idempotent = bool(result.get("idempotent"))
+    return {
+        "mode": "fixture_only",
+        "fixture_key": spec["fixture_key"],
+        "fixture_version": spec["fixture_version"],
+        "manifest_sha256": spec["manifest_sha256"],
+        "application_id": spec["application_id"],
+        "alert_id": alert_id,
+        "request_id": spec["request_id"],
+        "scanned": 1,
+        "created": 0 if idempotent else 1,
+        "already_active": 1 if idempotent else 0,
+        "request_ids": [] if idempotent else [spec["request_id"]],
+        "already_active_request_ids": [spec["request_id"]] if idempotent else [],
+        "blocked": 0,
+        "blocked_alerts": [],
+        "degraded": False,
+        "degraded_failures": [],
+        "non_fixture_scanned": 0,
+    }
+
+
 def generate_due_reminders(
     db: Any,
     *,
@@ -3014,7 +3413,7 @@ def generate_due_reminders(
 ) -> Dict[str, Any]:
     """Generate bounded reminder intents using one short transaction per row."""
 
-    _require_feature(feature_flags)
+    _require_feature(feature_flags, operation="global_reminders")
     actor_info = _actor(actor)
     _require_system(actor_info)
     reminder_intervals = validate_reminder_intervals(intervals)
@@ -3208,7 +3607,11 @@ __all__ = [
     "list_renewal_requests",
     "record_renewal_upload",
     "renewal_feature_enabled",
+    "renewal_feature_enabled_for_alert",
+    "renewal_feature_enabled_for_application",
+    "renewal_feature_enabled_for_request",
     "renewal_request_for_alert",
+    "run_fixture_only_renewal_eligibility",
     "resend_renewal_request",
     "update_renewal_due_date",
     "validate_reminder_intervals",

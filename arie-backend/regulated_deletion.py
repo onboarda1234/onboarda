@@ -24,6 +24,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 logger = logging.getLogger("arie.regulated_deletion")
 
 FIXTURE_CLEANUP_CONFIRMATION = "DELETE-SYNTHETIC-FIXTURE"
+DISPOSABLE_POSTGRES_TEST_DATABASE_PREFIX = "onboarda_test_"
 
 # Exact table names only.  Root/business tables use record-aware preflight
 # guards because a blanket denial would also prevent safe deletion of a new,
@@ -264,7 +265,7 @@ def is_verified_disposable_postgres_test_db(
     if not _local_postgres_host(host, query_map):
         return False
     database_lower = database.lower()
-    if not database_lower.startswith("onboarda_test_"):
+    if not database_lower.startswith(DISPOSABLE_POSTGRES_TEST_DATABASE_PREFIX):
         return False
     if any(marker in database_lower for marker in ("production", "staging", "_prod", "_stage")):
         return False

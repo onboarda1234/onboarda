@@ -293,7 +293,22 @@ class FeatureFlags:
     def is_enabled(self, flag: str) -> bool:
         """Check if a feature flag is enabled."""
         if flag in self._cache:
-            return self._cache[flag]
+            enabled = self._cache[flag]
+            # A reviewed staging harness may temporarily set the renewal flag
+            # on the backend service.  Its process-local lease is a second,
+            # fail-closed boundary: expiry makes the evaluated state OFF even
+            # if task-definition restoration is delayed.  Production and
+            # ordinary staging releases retain the existing flag contract.
+            if (
+                flag == "ENABLE_DOCUMENT_RENEWAL_AUTOMATION"
+                and self._env == "staging"
+            ):
+                from document_renewal_staging_activation import (
+                    effective_renewal_flag,
+                )
+
+                return effective_renewal_flag(enabled)
+            return enabled
         # Check env var for unknown flags
         env_val = os.environ.get(flag)
         if env_val is not None:

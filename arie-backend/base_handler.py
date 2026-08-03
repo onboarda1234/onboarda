@@ -697,6 +697,68 @@ class BaseHandler(tornado.web.RequestHandler):
             except Exception:
                 logger.exception("Inactive token audit fallback stderr write also failed")
 
+    def _log_governed_fixture_client_grant(self, token_user, context):
+        """Hash-chain the one staging-only inactive-client authorization.
+
+        A fixture-client request is denied when this audit append cannot be
+        committed. The evidence contains only stable synthetic identifiers and
+        request metadata; credentials and token material are never recorded.
+        """
+
+        user = token_user or {}
+        safe_context = context if isinstance(context, dict) else {}
+        actor_id = str(user.get("sub") or "")
+        fixture_key = str(safe_context.get("fixture_key") or "")
+        application_id = str(safe_context.get("application_id") or "")
+        run_id = str(safe_context.get("run_id") or "")
+        method = self.request.method if hasattr(self, "request") else ""
+        path = self.request.path if hasattr(self, "request") else ""
+        payload = {
+            "event": "document_renewal_fixture_client_authorized",
+            "fixture_key": fixture_key,
+            "harness_run_id": run_id,
+            "actor_type": "client",
+            "actor_id": actor_id,
+            "path": str(path)[:512],
+            "method": str(method)[:32],
+            "ts": datetime.datetime.now(datetime.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            ),
+        }
+        audit_db = None
+        try:
+            from db import append_audit_log
+
+            audit_db = get_db()
+            evidence = append_audit_log(
+                audit_db,
+                action="monitoring.document_renewal.fixture_client_auth",
+                user_id=actor_id,
+                user_name="Governed Document Renewal Fixture Client",
+                user_role="client",
+                target=f"monitoring_renewal_fixture:{fixture_key}",
+                detail=json.dumps(payload, sort_keys=True),
+                ip_address=(
+                    self.get_client_ip() if hasattr(self, "request") else ""
+                ),
+                application_id=application_id,
+                commit=True,
+            )
+            return bool(str(evidence or "").strip())
+        except Exception as exc:
+            logger.error(
+                "governed_fixture_client_audit_failed=true "
+                "actor_id=%s path=%s method=%s error_type=%s",
+                actor_id,
+                str(path)[:512],
+                str(method)[:32],
+                type(exc).__name__,
+            )
+            return False
+        finally:
+            if audit_db is not None:
+                audit_db.close()
+
     def _validate_current_actor(self, token_user):
         """Fail closed unless the decoded token subject is active in the database."""
         if not token_user or not token_user.get("sub"):
@@ -713,7 +775,8 @@ class BaseHandler(tornado.web.RequestHandler):
             db = get_db()
             if actor_type == "client":
                 row = db.execute(
-                    "SELECT id, email, company_name, status FROM clients WHERE id = ?",
+                    "SELECT id, email, company_name, status "
+                    "FROM clients WHERE id = ?",
                     (actor_id,),
                 ).fetchone()
             else:
@@ -734,7 +797,80 @@ class BaseHandler(tornado.web.RequestHandler):
             return None
 
         status = row.get("status")
-        if not self._is_active_status(status):
+        governed_fixture_client = False
+        if (
+            actor_type == "client"
+            and not self._is_active_status(status)
+            and os.environ.get("DOCUMENT_RENEWAL_STAGING_HARNESS") not in (None, "")
+        ):
+            fixture_row = None
+            credential_db = None
+            try:
+                from document_renewal_staging_activation import (
+                    fixture_client_actor_candidate_context,
+                    fixture_client_actor_context,
+                    harness_mode_configured,
+                )
+
+                if not harness_mode_configured():
+                    raise PermissionError("governed fixture mode is not configured")
+                fixture_candidate = fixture_client_actor_candidate_context(
+                    token_user,
+                    row,
+                    method=(self.request.method if hasattr(self, "request") else ""),
+                    path=(self.request.path if hasattr(self, "request") else ""),
+                )
+                if not fixture_candidate:
+                    raise PermissionError("inactive actor is not the governed fixture")
+                # Keep the credential hash out of the ordinary authenticated
+                # client path. Load it only for the already-inactive fixture
+                # candidate and discard the row immediately after validation.
+                credential_db = get_db()
+                fixture_row = credential_db.execute(
+                    "SELECT password_hash FROM clients "
+                    "WHERE id = ? AND email = ? AND status = 'inactive'",
+                    (actor_id, row.get("email")),
+                ).fetchone()
+                credential_db.close()
+                credential_db = None
+                fixture_context = fixture_client_actor_context(
+                    token_user,
+                    {**dict(row), **dict(fixture_row or {})},
+                    method=(self.request.method if hasattr(self, "request") else ""),
+                    path=(self.request.path if hasattr(self, "request") else ""),
+                )
+                governed_fixture_client = bool(
+                    fixture_context
+                    and self._log_governed_fixture_client_grant(
+                        token_user,
+                        fixture_context,
+                    )
+                )
+            except Exception as exc:
+                # Any malformed/expired harness state preserves the ordinary
+                # fail-closed inactive-client contract.
+                governed_fixture_client = False
+                logger.error(
+                    "governed_fixture_client_check_failed=true "
+                    "actor_id=%s path=%s method=%s error_type=%s",
+                    actor_id,
+                    (
+                        self.request.path
+                        if hasattr(self, "request")
+                        else ""
+                    ),
+                    (
+                        self.request.method
+                        if hasattr(self, "request")
+                        else ""
+                    ),
+                    type(exc).__name__,
+                )
+            finally:
+                fixture_row = None
+                if credential_db is not None:
+                    credential_db.close()
+        if not self._is_active_status(status) and not governed_fixture_client:
             self._log_inactive_token_denial(token_user, actor_type, "actor_inactive", status)
             return None
 
