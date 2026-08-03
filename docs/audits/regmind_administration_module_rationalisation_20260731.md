@@ -126,6 +126,36 @@ The `/api/config/document-policies` endpoint (`server.py:17794`) has **zero UI c
 
 **No production customer will ever rename "Corporate Structure & UBO Mapping Agent" or add an 11th agent.** Giving a bank a button that lets them break the pipeline for zero benefit is a liability, not a feature.
 
+#### 1.5.1 Workflow-connection verification (traced 2026-07-31)
+
+**The supervisor pipeline never reads the `ai_agents` table.** Dispatch is a hardcoded `EXECUTOR_MAP` keyed on the `AgentType` enum (`supervisor/agent_executors.py:4606–4616`), looked up at `supervisor/supervisor.py:444`. There is no `enabled` check anywhere in `supervisor/supervisor.py` and no DB read of `ai_agents` in the entire `supervisor/` package.
+
+The table is read at runtime in exactly **four places, all in `server.py`, all selecting only `enabled`**:
+
+| Agent | Read site | Gated workflow |
+|---|---|---|
+| 1 | `server.py:13078` | `POST /api/documents/:id/verify` — document verification skipped, outcome persisted so reliance gates fail closed |
+| 3 | `server.py:28505` | `POST /api/screening/run` — returns `{"status":"skipped"}` |
+| 3 | `server.py:26738` (`_agent3_enabled`), called at `server.py:28346` | Agent 3 screening interpretation |
+| 5 | `server.py:32326` | `POST /api/applications/:id/memo` — memo generation skipped |
+
+Everything else that touches `ai_agents` is schema/seed (`db.py`) or table-name lists in `gdpr_erasure.py:193` / `regulated_deletion.py:33`.
+
+**Field-by-field verdict:**
+
+| Field | Connected to a workflow? |
+|---|---|
+| `enabled` (agents 1, 3, 5) | **Yes** — a live kill-switch on document verification, screening, and memo generation |
+| `enabled` (agents 2, 4, 6, 7) | **No** — the toggle is enabled in the UI, persists to the DB, and is read by nothing |
+| `enabled` (agents 8, 9, 10) | N/A — force-`False` by policy (`ENTERPRISE_ROADMAP_AGENT_IDS`, `server.py:4336`, `15477`, `17528`) |
+| `name`, `icon`, `stage`, `description` | **No** — display metadata; zero runtime reads |
+| `checks` | **No** — agent 1's list is machine-regenerated from `ai_checks` on every save (`server.py:17767`) and every startup (`db.py:12048`); agents 2–10's lists are never read |
+| `supervisor_agent_type`, `risk_dimensions` (columns exist, `db.py:10999`) | **No** — never read by any module |
+
+**`+ Add Agent`** creates `agent_number = 11`, for which no `AgentType` enum member and no executor exist. The agent can never run. **`Delete Agent`** is a soft-disable (`UPDATE ai_agents SET enabled=false`, `server.py:17669`) — which, for agents 2/4/6/7, changes nothing.
+
+**Conclusion: the AI Agents page is not connected to any workflow except three kill-switches.** That is worse than being fully disconnected — of ~30 editable controls on the page, 27 are inert and 3 silently disable core compliance processing with no confirmation beyond a toast.
+
 ### 1.6 Agent Health — `view-agent-health`
 
 | | |
@@ -159,6 +189,35 @@ The `/api/config/document-policies` endpoint (`server.py:17794`) has **zero UI c
 | **Customer value** | **High** — this is the page a compliance officer will actually tune |
 
 The form is raw: `Trigger Key`, `Requirement Key`, `Subject Scope`, `Sort Order`, `Canonical doc_type` are developer vocabulary exposed to an officer with no picker, no validation preview, and no "what will this change" impact statement.
+
+#### 1.7.1 Workflow-connection verification (traced 2026-07-31)
+
+**Fully connected — this is the most load-bearing page in Administration.** The admin CRUD writes `enhanced_requirement_rules`; `_load_active_rules()` reads that exact table with `WHERE active = 1 AND trigger_key IN (...)` (`enhanced_requirements.py:4744–4757`). Full chain:
+
+```
+Admin edits rule            → enhanced_requirement_rules
+  → _load_active_rules()                                    (enhanced_requirements.py:4744)
+  → generate_application_enhanced_requirements()            (enhanced_requirements.py:4759)
+      callers: server.py:4056, server.py:9889, server.py:17414, routing_actuator.py:592
+  → application_enhanced_requirements  (per-case snapshot)
+  → validate_enhanced_requirements_for_approval()           (enhanced_requirements.py:2845)
+      callers: security_hardening.py:1389 and :1849  ← THE APPROVAL GATE
+               server.py:33091
+```
+
+Eleven modules import `enhanced_requirements`: `security_hardening.py` (approval gate), `server.py`, `routing_actuator.py`, `periodic_review_document_requests.py`, `periodic_review_memo.py`, `periodic_review_projection_service.py`, `periodic_review_risk_reassessment.py`, `periodic_review_notifications.py`, `periodic_review_blockers.py`, `monitoring_document_refresh.py`, `db.py`.
+
+**Every editable field has runtime effect:** `active` (rule selection), `blocking_approval` + `mandatory` + `waivable` + `waiver_roles` (approval gate, `_valid_approval_waiver`), `audience` (portal vs back-office exposure via `list_portal_application_enhanced_requirements`), `requirement_type` (`classify_requirement_presentation_type`), `subject_scope` (per-UBO/director/screening-subject fan-out), `applies_when` (`_rule_applicable_to_application`), `client_safe_label`/`client_safe_description` (client-visible copy via `_client_safe_requirement_fields`), `sort_order`, labels/descriptions (memo via `build_enhanced_review_memo_summary`).
+
+**Durability — the opposite of Document Verification Policies.** `seed_default_enhanced_requirement_rules()` is explicitly non-destructive: *"Insert missing default rules without overwriting customized rows"* (`enhanced_requirements.py:1942–1945`); it skips any `(trigger_key, requirement_key)` that already exists.
+
+**One caveat (ADM-MED-9).** `_apply_approved_enhanced_requirement_taxonomy_updates()` (`enhanced_requirements.py:2012`) runs on every startup immediately after seeding and:
+- **force-overwrites 9 named rules** — `high_or_very_high_risk/company_bank_reference`, `high_or_very_high_risk/company_sof_evidence`, `pep/pep_declaration_details`, `pep/pep_adverse_media_assessment`, `pep/pep_enhanced_monitoring_flag`, `opaque_ownership/trust_nominee_foundation_documents`, `high_risk_jurisdiction/jurisdiction_sof_evidence`, `high_risk_jurisdiction/jurisdiction_exposure_rationale`, `high_risk_jurisdiction/jurisdiction_risk_assessment` — pinning `active`, `blocking_approval`, `mandatory`, `audience`, `requirement_type`, `subject_scope`, labels, client-safe copy and `applies_when` back to product-approved values;
+- **force-deactivates 35 legacy `requirement_key`s** (`REMOVED_ACTIVE_ENHANCED_REQUIREMENT_KEYS`, `enhanced_requirements.py:231`) — so re-enabling any of them via the UI reverts on the next deploy.
+
+Nine of the 14 shipped default rules (`DEFAULT_ENHANCED_REQUIREMENT_RULES`, `enhanced_requirements.py:754–982`) are therefore effectively read-only despite presenting a full edit form. This is the same *class* of defect as ADM-BLOCK-2 but far narrower and intentional (product-approved config correction, audited as `enhanced_requirement_rules.taxonomy_reconciled`) rather than a blanket wipe. **Fix is UX, not architecture: mark pinned rules read-only in the UI with a "governed by product policy" badge, instead of accepting an edit and reverting it silently.**
+
+**Conclusion: Enhanced Requirements is genuinely connected end-to-end — it gates approvals, drives the portal, and feeds the memo. Keep it. It is the one page in Administration that earns its place.**
 
 ### 1.8 Resources — `view-resources`
 
@@ -387,6 +446,8 @@ Estimated ongoing maintenance reduction: **~55–60%**, concentrated in the elim
 | ADM-HIGH-5 | Agent Health renders fabricated accuracy/drift/golden-dataset metrics whenever `APP_ENV === 'demo'` | High | Invented assurance metrics shown to prospects. |
 | ADM-MED-6 | `Resources` / `Enhanced Requirements` nav items outlive the `role-admin-only` section header for CO/Analyst | Medium | Orphaned items under the wrong heading. |
 | ADM-MED-7 | System Settings persists five fields no engine reads | Medium | Settings theatre. |
+| ADM-MED-9 | AI Agents exposes live `enabled` toggles for agents 2/4/6/7 that are read by nothing, and 3 toggles (agents 1/3/5) that silently disable document verification, screening and memo generation behind a toast | Medium | 27 of ~30 controls inert; the 3 live ones are unguarded kill-switches on core compliance processing. |
+| ADM-MED-10 | Enhanced Requirements accepts edits to 9 pinned rules and 35 removed keys, then reverts them on next startup via `_apply_approved_enhanced_requirement_taxonomy_updates()` | Medium | Silent revert on 9 of 14 default rules. UX fix: badge them read-only. |
 | ADM-LOW-8 | `/api/config/document-policies` orphaned; audit action filter vocabulary hardcoded and incomplete | Low | Cleanup. |
 
 ---
