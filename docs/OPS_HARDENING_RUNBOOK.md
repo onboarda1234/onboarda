@@ -13,37 +13,53 @@ Logs admin), and the RDS master-user DSN for `regmind-staging-db`.
 
 ## 1. P9-12 — ECR immutable image tags
 
-The deploy workflow already pushes one unique tag per commit
-(`$ECR_REGISTRY/regmind-backend:<github.sha>`, no `:latest`), so immutability
-is compatible with normal deploys as-is.
+The staging release path uses one full Git SHA tag per commit and never uses a
+mutable convenience tag as release evidence. The workflow now refuses to build,
+push, register a task definition, or update ECS unless the repository reports
+exactly `IMMUTABLE` with scan-on-push enabled.
 
-**Flip (staging ECR):**
-
-```bash
-aws ecr put-image-tag-mutability \
-  --repository-name regmind-backend \
-  --image-tag-mutability IMMUTABLE \
-  --region af-south-1
-
-# verify
-aws ecr describe-repositories --repository-names regmind-backend \
-  --region af-south-1 --query 'repositories[0].imageTagMutability'
-# expect: "IMMUTABLE"
-```
-
-**Known operational caveat — workflow RE-RUNS:** Docker builds are not
-byte-reproducible, so re-running the deploy workflow for the *same commit*
-produces a different manifest under the same `<sha>` tag and the push will be
-rejected (`ImageTagAlreadyExistsException`). Two sanctioned outs:
+Use the pinned, dry-run-first operator control. It verifies the AWS account,
+region, repository identity, and current state before proposing a change:
 
 ```bash
-# preferred: delete the stale tag, then re-run the workflow
-aws ecr batch-delete-image --repository-name regmind-backend \
-  --image-ids imageTag=<sha> --region af-south-1
-# or: land an empty commit so the re-deploy gets a fresh sha
+cd arie-backend
+python3 scripts/ops/enforce_ecr_immutability.py
+
+# After reviewing the exact dry-run:
+python3 scripts/ops/enforce_ecr_immutability.py \
+  --apply \
+  --confirm SET-regmind-backend-IMMUTABLE
 ```
 
-Rollback of the setting itself: rerun with `--image-tag-mutability MUTABLE`.
+Re-running the tool after activation is a verified no-op. It deliberately has
+no `MUTABLE` or rollback option: weakening this control is a security incident,
+not a normal deployment recovery action.
+Internally, the only mutating AWS operation is the exact scoped
+`aws ecr put-image-tag-mutability --image-tag-mutability IMMUTABLE` call,
+followed by a fresh postcondition read.
+
+**Workflow reruns:** an immutable repository returns
+`ImageTagAlreadyExistsException` for any attempt to push an existing SHA tag.
+The workflow therefore checks first:
+
+1. If the full-SHA tag is absent, build and push it once.
+2. If it exists, resolve its digest, pull by digest, and require its `git.sha`,
+   `git.ref`, `GIT_SHA`, `IMAGE_TAG`, OS, and architecture provenance to match.
+3. If provenance differs, stop. Never delete, overwrite, or retag the SHA.
+
+The historical `latest` alias is not release evidence and must never be moved.
+Removing a historical alias is a separately reviewed registry-cleanup action;
+it is not part of a deploy or rerun.
+
+Every release also gates both the ECR registry scan and a pinned Trivy scan of
+the exact digest before ECS mutation. Trivy must report OS-package coverage and
+Python-package coverage (`python-pkg` in the pinned 0.72.0 schema; legacy
+supported reports may use `pip`). This deployment-local gate is mandatory even
+when the separate pull-request scan succeeded. CRITICAL findings are never
+accepted. A HIGH finding requires an exact package/version match in the
+versioned acceptance manifest, a named owner, technical and reachability
+analysis, compensating controls, explicit approval, and a future expiry date.
+The current manifest is intentionally empty.
 
 ---
 
@@ -216,11 +232,13 @@ the CI smoke account `github-actions-day6-staging-smoke@onboarda.internal` —
 `db.ensure_qa_smoke_user()` re-creates **and force-reactivates** it on every
 boot, so quarantining it would be silently undone by the next deploy.
 
-**Before running:** `raj.patel@onboarda.com` and `m.dubois@onboarda.com` are the
-identities prior staging QA evidence runs used (`STAGING_QA_EMAIL`,
-`scripts/qa/staging_browser_smoke.js`). Deactivating them breaks that smoke
-path until you point it at a replacement account. Do that first, or accept the
-smoke gap for the window.
+**Mandatory before running:** `raj.patel@onboarda.com` and
+`m.dubois@onboarda.com` are the identities prior staging QA evidence runs used
+(`STAGING_QA_EMAIL`, `scripts/qa/staging_browser_smoke.js`). Repoint the
+`STAGING_QA_EMAIL` secret to an approved replacement account and complete one
+successful authenticated smoke with that replacement **before** quarantine.
+Do not accept a smoke gap and do not count this row complete without that
+evidence.
 
 **Verify:** re-run the dry-run — the plan skips already-inactive accounts, so a
 successful run leaves an empty match list. Then confirm login is refused for
@@ -259,58 +277,32 @@ single-AZ by design; production is tracked separately).
 
 **Step 2 — the timed restore drill (operator, in a change window):**
 
-1. Note the start time (`date -u +%FT%TZ`) and restore to a NEW instance:
+> ⚠️ **The executable commands live in ONE place: the
+> [operator runsheet §2](OPERATOR_RUNSHEET_REMAINING_OPS.md#2-dr-posture-and-timed-point-in-time-restore-drill).
+> Run them from there, not from this section.**
+>
+> This section previously carried its own copy of the drill using a *fixed*
+> instance id (`regmind-dr-drill`), while the runsheet creates a *timestamped*
+> one (`regmind-dr-drill-<UTC>`). An operator who created the instance with the
+> runsheet and then tore down with this section would have targeted an
+> identifier that does not exist — leaving a **live RDS instance holding a full
+> copy of staging data running and billing indefinitely**. The command bodies
+> are therefore deliberately NOT duplicated here; a single source of truth is
+> the only way this cannot drift again.
 
-   ```bash
-   aws rds restore-db-instance-to-point-in-time \
-     --source-db-instance-identifier regmind-staging-db \
-     --target-db-instance-identifier regmind-dr-drill \
-     --use-latest-restorable-time --region af-south-1
-   aws rds wait db-instance-available \
-     --db-instance-identifier regmind-dr-drill --region af-south-1
-   ```
+The shape of the drill (for review purposes — do not execute from this list):
 
-2. Verify integrity against the RESTORED instance (never against staging):
-
-   ```bash
-   psql "$DRILL_DSN" -c "SELECT
-     (SELECT COUNT(*) FROM applications)        AS applications,
-     (SELECT COUNT(*) FROM audit_log)           AS audit_rows,
-     (SELECT COUNT(*) FROM supervisor_audit_log) AS supervisor_rows;"
-   ```
-
-   The supervisor hash chain has no CLI — verification is
-   `GET /api/supervisor/audit/verify`, which needs an app pointed at this DSN.
-   Either run a throwaway task with `DATABASE_URL=$DRILL_DSN` and call that
-   endpoint, or record row counts only and note the chain check as not
-   performed. **Do not repoint the staging service at the drill instance.**
-
-3. Record the wall-clock time from step 1 to a verified step 2 — **that is the
-   measured RTO**. The RPO is bounded by the PITR lag reported in step 1.
-
-4. Tear down (the restored instance bills until deleted, and RDS may copy the
-   source's deletion protection). **`--apply-immediately` does not block** —
-   deleting before the modification lands fails with deletion protection still
-   active, so poll until it is actually off, and wait for the delete to finish:
-
-   ```bash
-   aws rds modify-db-instance --db-instance-identifier regmind-dr-drill \
-     --no-deletion-protection --apply-immediately --region af-south-1
-
-   # wait until DeletionProtection is REALLY false before deleting
-   until [ "$(aws rds describe-db-instances \
-       --db-instance-identifier regmind-dr-drill --region af-south-1 \
-       --query 'DBInstances[0].DeletionProtection' --output text)" = "False" ]; do
-     echo "waiting for deletion protection to clear…"; sleep 10
-   done
-
-   aws rds delete-db-instance --db-instance-identifier regmind-dr-drill \
-     --skip-final-snapshot --delete-automated-backups --region af-south-1
-   # confirm the drill instance is actually gone (it bills until it is)
-   aws rds wait db-instance-deleted \
-     --db-instance-identifier regmind-dr-drill --region af-south-1
-   ```
-
+1. Note the start time and restore to a **new, uniquely named** instance
+   (`regmind-dr-drill-<UTC timestamp>`), never over the source.
+2. Verify integrity against the **restored** instance only, asserting non-zero
+   row counts — never against staging, and never by repointing the staging
+   service at the drill instance.
+3. The **measured RTO** is wall-clock from step 1 to a *verified* step 2 (not
+   merely "instance available"); the RPO is the PITR lag from Step 1's posture
+   check.
+4. Tear down: `--apply-immediately` does **not** block, so poll until
+   `DeletionProtection=False`, then delete, then `wait db-instance-deleted`.
+   The restored copy bills — and holds real data — until this completes.
 5. File the evidence JSON plus the measured RTO/RPO against the P9-8 row.
 
 The script deliberately reports `rto_seconds_observed: null` — RTO can only
@@ -329,15 +321,24 @@ change is needed — the telemetry is already being written.
 
 ```bash
 cd arie-backend
-python scripts/provision_production_monitoring.py            # dry-run
-python scripts/provision_production_monitoring.py --apply \
-  --alarm-action-arn arn:aws:sns:af-south-1:<acct>:regmind-staging-pilot-alerts
+python scripts/provision_production_monitoring.py \
+  --environment production --log-group "$PRODUCTION_LOG_GROUP" \
+  --alarm-action-arn "$ALARM_ACTION_ARN"                    # dry-run
+python scripts/provision_production_monitoring.py \
+  --environment production --log-group "$PRODUCTION_LOG_GROUP" \
+  --alarm-action-arn "$ALARM_ACTION_ARN" \
+  --apply --confirm-production
 ```
 
-**Without `--alarm-action-arn` the alarms are created with no actions and page
-nobody** — the dry-run says so explicitly. The SNS topic must have a confirmed
-subscription; an unconfirmed subscription is indistinguishable from working
-until the first real incident.
+`PRODUCTION_LOG_GROUP` must be the deployed production backend/worker log
+group; do not substitute the staging group and call P9-10 complete.
+`ALARM_ACTION_ARN` must be an SNS topic in the target account/region with a
+confirmed subscription into the named on-call rota.
+
+**Without `--alarm-action-arn` alarms page nobody.** The script now refuses
+`--apply` without it. The SNS topic must have a confirmed subscription; an
+unconfirmed subscription is indistinguishable from working until the first
+real incident.
 
 Two alarms are worth understanding before you tune them:
 
@@ -360,17 +361,21 @@ produces:
 ```bash
 aws cloudwatch get-metric-statistics --region af-south-1 \
   --namespace RegMind/Pilot --metric-name ScreeningQueueDepth \
-  --dimensions Name=Environment,Value=staging Name=Service,Value=verification-worker \
+  --dimensions Name=Environment,Value=production Name=Service,Value=verification-worker \
   --start-time $(date -u -d '30 minutes ago' +%FT%TZ) \
   --end-time $(date -u +%FT%TZ) --period 300 --statistics SampleCount
 ```
 
 An empty `Datapoints` list means the filter is not matching — usually because
 `$.environment` does not equal what the service actually emits. Repeat for
-`ApplicationErrorCount-staging` (no dimensions).
+`ApplicationErrorCount-production` (no dimensions).
 
 **On-call:** alarm actions must route to a rota with a confirmed subscription.
 Recording the rota itself is a commercial/process step outside this repo.
+
+The exact commands, prerequisites, and evidence templates for §§5–7 are
+consolidated in
+[`OPERATOR_RUNSHEET_REMAINING_OPS.md`](OPERATOR_RUNSHEET_REMAINING_OPS.md).
 
 ---
 

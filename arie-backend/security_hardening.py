@@ -4115,7 +4115,7 @@ def get_safe_health_response() -> Dict:
     """
     return {
         'status': 'ok',
-        'service': 'ARIE Finance API',
+        'service': 'RegMind API',
         'version': '1.0.0',
         'timestamp': datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }

@@ -526,20 +526,19 @@ def mark_alert_assigned(db, alert_id, *, user=None, audit_writer=None, commit=Tr
 
 
 def mark_alert_resolved(db, alert_id, *, user=None, audit_writer=None, commit=True):
-    """Set resolved_at on a monitoring alert.
+    """Reject the retired timestamp-only Monitoring resolution path.
 
-    Requires a non-None audit_writer (raises MissingAuditWriter).
+    Resolution is an authoritative state transition and must go through
+    ``monitoring_alert_state_machine.transition_alert_status`` with typed
+    evidence and an atomic canonical audit. Keeping this compatibility symbol
+    fail-closed makes older callers visible without allowing parallel logic.
     """
     _require_audit_writer(audit_writer)
-    alert = _assert_exists(db, "monitoring_alerts", alert_id, "monitoring_alert")
-    ts = _utc_now_iso()
-    before = {"resolved_at": _row_get(alert, "resolved_at")}
-    db.execute("UPDATE monitoring_alerts SET resolved_at = ? WHERE id = ?", (ts, alert_id))
-    if commit:
-        db.commit()
-    _emit_audit(audit_writer, user, "lifecycle.alert.resolved",
-                f"monitoring_alert:{alert_id}", {"timestamp": ts}, db,
-                before_state=before, after_state={"resolved_at": ts}, commit=commit)
+    _assert_exists(db, "monitoring_alerts", alert_id, "monitoring_alert")
+    raise InvalidLifecycleTransition(
+        "mark_alert_resolved is retired; use the canonical Monitoring Alert "
+        "transition service with an approved reason and typed evidence"
+    )
 
 
 # -- Cross-object link helpers --------------------------------------
@@ -560,6 +559,26 @@ def link_alert_to_edd(db, alert_id, edd_case_id, *,
     alert = _assert_exists(db, "monitoring_alerts", alert_id, "monitoring_alert")
     edd = _assert_exists(db, "edd_cases", edd_case_id, "edd_case")
     _assert_edd_not_terminal(edd, edd_case_id)
+    alert_application_id = _row_get(alert, "application_id")
+    edd_application_id = _row_get(edd, "application_id")
+    if (
+        alert_application_id in (None, "")
+        or edd_application_id in (None, "")
+        or str(alert_application_id) != str(edd_application_id)
+    ):
+        raise InvalidLifecycleTransition(
+            "monitoring alert and EDD case must have the same non-empty "
+            "application linkage"
+        )
+    existing_alert_id = _row_get(edd, "linked_monitoring_alert_id")
+    if (
+        existing_alert_id not in (None, "")
+        and str(existing_alert_id) != str(alert_id)
+    ):
+        raise InvalidLifecycleTransition(
+            f"edd_case id={edd_case_id} is already linked to another "
+            "monitoring alert"
+        )
 
     prior_edd_id = _row_get(alert, "linked_edd_case_id")
     displaced = prior_edd_id is not None and prior_edd_id != edd_case_id
@@ -662,6 +681,26 @@ def link_alert_to_review(db, alert_id, review_id, *,
     if _row_get(review, "closed_at") is not None:
         raise InvalidLifecycleTransition(
             f"cannot link alert to closed periodic_review id={review_id}"
+        )
+    alert_application_id = _row_get(alert, "application_id")
+    review_application_id = _row_get(review, "application_id")
+    if (
+        alert_application_id in (None, "")
+        or review_application_id in (None, "")
+        or str(alert_application_id) != str(review_application_id)
+    ):
+        raise InvalidLifecycleTransition(
+            "monitoring alert and periodic review must have the same non-empty "
+            "application linkage"
+        )
+    existing_alert_id = _row_get(review, "linked_monitoring_alert_id")
+    if (
+        existing_alert_id not in (None, "")
+        and str(existing_alert_id) != str(alert_id)
+    ):
+        raise InvalidLifecycleTransition(
+            f"periodic_review id={review_id} is already linked to another "
+            "monitoring alert"
         )
 
     prior_review_id = _row_get(alert, "linked_periodic_review_id")

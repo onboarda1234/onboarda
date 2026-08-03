@@ -10,7 +10,7 @@ Run:  python server.py
 Env:  PORT=10000 SECRET_KEY=your-secret DB_PATH=./arie.db
 """
 
-import os, sys, json, uuid, time, hashlib, re, base64, logging, secrets, smtplib, math
+import os, sys, json, uuid, time, hashlib, re, base64, logging, secrets, smtplib, math, threading
 from dotenv import load_dotenv
 load_dotenv()  # Load .env before any config reads
 from collections.abc import Mapping
@@ -71,10 +71,20 @@ from document_policy_registry import build_document_policy_payload
 
 # S3 support (optional)
 try:
-    from s3_client import get_s3_client
+    from s3_client import (
+        get_s3_client,
+        build_monitoring_renewal_candidate_key,
+        monitoring_renewal_candidate_key_allowed,
+    )
     HAS_S3 = True
 except ImportError:
     HAS_S3 = False
+
+    def monitoring_renewal_candidate_key_allowed(_key):
+        return False
+
+    def build_monitoring_renewal_candidate_key(*_args, **_kwargs):
+        raise RuntimeError("S3 candidate key builder unavailable")
 
 # Security hardening module — MANDATORY dependency
 # If this import fails, the server MUST NOT start. These modules enforce:
@@ -138,6 +148,12 @@ from memo_governance import (
     latest_compliance_memo_row,
     latest_compliance_memo_row_for_identifier,
     memo_selection_metadata,
+)
+from memo_pdf_artifacts import (
+    MemoPDFArtifactError,
+    MemoPDFArtifactIntegrityError,
+    load_memo_pdf_artifact,
+    persist_memo_pdf_artifact,
 )
 from provider_errors import sanitize_provider_error
 from screening_jobs import (
@@ -224,6 +240,9 @@ from document_scope_policy import (
 )
 import monitoring_status as _monitoring_status
 import monitoring_dismissal_control as _mdc
+import monitoring_alert_state_machine as _monitoring_state_machine
+import monitoring_alert_linkage as _monitoring_linkage
+import monitoring_document_renewal as _monitoring_document_renewal
 import monitoring_sla as _monitoring_sla
 import monitoring_followups as _monitoring_followups
 from monitoring_enrollment import (
@@ -238,6 +257,7 @@ from monitoring_document_refresh import (
     is_document_refresh_alert as _is_document_refresh_alert,
     mark_backoffice_upload_received as _mark_monitoring_backoffice_upload_received,
     mark_client_upload_received_if_monitoring_linked as _mark_monitoring_document_upload_received,
+    prepare_document_refresh_clearance as _prepare_monitoring_document_clearance,
     request_updated_document as _request_monitoring_updated_document,
     review_document_refresh as _review_monitoring_document_refresh,
     sync_requirement_review_to_monitoring_alert as _sync_monitoring_requirement_review,
@@ -1540,7 +1560,7 @@ def send_portal_email(to_addr: str, subject: str, text_body: str) -> bool:
     smtp_user = os.environ.get("SMTP_USER")
     smtp_password = os.environ.get("SMTP_PASSWORD")
     smtp_from = BRAND.get("email_from_address") or smtp_user
-    smtp_from_name = BRAND.get("email_from_name") or "Onboarda"
+    smtp_from_name = BRAND.get("email_from_name") or "RegMind"
 
     if not smtp_host or not smtp_user:
         logger.warning("SMTP not configured. Transactional email not sent: %s", subject)
@@ -3034,6 +3054,40 @@ def _post_commit_worker_count() -> int:
 
 
 _POST_COMMIT_EXECUTOR = ThreadPoolExecutor(max_workers=_post_commit_worker_count())
+_DOCUMENT_RENEWAL_CLEANUP_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="renewal-artifact-cleanup",
+)
+_DOCUMENT_RENEWAL_INLINE_CLEANUP_EXECUTOR = ThreadPoolExecutor(
+    max_workers=2,
+    thread_name_prefix="renewal-artifact-cleanup-inline",
+)
+_DOCUMENT_RENEWAL_SCHEDULER_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="renewal-workflow-scheduler",
+)
+_DOCUMENT_RENEWAL_UPLOAD_EXECUTOR = ThreadPoolExecutor(
+    max_workers=2,
+    thread_name_prefix="renewal-candidate-upload",
+)
+_DOCUMENT_RENEWAL_UPLOAD_ADMISSION = threading.BoundedSemaphore(value=2)
+
+
+def _try_acquire_document_renewal_upload_capacity():
+    return _DOCUMENT_RENEWAL_UPLOAD_ADMISSION.acquire(blocking=False)
+
+
+def _submit_document_renewal_upload(upload_callable):
+    """Transfer one acquired admission slot to a concurrent upload future."""
+    future = _DOCUMENT_RENEWAL_UPLOAD_EXECUTOR.submit(upload_callable)
+    # The concurrent future owns the slot once submitted. Cancelling an
+    # asyncio wrapper must not release capacity while the worker still owns
+    # the request body and is performing S3 I/O. A queued source future that
+    # is cancelled still completes and runs this callback.
+    future.add_done_callback(
+        lambda _completed: _DOCUMENT_RENEWAL_UPLOAD_ADMISSION.release()
+    )
+    return future
 
 
 def _submit_ca_poll_timeout_seconds() -> float:
@@ -5449,12 +5503,12 @@ class ForgotPasswordHandler(BaseHandler):
         portal_base = os.environ.get("PORTAL_BASE_URL") or BRAND.get("website") or ""
         reset_link = f"{portal_base.rstrip('/')}/?reset_token={reset_token}" if portal_base else ""
         email_body = (
-            "A password reset was requested for your Onboarda portal account.\n\n"
+            "A password reset was requested for your RegMind Portal account.\n\n"
             f"Use this reset token: {reset_token}\n\n"
             + (f"Reset link: {reset_link}\n\n" if reset_link else "")
             + "This token will expire in 1 hour. If you did not request this change, you can ignore this email."
         )
-        email_sent = send_portal_email(email, "Onboarda password reset", email_body)
+        email_sent = send_portal_email(email, "RegMind Portal password reset", email_body)
 
         if not IS_PRODUCTION:
             result["reset_token"] = reset_token  # Only expose token in non-production
@@ -6436,6 +6490,56 @@ def _memo_final_status(memo_row):
     if review_status == "draft":
         return "draft"
     return "draft"
+
+
+def _memo_lifecycle_status(
+    memo_row,
+    memo_data=None,
+    *,
+    is_current=True,
+    is_stale=None,
+):
+    """Project existing memo controls into the document-workspace lifecycle.
+
+    This is deliberately derived rather than persisted: review, validation,
+    approval, version and staleness remain the authoritative workflow fields.
+    """
+    if not memo_row:
+        return "NOT_GENERATED"
+    if not is_current:
+        return "SUPERSEDED"
+    row = dict(memo_row)
+    stale = _memo_stale_bool(row.get("is_stale")) if is_stale is None else bool(is_stale)
+    if stale:
+        return "STALE"
+    if str(row.get("review_status") or "").strip().lower() == "approved":
+        return "FINAL"
+    if row.get("blocked"):
+        return "DRAFT"
+
+    validation_status = str(row.get("validation_status") or "pending").strip().lower()
+    if validation_status not in ("pass", "pass_with_fixes"):
+        return "DRAFT"
+
+    if memo_data is None:
+        try:
+            memo_data = safe_json_loads(row.get("memo_data") or "{}")
+        except Exception:
+            memo_data = {}
+    memo_data = memo_data if isinstance(memo_data, dict) else {}
+    metadata = memo_data.get("metadata") if isinstance(memo_data.get("metadata"), dict) else {}
+    if metadata.get("is_fallback") is True:
+        return "DRAFT"
+    consistency = memo_data.get("supervisor") or metadata.get("supervisor") or {}
+    consistency = consistency if isinstance(consistency, dict) else {}
+    verdict = str(consistency.get("verdict") or row.get("supervisor_status") or "").upper()
+    if (
+        verdict in ("CONSISTENT", "CONSISTENT_WITH_WARNINGS")
+        and consistency.get("can_approve") is not False
+        and not consistency.get("mandatory_escalation")
+    ):
+        return "AWAITING_OFFICER_SIGNOFF"
+    return "DRAFT"
 
 
 OFFICER_CORRECTION_TARGETS = frozenset({
@@ -8530,7 +8634,8 @@ class ApplicationDetailHandler(BaseHandler):
             result["id"],
             columns="""
                 id, version, memo_data, review_status, validation_status, blocked, block_reason,
-                quality_score, memo_version, approved_by, approved_at, approval_reason, created_at,
+                quality_score, memo_version, reviewed_by, review_notes, supervisor_status,
+                approved_by, approved_at, approval_reason, created_at,
                 is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
             """,
         )
@@ -8552,11 +8657,26 @@ class ApplicationDetailHandler(BaseHandler):
             latest_memo_data["approved_by"] = latest_memo_dict.get("approved_by")
             latest_memo_data["approved_at"] = latest_memo_dict.get("approved_at")
             latest_memo_data["approval_reason"] = latest_memo_dict.get("approval_reason") or ""
+            latest_memo_data["officer_rationale"] = (
+                latest_memo_dict.get("approval_reason")
+                or latest_memo_dict.get("review_notes")
+                or ""
+            )
             latest_memo_data["is_stale"] = stale_view["is_stale"]
             latest_memo_data["stale_reason"] = stale_view["reason"]
             latest_memo_data["stale_trigger"] = stale_view["trigger"]
             latest_memo_data["memo_version"] = latest_memo_dict.get("memo_version") or latest_memo_dict.get("version")
             latest_memo_data["memo_generated"] = latest_memo_dict.get("created_at")
+            latest_memo_data["application_snapshot_timestamp"] = (
+                latest_memo_data["metadata"].get("application_snapshot_timestamp")
+                or latest_memo_data["metadata"].get("memo_generated_at")
+                or latest_memo_dict.get("created_at")
+            )
+            latest_memo_data["lifecycle_status"] = _memo_lifecycle_status(
+                latest_memo_dict,
+                latest_memo_data,
+                is_stale=stale_view["is_stale"],
+            )
             latest_memo_data["application_ref"] = result.get("ref")
             latest_memo_data["metadata"]["memo_id"] = latest_memo_dict.get("id")
             latest_memo_data["metadata"]["canonical_memo_id"] = latest_memo_selection["canonical_memo_id"]
@@ -8589,6 +8709,9 @@ class ApplicationDetailHandler(BaseHandler):
             latest_memo_dict["memo_selection"] = latest_memo_selection
             latest_memo_dict["canonical_memo_id"] = latest_memo_selection["canonical_memo_id"]
             latest_memo_dict["selector"] = MEMO_SELECTOR_VERSION
+            latest_memo_dict["officer_rationale"] = latest_memo_data["officer_rationale"]
+            latest_memo_dict["application_snapshot_timestamp"] = latest_memo_data["application_snapshot_timestamp"]
+            latest_memo_dict["lifecycle_status"] = latest_memo_data["lifecycle_status"]
             result["latest_memo"] = latest_memo_dict
             result["latest_memo_data"] = latest_memo_data
             result["memo_is_stale"] = stale_view["is_stale"]
@@ -14680,6 +14803,32 @@ class DocumentDownloadHandler(BaseHandler):
 # COMPLIANCE RESOURCES ENDPOINTS
 # ══════════════════════════════════════════════════════════
 
+_SYSTEM_COMPLIANCE_RESOURCE_PRESENTATION = {
+    "regulatory-compliance-report": {
+        "title": "RegMind Regulatory Compliance Report",
+        "file_name": "RegMind_Regulatory_Compliance_Report.docx",
+        "file_path": "docs/compliance/RegMind_Regulatory_Compliance_Report.docx",
+    },
+    "sample-compliance-memo": {
+        "title": "RegMind Sample Compliance Memo",
+        "file_name": "RegMind_Sample_Compliance_Memo.pdf",
+        "file_path": "docs/compliance/RegMind_Sample_Compliance_Memo.pdf",
+    },
+}
+
+
+def _present_compliance_resource(resource):
+    """Apply current display metadata without mutating persisted resource evidence."""
+    presented = dict(resource)
+    override = _SYSTEM_COMPLIANCE_RESOURCE_PRESENTATION.get(presented.get("slug"))
+    if override:
+        presented.update({
+            "title": override["title"],
+            "file_name": override["file_name"],
+        })
+    return presented
+
+
 class ComplianceResourcesHandler(BaseHandler):
     """GET/POST /api/resources — list and upload compliance reference resources"""
     def get(self):
@@ -14700,7 +14849,7 @@ class ComplianceResourcesHandler(BaseHandler):
                 r.title ASC
         """).fetchall()
         db.close()
-        self.success({"resources": [dict(r) for r in rows]})
+        self.success({"resources": [_present_compliance_resource(r) for r in rows]})
 
     def post(self):
         user = self.require_auth(roles=["admin", "sco", "co"])
@@ -14787,7 +14936,9 @@ class ComplianceResourceDownloadHandler(BaseHandler):
         if not resource:
             return self.error("Resource not found", 404)
 
-        file_path = resource["file_path"]
+        presented_resource = _present_compliance_resource(resource)
+        override = _SYSTEM_COMPLIANCE_RESOURCE_PRESENTATION.get(resource["slug"])
+        file_path = override["file_path"] if override else resource["file_path"]
         if not file_path:
             return self.error("Resource file is not configured", 404)
         if not os.path.isabs(file_path):
@@ -14797,11 +14948,11 @@ class ComplianceResourceDownloadHandler(BaseHandler):
 
         self.set_header("Content-Type", resource.get("mime_type") or "application/octet-stream")
         # P11-7 (BSA-008): sanitize the stored name before header interpolation.
-        safe_resource_name = re.sub(r'[^\w \-.]', '_', resource["file_name"] or "document")[:255] or "document"
+        safe_resource_name = re.sub(r'[^\w \-.]', '_', presented_resource["file_name"] or "document")[:255] or "document"
         self.set_header("Content-Disposition", f'attachment; filename="{safe_resource_name}"')
         with open(file_path, "rb") as f:
             self.write(f.read())
-        self.log_audit(user, "Download", "Resources", f"Compliance resource downloaded: {resource['file_name']}")
+        self.log_audit(user, "Download", "Resources", f"Compliance resource downloaded: {presented_resource['file_name']}")
         self.finish()
 
 
@@ -14816,7 +14967,7 @@ class RegulatoryIntelligenceHandler(BaseHandler):
         if not user:
             return
         if not _regulatory_intelligence_enabled():
-            return _enterprise_module_disabled(self, "Regulatory Intelligence")
+            return _enterprise_module_disabled(self, "RegMind Regulatory Intelligence")
 
         db = get_db()
         rows = db.execute("""
@@ -14851,7 +15002,7 @@ class RegulatoryIntelligenceHandler(BaseHandler):
         if not user:
             return
         if not _regulatory_intelligence_enabled():
-            return _enterprise_module_disabled(self, "Regulatory Intelligence")
+            return _enterprise_module_disabled(self, "RegMind Regulatory Intelligence")
 
         if not self.check_rate_limit("regulatory_upload", max_attempts=10, window_seconds=60):
             return
@@ -14898,9 +15049,9 @@ class RegulatoryIntelligenceHandler(BaseHandler):
             }
             ext_check = os.path.splitext(file_name)[1].lower()
             if ext_check not in reg_allowed_ext:
-                return self.error(f"Regulatory Intelligence accepts PDF and DOCX files only (got {ext_check})", 400)
+                return self.error(f"RegMind Regulatory Intelligence accepts PDF and DOCX files only (got {ext_check})", 400)
             if mime_type not in reg_allowed_mime:
-                return self.error(f"Regulatory Intelligence accepts PDF and DOCX files only", 400)
+                return self.error("RegMind Regulatory Intelligence accepts PDF and DOCX files only", 400)
 
             is_valid, upload_error = FileUploadValidator.validate(file_name, mime_type, file_body)
             if not is_valid:
@@ -15019,7 +15170,7 @@ class RegulatoryIntelligenceHandler(BaseHandler):
         finally:
             db.close()
 
-        self.log_audit(user, "Upload", "Regulatory Intelligence", f"Regulatory document uploaded: {title} ({status})")
+        self.log_audit(user, "Upload", "RegMind Regulatory Intelligence", f"Regulatory document uploaded: {title} ({status})")
         self.success({
             "id": doc_id,
             "title": title,
@@ -15043,7 +15194,7 @@ class RegulatoryIntelligenceReviewHandler(BaseHandler):
         if not user:
             return
         if not _regulatory_intelligence_enabled():
-            return _enterprise_module_disabled(self, "Regulatory Intelligence")
+            return _enterprise_module_disabled(self, "RegMind Regulatory Intelligence")
 
         data = self.get_json()
         suggestion_id = (data.get("suggestion_id") or "").strip()
@@ -15104,7 +15255,7 @@ class RegulatoryIntelligenceReviewHandler(BaseHandler):
         db.commit()
         db.close()
 
-        self.log_audit(user, "Review", "Regulatory Intelligence", f"Suggestion {suggestion_id} {decision} for document {document_id}")
+        self.log_audit(user, "Review", "RegMind Regulatory Intelligence", f"Suggestion {suggestion_id} {decision} for document {document_id}")
         self.success({"status": "recorded", "document_id": document_id, "suggestion": suggestion})
 
 
@@ -15115,7 +15266,7 @@ class RegulatoryIntelligenceSourceTextHandler(BaseHandler):
         if not user:
             return
         if not _regulatory_intelligence_enabled():
-            return _enterprise_module_disabled(self, "Regulatory Intelligence")
+            return _enterprise_module_disabled(self, "RegMind Regulatory Intelligence")
 
         data = self.get_json()
         source_text = (data.get("source_text") or "").strip()
@@ -15183,7 +15334,7 @@ class RegulatoryIntelligenceSourceTextHandler(BaseHandler):
         self.log_audit(
             user,
             "Update",
-            "Regulatory Intelligence",
+            "RegMind Regulatory Intelligence",
             f"Manual source text {'updated' if prior_source_text else 'added'} and structured review re-run for document {document_id}"
         )
         self.success({
@@ -15209,7 +15360,7 @@ class RegulatoryIntelligenceDownloadHandler(BaseHandler):
         if not user:
             return
         if not _regulatory_intelligence_enabled():
-            return _enterprise_module_disabled(self, "Regulatory Intelligence")
+            return _enterprise_module_disabled(self, "RegMind Regulatory Intelligence")
 
         db = get_db()
         row = db.execute("SELECT * FROM regulatory_documents WHERE id = ?", (document_id,)).fetchone()
@@ -15227,7 +15378,7 @@ class RegulatoryIntelligenceDownloadHandler(BaseHandler):
                     response_filename=row.get("file_name") or f"{document_id}.bin"
                 )
                 if success:
-                    self.log_audit(user, "Download", "Regulatory Intelligence", f"Downloaded regulatory document via S3: {row.get('title')}")
+                    self.log_audit(user, "Download", "RegMind Regulatory Intelligence", f"Downloaded regulatory document via S3: {row.get('title')}")
                     return self.success({"download_url": url_or_error, "source": "s3", "expires_in": 900})
             except Exception as e:
                 logger.warning("Regulatory intelligence download via S3 failed: %s", e)
@@ -15246,7 +15397,7 @@ class RegulatoryIntelligenceDownloadHandler(BaseHandler):
         self.set_header("Content-Disposition", f'attachment; filename="{safe_reg_name}"')
         with open(file_path, "rb") as f:
             self.write(f.read())
-        self.log_audit(user, "Download", "Regulatory Intelligence", f"Downloaded regulatory document locally: {row.get('title')}")
+        self.log_audit(user, "Download", "RegMind Regulatory Intelligence", f"Downloaded regulatory document locally: {row.get('title')}")
         self.finish()
 
 
@@ -15382,7 +15533,7 @@ def _validate_system_settings_payload(data, current=None):
             errors.append({"code": "secret_field_not_allowed", "field": key, "message": f"{key} cannot be updated through system settings"})
 
     normalized = {
-        "company_name": text_field("company_name", "Onboarda Ltd", max_len=120),
+        "company_name": text_field("company_name", "Your Financial Institution", max_len=120),
         "licence_number": text_field("licence_number", "FSC-PIS-2024-001", max_len=80),
         "default_retention_years": int_field("default_retention_years", 7, 1, 25),
         "auto_approve_max_score": int_field("auto_approve_max_score", 40, 0, 100),
@@ -16064,7 +16215,7 @@ def get_provider_status_summary():
 
 def get_build_metadata():
     git_sha = _runtime_env_value("GIT_SHA")
-    image_tag = _runtime_env_value("IMAGE_TAG", fallback=git_sha if git_sha != _UNKNOWN_RUNTIME_VALUE else _UNKNOWN_RUNTIME_VALUE)
+    image_tag = _runtime_env_value("IMAGE_TAG")
     return {
         "git_sha": git_sha,
         "git_sha_short": _git_sha_short(git_sha),
@@ -16109,13 +16260,16 @@ class SystemSettingsHandler(BaseHandler):
         db.close()
         if not row:
             return self.success({
-                "company_name": "Onboarda Ltd",
+                "company_name": "Your Financial Institution",
                 "licence_number": "FSC-PIS-2024-001",
                 "default_retention_years": 7,
                 "auto_approve_max_score": 40,
                 "edd_threshold_score": 55,
             })
-        self.success(dict(row))
+        payload = dict(row)
+        if str(payload.get("company_name") or "").strip().lower() == "onboarda ltd":
+            payload["company_name"] = "Your Financial Institution"
+        self.success(payload)
 
     def put(self):
         user = self.require_backoffice_auth(
@@ -16553,12 +16707,155 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
         data = self.get_json() or {}
         db = get_db()
         try:
-            # Capture the prior requirement status for the waiver audit event (below).
+            # Capture the prior requirement state before deciding whether this
+            # PATCH participates in the Monitoring Alert lifecycle. Metadata-
+            # only edits and repeated identical outcomes must not attempt a
+            # second terminal transition.
             _req_before = db.execute(
-                "SELECT status FROM application_enhanced_requirements WHERE id = ?",
-                (requirement_id,),
+                """
+                SELECT aer.*
+                  FROM application_enhanced_requirements aer
+                  JOIN applications app ON app.id = aer.application_id
+                 WHERE aer.id = ?
+                   AND (app.id = ? OR app.ref = ?)
+                """,
+                (requirement_id, app_id, app_id),
             ).fetchone()
-            _req_prev_status = (dict(_req_before).get("status") if _req_before else None)
+            _req_before_dict = dict(_req_before) if _req_before else {}
+            _req_prev_status = _req_before_dict.get("status")
+            _linked_monitoring_alert_id = (
+                _req_before_dict.get("monitoring_alert_id")
+            )
+            if (
+                _linked_monitoring_alert_id not in (None, "")
+                and _monitoring_legacy_document_write_blocked(
+                    db, _linked_monitoring_alert_id
+                )
+            ):
+                return self.error(
+                    "Legacy Monitoring document requests are read-only while "
+                    "a canonical renewal request owns this alert.",
+                    409,
+                )
+            _requested_status = (
+                str(data.get("status") or "").strip().lower()
+                if data.get("status") not in (None, "")
+                else ""
+            )
+            _actual_status_change_requested = bool(
+                _requested_status
+                and _requested_status
+                != str(_req_prev_status or "").strip().lower()
+            )
+            _locked_monitoring_alert = None
+            _document_review_request_id = None
+            if (
+                _actual_status_change_requested
+                and _linked_monitoring_alert_id not in (None, "")
+            ):
+                # Canonical lock order is Monitoring Alert first, then linked
+                # requirement. Re-read the requirement under lock so a stale
+                # browser PATCH cannot interleave with another review outcome.
+                _locked_monitoring_alert = (
+                    _monitoring_state_machine.lock_alert_for_transition(
+                        db, _linked_monitoring_alert_id
+                    )
+                )
+                _locked_req_sql = (
+                    "SELECT * "
+                    "FROM application_enhanced_requirements "
+                    "WHERE id = ? AND application_id = ?"
+                )
+                if getattr(db, "is_postgres", False):
+                    _locked_req_sql += " FOR UPDATE"
+                _locked_req = db.execute(
+                    _locked_req_sql,
+                    (requirement_id, _req_before_dict.get("application_id")),
+                ).fetchone()
+                _locked_req_dict = dict(_locked_req) if _locked_req else {}
+                if (
+                    str(_locked_req_dict.get("status") or "").strip().lower()
+                    != str(_req_prev_status or "").strip().lower()
+                    or str(_locked_req_dict.get("monitoring_alert_id") or "")
+                    != str(_linked_monitoring_alert_id)
+                ):
+                    raise _monitoring_state_machine.StaleCurrentState(
+                        "The enhanced requirement changed since it was read; "
+                        "refresh and retry."
+                    )
+
+                # This state-machine version deliberately has no terminal
+                # reopening edge. A document outcome reversal must therefore
+                # fail atomically instead of reopening only the requirement
+                # while leaving its linked alert terminal.
+                _alert_status = str(
+                    _locked_monitoring_alert.get("status") or ""
+                ).strip()
+                _terminal_outcome_reversal = (
+                    (
+                        str(_req_prev_status or "").strip().lower()
+                        == "accepted"
+                        and _alert_status == "resolved"
+                    )
+                    or (
+                        str(_req_prev_status or "").strip().lower()
+                        == "waived"
+                        and _alert_status == "waived"
+                    )
+                )
+                if _terminal_outcome_reversal:
+                    raise _monitoring_state_machine.TerminalStateError(
+                        "A linked terminal Monitoring Alert cannot be reopened "
+                        "through an enhanced requirement update."
+                    )
+
+                if _requested_status in {"accepted", "waived"}:
+                    document_outcome = (
+                        "accept"
+                        if _requested_status == "accepted"
+                        else "waive"
+                    )
+                    disposition, review_request = (
+                        _prepare_monitoring_document_clearance(
+                            db,
+                            alert=_locked_monitoring_alert,
+                            request=_locked_req_dict,
+                            outcome=document_outcome,
+                            note=str(
+                                data.get("review_notes")
+                                or data.get("waiver_reason")
+                                or ""
+                            ).strip(),
+                            evidence_ref=str(
+                                data.get("evidence_ref")
+                                or data.get("evidence_note")
+                                or ""
+                            ).strip(),
+                            user=user,
+                            audit_writer=self.log_audit,
+                            send_for_second_review=bool(
+                                data.get("send_for_second_review")
+                            ),
+                        )
+                    )
+                    if disposition == "pending":
+                        db.commit()
+                        return self.success({
+                            "status": "review_requested",
+                            "result": {
+                                "review_request_id": (
+                                    review_request or {}
+                                ).get("id"),
+                                "alert_id": _linked_monitoring_alert_id,
+                                "pending_second_review": True,
+                            },
+                            "requirement": serialize_application_requirement(
+                                _locked_req_dict
+                            ),
+                        })
+                    _document_review_request_id = (
+                        review_request or {}
+                    ).get("id")
             result, error, status_code = update_application_enhanced_requirement(
                 db,
                 app_id,
@@ -16587,12 +16884,14 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
                     ip_address=self.get_client_ip(),
                     after_state=result,
                 )
-            _sync_monitoring_requirement_review(
-                db,
-                result.get("requirement") or {},
-                user=user,
-                audit_writer=self.log_audit,
-            )
+            if "status" in (result.get("changes") or {}):
+                _sync_monitoring_requirement_review(
+                    db,
+                    result.get("requirement") or {},
+                    user=user,
+                    audit_writer=self.log_audit,
+                    review_request_id=_document_review_request_id,
+                )
             # ── PR-AUTHORITY-AUDIT-HARDENING-1: first-class waiver event ──
             # An enhanced/EDD requirement waiver is a senior control action that
             # previously wrote no dedicated audit row. Emit a filterable "Waiver Used"
@@ -16618,11 +16917,22 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
                 )
             db.commit()
             self.success(result)
+        except _MonitoringDocumentRefreshError as exc:
+            _rollback_monitoring_transaction(db)
+            self.error(str(exc), exc.status_code)
+        except _monitoring_state_machine.MonitoringTransitionError as exc:
+            _rollback_monitoring_transaction(db)
+            self.error(str(exc), exc.status_code)
+        except _monitoring_state_machine.AuditInfrastructureError:
+            _rollback_monitoring_transaction(db)
+            logger.exception(
+                "Monitoring Alert transition audit failed during enhanced "
+                "requirement update: requirement_id=%s",
+                requirement_id,
+            )
+            self.error("Monitoring Alert transition could not be completed.", 500)
         except Exception as exc:
-            try:
-                db.rollback()
-            except Exception:
-                pass
+            _rollback_monitoring_transaction(db)
             logger.error(
                 "application enhanced requirement update failed: app_id=%s requirement_id=%s error=%s",
                 app_id,
@@ -16645,6 +16955,33 @@ class ApplicationEnhancedRequirementRequestHandler(BaseHandler):
 
         db = get_db()
         try:
+            legacy_requirement = db.execute(
+                """
+                SELECT monitoring_alert_id
+                  FROM application_enhanced_requirements
+                 WHERE id = ?
+                   AND application_id IN (
+                       SELECT id FROM applications WHERE id = ? OR ref = ?
+                   )
+                """,
+                (requirement_id, app_id, app_id),
+            ).fetchone()
+            legacy_requirement = (
+                dict(legacy_requirement) if legacy_requirement else None
+            )
+            if (
+                legacy_requirement
+                and legacy_requirement.get("monitoring_alert_id")
+                not in (None, "")
+                and _monitoring_legacy_document_write_blocked(
+                    db, legacy_requirement.get("monitoring_alert_id")
+                )
+            ):
+                return self.error(
+                    "Legacy Monitoring document requests are read-only while "
+                    "a canonical renewal request owns this alert.",
+                    409,
+                )
             result, error, status_code = request_application_enhanced_requirement_from_client(
                 db,
                 app_id,
@@ -16798,6 +17135,18 @@ class ApplicationEnhancedRequirementUploadHandler(BaseHandler):
             if str(before.get("status") or "").lower() in ("accepted", "waived", "cancelled"):
                 return self.error("This enhanced requirement is already resolved and cannot accept uploads", 409)
             is_monitoring_refresh = _is_monitoring_document_refresh_requirement(before)
+            if (
+                is_monitoring_refresh
+                and before.get("monitoring_alert_id") not in (None, "")
+                and _monitoring_legacy_document_write_blocked(
+                    db, before.get("monitoring_alert_id")
+                )
+            ):
+                return self.error(
+                    "Legacy Monitoring replacement uploads are disabled while "
+                    "a canonical renewal request owns this alert.",
+                    409,
+                )
             policy_info = enhanced_requirement_document_policy(before.get("requirement_key"))
             mapped_doc_type = policy_info.get("document_type") or "supporting_document"
             if is_monitoring_refresh:
@@ -18875,6 +19224,12 @@ def _directors_ubos_report_cte():
                 u.full_name AS assigned_officer,
                 a.updated_at AS last_updated_at,
                 g.created_at,
+                -- The fixture text-pattern vintage bound must key off the
+                -- APPLICATION's created_at. g.created_at is MIN(party.created_at),
+                -- which moves whenever a director/UBO is re-created, so it would
+                -- classify the same application differently here than on every
+                -- other surface.
+                a.created_at AS application_created_at,
                 a.prescreening_data,
                 a.is_fixture,
                 CASE WHEN EXISTS (SELECT 1 FROM periodic_reviews pr WHERE pr.application_id = g.application_id) THEN 1 ELSE 0 END AS has_periodic_review
@@ -18967,6 +19322,8 @@ def _directors_ubos_report_scope_from_request(handler, user):
             include_text_patterns=True,
             ref_column="application_ref",
             name_column="company_name",
+            # NOT report_rows.created_at — that is MIN(party.created_at).
+            created_column="application_created_at",
         )
         conditions.append(fx_excl)
         params.extend(fx_params)
@@ -20309,7 +20666,7 @@ class SupervisorAuditExportHandler(BaseHandler):
         if not user:
             return
         if not _supervisor_audit_enabled():
-            return _enterprise_module_disabled(self, "AI Compliance Supervisor Audit")
+            return _enterprise_module_disabled(self, "RegMind AI Compliance Supervisor Audit")
 
         fmt = self.get_argument("format", "json").lower()
         if fmt not in ("json", "csv"):
@@ -20913,6 +21270,26 @@ class BackOfficeHandler(BaseHandler):
 
 class SecureStaticFileHandler(tornado.web.StaticFileHandler):
     """Static asset handler with the same browser security posture as HTML."""
+    def set_default_headers(self):
+        self.set_header("Server", "RegMind")
+        self.set_header("X-Content-Type-Options", "nosniff")
+        self.set_header("X-Frame-Options", "DENY")
+        self.set_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        self.set_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+        self.set_header(
+            "Content-Security-Policy",
+            "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+        )
+
+
+class SecureRootRedirectHandler(tornado.web.RedirectHandler):
+    """R3-BSA-013: `/` redirect with the same security posture as every page.
+
+    Tornado's built-in RedirectHandler does not inherit BaseHandler, so the
+    front-door 301 was the one response served without the security headers.
+    Same redirect, same headers as SecureStaticFileHandler above.
+    """
     def set_default_headers(self):
         self.set_header("Server", "RegMind")
         self.set_header("X-Content-Type-Options", "nosniff")
@@ -24441,10 +24818,13 @@ def _filter_screening_queue_rows(rows, filters):
     provider_filter = _screening_queue_filter_value(filters.get("provider"))
     pep_filter = _screening_queue_filter_value(filters.get("pep"))
     app_ref_filter = _screening_queue_filter_value(filters.get("application_ref"))
+    exact_app_ref = str(filters.get("exact_application_ref") or "").strip()
     universal_terms = [token for token in (search, app_ref_filter) if token]
 
     filtered = []
     for row in rows:
+        if exact_app_ref and str(row.get("application_ref") or "") != exact_app_ref:
+            continue
         blob = _screening_queue_search_blob(row)
         if any(term not in blob for term in universal_terms):
             continue
@@ -24587,7 +24967,26 @@ def _screening_queue_row_triage(row):
 
     items = ((row.get("screening_evidence") or {}).get("items")) or []
     buckets = {"sanctions": 0, "pep": 0, "adverse_media": 0, "watchlist": 0, "other": 0}
-    scored, weak, unscored = [], 0, 0
+    # SRP-3 Phase F (F4) — reconciliation split.
+    #
+    # ``buckets`` counts EVERY hit in its category and ``weak_count`` re-counts
+    # the below-threshold ones across all categories, so the two overlap: a
+    # weak watchlist hit is in both. The review page renders them as adjacent
+    # tiles, which reads as a partition and overstated the material exposure
+    # (e.g. "15 Sanctions & watchlist" for a subject with zero of either, all
+    # 15 being weak name-only matches also counted in the weak tile).
+    #
+    # These additive fields express the partition the hit list already
+    # performs — every below-threshold hit is pulled out of its section and
+    # rendered in the weak tail — so counts and list agree:
+    #     sum(section_buckets) + weak_tail_count == total
+    #
+    # Sanctions are deliberately exempt from the tail: a sanctions hit is
+    # material regardless of how the name-match scored, and must never be
+    # buried behind a "weak name-only" disclosure.
+    section_buckets = {"sanctions": 0, "pep": 0, "adverse_media": 0, "watchlist": 0, "other": 0}
+    weak_buckets = {"sanctions": 0, "pep": 0, "adverse_media": 0, "watchlist": 0, "other": 0}
+    scored, weak, weak_tail, unscored = [], 0, 0, 0
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -24596,7 +24995,21 @@ def _screening_queue_row_triage(row):
         )
         buckets[category_key] += 1
         score = item.get("triage_score")
-        if isinstance(score, (int, float)):
+        # ``bool`` is a subclass of ``int`` — a stored ``true``/``false`` would
+        # otherwise score as 1/0 and be silently classed "weak". The client
+        # uses ``typeof === 'number'``, which excludes booleans, so excluding
+        # them here keeps the two partitions identical.
+        numeric = isinstance(score, (int, float)) and not isinstance(score, bool)
+        is_weak = numeric and score < _TRIAGE_WEAK_THRESHOLD
+        if is_weak:
+            weak_buckets[category_key] += 1
+        # Unscored hits are never assumed weak — they stay in-section and are
+        # disclosed separately as "unscored".
+        if is_weak and category_key != "sanctions":
+            weak_tail += 1
+        else:
+            section_buckets[category_key] += 1
+        if numeric:
             if score < _TRIAGE_WEAK_THRESHOLD:
                 weak += 1
             scored.append({
@@ -24616,6 +25029,12 @@ def _screening_queue_row_triage(row):
         "total": sum(buckets.values()),
         "buckets": buckets,
         "weak_count": weak,
+        # Additive reconciliation fields (see note above). Legacy ``buckets``
+        # and ``weak_count`` keep their original overlapping semantics for
+        # back-compatibility with stored/cached payloads.
+        "section_buckets": section_buckets,
+        "weak_buckets": weak_buckets,
+        "weak_tail_count": weak_tail,
         "unscored_count": unscored,
         "weak_threshold": _TRIAGE_WEAK_THRESHOLD,
         "top_hits": scored[:5],
@@ -24649,8 +25068,15 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False, limit=None,
         fx_excl, fx_params = fixture_app_exclude_clause(table_alias="", include_text_patterns=True)
         query += f" AND {fx_excl}"
         params.extend(fx_params)
+    exact_app_ref = str(filters.get("exact_application_ref") or "").strip()
     app_ref_filter = _screening_queue_filter_value(filters.get("application_ref"))
-    if app_ref_filter:
+    if exact_app_ref:
+        # Additive canonical-linkage handoff filter. Existing queue search
+        # remains fuzzy, while this exact stable reference is enforced before
+        # any cross-application evidence is loaded into the response.
+        query += " AND ref = ?"
+        params.append(exact_app_ref)
+    elif app_ref_filter:
         query += " AND lower(ref) LIKE ?"
         params.append(f"%{app_ref_filter}%")
     query += f" ORDER BY created_at DESC LIMIT {_SCREENING_QUEUE_APPLICATION_SCAN_CAP}"
@@ -25298,6 +25724,9 @@ class ScreeningQueueHandler(BaseHandler):
             "provider": self.get_argument("provider", "").strip(),
             "pep": self.get_argument("pep", "").strip(),
             "application_ref": self.get_argument("application_ref", "").strip(),
+            "exact_application_ref": self.get_argument(
+                "exact_application_ref", ""
+            ).strip(),
         }
         _queue_started = time.monotonic()
         db = get_db()
@@ -30829,13 +31258,17 @@ class SumsubDocumentHandler(BaseHandler):
         file_data = data.get("file_data")
         file_name = data.get("file_name", "document.pdf")
 
-        # Security: restrict file_path to uploads directory only (Finding S-15)
+        # Security: restrict file_path to uploads directory only (Finding S-15).
+        # R3-BSA-012: the check must be a PARENT-DIRECTORY test, not a string
+        # prefix — `startswith("<...>/uploads")` also matched sibling dirs like
+        # `uploads_evil/x.pdf`, letting request-controlled paths escape the
+        # uploads root while appearing contained.
         file_path = data.get("file_path")
         if file_path:
             import pathlib
             allowed_dir = pathlib.Path(os.path.join(os.path.dirname(__file__), "uploads")).resolve()
             requested = pathlib.Path(file_path).resolve()
-            if not str(requested).startswith(str(allowed_dir)):
+            if allowed_dir not in requested.parents:
                 logger.warning(f"SumsubDocumentHandler: blocked path traversal attempt: {file_path}")
                 return self.error("file_path must be within the uploads directory", 400)
             file_path = str(requested)
@@ -30932,6 +31365,19 @@ class SumsubWebhookHandler(BaseHandler):
         # Verify webhook signature — always verify, never skip (Finding S-16).
         # F-2: pass the advertised algorithm through to the verifier, which
         # hard-gates against ALLOWED_DIGEST_ALGS fail-closed.
+        #
+        # R3-BSA-016 (recorded design decision): the audit suggested returning an
+        # indistinguishable 200 on a bad signature to avoid confirming the
+        # endpoint to a prober. We deliberately return 401 instead:
+        #   * 401 is the correct, standard semantics for a failed HMAC and leaks
+        #     nothing actionable — the endpoint's existence is already public in
+        #     the Sumsub dashboard config; a 200-on-invalid would instead risk a
+        #     legitimate misconfigured delivery being silently black-holed.
+        #   * Sumsub retries on non-2xx, so 401 gives the correct redelivery
+        #     behaviour for a transient signing/rotation error; a masking 200
+        #     would suppress that retry.
+        # No behaviour change — this comment records the decision so the finding
+        # is closed as accepted, not open.
         if not sumsub_verify_webhook(body, signature, digest_alg=_digest_alg or None):
             logger.warning("Sumsub webhook: Invalid or missing signature")
             return self.error("Invalid signature", 401)
@@ -31010,7 +31456,25 @@ class SumsubWebhookHandler(BaseHandler):
                         (event_digest, event_type, applicant_id, external_user_id, review_answer, received_at)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (_event_digest, event_type, applicant_id, external_user_id, review_answer, _now_utc))
-            except Exception:
+            except Exception as _dedup_exc:
+                # R3-BSA-017: ONLY a UNIQUE violation means "already processed".
+                # The previous blanket except acknowledged EVERY insert failure
+                # (DB outage, schema error, connection loss) as a duplicate —
+                # returning 200 so Sumsub never retried and the event was lost
+                # forever. A genuine infrastructure error must propagate to the
+                # outer handler (5xx), which is what makes Sumsub redeliver.
+                if not SaveResumeHandler._is_unique_constraint_error(_dedup_exc):
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                    logger.error(
+                        "Sumsub webhook: idempotency insert failed with a "
+                        "NON-duplicate error — surfacing for retry. applicant=%s "
+                        "event=%s error=%s",
+                        _masked_id, event_type, type(_dedup_exc).__name__,
+                    )
+                    raise
                 # UNIQUE constraint violation — this event was already processed.
                 try:
                     db.rollback()
@@ -31969,9 +32433,159 @@ def _latest_compliance_memo_row(db, application_id):
         columns="""
             id, version, memo_data, review_status, validation_status, blocked,
             block_reason, quality_score, memo_version, raw_output_hash, created_at,
-            is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
+            is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at,
+            supervisor_status, approved_by, approved_at, approval_reason,
+            pdf_generated_at
         """,
     )
+
+
+def _memo_pdf_artifact_state(memo_row):
+    """Map the existing review status to the canonical PDF artefact state."""
+    return (
+        "final"
+        if str((memo_row or {}).get("review_status") or "").strip().lower() == "approved"
+        else "draft"
+    )
+
+
+def _memo_pdf_render_context(
+    db,
+    application,
+    memo_row,
+    *,
+    approved_by=None,
+    approved_at=None,
+    approval_reason=None,
+):
+    """Build the existing PDF renderer inputs without changing memo content."""
+    try:
+        memo_data = safe_json_loads(memo_row.get("memo_data") or "{}")
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise MemoPDFArtifactError("Memo data is corrupt or unparseable") from exc
+    if not isinstance(memo_data, dict):
+        raise MemoPDFArtifactError("Memo data is corrupt or unparseable")
+
+    memo_data = dict(memo_data)
+    metadata = dict(memo_data.get("metadata") or {})
+    authoritative_risk = _application_authoritative_risk_metadata(application)
+    metadata["authoritative_case_risk"] = authoritative_risk
+    metadata["risk_source"] = authoritative_risk.get("source")
+    metadata["risk_calculated_at"] = authoritative_risk.get("calculated_at")
+    metadata["memo_generated_at"] = _risk_metadata_json_value(
+        metadata.get("memo_generated_at") or memo_row.get("created_at")
+    )
+    if authoritative_risk.get("available"):
+        metadata["canonical_risk"] = {
+            **(metadata.get("canonical_risk") or {}),
+            **authoritative_risk,
+        }
+        metadata["display_risk_rating"] = authoritative_risk.get("level")
+        metadata["display_risk_score"] = authoritative_risk.get("score")
+        metadata["risk_rating"] = authoritative_risk.get("level")
+        metadata["risk_score"] = authoritative_risk.get("score")
+    memo_data["metadata"] = metadata
+
+    validation_result = {
+        "validation_status": (
+            memo_row.get("validation_status")
+            or metadata.get("validation_status", "pending")
+        ),
+        "quality_score": (
+            memo_row.get("quality_score")
+            or metadata.get("quality_score", 0)
+        ),
+    }
+    stored_supervisor = memo_data.get("supervisor") or metadata.get("supervisor", {})
+    supervisor_result = {
+        "verdict": (
+            memo_row.get("supervisor_status")
+            or stored_supervisor.get("verdict", "N/A")
+        ),
+    }
+
+    resolved_approved_by = (
+        memo_row.get("approved_by") if approved_by is None else approved_by
+    )
+    if resolved_approved_by:
+        approver = db.execute(
+            "SELECT email FROM users WHERE id = ?",
+            (resolved_approved_by,),
+        ).fetchone()
+        if approver:
+            resolved_approved_by = approver["email"]
+
+    return {
+        "memo_data": memo_data,
+        "metadata": metadata,
+        "authoritative_risk": authoritative_risk,
+        "validation_result": validation_result,
+        "supervisor_result": supervisor_result,
+        "approved_by": resolved_approved_by,
+        "approved_at": memo_row.get("approved_at") if approved_at is None else approved_at,
+        "approval_reason": (
+            memo_row.get("approval_reason") or ""
+            if approval_reason is None
+            else approval_reason
+        ),
+    }
+
+
+def _ensure_memo_pdf_artifact(
+    db,
+    application,
+    memo_row,
+    *,
+    artifact_state=None,
+    approved_by=None,
+    approved_at=None,
+    approval_reason=None,
+    reject_different_existing=False,
+):
+    """Load the immutable artefact, or render and persist it exactly once."""
+    state = artifact_state or _memo_pdf_artifact_state(memo_row)
+    stored = load_memo_pdf_artifact(db, memo_row["id"], state)
+    if stored:
+        return stored, False, None
+    if not HAS_PDF_GENERATOR:
+        raise MemoPDFArtifactError("PDF generation not available. Install weasyprint.")
+
+    context = _memo_pdf_render_context(
+        db,
+        application,
+        memo_row,
+        approved_by=approved_by,
+        approved_at=approved_at,
+        approval_reason=approval_reason,
+    )
+    try:
+        rendered = generate_memo_pdf(
+            memo_data=context["memo_data"],
+            application=dict(application),
+            validation_result=context["validation_result"],
+            supervisor_result=context["supervisor_result"],
+            approved_by=context["approved_by"],
+            approved_at=context["approved_at"],
+            approval_reason=context["approval_reason"],
+        )
+    except Exception as exc:
+        raise MemoPDFArtifactError(f"PDF generation failed: {exc}") from exc
+
+    renderer_build = get_build_metadata()
+    artifact, created = persist_memo_pdf_artifact(
+        db,
+        memo_id=memo_row["id"],
+        artifact_state=state,
+        pdf_bytes=rendered,
+        renderer_build_sha=renderer_build.get("git_sha") or "unknown",
+        reject_different_existing=reject_different_existing,
+    )
+    if created:
+        db.execute(
+            "UPDATE compliance_memos SET pdf_generated_at = ? WHERE id = ?",
+            (artifact.get("created_at") or datetime.now(timezone.utc).isoformat(), memo_row["id"]),
+        )
+    return artifact, created, context
 
 
 def _memo_payload_if_fingerprint_unchanged(latest_row, fingerprint):
@@ -32032,7 +32646,205 @@ def _locked_memo_application_row(db, app_id):
 
 
 class ComplianceMemoHandler(BaseHandler):
-    """POST /api/applications/:id/memo — Generate compliance memo from application data"""
+    """Compliance memo document workspace resource."""
+
+    def get(self, app_id):
+        """Return compact lifecycle and version history for the memo workspace."""
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app_view = _attach_memo_screening_current_snapshot(db, dict(app))
+
+            rows = db.execute(
+                f"""
+                SELECT id, application_id, version, memo_version, memo_data,
+                       ai_recommendation, review_status, reviewed_by,
+                       validation_status, supervisor_status, blocked, block_reason,
+                       is_stale, stale_reason, stale_trigger, stale_marked_at,
+                       approved_by, approved_at, pdf_generated_at,
+                       created_at
+                  FROM compliance_memos
+                 WHERE application_id = ?
+                {CANONICAL_MEMO_ORDER_SQL}
+                """,
+                (app["id"],),
+            ).fetchall()
+
+            versions = []
+            for index, raw_row in enumerate(rows):
+                row = dict(raw_row)
+                try:
+                    memo_data = safe_json_loads(row.get("memo_data") or "{}")
+                except Exception:
+                    memo_data = {}
+                memo_data = memo_data if isinstance(memo_data, dict) else {}
+                metadata = memo_data.get("metadata") if isinstance(memo_data.get("metadata"), dict) else {}
+                approved_by_name = resolve_user_display_name(db, row.get("approved_by"))
+                reviewed_by_name = resolve_user_display_name(db, row.get("reviewed_by"))
+                stale_view = (
+                    _memo_staleness_view(app_view, row)
+                    if index == 0
+                    else {
+                        "is_stale": _memo_stale_bool(row.get("is_stale")),
+                        "reason": row.get("stale_reason") or "",
+                        "trigger": row.get("stale_trigger") or "",
+                    }
+                )
+                lifecycle_status = _memo_lifecycle_status(
+                    row,
+                    memo_data,
+                    is_current=index == 0,
+                    is_stale=stale_view["is_stale"],
+                )
+                versions.append({
+                    "memo_id": row.get("id"),
+                    "version": row.get("version"),
+                    "memo_version": row.get("memo_version") or row.get("version"),
+                    "lifecycle_status": lifecycle_status,
+                    "is_current": index == 0,
+                    "recommendation": (
+                        row.get("ai_recommendation")
+                        or metadata.get("approval_recommendation")
+                        or "REVIEW"
+                    ),
+                    "generated_at": row.get("created_at"),
+                    "application_snapshot_timestamp": (
+                        metadata.get("application_snapshot_timestamp")
+                        or metadata.get("memo_generated_at")
+                        or row.get("created_at")
+                    ),
+                    "review_status": row.get("review_status"),
+                    "validation_status": row.get("validation_status"),
+                    "is_stale": bool(stale_view["is_stale"]),
+                    "stale_reason": stale_view.get("reason") or "",
+                    "stale_trigger": stale_view.get("trigger") or "",
+                    "reviewed_by": reviewed_by_name or row.get("reviewed_by"),
+                    "approved_by": approved_by_name or row.get("approved_by"),
+                    "approved_at": row.get("approved_at"),
+                    "pdf_generated_at": row.get("pdf_generated_at"),
+                })
+
+            current = versions[0] if versions else None
+            self.success({
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "entity_name": app["company_name"],
+                "application_snapshot_timestamp": (
+                    current["application_snapshot_timestamp"]
+                    if current else app.get("inputs_updated_at")
+                ),
+                "lifecycle_status": current["lifecycle_status"] if current else "NOT_GENERATED",
+                "current": current,
+                "versions": versions,
+                "version_count": len(versions),
+            })
+        finally:
+            db.close()
+
+    def patch(self, app_id):
+        """Persist draft officer rationale without approving the memo."""
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        body = self.get_json() or {}
+        if not isinstance(body, dict):
+            return self.error("Request body must be a JSON object.", 400)
+        rationale_value = body.get("officer_rationale")
+        if rationale_value is None:
+            return self.error("officer_rationale is required.", 400)
+        if not isinstance(rationale_value, str):
+            return self.error("officer_rationale must be text.", 400)
+        rationale = rationale_value.strip()
+        if len(rationale) > 4000:
+            return self.error("officer_rationale must be 4000 characters or fewer.", 400)
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            memo_row = latest_compliance_memo_row(db, app["id"])
+            if not memo_row:
+                return self.error("No compliance memo found. Generate a memo first.", 404)
+
+            stale = _ensure_memo_fresh_or_mark_stale(
+                db,
+                app,
+                memo_row,
+                actor=user,
+                ip_address=self.get_client_ip(),
+                context="memo_officer_rationale",
+            )
+            if stale.get("is_stale"):
+                db.commit()
+                return self.error(
+                    "Cannot save rationale against a stale memo. Regenerate the memo first.",
+                    409,
+                )
+            if str(memo_row.get("review_status") or "").lower() == "approved":
+                return self.error("Final memo is approved and locked.", 409)
+
+            db.execute(
+                "UPDATE compliance_memos SET review_notes = ?, reviewed_by = ? "
+                "WHERE id = ? AND (review_status IS NULL OR LOWER(review_status) <> 'approved')",
+                (rationale, user.get("sub", ""), memo_row["id"]),
+            )
+            updated_rows = getattr(getattr(db, "_cursor", None), "rowcount", 0)
+            if updated_rows != 1:
+                db.rollback()
+                return self.error("Final memo is approved and locked.", 409)
+            rationale_hash = hashlib.sha256(rationale.encode("utf-8")).hexdigest() if rationale else None
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    user.get("sub", ""),
+                    user.get("name", ""),
+                    user.get("role", ""),
+                    "Save Memo Officer Rationale",
+                    app["ref"],
+                    app["id"],
+                    json.dumps({
+                        "event": "memo_officer_rationale_saved",
+                        "memo_id": memo_row["id"],
+                        "character_count": len(rationale),
+                        "rationale_sha256": rationale_hash,
+                    }, sort_keys=True),
+                    self.get_client_ip(),
+                    (_obs_get_request_id() or ""),
+                ),
+            )
+            db.commit()
+            memo_after = dict(memo_row)
+            memo_after["review_notes"] = rationale
+            self.success({
+                "status": "saved",
+                "memo_id": memo_row["id"],
+                "memo_version": memo_row.get("memo_version") or memo_row.get("version"),
+                "lifecycle_status": _memo_lifecycle_status(memo_after),
+                "officer_rationale": rationale,
+                "reviewed_by": user.get("name") or user.get("sub", ""),
+            })
+        except Exception as exc:
+            db.rollback()
+            logger.error("Failed to save memo officer rationale for %s: %s", app_id, exc, exc_info=True)
+            return self.error("Failed to save officer rationale.", 500)
+        finally:
+            db.close()
+
     def post(self, app_id):
         user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
@@ -32207,6 +33019,21 @@ class ComplianceMemoHandler(BaseHandler):
             reused_memo = None
         if reused_memo:
             reused_blocked = bool(reused_memo.get("metadata", {}).get("blocked"))
+            try:
+                _, artifact_created, _ = _ensure_memo_pdf_artifact(
+                    db,
+                    app,
+                    dict(latest_memo_row),
+                )
+            except MemoPDFArtifactError as exc:
+                logger.error(
+                    "Failed to ensure canonical PDF artefact for reused memo %s: %s",
+                    latest_memo_row.get("id"),
+                    exc,
+                    exc_info=True,
+                )
+                _rollback_and_close(db)
+                return self.error("Failed to persist canonical memo PDF artefact", 500)
             db.execute(
                 "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
                 "VALUES (?,?,?,?,?,?,?,?,?)",
@@ -32220,6 +33047,7 @@ class ComplianceMemoHandler(BaseHandler):
                     "Compliance memo generation reused existing memo "
                     + str(reused_memo.get("metadata", {}).get("idempotency", {}).get("memo_id"))
                     + " because source inputs were unchanged"
+                    + (" | canonical_pdf_artifact_created=true" if artifact_created else "")
                     + (" | reused_blocked_memo=true" if reused_blocked else ""),
                     self.get_client_ip(),
                     (_obs_get_request_id() or ""),
@@ -32293,6 +33121,10 @@ class ComplianceMemoHandler(BaseHandler):
         memo["metadata"]["risk_calculated_at"] = authoritative_risk.get("calculated_at")
         memo["metadata"]["risk_source"] = authoritative_risk.get("source")
         memo["metadata"]["memo_generated_at"] = datetime.now(timezone.utc).isoformat()
+        memo["metadata"]["application_snapshot_timestamp"] = _risk_metadata_json_value(
+            app.get("inputs_updated_at")
+            or memo["metadata"]["memo_generated_at"]
+        )
         if authoritative_risk.get("available"):
             memo["metadata"]["canonical_risk"] = {
                 **(memo["metadata"].get("canonical_risk") or {}),
@@ -32326,6 +33158,15 @@ class ComplianceMemoHandler(BaseHandler):
                  memo.get("metadata", {}).get("memo_version", "v" + str(next_version)), memo_input_hash, next_version,
                  _memo_blocked_val, _memo_block_reason)
             )
+            persisted_memo_row = _latest_compliance_memo_row(db, real_id)
+            if not persisted_memo_row or int(persisted_memo_row.get("version") or 0) != next_version:
+                raise MemoPDFArtifactError("Newly generated memo row could not be resolved")
+            draft_artifact, _, _ = _ensure_memo_pdf_artifact(
+                db,
+                app,
+                persisted_memo_row,
+                artifact_state="draft",
+            )
             db.execute(
                 "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
                 "VALUES (?,?,?,?,?,?,?,?,?)",
@@ -32340,6 +33181,7 @@ class ComplianceMemoHandler(BaseHandler):
                     + " | Supervisor: " + supervisor_result["verdict"]
                     + " | Quality: " + str(validation_result["quality_score"]) + "/10"
                     + " | Rule Engine: " + rule_engine_result["engine_status"]
+                    + " | Canonical PDF: " + draft_artifact["pdf_sha256"]
                     + (" | BLOCKED" if memo["metadata"].get("blocked") else ""),
                     self.get_client_ip(),
                     (_obs_get_request_id() or ""),
@@ -32401,7 +33243,7 @@ class SupervisorRunHandler(BaseHandler):
         if not user:
             return
         if not _ai_supervisor_enabled():
-            return _enterprise_module_disabled(self, "AI Compliance Supervisor")
+            return _enterprise_module_disabled(self, "RegMind AI Compliance Supervisor")
 
         if not SUPERVISOR_AVAILABLE:
             return self.error("Supervisor framework not available", 503)
@@ -32533,7 +33375,7 @@ class SupervisorResultHandler(BaseHandler):
         if not user:
             return
         if not _ai_supervisor_enabled():
-            return _enterprise_module_disabled(self, "AI Compliance Supervisor")
+            return _enterprise_module_disabled(self, "RegMind AI Compliance Supervisor")
 
         if not SUPERVISOR_AVAILABLE:
             return self.error("Supervisor framework not available", 503)
@@ -34359,6 +35201,26 @@ class MemoApproveHandler(BaseHandler):
 
         now_ts = datetime.now().isoformat()
         try:
+            draft_artifact, _, _ = _ensure_memo_pdf_artifact(
+                db,
+                app_row,
+                memo_row,
+                artifact_state="draft",
+            )
+            final_artifact, _, _ = _ensure_memo_pdf_artifact(
+                db,
+                app_row,
+                memo_row,
+                artifact_state="final",
+                approved_by=user.get("sub", ""),
+                approved_at=now_ts,
+                approval_reason=approval_reason,
+                reject_different_existing=True,
+            )
+            if final_artifact["pdf_sha256"] == draft_artifact["pdf_sha256"]:
+                raise MemoPDFArtifactIntegrityError(
+                    "Draft and final memo PDF artefacts must be distinct"
+                )
             db.execute(
                 "UPDATE compliance_memos SET review_status = 'approved', approved_by = ?, approved_at = ?, reviewed_by = ?, approval_reason = ? WHERE id = ?",
                 (user.get("sub", ""), now_ts, user.get("sub", ""), approval_reason, memo_row["id"])
@@ -34377,7 +35239,11 @@ class MemoApproveHandler(BaseHandler):
                 audit_detail += "Validation status: pass_with_fixes. "
             if supervisor_warnings_approval:
                 audit_detail += "Supervisor verdict: CONSISTENT_WITH_WARNINGS. "
-            audit_detail += f"Approval reason: {approval_reason}"
+            audit_detail += (
+                f"Approval reason: {approval_reason}. "
+                f"Canonical final PDF: {final_artifact['pdf_sha256']} "
+                f"({final_artifact['byte_length']} bytes)"
+            )
 
             db.execute(
                 "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
@@ -34494,111 +35360,96 @@ class MemoValidationResultsHandler(BaseHandler):
 
 
 class MemoPDFDownloadHandler(BaseHandler):
-    """GET /api/applications/:id/memo/pdf — Generate and download compliance memo as PDF"""
+    """Serve the immutable canonical memo PDF for preview or download."""
     def get(self, app_id):
         user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
             return
-
-        if not HAS_PDF_GENERATOR:
-            return self.error("PDF generation not available. Install weasyprint.", 503)
+        inline_preview = str(self.get_query_argument("preview", "")).strip().lower() in (
+            "1", "true", "yes", "inline",
+        )
 
         db = get_db()
-        # Fetch application
-        app = db.execute(
-            "SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)
-        ).fetchone()
-        if not app:
-            db.close()
-            return self.error("Application not found", 404)
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)
+            ).fetchone()
+            if not app:
+                db.close()
+                return self.error("Application not found", 404)
 
-        real_id = app["id"]
+            real_id = app["id"]
+            memo_row = latest_compliance_memo_row(db, real_id)
+            if not memo_row:
+                db.close()
+                return self.error("No compliance memo found. Generate a memo first.", 404)
 
-        # Fetch canonical latest memo
-        memo_row = latest_compliance_memo_row(db, real_id)
-        if not memo_row:
-            db.close()
-            return self.error("No compliance memo found. Generate a memo first.", 404)
+            stale = _ensure_memo_fresh_or_mark_stale(
+                db,
+                app,
+                memo_row,
+                actor=user,
+                ip_address=self.get_client_ip(),
+                context="memo_pdf_export",
+            )
+            if stale.get("is_stale"):
+                db.commit()
+                db.close()
+                return self.error(
+                    "PDF export blocked: Compliance memo is stale: "
+                    + stale.get("reason", "Regenerate the memo before PDF export."),
+                    409,
+                )
+        except Exception as exc:
+            logger.error(
+                "Failed to resolve canonical memo PDF source for %s: %s",
+                app_id,
+                exc,
+                exc_info=True,
+            )
+            _rollback_and_close(db)
+            return self.error("Failed to resolve canonical memo PDF source.", 500)
 
-        stale = _ensure_memo_fresh_or_mark_stale(
-            db,
-            app,
-            memo_row,
-            actor=user,
-            ip_address=self.get_client_ip(),
-            context="memo_pdf_export",
-        )
-        if stale.get("is_stale"):
-            db.commit()
-            db.close()
+        try:
+            artifact_state = _memo_pdf_artifact_state(memo_row)
+            artifact, artifact_created, render_context = _ensure_memo_pdf_artifact(
+                db,
+                app,
+                memo_row,
+                artifact_state=artifact_state,
+                reject_different_existing=(artifact_state == "final"),
+            )
+            context = render_context or _memo_pdf_render_context(db, app, memo_row)
+        except MemoPDFArtifactError as exc:
+            logger.error(
+                "Canonical memo PDF artefact failure for %s: %s",
+                app_id,
+                exc,
+                exc_info=True,
+            )
+            _rollback_and_close(db)
             return self.error(
-                "PDF export blocked: Compliance memo is stale: "
-                + stale.get("reason", "Regenerate the memo before PDF export."),
-                409,
+                "Canonical memo PDF artefact is unavailable or failed integrity validation.",
+                500,
             )
-
-        # Parse memo data
-        try:
-            memo_data = safe_json_loads(memo_row["memo_data"])
-        except (json.JSONDecodeError, TypeError):
-            db.close()
-            return self.error("Memo data is corrupt or unparseable.", 500)
-        memo_data = dict(memo_data or {})
-        metadata = dict(memo_data.get("metadata") or {})
-        authoritative_risk = _application_authoritative_risk_metadata(app)
-        metadata["authoritative_case_risk"] = authoritative_risk
-        metadata["risk_source"] = authoritative_risk.get("source")
-        metadata["risk_calculated_at"] = authoritative_risk.get("calculated_at")
-        metadata["memo_generated_at"] = _risk_metadata_json_value(
-            metadata.get("memo_generated_at") or memo_row.get("created_at")
-        )
-        if authoritative_risk.get("available"):
-            metadata["canonical_risk"] = {
-                **(metadata.get("canonical_risk") or {}),
-                **authoritative_risk,
-            }
-            metadata["display_risk_rating"] = authoritative_risk.get("level")
-            metadata["display_risk_score"] = authoritative_risk.get("score")
-            metadata["risk_rating"] = authoritative_risk.get("level")
-            metadata["risk_score"] = authoritative_risk.get("score")
-        memo_data["metadata"] = metadata
-
-        # Build validation/supervisor context from memo metadata
-        validation_result = {
-            "validation_status": memo_row.get("validation_status") or metadata.get("validation_status", "pending"),
-            "quality_score": memo_row.get("quality_score") or metadata.get("quality_score", 0),
-        }
-        stored_supervisor = memo_data.get("supervisor") or metadata.get("supervisor", {})
-        supervisor_result = {
-            "verdict": memo_row.get("supervisor_status") or stored_supervisor.get("verdict", "N/A"),
-        }
-
-        approved_by = memo_row.get("approved_by")
-        approved_at = memo_row.get("approved_at")
-
-        # If approved_by is user ID, try to resolve to name
-        if approved_by:
-            approver = db.execute("SELECT email FROM users WHERE id = ?", (approved_by,)).fetchone()
-            if approver:
-                approved_by = approver["email"]
-
-        # Generate PDF
-        try:
-            pdf_bytes = generate_memo_pdf(
-                memo_data=memo_data,
-                application=dict(app),
-                validation_result=validation_result,
-                supervisor_result=supervisor_result,
-                approved_by=approved_by,
-                approved_at=approved_at,
+        except Exception as exc:
+            logger.error(
+                "Unexpected canonical memo PDF preparation failure for %s: %s",
+                app_id,
+                exc,
+                exc_info=True,
             )
-        except Exception as e:
-            logger.error("PDF generation failed for %s: %s", app_id, str(e))
-            db.close()
-            return self.error(f"PDF generation failed: {str(e)}", 500)
+            _rollback_and_close(db)
+            return self.error("Canonical memo PDF preparation failed safely.", 500)
 
-        pdf_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
-        pdf_generated_at = datetime.now(timezone.utc).isoformat()
+        pdf_bytes = artifact["pdf_bytes"]
+        pdf_sha256 = artifact["pdf_sha256"]
+        pdf_generated_at = _risk_metadata_json_value(artifact.get("created_at"))
+        memo_data = context["memo_data"]
+        metadata = context["metadata"]
+        validation_result = context["validation_result"]
+        supervisor_result = context["supervisor_result"]
+        authoritative_risk = context["authoritative_risk"]
         memo_version = memo_row.get("memo_version") or (metadata or {}).get("memo_version") or str(memo_row.get("version") or "")
         renderer_build = get_build_metadata()
         memo_build = metadata.get("build") if isinstance(metadata.get("build"), dict) else {}
@@ -34607,14 +35458,9 @@ class MemoPDFDownloadHandler(BaseHandler):
             memo_build_sha[:7] if memo_build_sha != "unknown" else "unknown"
         )
 
-        # Update pdf_generated_at timestamp
         try:
-            db.execute(
-                "UPDATE compliance_memos SET pdf_generated_at = ? WHERE id = ?",
-                (pdf_generated_at, memo_row["id"])
-            )
             audit_detail = json.dumps({
-                "event": "memo_pdf_generated",
+                "event": "memo_pdf_previewed" if inline_preview else "memo_pdf_generated",
                 "application_ref": app["ref"],
                 "company_name": app["company_name"],
                 "memo_id": memo_row["id"],
@@ -34622,7 +35468,11 @@ class MemoPDFDownloadHandler(BaseHandler):
                 "memo_selection": memo_selection_metadata(memo_row),
                 "memo_version": memo_version,
                 "pdf_sha256": pdf_sha256,
-                "pdf_bytes": len(pdf_bytes),
+                "pdf_bytes": artifact["byte_length"],
+                "pdf_artifact_state": artifact_state,
+                "canonical_artifact_created": artifact_created,
+                "canonical_artifact_created_at": pdf_generated_at,
+                "canonical_renderer_build_sha": artifact.get("renderer_build_sha"),
                 "build": renderer_build,
                 "renderer_build": renderer_build,
                 "memo_build": memo_build or None,
@@ -34634,26 +35484,55 @@ class MemoPDFDownloadHandler(BaseHandler):
                 "risk_source": authoritative_risk.get("source"),
                 "risk_calculated_at": authoritative_risk.get("calculated_at"),
                 "generated_at": pdf_generated_at,
+                "served_at": datetime.now(timezone.utc).isoformat(),
             })
             db.execute(
-                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                (user.get("sub",""), user.get("name",""), user.get("role",""), "Download Memo PDF", app["ref"],
-                 audit_detail, self.get_client_ip())
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, application_id, detail, ip_address, request_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    user.get("sub", ""),
+                    user.get("name", ""),
+                    user.get("role", ""),
+                    "Preview Memo PDF" if inline_preview else "Download Memo PDF",
+                    app["ref"],
+                    real_id,
+                    audit_detail,
+                    self.get_client_ip(),
+                    (_obs_get_request_id() or ""),
+                ),
             )
             db.commit()
-        except Exception as e:
-            logger.error(f"Failed to store PDF generation audit for {app_id}: {e}", exc_info=True)
+        except Exception as exc:
+            logger.error(
+                "Failed to persist canonical PDF access audit for %s: %s",
+                app_id,
+                exc,
+                exc_info=True,
+            )
+            _rollback_and_close(db)
+            return self.error("Memo PDF access could not be audited safely.", 500)
         db.close()
 
-        # Return PDF as binary download
         safe_ref = re.sub(r'[^a-zA-Z0-9_-]', '_', app.get("ref", "memo"))
         filename = f"compliance_memo_{safe_ref}.pdf"
         self.set_header("Content-Type", "application/pdf")
-        self.set_header("Content-Disposition", f'attachment; filename="{filename}"')
+        disposition = "inline" if inline_preview else "attachment"
+        self.set_header("Content-Disposition", f'{disposition}; filename="{filename}"')
         self.set_header("Content-Length", str(len(pdf_bytes)))
         self.set_header("X-Memo-Id", str(memo_row["id"]))
         self.set_header("X-Memo-Version", str(memo_version))
+        self.set_header(
+            "X-Memo-Lifecycle",
+            _memo_lifecycle_status(memo_row, memo_data),
+        )
         self.set_header("X-PDF-SHA256", pdf_sha256)
+        self.set_header("X-PDF-Artifact-State", artifact_state)
+        self.set_header("X-PDF-Artifact-Source", "stored")
+        self.set_header("X-PDF-Artifact-Created-At", str(pdf_generated_at or ""))
+        self.set_header(
+            "X-PDF-Renderer-Build-Sha",
+            str(artifact.get("renderer_build_sha") or "unknown"),
+        )
         self.set_header("X-Build-Git-Sha", renderer_build["git_sha"])
         self.set_header("X-Build-Git-Sha-Short", renderer_build["git_sha_short"])
         self.set_header("X-Memo-Build-Git-Sha", memo_build_sha)
@@ -34739,7 +35618,7 @@ class MemoSupervisorHandler(BaseHandler):
         # /supervisor/run and /supervisor/result) and was reachable by a
         # BROADER role set than its gated siblings.
         if not _ai_supervisor_enabled():
-            return _enterprise_module_disabled(self, "AI Compliance Supervisor")
+            return _enterprise_module_disabled(self, "RegMind AI Compliance Supervisor")
 
         db = get_db()
         memo_row = latest_compliance_memo_row_for_identifier(db, app_id)
@@ -34923,7 +35802,7 @@ class MemoSupervisorResultHandler(BaseHandler):
             return
         # Item 33: see MemoSupervisorHandler — same missed enterprise surface.
         if not _ai_supervisor_enabled():
-            return _enterprise_module_disabled(self, "AI Compliance Supervisor")
+            return _enterprise_module_disabled(self, "RegMind AI Compliance Supervisor")
 
         db = get_db()
         memo_row = latest_compliance_memo_row_for_identifier(
@@ -36529,15 +37408,7 @@ _MONITORING_LIST_ACTIVE_STATUSES = {
     "notification_failed",
 }
 
-_MONITORING_LIST_TERMINAL_STATUSES = {
-    "resolved",
-    "closed",
-    "dismissed",
-    "waived",
-    "cancelled",
-    "routed_to_edd",
-    "routed_to_review",
-}
+_MONITORING_LIST_TERMINAL_STATUSES = set(_monitoring_status.TERMINAL_STATUSES)
 
 _MONITORING_LIST_SUPPORTED_TYPES = {
     "document_expiry",
@@ -36657,9 +37528,11 @@ def _monitoring_list_client_display(row):
 
 
 def _monitoring_list_is_terminal(row, status_key):
-    if row.get("resolved_at") not in (None, ""):
-        return True
-    return status_key in _MONITORING_LIST_TERMINAL_STATUSES
+    # The canonical status is authoritative. A historical resolved_at drift
+    # cannot close an active/handoff alert, and routed states remain visible
+    # nonterminal handoffs.
+    del row
+    return _monitoring_status.is_terminal(status_key)
 
 
 def _monitoring_list_refresh_status_map(db, rows):
@@ -36745,6 +37618,7 @@ def _monitoring_list_project_row(row, refresh_status_map=None, pending_review_id
     type_key = _monitoring_list_canonical_type(item)
     client_display, mapping_status = _monitoring_list_client_display(item)
     is_terminal = _monitoring_list_is_terminal(item, status_key)
+    is_action_locked = _monitoring_status.is_action_locked(item.get("status"))
     is_supported_type = type_key in _MONITORING_LIST_SUPPORTED_TYPES
     is_internal_type = type_key in _MONITORING_LIST_INTERNAL_TYPES
     item.update({
@@ -36765,6 +37639,7 @@ def _monitoring_list_project_row(row, refresh_status_map=None, pending_review_id
         "client_display_name": client_display or None,
         "mapping_status": mapping_status,
         "is_terminal": is_terminal,
+        "is_action_locked": is_action_locked,
         "is_supported_pilot_type": is_supported_type,
         "is_internal_type": is_internal_type,
         # M2.2 four-eyes: derived pending-second-review flag (no stored status).
@@ -36846,7 +37721,21 @@ def _monitoring_list_extra_fixture_clause():
             params.append(pattern)
     if not clauses:
         return "", []
-    return " AND NOT (" + " OR ".join(clauses) + ")", params
+    # Same vintage bound as fixture_filter's heuristic arm. These patterns match
+    # applicant-controlled text (app.ref / app.company_name) and alert text
+    # (ma.summary / ma.client_name), so unbounded they hide a REAL client's
+    # monitoring alerts forever — a sanctions-change or adverse-media alert on a
+    # live client silently vanishing from the monitoring queue. Applications
+    # created from the cutoff onward are classified by the authoritative markers
+    # only. NULL created_at counts as historical (fail-closed for fixtures).
+    from fixture_filter import FIXTURE_TEXT_PATTERN_CUTOFF
+
+    params.append(FIXTURE_TEXT_PATTERN_CUTOFF)
+    return (
+        " AND NOT ((" + " OR ".join(clauses) + ")"
+        " AND (app.created_at IS NULL OR app.created_at < ?))",
+        params,
+    )
 
 
 MONITORING_DECISION_OUTCOMES = {
@@ -36861,7 +37750,7 @@ MONITORING_DECISION_OUTCOMES = {
         "status": "resolved",
         "officer_action": "no_material_impact",
         "audit_action": "monitoring.alert.no_material_impact",
-        "note_required": False,
+        "note_required": True,
     },
     "route_to_edd": {
         "status": "routed_to_edd",
@@ -36915,6 +37804,40 @@ MONITORING_DECISION_OUTCOMES = {
         "note_required": True,
     },
 }
+
+_MONITORING_DECISION_REASON_CODES = {
+    "no_material_impact": "no_material_impact",
+    "escalate_to_sco": "escalated_to_sco",
+    "update_risk_profile": "risk_profile_update_required",
+    "request_further_information": "further_information_requested",
+}
+
+
+def _monitoring_alert_identity_evidence(alert):
+    source_reference = str((alert or {}).get("source_reference") or "").strip()
+    if source_reference:
+        return {"source_reference": source_reference}
+    case_identifier = str((alert or {}).get("case_identifier") or "").strip()
+    if case_identifier:
+        return {"case_identifier": case_identifier}
+    return {}
+
+
+def _monitoring_control_transition_evidence(data):
+    """Return only typed linked-object evidence accepted by four-eyes control."""
+    payload = data if isinstance(data, dict) else {}
+    return {
+        key: payload[key]
+        for key in _mdc.TRANSITION_EVIDENCE_KEYS
+        if payload.get(key) not in (None, "")
+    }
+
+
+def _rollback_monitoring_transaction(db):
+    try:
+        db.rollback()
+    except Exception:
+        logger.exception("Monitoring Alert transaction rollback failed")
 
 
 def _monitoring_alert_get(db, alert_id):
@@ -37013,7 +37936,10 @@ def _monitoring_alert_action_note_required(alert, outcome):
 
 
 def _execute_monitoring_decision_outcome(db, user, alert_id, alert_before, *,
-                                         outcome, note, audit_writer, commit=True):
+                                         outcome, note, audit_writer,
+                                         transition_evidence=None,
+                                         reason_code=None,
+                                         commit=True):
     """Execute a configured Monitoring decision outcome.
 
     This is the existing ``save_decision`` transition shape factored into a
@@ -37029,9 +37955,63 @@ def _execute_monitoring_decision_outcome(db, user, alert_id, alert_before, *,
         "decided_by": user.get("sub", ""),
         "decided_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
-    if cfg["status"] is None:
-        # M1.1: outcome records officer bookkeeping only; alert.status stays
-        # canonical.
+    prior_status = str(alert_before.get("status") or "").strip()
+    status_value = cfg["status"]
+    evidence = dict(transition_evidence or {})
+    if note:
+        evidence.setdefault("officer_rationale", note)
+    try:
+        # Metadata-only outcomes and repeated in-review bookkeeping preserve the
+        # authoritative lifecycle state. Every actual status change goes through
+        # the canonical locked service below.
+        repeated_in_review_bookkeeping = (
+            status_value == prior_status == "in_review"
+            and outcome in {
+                "update_risk_profile",
+                "request_further_information",
+            }
+        )
+        if status_value is None or repeated_in_review_bookkeeping:
+            locked = _monitoring_state_machine.lock_alert_for_transition(db, alert_id)
+            locked_status = str(locked.get("status") or "").strip()
+            if locked_status != prior_status:
+                raise _monitoring_state_machine.StaleCurrentState(
+                    "The Monitoring Alert changed since it was read; refresh and retry."
+                )
+            if locked_status not in _monitoring_state_machine.CANONICAL_STATUS_SET:
+                raise _monitoring_state_machine.InvalidStatus(
+                    "The stored Monitoring Alert status is not canonical."
+                )
+            if (
+                locked_status in _monitoring_state_machine.TERMINAL_STATUSES
+                or locked_status in _monitoring_state_machine.HANDOFF_STATUSES
+            ):
+                raise _monitoring_state_machine.TerminalStateError(
+                    "Closed or downstream-routed Monitoring Alerts cannot accept a new decision."
+                )
+            authoritative_status = locked_status
+            changed = False
+        else:
+            transition = _monitoring_state_machine.transition_alert_status(
+                db,
+                alert_id,
+                expected_status=prior_status,
+                target_status=status_value,
+                actor=user,
+                source_workflow="monitoring",
+                reason_code=(
+                    reason_code
+                    or _MONITORING_DECISION_REASON_CODES.get(outcome)
+                    or outcome
+                ),
+                reason=note,
+                evidence=evidence,
+                request_id=(_obs_get_request_id() or ""),
+                commit=False,
+            )
+            authoritative_status = transition["status"]
+            changed = bool(transition.get("changed"))
+
         db.execute(
             """
             UPDATE monitoring_alerts
@@ -37039,63 +38019,59 @@ def _execute_monitoring_decision_outcome(db, user, alert_id, alert_before, *,
                    officer_notes = ?,
                    reviewed_at = CURRENT_TIMESTAMP,
                    reviewed_by = COALESCE(reviewed_by, ?)
-             WHERE id = ?
+             WHERE id = ? AND status = ?
             """,
             (
                 cfg["officer_action"],
                 json.dumps(decision_payload, sort_keys=True),
                 user.get("sub", ""),
                 alert_id,
+                authoritative_status,
             ),
         )
-    else:
-        db.execute(
-            """
-            UPDATE monitoring_alerts
-               SET status = ?,
-                   officer_action = ?,
-                   officer_notes = ?,
-                   reviewed_at = CURRENT_TIMESTAMP,
-                   reviewed_by = COALESCE(reviewed_by, ?),
-                   resolved_at = CASE WHEN ? IN ('resolved','waived') THEN CURRENT_TIMESTAMP ELSE resolved_at END
-             WHERE id = ?
-            """,
-            (
-                cfg["status"],
-                cfg["officer_action"],
-                json.dumps(decision_payload, sort_keys=True),
-                user.get("sub", ""),
-                cfg["status"],
-                alert_id,
-            ),
+        decision_after_state = {
+            "status": authoritative_status,
+            "officer_action": cfg["officer_action"],
+            "outcome": outcome,
+        }
+        audit_writer(
+            user,
+            cfg["audit_action"],
+            f"monitoring_alert:{alert_id}",
+            json.dumps(decision_payload, default=str, sort_keys=True),
+            db=db,
+            before_state={
+                "status": alert_before.get("status"),
+                "officer_action": alert_before.get("officer_action"),
+            },
+            after_state=decision_after_state,
+            commit=False,
         )
-    decision_after_state = {"officer_action": cfg["officer_action"], "outcome": outcome}
-    if cfg["status"] is not None:
-        decision_after_state["status"] = cfg["status"]
-    audit_writer(
-        user,
-        cfg["audit_action"],
-        f"monitoring_alert:{alert_id}",
-        json.dumps(decision_payload, default=str, sort_keys=True),
-        db=db,
-        before_state={
-            "status": alert_before.get("status"),
-            "officer_action": alert_before.get("officer_action"),
-        },
-        after_state=decision_after_state,
-        commit=False,
-    )
-    if commit:
-        db.commit()
-    return {
-        "alert_id": alert_id,
-        "status": cfg["status"] if cfg["status"] is not None else alert_before.get("status"),
-        "outcome": outcome,
-    }
+        if commit:
+            db.commit()
+        refreshed = dict(_monitoring_alert_get(db, alert_id) or {})
+        return {
+            "alert_id": alert_id,
+            "status": refreshed.get("status") or authoritative_status,
+            "outcome": outcome,
+            "changed": changed,
+            "alert": refreshed,
+        }
+    except Exception:
+        _rollback_monitoring_transaction(db)
+        raise
 
 
-def _record_monitoring_overdue_escalation(db, alert_id, user, *,
-                                          reason, alert_before, alert_after, sla):
+def _record_monitoring_overdue_escalation(
+    db,
+    alert_id,
+    user,
+    *,
+    reason,
+    alert_before,
+    new_status,
+    sla,
+):
     escalated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     payload = {
         "alert_id": alert_id,
@@ -37104,21 +38080,24 @@ def _record_monitoring_overdue_escalation(db, alert_id, user, *,
         "escalated_by_role": user.get("role", ""),
         "escalated_at": escalated_at,
         "prior_status": alert_before.get("status"),
-        "new_status": alert_after.get("status"),
+        "new_status": new_status,
         "severity": alert_before.get("severity"),
         "sla_state": sla.get("sla_state"),
         "days_overdue": sla.get("days_overdue"),
         "sla_due_at": sla.get("sla_due_at"),
         "sla_days": sla.get("sla_days"),
     }
-    db.execute(
-        """
+    insert_sql = """
         INSERT INTO monitoring_alert_escalations
             (alert_id, reason, escalated_by, escalated_by_role, escalated_at,
              prior_status, new_status, sla_state, days_overdue, sla_due_at,
              sla_days, alert_severity_at_escalation)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
+    """
+    if getattr(db, "is_postgres", False):
+        insert_sql += " RETURNING id"
+    inserted = db.execute(
+        insert_sql,
         (
             alert_id,
             reason,
@@ -37134,6 +38113,12 @@ def _record_monitoring_overdue_escalation(db, alert_id, user, *,
             payload["severity"],
         ),
     )
+    if getattr(db, "is_postgres", False):
+        escalation_id = inserted.fetchone()["id"]
+    else:
+        escalation_id = db.execute(
+            "SELECT last_insert_rowid() AS id"
+        ).fetchone()["id"]
     row = db.execute(
         """
         SELECT id, alert_id, reason, escalated_by, escalated_by_role,
@@ -37141,11 +38126,9 @@ def _record_monitoring_overdue_escalation(db, alert_id, user, *,
                days_overdue, sla_due_at, sla_days,
                alert_severity_at_escalation
           FROM monitoring_alert_escalations
-         WHERE alert_id = ?
-         ORDER BY id DESC
-         LIMIT 1
+         WHERE id = ?
         """,
-        (alert_id,),
+        (escalation_id,),
     ).fetchone()
     return dict(row) if row else payload
 
@@ -37177,6 +38160,1319 @@ def _monitoring_alert_provider_evidence(db, alert_id):
         item["raw_provider_reference"] = safe_json_loads(item.get("raw_provider_reference") or "{}")
         evidence.append(item)
     return evidence
+
+
+def _monitoring_linkage_safe_envelope(db, alert_id):
+    try:
+        return _monitoring_linkage.resolve_alert_linkage_envelope(db, alert_id)
+    except Exception:
+        logger.exception(
+            "monitoring_linkage_resolution_failed alert_id=%s request_id=%s",
+            alert_id,
+            (_obs_get_request_id() or ""),
+        )
+        return {
+            "contract_version": _monitoring_linkage.CONTRACT_VERSION,
+            "read_only": True,
+            "mutation_controls": False,
+            "error": {
+                "code": "linkage_unavailable",
+                "message": "Canonical linkage is temporarily unavailable.",
+                "alert_id": alert_id,
+                "linkage_status": "manual_review_required",
+                "reasons": ["linkage_resolution_failed"],
+            },
+        }
+
+
+class MonitoringAlertLinkageHandler(BaseHandler):
+    """Authenticated GET-only canonical owner-linkage projection."""
+
+    def get(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        db = get_db()
+        try:
+            result = _monitoring_linkage.resolve_alert_linkage(db, alert_id)
+            self.success(result)
+        except _monitoring_linkage.LinkageError as exc:
+            payload = exc.payload(alert_id)
+            linkage_error = payload.pop("error")
+            payload["error"] = linkage_error["message"]
+            payload["linkage_error"] = linkage_error
+            self.set_status(exc.http_status)
+            self.write(json.dumps(payload, default=str))
+        except Exception:
+            logger.exception(
+                "monitoring_linkage_api_failed alert_id=%s request_id=%s",
+                alert_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.set_status(500)
+            self.write(
+                json.dumps(
+                    {
+                        "contract_version": _monitoring_linkage.CONTRACT_VERSION,
+                        "read_only": True,
+                        "mutation_controls": False,
+                        "error": "Canonical linkage is temporarily unavailable.",
+                        "linkage_error": {
+                            "code": "linkage_unavailable",
+                            "message": "Canonical linkage is temporarily unavailable.",
+                            "alert_id": alert_id,
+                            "linkage_status": "manual_review_required",
+                            "reasons": ["linkage_resolution_failed"],
+                        },
+                    }
+                )
+            )
+        finally:
+            db.close()
+
+
+_RENEWAL_REQUEST_PUBLIC_FIELDS = (
+    "request_id",
+    "application_id",
+    "customer_id",
+    "person_id",
+    "person_type",
+    "document_id",
+    "document_type",
+    "subject_display_label",
+    "document_version",
+    "monitoring_alert_id",
+    "request_reason",
+    "request_status",
+    "created_at",
+    "due_date",
+    "created_by",
+    "sent_at",
+    "cancelled_at",
+    "cancelled_by",
+    "cancel_reason",
+    "updated_at",
+    "updated_by",
+    "revision",
+    "contract_version",
+    "reminder_count",
+    "last_reminder_at",
+    "linkage_current",
+    "binding_current",
+    "upload_allowed",
+    "request_expired",
+    "manual_review_required",
+    "linkage_error",
+    "binding_error",
+    "display_status",
+    "milestones",
+    "idempotent",
+)
+
+
+def _monitoring_canonical_renewal_active(db, alert_id):
+    """Return whether a non-cancelled canonical request owns this alert.
+
+    This check protects rollback mode: turning the feature flag OFF makes the
+    canonical request read-only, but must not revive a competing legacy write
+    path while that request still exists. Database errors intentionally
+    propagate so a legacy mutation fails closed.
+    """
+
+    if alert_id in (None, ""):
+        return False
+    return bool(
+        db.execute(
+            """
+            SELECT 1
+              FROM monitoring_document_renewal_requests
+             WHERE monitoring_alert_id = ?
+               AND request_status <> 'cancelled'
+             LIMIT 1
+            """,
+            (alert_id,),
+        ).fetchone()
+    )
+
+
+def _monitoring_legacy_document_request_active(db, alert_id):
+    """Return whether this alert already owns an in-flight legacy request."""
+
+    if alert_id in (None, ""):
+        return False
+    return bool(
+        db.execute(
+            """
+            SELECT 1
+              FROM application_enhanced_requirements
+             WHERE monitoring_alert_id = ?
+               AND active = 1
+               AND LOWER(COALESCE(status, '')) IN (
+                    'requested','uploaded','under_review','rejected'
+               )
+             LIMIT 1
+            """,
+            (alert_id,),
+        ).fetchone()
+    )
+
+
+def _monitoring_legacy_document_write_blocked(db, alert_id):
+    """Preserve in-flight legacy work but prohibit split-brain ownership."""
+
+    def canonical_exists_in_application(application_id):
+        if application_id in (None, ""):
+            return False
+        return bool(
+            db.execute(
+                """
+                SELECT 1 FROM monitoring_document_renewal_requests
+                 WHERE application_id = ?
+                   AND request_status <> 'cancelled'
+                 LIMIT 1
+                """,
+                (application_id,),
+            ).fetchone()
+        )
+
+    if getattr(db, "is_postgres", False):
+        locked = db.execute(
+            """
+            SELECT id, application_id, source_reference
+              FROM monitoring_alerts WHERE id = ? FOR UPDATE
+            """,
+            (alert_id,),
+        ).fetchone()
+    else:
+        raw = getattr(db, "conn", db)
+        if not getattr(raw, "in_transaction", False):
+            db.execute("BEGIN IMMEDIATE")
+        locked = db.execute(
+            "SELECT id, application_id, source_reference FROM monitoring_alerts WHERE id = ?",
+            (alert_id,),
+        ).fetchone()
+    if not locked:
+        return True
+    if _monitoring_canonical_renewal_active(db, alert_id):
+        return True
+    locked = dict(locked)
+    application_id = str(locked.get("application_id") or "").strip()
+    source_reference = str(locked.get("source_reference") or "")
+    document_id = (
+        source_reference[len("document:"):]
+        if source_reference.startswith("document:")
+        else ""
+    )
+    if not application_id or not document_id or "/" in document_id:
+        return bool(
+            canonical_exists_in_application(application_id)
+            or _monitoring_document_renewal.renewal_feature_enabled()
+        )
+    document = db.execute(
+        """
+        SELECT id, slot_key FROM documents
+         WHERE id = ? AND application_id = ?
+        """,
+        (document_id, application_id),
+    ).fetchone()
+    if not document or not str(document["slot_key"] or "").strip():
+        return bool(
+            canonical_exists_in_application(application_id)
+            or _monitoring_document_renewal.renewal_feature_enabled()
+        )
+    if getattr(db, "is_postgres", False):
+        db.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(?)::bigint)",
+            (f"{application_id}:{document['slot_key']}",),
+        )
+    canonical_for_document = db.execute(
+        """
+        SELECT 1 FROM monitoring_document_renewal_requests rr
+         WHERE rr.request_status <> 'cancelled'
+           AND (
+                rr.monitoring_alert_id = ?
+                OR (rr.application_id = ? AND rr.document_slot_key = ?)
+           )
+         LIMIT 1
+        """,
+        (alert_id, application_id, document["slot_key"]),
+    ).fetchone()
+    if canonical_for_document:
+        return True
+    if not _monitoring_document_renewal.renewal_feature_enabled():
+        return False
+    return not _monitoring_legacy_document_request_active(db, alert_id)
+
+
+def _monitoring_renewal_public_projection(request, *, portal=False):
+    """Return renewal state without storage locations, hashes or audit payloads."""
+    source = request if isinstance(request, dict) else {}
+    result = {
+        key: source.get(key)
+        for key in _RENEWAL_REQUEST_PUBLIC_FIELDS
+        if key in source
+    }
+    if portal:
+        for key in (
+            "customer_id",
+            "person_id",
+            "person_type",
+            "document_id",
+            "document_version",
+            "monitoring_alert_id",
+            "created_by",
+            "cancelled_by",
+            "cancel_reason",
+            "updated_by",
+        ):
+            result.pop(key, None)
+    events = []
+    for item in source.get("events") or source.get("history") or []:
+        if not isinstance(item, dict):
+            continue
+        events.append({
+            key: item.get(key)
+            for key in (
+                "event_id",
+                "event_sequence",
+                "event_type",
+                "created_at",
+                "due_date_snapshot",
+                "reminder_interval_days",
+            )
+            if key in item
+        })
+    if events:
+        result["events"] = events
+
+    def public_upload_binding(item):
+        """Project an immutable binding without storage or integrity secrets."""
+
+        if not isinstance(item, dict):
+            return None
+        binding = {
+            key: item.get(key)
+            for key in (
+                "upload_id",
+                "renewal_request_id",
+                "application_id",
+                "customer_id",
+                "person_id",
+                "person_type",
+                "original_document_id",
+                "original_document_version",
+                "uploaded_document_id",
+                "document_type",
+                "upload_timestamp",
+                "uploaded_by",
+                "binding_status",
+                "contract_version",
+                "original_filename",
+                "file_size",
+                "mime_type",
+                "uploaded_at",
+            )
+            if key in item
+        }
+        # Compatibility aliases are populated only from authoritative service
+        # output. The browser never supplies or selects binding identities.
+        if "renewal_request_id" not in binding and item.get("request_id") is not None:
+            binding["renewal_request_id"] = item.get("request_id")
+        if "upload_timestamp" not in binding and item.get("uploaded_at") is not None:
+            binding["upload_timestamp"] = item.get("uploaded_at")
+        if "contract_version" not in binding and item.get("binding_contract_version") is not None:
+            binding["contract_version"] = item.get("binding_contract_version")
+        if portal:
+            for key in (
+                "customer_id",
+                "person_id",
+                "person_type",
+                "original_document_id",
+                "original_document_version",
+                "uploaded_document_id",
+                "uploaded_by",
+            ):
+                binding.pop(key, None)
+        return binding
+
+    binding = public_upload_binding(source.get("upload_binding"))
+    if binding:
+        result["upload_binding"] = binding
+    uploads = []
+    for item in source.get("uploads") or []:
+        projected = public_upload_binding(item)
+        if projected:
+            uploads.append(projected)
+    if uploads:
+        result["uploads"] = uploads
+    return result
+
+
+_MONITORING_RENEWAL_LOCAL_STORAGE_PREFIX = (
+    "local://monitoring-renewal-candidates/"
+)
+_MONITORING_RENEWAL_CLEANUP_STATES = (
+    "reserved",
+    "stored",
+    "cleanup_pending",
+)
+
+
+def _monitoring_renewal_rowcount(cursor):
+    value = getattr(cursor, "rowcount", None)
+    if value is None:
+        value = getattr(getattr(cursor, "_cursor", None), "rowcount", None)
+    return value
+
+
+def _monitoring_renewal_artifact_audit(
+    db,
+    artifact,
+    *,
+    action,
+    actor_id,
+    actor_name,
+    actor_role,
+    before_state,
+    after_state,
+):
+    """Append artifact lifecycle evidence without exposing storage locations."""
+
+    from db import append_audit_log
+
+    detail = {
+        "contract_version": _monitoring_document_renewal.CONTRACT_VERSION,
+        "cleanup_id": artifact["cleanup_id"],
+        "upload_id": artifact["upload_id"],
+        "request_id": artifact["request_id"],
+        "backend": artifact["backend"],
+        "artifact_state": after_state,
+    }
+    evidence = append_audit_log(
+        db,
+        action=f"monitoring.document_renewal.artifact_{action}",
+        user_id=str(actor_id or "system:document-renewal-artifact-cleanup"),
+        user_name=str(actor_name or "Document Renewal Artifact Cleanup"),
+        user_role=str(actor_role or "system"),
+        target=f"monitoring_renewal_request:{artifact['request_id']}",
+        detail=json.dumps(detail, sort_keys=True, separators=(",", ":")),
+        before_state={"artifact_state": before_state},
+        after_state={"artifact_state": after_state},
+        application_id=str(artifact["application_id"]),
+        request_id=str(artifact.get("correlation_id") or "") or None,
+        commit=False,
+    )
+    if not isinstance(evidence, str) or not evidence.strip():
+        raise RuntimeError("artifact audit append did not return evidence")
+
+
+def _reserve_monitoring_renewal_upload_artifact(
+    db,
+    *,
+    request,
+    actor,
+    cleanup_id,
+    upload_id,
+    backend,
+    storage_key,
+    file_extension,
+    local_path=None,
+    correlation_id=None,
+):
+    """Commit a deterministic intent before any local or S3 artifact write."""
+
+    artifact = {
+        "cleanup_id": str(cleanup_id),
+        "upload_id": str(upload_id),
+        "request_id": str(request["request_id"]),
+        "application_id": str(request["application_id"]),
+        "customer_id": str(request["customer_id"]),
+        "backend": str(backend),
+        "storage_key": str(storage_key),
+        "file_extension": str(file_extension or ""),
+        "local_path": str(local_path) if local_path else None,
+        "correlation_id": str(correlation_id or "") or None,
+    }
+    if not re.fullmatch(r"(?:\.[a-z0-9]{1,20})?", artifact["file_extension"]):
+        raise RuntimeError("invalid renewal candidate file extension")
+    if artifact["backend"] == "s3":
+        expected_storage_key = build_monitoring_renewal_candidate_key(
+            artifact["customer_id"],
+            artifact["request_id"],
+            artifact["upload_id"],
+            "candidate" + artifact["file_extension"],
+        )
+        if artifact["storage_key"] != expected_storage_key:
+            raise RuntimeError("renewal candidate storage key identity mismatch")
+    elif artifact["backend"] == "local":
+        if not _monitoring_renewal_local_artifact_allowed(
+            artifact["storage_key"],
+            artifact["local_path"],
+            artifact["upload_id"],
+            artifact["file_extension"],
+        ):
+            raise RuntimeError("renewal candidate local path identity mismatch")
+    else:
+        raise RuntimeError("invalid renewal candidate backend")
+    reserved_at = datetime.now(timezone.utc)
+    timestamp = reserved_at.isoformat()
+    upload_lease_owner = f"upload:{artifact['cleanup_id']}"
+    upload_lease_expires = (reserved_at + timedelta(minutes=15)).isoformat()
+    try:
+        db.execute(
+            """
+            INSERT INTO monitoring_document_renewal_upload_cleanup
+                (cleanup_id, upload_id, request_id, application_id, customer_id,
+                 backend, storage_key, file_extension, local_path, artifact_state,
+                 correlation_id, lease_owner, lease_expires_at, next_retry_at,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                artifact["cleanup_id"],
+                artifact["upload_id"],
+                artifact["request_id"],
+                artifact["application_id"],
+                artifact["customer_id"],
+                artifact["backend"],
+                artifact["storage_key"],
+                artifact["file_extension"],
+                artifact["local_path"],
+                artifact["correlation_id"],
+                upload_lease_owner,
+                upload_lease_expires,
+                upload_lease_expires,
+                timestamp,
+                timestamp,
+            ),
+        )
+        _monitoring_renewal_artifact_audit(
+            db,
+            artifact,
+            action="reserved",
+            actor_id=actor.get("sub") or actor.get("id"),
+            actor_name=actor.get("name"),
+            actor_role=actor.get("role"),
+            before_state=None,
+            after_state="reserved",
+        )
+        db.commit()
+        return artifact
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _mark_monitoring_renewal_artifact_stored(
+    db,
+    artifact,
+    *,
+    actor,
+    s3_version_id=None,
+):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    try:
+        cursor = db.execute(
+            """
+            UPDATE monitoring_document_renewal_upload_cleanup
+               SET artifact_state = 'stored', s3_version_id = ?,
+                   stored_at = ?, updated_at = ?
+             WHERE cleanup_id = ? AND upload_id = ?
+               AND artifact_state = 'reserved'
+            """,
+            (
+                str(s3_version_id or "").strip() or None,
+                timestamp,
+                timestamp,
+                artifact["cleanup_id"],
+                artifact["upload_id"],
+            ),
+        )
+        if _monitoring_renewal_rowcount(cursor) not in (-1, 1):
+            raise RuntimeError("artifact reservation changed before storage")
+        _monitoring_renewal_artifact_audit(
+            db,
+            artifact,
+            action="stored",
+            actor_id=actor.get("sub") or actor.get("id"),
+            actor_name=actor.get("name"),
+            actor_role=actor.get("role"),
+            before_state="reserved",
+            after_state="stored",
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _mark_monitoring_renewal_artifact_cleanup_pending(
+    cleanup_id,
+    *,
+    error_code,
+):
+    db = None
+    try:
+        db = get_db()
+        db.execute(
+            """
+            UPDATE monitoring_document_renewal_upload_cleanup
+               SET artifact_state = 'cleanup_pending', last_error_code = ?,
+                   next_retry_at = ?, updated_at = ?,
+                   lease_owner = NULL, lease_expires_at = NULL
+             WHERE cleanup_id = ?
+               AND artifact_state IN ('reserved','stored','cleanup_pending')
+            """,
+            (
+                str(error_code or "cleanup_required")[:64],
+                datetime.now(timezone.utc).isoformat(),
+                datetime.now(timezone.utc).isoformat(),
+                cleanup_id,
+            ),
+        )
+        db.commit()
+        return True
+    except Exception:
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.exception(
+            "renewal artifact cleanup_pending mark failed cleanup_id=%s",
+            cleanup_id,
+        )
+        # The durable artifact remains in reserved/stored/cleanup_pending and
+        # the periodic sweep selects all three states. Do not replace the
+        # caller's authoritative upload error with bookkeeping failure.
+        return False
+    finally:
+        if db is not None:
+            db.close()
+
+
+def _mark_monitoring_renewal_artifact_not_owned(cleanup_id, *, error_code):
+    """Finalize a reservation when a conditional S3 write wrote no object."""
+
+    db = None
+    try:
+        db = get_db()
+        row = db.execute(
+            """
+            SELECT * FROM monitoring_document_renewal_upload_cleanup
+             WHERE cleanup_id = ?
+            """,
+            (cleanup_id,),
+        ).fetchone()
+        if not row:
+            return False
+        artifact = dict(row)
+        if artifact["artifact_state"] == "cleaned":
+            return True
+        if artifact["artifact_state"] != "reserved":
+            return False
+        timestamp = datetime.now(timezone.utc).isoformat()
+        cursor = db.execute(
+            """
+            UPDATE monitoring_document_renewal_upload_cleanup
+               SET artifact_state = 'cleaned', cleaned_at = ?, updated_at = ?,
+                   last_error_code = ?, lease_owner = NULL,
+                   lease_expires_at = NULL, next_retry_at = NULL
+             WHERE cleanup_id = ? AND artifact_state = 'reserved'
+            """,
+            (
+                timestamp,
+                timestamp,
+                str(error_code or "candidate_not_owned")[:64],
+                cleanup_id,
+            ),
+        )
+        if _monitoring_renewal_rowcount(cursor) not in (-1, 1):
+            raise RuntimeError("artifact reservation changed before finalization")
+        _monitoring_renewal_artifact_audit(
+            db,
+            artifact,
+            action="not_owned",
+            actor_id=None,
+            actor_name=None,
+            actor_role=None,
+            before_state="reserved",
+            after_state="cleaned",
+        )
+        db.commit()
+        return True
+    except Exception:
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        logger.exception(
+            "renewal artifact not-owned finalization failed cleanup_id=%s",
+            cleanup_id,
+        )
+        return False
+    finally:
+        if db is not None:
+            db.close()
+
+
+async def _attempt_monitoring_renewal_inline_cleanup(cleanup_id):
+    """Best-effort request-path cleanup; the durable sweep remains authoritative."""
+
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            _DOCUMENT_RENEWAL_INLINE_CLEANUP_EXECUTOR,
+            lambda: _process_monitoring_renewal_upload_artifact(cleanup_id),
+        )
+        return True
+    except Exception:
+        logger.exception(
+            "renewal artifact inline cleanup failed cleanup_id=%s",
+            cleanup_id,
+        )
+        return False
+
+
+def _monitoring_renewal_local_artifact_allowed(
+    storage_key,
+    local_path,
+    upload_id,
+    file_extension,
+):
+    prefix = _MONITORING_RENEWAL_LOCAL_STORAGE_PREFIX
+    key = str(storage_key or "")
+    path = os.path.abspath(str(local_path or ""))
+    root = os.path.abspath(
+        os.path.join(UPLOAD_DIR, "monitoring-renewal-candidates")
+    )
+    return bool(
+        os.path.dirname(path) == root
+        and key.startswith(prefix)
+        and key == prefix + os.path.basename(path)
+        and os.path.basename(path)
+        == str(upload_id or "") + str(file_extension or "")
+        and not os.path.islink(path)
+        and re.fullmatch(
+            r"[a-f0-9]{32}(?:\.[a-z0-9]{1,20})?",
+            os.path.basename(path),
+        )
+    )
+
+
+def _open_monitoring_renewal_local_candidate_directory(*, create):
+    """Open the local-only candidate directory without following its entry."""
+    upload_root = os.path.abspath(UPLOAD_DIR)
+    if create:
+        os.makedirs(upload_root, mode=0o700, exist_ok=True)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+    root_fd = os.open(upload_root, directory_flags)
+    try:
+        if create:
+            try:
+                os.mkdir(
+                    "monitoring-renewal-candidates",
+                    0o700,
+                    dir_fd=root_fd,
+                )
+            except FileExistsError:
+                pass
+        candidate_fd = os.open(
+            "monitoring-renewal-candidates",
+            directory_flags,
+            dir_fd=root_fd,
+        )
+    finally:
+        os.close(root_fd)
+    try:
+        if create:
+            os.fchmod(candidate_fd, 0o700)
+        return candidate_fd, os.path.join(
+            upload_root,
+            "monitoring-renewal-candidates",
+        )
+    except BaseException:
+        os.close(candidate_fd)
+        raise
+
+
+def _process_monitoring_renewal_upload_artifact(cleanup_id):
+    """Claim and clean one unattached candidate without holding a DB lock over I/O."""
+
+    lease_owner = f"renewal-cleanup:{uuid.uuid4().hex}"
+    now = datetime.now(timezone.utc)
+    now_text = now.isoformat()
+    lease_until = (now + timedelta(minutes=5)).isoformat()
+    db = get_db()
+    try:
+        cursor = db.execute(
+            """
+            UPDATE monitoring_document_renewal_upload_cleanup
+               SET artifact_state = 'cleanup_pending',
+                   lease_owner = ?, lease_expires_at = ?,
+                   attempts = attempts + 1, updated_at = ?
+             WHERE cleanup_id = ?
+               AND artifact_state IN ('reserved','stored','cleanup_pending')
+               AND (next_retry_at IS NULL OR next_retry_at <= ?)
+               AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+            """,
+            (lease_owner, lease_until, now_text, cleanup_id, now_text, now_text),
+        )
+        if _monitoring_renewal_rowcount(cursor) not in (-1, 1):
+            db.rollback()
+            return {"claimed": False, "cleaned": False, "attached": False}
+        row = db.execute(
+            """
+            SELECT * FROM monitoring_document_renewal_upload_cleanup
+             WHERE cleanup_id = ? AND lease_owner = ?
+            """,
+            (cleanup_id, lease_owner),
+        ).fetchone()
+        if not row:
+            db.rollback()
+            return {"claimed": False, "cleaned": False, "attached": False}
+        artifact = dict(row)
+        db.commit()
+    finally:
+        db.close()
+
+    # A canonical row always wins. This recheck covers a process death after
+    # the atomic upload commit but before the caller observed success.
+    db = get_db()
+    try:
+        attached = db.execute(
+            """
+            SELECT 1 FROM monitoring_document_renewal_uploads
+             WHERE upload_id = ? AND request_id = ? AND application_id = ?
+               AND customer_id = ? AND storage_key = ?
+             LIMIT 1
+            """,
+            (
+                artifact["upload_id"],
+                artifact["request_id"],
+                artifact["application_id"],
+                artifact["customer_id"],
+                artifact["storage_key"],
+            ),
+        ).fetchone()
+        if attached:
+            timestamp = datetime.now(timezone.utc).isoformat()
+            cursor = db.execute(
+                """
+                UPDATE monitoring_document_renewal_upload_cleanup
+                   SET artifact_state = 'attached',
+                       stored_at = COALESCE(stored_at, ?), attached_at = ?,
+                       updated_at = ?, lease_owner = NULL,
+                       lease_expires_at = NULL, next_retry_at = NULL,
+                       last_error_code = NULL
+                 WHERE cleanup_id = ? AND lease_owner = ?
+                """,
+                (timestamp, timestamp, timestamp, cleanup_id, lease_owner),
+            )
+            if _monitoring_renewal_rowcount(cursor) not in (-1, 1):
+                raise RuntimeError("artifact attachment reconciliation lost its lease")
+            _monitoring_renewal_artifact_audit(
+                db,
+                artifact,
+                action="attached_reconciled",
+                actor_id=None,
+                actor_name=None,
+                actor_role=None,
+                before_state=artifact["artifact_state"],
+                after_state="attached",
+            )
+            db.commit()
+            return {"claimed": True, "cleaned": False, "attached": True}
+        db.commit()
+    finally:
+        db.close()
+
+    cleaned = False
+    not_owned = False
+    error_code = None
+    if artifact["backend"] == "local":
+        if not _monitoring_renewal_local_artifact_allowed(
+            artifact["storage_key"],
+            artifact.get("local_path"),
+            artifact.get("upload_id"),
+            artifact.get("file_extension"),
+        ):
+            error_code = "invalid_local_candidate_path"
+        else:
+            try:
+                directory_fd, _candidate_dir = (
+                    _open_monitoring_renewal_local_candidate_directory(
+                        create=False
+                    )
+                )
+                try:
+                    try:
+                        os.unlink(
+                            os.path.basename(artifact["local_path"]),
+                            dir_fd=directory_fd,
+                        )
+                    except FileNotFoundError:
+                        pass
+                finally:
+                    os.close(directory_fd)
+                cleaned = True
+            except OSError:
+                error_code = "local_candidate_delete_failed"
+    elif artifact["backend"] == "s3":
+        try:
+            expected_s3_key = build_monitoring_renewal_candidate_key(
+                artifact["customer_id"],
+                artifact["request_id"],
+                artifact["upload_id"],
+                "candidate" + str(artifact.get("file_extension") or ""),
+            )
+        except Exception:
+            expected_s3_key = None
+        if (
+            expected_s3_key != artifact["storage_key"]
+            or not monitoring_renewal_candidate_key_allowed(artifact["storage_key"])
+        ):
+            error_code = "invalid_s3_candidate_key"
+        elif not HAS_S3:
+            error_code = "s3_cleanup_unavailable"
+        else:
+            try:
+                cleaned, result_code = (
+                    get_s3_client().delete_monitoring_renewal_candidate(
+                        artifact["storage_key"],
+                        version_id=artifact.get("s3_version_id"),
+                        expected_request_id=artifact.get("request_id"),
+                        expected_upload_id=artifact.get("upload_id"),
+                        expected_cleanup_id=artifact.get("cleanup_id"),
+                    )
+                )
+                if not cleaned:
+                    if result_code == "candidate_ownership_mismatch":
+                        not_owned = True
+                        error_code = result_code
+                    else:
+                        error_code = str(
+                            result_code or "s3_candidate_delete_failed"
+                        )[:64]
+            except Exception:
+                error_code = "s3_candidate_delete_failed"
+    else:
+        error_code = "invalid_candidate_backend"
+
+    timestamp = datetime.now(timezone.utc)
+    db = get_db()
+    try:
+        if cleaned or not_owned:
+            cursor = db.execute(
+                """
+                UPDATE monitoring_document_renewal_upload_cleanup
+                   SET artifact_state = 'cleaned', cleaned_at = ?,
+                       updated_at = ?, lease_owner = NULL,
+                       lease_expires_at = NULL, next_retry_at = NULL,
+                       last_error_code = ?
+                 WHERE cleanup_id = ? AND lease_owner = ?
+                   AND artifact_state IN ('reserved','stored','cleanup_pending')
+                """,
+                (
+                    timestamp.isoformat(),
+                    timestamp.isoformat(),
+                    "candidate_ownership_mismatch" if not_owned else None,
+                    cleanup_id,
+                    lease_owner,
+                ),
+            )
+            if _monitoring_renewal_rowcount(cursor) not in (-1, 1):
+                raise RuntimeError("artifact cleanup lost its lease")
+            _monitoring_renewal_artifact_audit(
+                db,
+                artifact,
+                action="not_owned" if not_owned else "cleaned",
+                actor_id=None,
+                actor_name=None,
+                actor_role=None,
+                before_state=artifact["artifact_state"],
+                after_state="cleaned",
+            )
+        else:
+            retry_at = timestamp + timedelta(
+                seconds=min(3600, 60 * (2 ** min(int(artifact["attempts"]), 6)))
+            )
+            cursor = db.execute(
+                """
+                UPDATE monitoring_document_renewal_upload_cleanup
+                   SET artifact_state = 'cleanup_pending',
+                       last_error_code = ?, next_retry_at = ?, updated_at = ?,
+                       lease_owner = NULL, lease_expires_at = NULL
+                 WHERE cleanup_id = ? AND lease_owner = ?
+                """,
+                (
+                    str(error_code or "candidate_cleanup_failed")[:64],
+                    retry_at.isoformat(),
+                    timestamp.isoformat(),
+                    cleanup_id,
+                    lease_owner,
+                ),
+            )
+            if _monitoring_renewal_rowcount(cursor) not in (-1, 1):
+                raise RuntimeError("artifact cleanup deferral lost its lease")
+        db.commit()
+    finally:
+        db.close()
+    return {
+        "claimed": True,
+        "cleaned": bool(cleaned or not_owned),
+        "attached": False,
+    }
+
+
+def process_monitoring_renewal_upload_cleanup(*, limit=25):
+    """Bounded, idempotent retry that remains active when the feature is OFF."""
+
+    bounded_limit = max(1, min(int(limit), 100))
+    db = get_db()
+    try:
+        rows = db.execute(
+            """
+            SELECT cleanup_id
+              FROM monitoring_document_renewal_upload_cleanup
+             WHERE artifact_state IN ('reserved','stored','cleanup_pending')
+               AND (next_retry_at IS NULL OR next_retry_at <= ?)
+               AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+             ORDER BY created_at ASC, cleanup_id ASC
+             LIMIT ?
+            """,
+            (
+                datetime.now(timezone.utc).isoformat(),
+                datetime.now(timezone.utc).isoformat(),
+                bounded_limit,
+            ),
+        ).fetchall()
+    finally:
+        db.close()
+    summary = {"scanned": len(rows), "cleaned": 0, "attached": 0, "deferred": 0}
+    for row in rows:
+        result = _process_monitoring_renewal_upload_artifact(row["cleanup_id"])
+        if result.get("cleaned"):
+            summary["cleaned"] += 1
+        elif result.get("attached"):
+            summary["attached"] += 1
+        else:
+            summary["deferred"] += 1
+    return summary
+
+
+def _write_monitoring_renewal_error(handler, exc):
+    payload = {
+        "error": exc.public_message,
+        "error_code": exc.code,
+        "contract_version": _monitoring_document_renewal.CONTRACT_VERSION,
+        **({"error_details": exc.details} if exc.details else {}),
+    }
+    handler.set_status(exc.http_status)
+    handler.write(payload)
+
+
+def _write_monitoring_renewal_rejection(
+    handler,
+    code,
+    message,
+    status=409,
+    *,
+    db,
+    request_id,
+    actor,
+    expected_application_id,
+    expected_customer_id,
+    correlation_id,
+):
+    """Audit then write one proven-owned, public-safe preflight rejection.
+
+    This helper is deliberately fail-closed.  The service rolls back and
+    converts any audit-writer failure to the sanitized ``audit_unavailable``
+    RenewalError (503); the upload handler's RenewalError branch writes that
+    response.  A rejection without its durable audit evidence must never be
+    reported as successful or silently downgraded to a fail-open response.
+    """
+
+    _monitoring_document_renewal.audit_renewal_upload_preflight_rejection(
+        db,
+        request_id,
+        rejection_code=code,
+        actor=actor,
+        expected_application_id=expected_application_id,
+        expected_customer_id=expected_customer_id,
+        correlation_id=correlation_id,
+    )
+
+    handler.set_status(status)
+    handler.write({
+        "error": message,
+        "error_code": code,
+        "contract_version": _monitoring_document_renewal.CONTRACT_VERSION,
+    })
+
+
+def _monitoring_renewal_public_rejection_code(value, *, allowed, default):
+    """Keep projected service failures inside the reviewed public contract."""
+
+    code = str(value or "").strip()
+    return code if code in allowed else default
+
+
+def _log_monitoring_renewal_upload_authz_denial(handler, user, application_id):
+    """Audit a cloaked request probe without persisting its supplied ID/path."""
+
+    from db import append_audit_log
+
+    safe_application_id = str(application_id or "")
+    safe_client_id = str((user or {}).get("sub") or "")
+    detail = {
+        "event": "authz_denied_not_owner",
+        "client_id": safe_client_id,
+        "attempted_resource_id": safe_application_id,
+        "path": (
+            "/api/portal/applications/:application_id/"
+            "renewal-requests/:request_id/upload"
+        ),
+        "surface": "portal_document_renewal_upload",
+        "resource_scope": "renewal_request",
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    audit_db = None
+    try:
+        audit_db = get_db()
+        evidence = append_audit_log(
+            audit_db,
+            action="authz_denied_not_owner",
+            user_id=safe_client_id,
+            user_name=str((user or {}).get("name") or ""),
+            user_role=str((user or {}).get("role") or ""),
+            target=safe_application_id,
+            detail=json.dumps(detail, sort_keys=True, separators=(",", ":")),
+            before_state={},
+            after_state={},
+            application_id=safe_application_id,
+            request_id=(_obs_get_request_id() or None),
+            commit=False,
+        )
+        if not isinstance(evidence, str) or not evidence.strip():
+            raise RuntimeError("authorization audit append returned no evidence")
+        audit_db.commit()
+    except Exception:
+        if audit_db is not None:
+            try:
+                audit_db.rollback()
+            except Exception:
+                pass
+        logger.exception(
+            "monitoring_renewal_upload_authz_audit_fallback=true "
+            "client_id=%s application_id=%s",
+            safe_client_id,
+            safe_application_id,
+        )
+    finally:
+        if audit_db is not None:
+            audit_db.close()
+
+
+class MonitoringAlertRenewalRequestHandler(BaseHandler):
+    """Officer read/create contract for one exact document-linked alert."""
+
+    def get(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        db = get_db()
+        try:
+            request = _monitoring_document_renewal.renewal_request_for_alert(
+                db,
+                alert_id,
+                include_cancelled=True,
+            )
+            self.success({
+                "feature_enabled": (
+                    _monitoring_document_renewal.renewal_feature_enabled()
+                ),
+                "request": (
+                    _monitoring_renewal_public_projection(request)
+                    if request
+                    else None
+                ),
+            })
+        except _monitoring_document_renewal.RenewalError as exc:
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            logger.exception(
+                "monitoring_renewal_read_failed alert_id=%s request_id=%s",
+                alert_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal status is temporarily unavailable.", 500)
+        finally:
+            db.close()
+
+    def post(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json() or {}
+        db = get_db()
+        try:
+            result = _monitoring_document_renewal.create_renewal_request(
+                db,
+                alert_id,
+                reason=str(data.get("reason") or "").strip(),
+                due_date=data.get("due_date"),
+                manual_reason=str(data.get("manual_reason") or "").strip(),
+                actor=user,
+            )
+            status = 200 if result.get("idempotent") else 201
+            self.success(
+                {"request": _monitoring_renewal_public_projection(result)},
+                status,
+            )
+        except _monitoring_document_renewal.RenewalError as exc:
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception(
+                "monitoring_renewal_create_failed alert_id=%s request_id=%s",
+                alert_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal request could not be created.", 500)
+        finally:
+            db.close()
+
+
+class MonitoringRenewalRequestResendHandler(BaseHandler):
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json() or {}
+        try:
+            expected_revision = int(data.get("expected_revision"))
+        except (TypeError, ValueError):
+            return self.error("expected_revision is required.", 400)
+        db = get_db()
+        try:
+            result = _monitoring_document_renewal.resend_renewal_request(
+                db,
+                request_id,
+                actor=user,
+                expected_revision=expected_revision,
+                correlation_id=(_obs_get_request_id() or ""),
+            )
+            self.success({
+                "request": _monitoring_renewal_public_projection(result)
+            })
+        except _monitoring_document_renewal.RenewalError as exc:
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception(
+                "monitoring_renewal_resend_failed renewal_request_id=%s "
+                "request_id=%s",
+                request_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal request could not be resent.", 500)
+        finally:
+            db.close()
+
+
+class MonitoringRenewalRequestDueDateHandler(BaseHandler):
+    def patch(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json() or {}
+        try:
+            expected_revision = int(data.get("expected_revision"))
+        except (TypeError, ValueError):
+            return self.error("expected_revision is required.", 400)
+        reason = str(data.get("reason") or "").strip()
+        if not reason:
+            return self.error("A due-date change reason is required.", 400)
+        db = get_db()
+        try:
+            result = _monitoring_document_renewal.update_renewal_due_date(
+                db,
+                request_id,
+                actor=user,
+                expected_revision=expected_revision,
+                due_date=data.get("due_date"),
+                reason=reason,
+                correlation_id=(_obs_get_request_id() or ""),
+            )
+            self.success({
+                "request": _monitoring_renewal_public_projection(result)
+            })
+        except _monitoring_document_renewal.RenewalError as exc:
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception(
+                "monitoring_renewal_due_date_failed renewal_request_id=%s "
+                "request_id=%s",
+                request_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal due date could not be changed.", 500)
+        finally:
+            db.close()
+
+
+class MonitoringRenewalRequestCancelHandler(BaseHandler):
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json() or {}
+        try:
+            expected_revision = int(data.get("expected_revision"))
+        except (TypeError, ValueError):
+            return self.error("expected_revision is required.", 400)
+        db = get_db()
+        try:
+            result = _monitoring_document_renewal.cancel_renewal_request(
+                db,
+                request_id,
+                actor=user,
+                expected_revision=expected_revision,
+                cancel_reason=str(data.get("reason") or "").strip(),
+                correlation_id=(_obs_get_request_id() or ""),
+            )
+            self.success({
+                "request": _monitoring_renewal_public_projection(result)
+            })
+        except _monitoring_document_renewal.RenewalError as exc:
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception(
+                "monitoring_renewal_cancel_failed renewal_request_id=%s "
+                "request_id=%s",
+                request_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal request could not be cancelled.", 500)
+        finally:
+            db.close()
 
 
 class MonitoringAlertDetailHandler(BaseHandler):
@@ -37231,6 +39527,35 @@ class MonitoringAlertDetailHandler(BaseHandler):
             result["followups"] = []
             result["followups_summary"] = {"open_count": 0, "next_due_at": None}
         result["overdue_escalations"] = _monitoring_alert_overdue_escalations(db, alert_id)
+        result["canonical_linkage"] = _monitoring_linkage_safe_envelope(db, alert_id)
+        result["renewal_feature_enabled"] = (
+            _monitoring_document_renewal.renewal_feature_enabled()
+        )
+        try:
+            _renewal_request = (
+                _monitoring_document_renewal.renewal_request_for_alert(
+                    db,
+                    alert_id,
+                    include_cancelled=True,
+                )
+            )
+            result["renewal_request"] = (
+                _monitoring_renewal_public_projection(_renewal_request)
+                if _renewal_request
+                else None
+            )
+        except Exception:
+            logger.exception(
+                "monitoring_document_renewal_projection_failed "
+                "alert_id=%s request_id=%s",
+                alert_id,
+                (_obs_get_request_id() or ""),
+            )
+            result["renewal_request"] = None
+            result["renewal_projection_error"] = {
+                "code": "renewal_projection_unavailable",
+                "message": "Document renewal status is temporarily unavailable.",
+            }
         db.close()
         self.success(result)
 
@@ -37251,15 +39576,23 @@ class MonitoringAlertDetailHandler(BaseHandler):
 
     def _apply_dismissal_control(self, db, user, alert_id, alert_before, *,
                                  action, outcome, dismissal_reason, note,
-                                 evidence_ref, send_for_second_review):
+                                 evidence_ref, transition_evidence,
+                                 send_for_second_review):
         """M2.2 senior-override control for material alert clears.
 
         Returns a tuple ``(disposition, payload)``:
-          - ("execute", None): caller runs the terminal clear now (Tier-3, or a
-            senior direct-clear which is recorded here first).
+          - ("execute", request-or-None): caller runs the terminal clear now.
+            A senior direct-clear returns its approved review-control record.
           - ("pending", request): a review request was created; caller responds.
           - ("blocked", None): an error response was already written.
         """
+        locked_alert = _monitoring_state_machine.lock_alert_for_transition(
+            db, alert_id
+        )
+        # Reconcile all policy decisions against the row protected by the
+        # canonical Alert-first lock, not the earlier unlocked handler read.
+        alert_before.clear()
+        alert_before.update(locked_alert)
         if not _mdc.requires_control(
             alert_before, action=action, outcome=outcome, dismissal_reason=dismissal_reason
         ):
@@ -37267,26 +39600,80 @@ class MonitoringAlertDetailHandler(BaseHandler):
 
         tier = _mdc.classify_alert_tier(alert_before)
         requested_outcome = "dismiss" if action == "dismiss" else outcome
+        if not isinstance(transition_evidence, dict):
+            transition_evidence = {}
+        owner = _monitoring_state_machine.alert_owner(db, alert_before)
+        target_status = (
+            "dismissed"
+            if action == "dismiss" or outcome == "false_positive"
+            else (MONITORING_DECISION_OUTCOMES.get(outcome) or {}).get("status")
+        )
+        if target_status == "dismissed" and owner == "screening_review":
+            stored_case_identifier = str(
+                alert_before.get("case_identifier") or ""
+            ).strip()
+            if not stored_case_identifier:
+                raise _monitoring_state_machine.MissingEvidence(
+                    "Screening-owned dismissal evidence requires the alert's "
+                    "exact stored provider case_identifier."
+                )
+            # Bind the maker-checker record to the exact provider case. Any
+            # caller-supplied value is replaced with the authoritative alert
+            # linkage before the request is persisted.
+            transition_evidence["case_identifier"] = stored_case_identifier
+        if target_status == "dismissed" and owner == "documents":
+            source_reference = str(
+                alert_before.get("source_reference") or ""
+            ).strip()
+            if not (
+                transition_evidence.get("document_id")
+                or transition_evidence.get("document_request_id")
+                or (
+                    source_reference.startswith("document:")
+                    and source_reference.split(":", 1)[1].strip()
+                )
+            ):
+                raise _monitoring_state_machine.MissingEvidence(
+                    "Document-owned dismissal evidence requires document_id or "
+                    "document_request_id."
+                )
+            if (
+                not transition_evidence.get("document_id")
+                and not transition_evidence.get("document_request_id")
+                and source_reference.startswith("document:")
+            ):
+                transition_evidence["document_id"] = (
+                    source_reference.split(":", 1)[1].strip()
+                )
+        if target_status == "resolved" and owner != "manual":
+            raise _monitoring_state_machine.WrongAlertType(
+                "This alert is resolved only by its owning downstream workflow."
+            )
         try:
             if _mdc.is_senior(user) and not send_for_second_review:
                 # SCO/admin direct clear — record senior-clear ledger + audit,
                 # then let the caller run the existing terminal machinery.
-                _mdc.record_senior_clear(
+                request = _mdc.record_senior_clear(
                     db, alert=alert_before, tier=tier,
                     requested_outcome=requested_outcome, dismissal_reason=dismissal_reason,
                     rationale=note, evidence_ref=evidence_ref,
+                    transition_evidence=transition_evidence,
                     user=user, audit_writer=self.log_audit,
+                    commit=False,
                 )
-                return ("execute", None)
+                return ("execute", request)
             # CO/officer (or a senior electing second review) → pending request.
             request = _mdc.create_pending_request(
                 db, alert=alert_before, tier=tier,
                 requested_outcome=requested_outcome, dismissal_reason=dismissal_reason,
                 rationale=note, evidence_ref=evidence_ref,
+                transition_evidence=transition_evidence,
                 user=user, audit_writer=self.log_audit,
+                commit=False,
             )
             return ("pending", request)
         except _mdc.DismissalControlError as exc:
+            _rollback_monitoring_transaction(db)
             self.error(str(exc), exc.status_code)
             return ("blocked", None)
 
@@ -37347,6 +39734,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
             alert_before = dict(alert_before_row)
             try:
                 document_action = canonical_action
+                outcome_alias = ""
                 if canonical_action == "save_decision":
                     outcome_alias = str(data.get("outcome") or "").strip()
                     document_outcome_aliases = {
@@ -37364,6 +39752,13 @@ class MonitoringAlertDetailHandler(BaseHandler):
                     "reject_updated_document",
                     "waive_updated_document",
                 }:
+                    if _monitoring_legacy_document_write_blocked(db, alert_id):
+                        return self.error(
+                            "Legacy Monitoring document actions are disabled "
+                            "because the canonical workflow owns new requests "
+                            "or an active canonical request owns this alert.",
+                            409,
+                        )
                     if not _is_document_refresh_alert(alert_before):
                         return self.error("Document refresh actions are only available for document expiry alerts.", 400)
                     note = str(data.get("note") or data.get("reason") or "").strip()
@@ -37382,6 +39777,21 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             "reject_updated_document": "reject",
                             "waive_updated_document": "waive",
                         }[document_action]
+                        requested_document_outcome = (
+                            outcome_alias
+                            if canonical_action == "save_decision"
+                            and outcome_alias in {
+                                "mark_already_updated",
+                                "waive_with_reason",
+                            }
+                            else (
+                                "accept_updated_document"
+                                if review_outcome == "accept"
+                                else "waive_with_reason"
+                                if review_outcome == "waive"
+                                else None
+                            )
+                        )
                         result = _review_monitoring_document_refresh(
                             db,
                             alert_id,
@@ -37389,40 +39799,93 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             note=note,
                             user=user,
                             audit_writer=self.log_audit,
+                            evidence_ref=str(
+                                data.get("evidence_ref")
+                                or data.get("evidence_note")
+                                or ""
+                            ).strip(),
+                            send_for_second_review=bool(
+                                data.get("send_for_second_review")
+                            ),
+                            requested_outcome=requested_document_outcome,
                         )
                     db.commit()
                     canonical_action = document_action
+                    if result.get("pending_second_review"):
+                        return self.success({
+                            "status": "review_requested",
+                            "action": "request_senior_approval",
+                            "result": {
+                                "review_request_id": result.get(
+                                    "review_request_id"
+                                ),
+                                "alert_id": alert_id,
+                                "pending_second_review": True,
+                            },
+                            "new_status": alert_before.get("status"),
+                            "alert": dict(
+                                _monitoring_alert_get(db, alert_id) or {}
+                            ),
+                            "audit_history": _monitoring_alert_audit_history(
+                                db, alert_id
+                            ),
+                        })
                 elif canonical_action == "start_review":
-                    prior_status = alert_before.get("status") or "open"
-                    if str(prior_status).lower() in ("dismissed", "resolved", "waived", "routed_to_edd", "routed_to_review"):
-                        return self.error("Cannot start review for an alert that is already terminal.", 409)
+                    prior_status = str(alert_before.get("status") or "").strip()
                     # M1.1 decoupling: the refresh sub-state ('under_review')
                     # lives on the requirement row; starting a review always
                     # moves the alert itself to 'in_review'.
                     next_status = "in_review"
                     note = str(data.get("note") or data.get("reason") or "").strip()
+                    reason_code = (
+                        "senior_acknowledged"
+                        if prior_status == "escalated"
+                        else "review_started"
+                    )
+                    transition_evidence = _monitoring_alert_identity_evidence(
+                        alert_before
+                    )
+                    if prior_status == "escalated":
+                        if not note:
+                            return self.error(
+                                "A senior acknowledgement rationale is required "
+                                "to start review of an escalated alert.",
+                                400,
+                            )
+                        transition_evidence["officer_rationale"] = note
                     payload = {
                         "started_by": user.get("sub", ""),
                         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                         "note": note,
                     }
+                    transition = _monitoring_state_machine.transition_alert_status(
+                        db,
+                        alert_id,
+                        expected_status=prior_status,
+                        target_status=next_status,
+                        actor=user,
+                        source_workflow="monitoring",
+                        reason_code=reason_code,
+                        reason=note or "Monitoring Alert review started.",
+                        evidence=transition_evidence,
+                        request_id=(_obs_get_request_id() or ""),
+                        commit=False,
+                    )
                     db.execute(
                         """
                         UPDATE monitoring_alerts
-                           SET status = ?,
-                               officer_action = ?,
+                           SET officer_action = ?,
                                officer_notes = ?,
-                               triaged_at = COALESCE(triaged_at, CURRENT_TIMESTAMP),
                                reviewed_at = CURRENT_TIMESTAMP,
                                reviewed_by = COALESCE(reviewed_by, ?)
-                         WHERE id = ?
+                         WHERE id = ? AND status = ?
                         """,
                         (
-                            next_status,
                             "start_review",
                             json.dumps(payload, sort_keys=True),
                             user.get("sub", ""),
                             alert_id,
+                            next_status,
                         ),
                     )
                     self.log_audit(
@@ -37435,15 +39898,17 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         after_state={"status": next_status},
                         commit=False,
                     )
-                    db.commit()
-                    result = {"alert_id": alert_id, "status": next_status}
+                    result = {
+                        "alert_id": alert_id,
+                        "status": transition["status"],
+                        "changed": transition["changed"],
+                    }
                 elif canonical_action == "triage":
                     result = mr.triage_alert(
                         db, alert_id, user=user, audit_writer=self.log_audit,
+                        commit=False,
                     )
                 elif canonical_action == "assign":
-                    if str(alert_before.get("status") or "").lower() in ("dismissed", "resolved", "waived", "routed_to_edd", "routed_to_review"):
-                        return self.error("Cannot assign an alert that is already terminal.", 409)
                     requested_assignee = (
                         data.get("assignee_id")
                         or data.get("assigned_to")
@@ -37477,6 +39942,11 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         return self.error("Assigned officer is not active", 400)
                     previous_owner = alert_before.get("reviewed_by")
                     new_owner = assignee["id"]
+                    _monitoring_state_machine.validate_assignment_authority(
+                        db,
+                        user,
+                        new_owner,
+                    )
                     assignment_note = str(data.get("assignment_note") or data.get("note") or data.get("reason") or "").strip()
                     assignment_payload = {
                         "alert_id": alert_id,
@@ -37489,23 +39959,60 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         "assigned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                         "note": assignment_note,
                     }
+                    prior_status = str(alert_before.get("status") or "").strip()
+                    if (
+                        prior_status in _monitoring_state_machine.TERMINAL_STATUSES
+                        or prior_status in _monitoring_state_machine.HANDOFF_STATUSES
+                    ):
+                        raise _monitoring_state_machine.TerminalStateError(
+                            "Closed or downstream-routed Monitoring Alerts cannot be assigned."
+                        )
+                    if prior_status in {"open", "triaged"}:
+                        transition = _monitoring_state_machine.transition_alert_status(
+                            db,
+                            alert_id,
+                            expected_status=prior_status,
+                            target_status="assigned",
+                            actor=user,
+                            source_workflow="monitoring",
+                            reason_code="assign",
+                            reason=assignment_note or "Monitoring Alert assigned.",
+                            evidence={"officer_id": new_owner},
+                            request_id=(_obs_get_request_id() or ""),
+                            commit=False,
+                        )
+                        new_status = transition["status"]
+                        status_changed = bool(transition["changed"])
+                    elif prior_status in {"assigned", "in_review", "escalated"}:
+                        locked = _monitoring_state_machine.lock_alert_for_transition(
+                            db, alert_id
+                        )
+                        if str(locked.get("status") or "").strip() != prior_status:
+                            raise _monitoring_state_machine.StaleCurrentState(
+                                "The Monitoring Alert changed since it was read; refresh and retry."
+                            )
+                        new_status = prior_status
+                        status_changed = False
+                    else:
+                        raise _monitoring_state_machine.InvalidStatus(
+                            "The stored Monitoring Alert status is not canonical."
+                        )
                     db.execute(
                         """
                         UPDATE monitoring_alerts
-                           SET status = ?,
-                               officer_action = ?,
+                           SET officer_action = ?,
                                officer_notes = ?,
                                reviewed_by = ?,
                                reviewed_at = CURRENT_TIMESTAMP,
                                assigned_at = CURRENT_TIMESTAMP
-                         WHERE id = ?
+                         WHERE id = ? AND status = ?
                         """,
                         (
-                            "assigned",
                             "assign",
                             json.dumps(assignment_payload, sort_keys=True),
                             new_owner,
                             alert_id,
+                            new_status,
                         ),
                     )
                     self.log_audit(
@@ -37515,14 +40022,16 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         json.dumps(assignment_payload, default=str, sort_keys=True),
                         db=db,
                         before_state={"status": alert_before.get("status"), "owner": previous_owner},
-                        after_state={"status": "assigned", "owner": new_owner},
+                        after_state={"status": new_status, "owner": new_owner},
                         commit=False,
                     )
-                    db.commit()
-                    result = {"alert_id": alert_id, "status": "assigned", "owner_id": new_owner}
+                    result = {
+                        "alert_id": alert_id,
+                        "status": new_status,
+                        "owner_id": new_owner,
+                        "changed": status_changed,
+                    }
                 elif canonical_action == "save_decision":
-                    if str(alert_before.get("status") or "").lower() in ("dismissed", "resolved", "waived", "routed_to_edd", "routed_to_review"):
-                        return self.error("Cannot save a new decision for an alert that is already terminal.", 409)
                     outcome = str(data.get("outcome") or "").strip()
                     note = str(data.get("note") or data.get("reason") or "").strip()
                     if outcome not in MONITORING_DECISION_OUTCOMES:
@@ -37537,12 +40046,14 @@ class MonitoringAlertDetailHandler(BaseHandler):
                     # M2.2 four-eyes senior-override control (replaces the M1.1
                     # interim guard) for material clearing outcomes.
                     evidence_ref = str(data.get("evidence_ref") or data.get("evidence_note") or "").strip()
+                    typed_evidence = _monitoring_control_transition_evidence(data)
                     disposition, review_request = self._apply_dismissal_control(
                         db, user, alert_id, alert_before,
                         action="save_decision", outcome=outcome,
                         dismissal_reason=cfg.get("dismissal_reason"),
                         note=note,
                         evidence_ref=evidence_ref,
+                        transition_evidence=typed_evidence,
                         send_for_second_review=bool(data.get("send_for_second_review")),
                     )
                     if disposition == "blocked":
@@ -37564,6 +40075,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             trigger_notes=note,
                             priority=data.get("priority"),
                             user=user, audit_writer=self.log_audit,
+                            commit=False,
                         )
                     elif cfg.get("dismissal_reason"):
                         # RDI-008 defense-in-depth: with the M2.2 reconciliation a
@@ -37577,12 +40089,22 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             dismissal_notes=note,
                             user=user, audit_writer=self.log_audit,
                             critical_clearance=self._critical_clearance(user, evidence_ref),
+                            review_request_id=(review_request or {}).get("id"),
+                            screening_case_id=typed_evidence.get("screening_case_id"),
+                            document_id=typed_evidence.get("document_id"),
+                            document_request_id=typed_evidence.get("document_request_id"),
+                            commit=False,
                         )
                     else:
+                        transition_evidence = dict(typed_evidence)
+                        if (review_request or {}).get("id") not in (None, ""):
+                            transition_evidence["review_request_id"] = review_request["id"]
                         result = _execute_monitoring_decision_outcome(
                             db, user, alert_id, alert_before,
                             outcome=outcome, note=note,
                             audit_writer=self.log_audit,
+                            transition_evidence=transition_evidence,
+                            commit=False,
                         )
                 elif canonical_action == "dismiss":
                     dismissal_reason = data.get("dismissal_reason")
@@ -37593,13 +40115,20 @@ class MonitoringAlertDetailHandler(BaseHandler):
                             400,
                         )
                     dismiss_note = str(reason or data.get("dismissal_notes") or "").strip()
+                    if not dismiss_note:
+                        return self.error(
+                            "A dismissal rationale is required.",
+                            400,
+                        )
                     evidence_ref = str(data.get("evidence_ref") or data.get("evidence_note") or "").strip()
+                    typed_evidence = _monitoring_control_transition_evidence(data)
                     disposition, review_request = self._apply_dismissal_control(
                         db, user, alert_id, alert_before,
                         action="dismiss", outcome=None,
                         dismissal_reason=str(dismissal_reason).strip().lower(),
                         note=dismiss_note,
                         evidence_ref=evidence_ref,
+                        transition_evidence=typed_evidence,
                         send_for_second_review=bool(data.get("send_for_second_review")),
                     )
                     if disposition == "blocked":
@@ -37626,6 +40155,11 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         dismissal_notes=reason or data.get("dismissal_notes"),
                         user=user, audit_writer=self.log_audit,
                         critical_clearance=self._critical_clearance(user, evidence_ref),
+                        review_request_id=(review_request or {}).get("id"),
+                        screening_case_id=typed_evidence.get("screening_case_id"),
+                        document_id=typed_evidence.get("document_id"),
+                        document_request_id=typed_evidence.get("document_request_id"),
+                        commit=False,
                     )
                 elif canonical_action == "route_to_periodic_review":
                     result = mr.route_alert_to_periodic_review(
@@ -37633,6 +40167,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         review_reason=reason or data.get("review_reason"),
                         priority=data.get("priority"),
                         user=user, audit_writer=self.log_audit,
+                        commit=False,
                     )
                 elif canonical_action == "route_to_edd":
                     result = mr.route_alert_to_edd(
@@ -37640,18 +40175,46 @@ class MonitoringAlertDetailHandler(BaseHandler):
                         trigger_notes=reason or data.get("trigger_notes"),
                         priority=data.get("priority"),
                         user=user, audit_writer=self.log_audit,
+                        commit=False,
                     )
             except mr.AlertNotFound:
+                _rollback_monitoring_transaction(db)
                 return self.error("Alert not found", 404)
             except mr.InvalidDismissalReason as e:
+                _rollback_monitoring_transaction(db)
                 return self.error(str(e), 400)
             except mr.AlertAlreadyTerminal as e:
+                _rollback_monitoring_transaction(db)
                 return self.error(str(e), 409)
             except mr.MonitoringRoutingError as e:
+                _rollback_monitoring_transaction(db)
                 return self.error(str(e), 400)
             except _MonitoringDocumentRefreshError as e:
+                _rollback_monitoring_transaction(db)
                 return self.error(str(e), e.status_code)
+            except _monitoring_state_machine.MonitoringTransitionError as exc:
+                _rollback_monitoring_transaction(db)
+                return self.error(str(exc), exc.status_code)
+            except _monitoring_state_machine.AuditInfrastructureError:
+                _rollback_monitoring_transaction(db)
+                logger.exception(
+                    "Monitoring Alert transition audit failed: alert_id=%s",
+                    alert_id,
+                )
+                return self.error(
+                    "Monitoring Alert transition could not be completed.",
+                    500,
+                )
+            except Exception:
+                _rollback_monitoring_transaction(db)
+                logger.exception(
+                    "Monitoring Alert update failed: alert_id=%s action=%s",
+                    alert_id,
+                    canonical_action,
+                )
+                return self.error("Failed to update Monitoring Alert.", 500)
 
+            db.commit()
             self.success({
                 "status": "alert_updated",
                 "action": canonical_action,
@@ -37693,20 +40256,25 @@ class MonitoringAlertOverdueEscalationHandler(BaseHandler):
             if sla.get("sla_state") != "overdue":
                 return self.error("Only actively overdue alerts can be escalated.", 409)
 
-            result = _execute_monitoring_decision_outcome(
-                db, user, alert_id, alert_before,
-                outcome="escalate_to_sco", note=reason,
-                audit_writer=self.log_audit,
-                commit=False,
-            )
-            alert_after = dict(_monitoring_alert_get(db, alert_id) or {})
+            # Reserve the exact escalation evidence in this transaction before
+            # the canonical transition audit is appended. If transition or
+            # audit validation fails, the outer rollback removes this row too.
             escalation = _record_monitoring_overdue_escalation(
                 db, alert_id, user,
                 reason=reason,
                 alert_before=alert_before,
-                alert_after=alert_after,
+                new_status="escalated",
                 sla=sla,
             )
+            result = _execute_monitoring_decision_outcome(
+                db, user, alert_id, alert_before,
+                outcome="escalate_to_sco", note=reason,
+                audit_writer=self.log_audit,
+                reason_code="overdue_escalation",
+                transition_evidence={"escalation_id": escalation.get("id")},
+                commit=False,
+            )
+            alert_after = dict(_monitoring_alert_get(db, alert_id) or {})
             overdue_payload = {
                 "alert_id": alert_id,
                 "actor_id": user.get("sub", ""),
@@ -37752,11 +40320,18 @@ class MonitoringAlertOverdueEscalationHandler(BaseHandler):
                 "alert": refreshed,
                 "audit_history": _monitoring_alert_audit_history(db, alert_id),
             })
+        except _monitoring_state_machine.MonitoringTransitionError as exc:
+            _rollback_monitoring_transaction(db)
+            self.error(str(exc), exc.status_code)
+        except _monitoring_state_machine.AuditInfrastructureError:
+            _rollback_monitoring_transaction(db)
+            logger.exception(
+                "Monitoring overdue escalation audit failed: alert_id=%s",
+                alert_id,
+            )
+            self.error("Monitoring Alert transition could not be completed.", 500)
         except Exception:
-            try:
-                db.rollback()
-            except Exception:
-                pass
+            _rollback_monitoring_transaction(db)
             logger.exception("monitoring overdue escalation failed: alert_id=%s", alert_id)
             self.error("Failed to escalate overdue alert.", 500)
         finally:
@@ -37765,18 +40340,21 @@ class MonitoringAlertOverdueEscalationHandler(BaseHandler):
 
 def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
                                  requested_outcome, dismissal_reason, note, log_audit,
-                                 request_evidence_ref=None):
+                                 request_evidence_ref=None,
+                                 review_request_id=None,
+                                 transition_evidence=None):
     """Run the terminal clear for an approved/senior-cleared request, reusing the
     existing dismissal/decision machinery. Used by the approver endpoint (and
     mirrors the inline execution in MonitoringAlertDetailHandler.patch)."""
     import monitoring_routing as mr
 
-    # Re-verify the alert is not already terminal before clearing — mirrors the
-    # inline save_decision/dismiss guards, so a stale/duplicate approval is a
-    # handled no-op rather than a double-clear or 500.
+    # A review request must never silently approve after another actor has
+    # already closed the alert. Treat that as stale state and leave the request
+    # pending after the caller rolls the transaction back.
     if mr.is_alert_terminal(alert_before):
-        return {"alert_id": alert_id, "status": alert_before.get("status"),
-                "outcome": requested_outcome, "already_terminal": True}
+        raise _monitoring_state_machine.StaleCurrentState(
+            "The Monitoring Alert changed after this review request was created."
+        )
 
     # RDI-008 approval-time revalidation (Codex round-2 TOCTOU): the request's
     # evidence was validated against the alert AS IT WAS at creation. Re-check
@@ -37792,6 +40370,12 @@ def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
     # service-layer severity gate via the approved-review marker.
     approved_clearance = {"approver": dict(user or {}), "via": "approved_review",
                           "evidence_ref": str(request_evidence_ref or "").strip()}
+    evidence = dict(transition_evidence or {})
+    if review_request_id in (None, ""):
+        raise _monitoring_state_machine.MissingEvidence(
+            "An approved review_request_id is required for this clearance."
+        )
+    evidence["review_request_id"] = review_request_id
     if requested_outcome == "dismiss" or (dismissal_reason and requested_outcome not in MONITORING_DECISION_OUTCOMES):
         return mr.dismiss_alert(
             db, alert_id,
@@ -37799,8 +40383,36 @@ def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
             dismissal_notes=note,
             user=user, audit_writer=log_audit,
             critical_clearance=approved_clearance,
+            review_request_id=review_request_id,
+            screening_case_id=evidence.get("screening_case_id"),
+            document_id=evidence.get("document_id"),
+            document_request_id=evidence.get("document_request_id"),
+            commit=False,
+        )
+    if requested_outcome in {
+        "accept_updated_document",
+        "mark_already_updated",
+        "waive_with_reason",
+    }:
+        return _review_monitoring_document_refresh(
+            db,
+            alert_id,
+            outcome=(
+                "waive"
+                if requested_outcome == "waive_with_reason"
+                else "accept"
+            ),
+            requested_outcome=requested_outcome,
+            note=note,
+            user=user,
+            audit_writer=log_audit,
+            review_request_id=review_request_id,
         )
     cfg = MONITORING_DECISION_OUTCOMES.get(requested_outcome) or {}
+    if not cfg:
+        raise _monitoring_state_machine.InvalidTransition(
+            "The requested clearance outcome is not supported."
+        )
     if cfg.get("dismissal_reason"):
         return mr.dismiss_alert(
             db, alert_id,
@@ -37808,42 +40420,23 @@ def _execute_monitoring_clearing(db, user, alert_id, alert_before, *,
             dismissal_notes=note,
             user=user, audit_writer=log_audit,
             critical_clearance=approved_clearance,
+            review_request_id=review_request_id,
+            screening_case_id=evidence.get("screening_case_id"),
+            document_id=evidence.get("document_id"),
+            document_request_id=evidence.get("document_request_id"),
+            commit=False,
         )
-    decision_payload = {
-        "alert_id": alert_id,
-        "application_id": alert_before.get("application_id"),
-        "outcome": requested_outcome,
-        "note": note,
-        "decided_by": user.get("sub", ""),
-        "decided_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-    status_value = cfg.get("status") or "resolved"
-    db.execute(
-        """
-        UPDATE monitoring_alerts
-           SET status = ?,
-               officer_action = ?,
-               officer_notes = ?,
-               reviewed_at = CURRENT_TIMESTAMP,
-               reviewed_by = COALESCE(reviewed_by, ?),
-               resolved_at = CASE WHEN ? IN ('resolved','waived') THEN CURRENT_TIMESTAMP ELSE resolved_at END
-         WHERE id = ?
-        """,
-        (status_value, cfg.get("officer_action") or requested_outcome,
-         json.dumps(decision_payload, sort_keys=True), user.get("sub", ""),
-         status_value, alert_id),
-    )
-    log_audit(
+    return _execute_monitoring_decision_outcome(
+        db,
         user,
-        cfg.get("audit_action") or "monitoring.alert.cleared",
-        f"monitoring_alert:{alert_id}",
-        json.dumps(decision_payload, default=str, sort_keys=True),
-        db=db,
-        after_state={"status": status_value, "outcome": requested_outcome},
+        alert_id,
+        alert_before,
+        outcome=requested_outcome,
+        note=note,
+        audit_writer=log_audit,
+        transition_evidence=evidence,
         commit=False,
     )
-    db.commit()
-    return {"alert_id": alert_id, "status": status_value, "outcome": requested_outcome}
 
 
 class MonitoringReviewRequestQueueHandler(BaseHandler):
@@ -37880,28 +40473,61 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
             request = _mdc.fetch_request(db, request_id)
             if not request:
                 return self.error("Review request not found", 404)
-            if str(request.get("state")) != "pending":
-                return self.error("Review request is no longer pending.", 409)
             alert_id = request.get("alert_id")
-            alert_before = dict(_monitoring_alert_get(db, alert_id) or {})
             try:
+                # Learn alert_id without locking the request, then establish the
+                # canonical Alert-first order before locking/revalidating the
+                # review row. This avoids request↔alert deadlocks with request
+                # creation and senior-clear paths.
+                alert_before = _monitoring_state_machine.lock_alert_for_transition(
+                    db, alert_id
+                )
+                request = _mdc.fetch_request(
+                    db, request_id, for_update=True
+                )
+                if not request:
+                    _rollback_monitoring_transaction(db)
+                    return self.error("Review request not found", 404)
+                if str(request.get("alert_id")) != str(alert_id):
+                    raise _monitoring_state_machine.StaleCurrentState(
+                        "The review request linkage changed; refresh and retry."
+                    )
+                if str(request.get("state")) != "pending":
+                    _rollback_monitoring_transaction(db)
+                    return self.error("Review request is no longer pending.", 409)
                 if verb == "reject":
                     _mdc.reject_request(
                         db, request=request, approver=user,
                         rejection_reason=str(data.get("rejection_reason") or data.get("note") or "").strip(),
                         audit_writer=self.log_audit,
+                        commit=False,
                     )
+                    db.commit()
                     return self.success({
                         "status": "review_rejected",
                         "result": {"review_request_id": request_id, "alert_id": alert_id},
                         "alert": dict(_monitoring_alert_get(db, alert_id) or {}),
                         "audit_history": _monitoring_alert_audit_history(db, alert_id),
                     })
-                # approve → validate eligibility (self-approval/role) BEFORE any
-                # mutation, run the terminal clear, then record the approval last so
-                # the two steps are sequenced atomically (no approved-but-uncleared row).
-                _mdc.assert_can_review(request, user)
+                # approve → validate eligibility, mark the request approved in
+                # this still-open transaction (so typed evidence validation can
+                # see the approved disposition), run the canonical transition,
+                # then commit both audit records and both state changes together.
+                # The source-state binding is checked only after both rows are
+                # locked in canonical Alert-first order. A request created for
+                # ``open`` can therefore never approve a later ``in_review`` or
+                # ``escalated`` alert, while rejection remains available so an
+                # operator can retire stale/legacy requests safely.
+                _mdc.assert_request_source_status_current(
+                    request, alert_before
+                )
+                _mdc.assert_can_review(db, request, user)
                 approval_note = str(data.get("approval_note") or data.get("note") or "approved").strip()
+                _mdc.mark_request_approved(
+                    db, request=request, approver=user,
+                    approval_note=approval_note, audit_writer=self.log_audit,
+                    commit=False,
+                )
                 result = _execute_monitoring_clearing(
                     db, user, alert_id, alert_before,
                     requested_outcome=request.get("requested_outcome"),
@@ -37909,11 +40535,10 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
                     note=request.get("rationale"),
                     log_audit=self.log_audit,
                     request_evidence_ref=request.get("evidence_ref"),
+                    review_request_id=request.get("id"),
+                    transition_evidence=_mdc.transition_evidence_for_request(request),
                 )
-                _mdc.mark_request_approved(
-                    db, request=request, approver=user,
-                    approval_note=approval_note, audit_writer=self.log_audit,
-                )
+                db.commit()
                 return self.success({
                     "status": "review_approved",
                     "result": {"review_request_id": request_id, **(result or {})},
@@ -37922,6 +40547,7 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
                     "audit_history": _monitoring_alert_audit_history(db, alert_id),
                 })
             except _mdc.DismissalControlError as exc:
+                _rollback_monitoring_transaction(db)
                 # Self-approval / wrong role (403) and approval-time evidence
                 # refusal (409, Codex round-2) → audited blocked signal + error.
                 if exc.status_code in (403, 409):
@@ -37932,8 +40558,56 @@ class MonitoringReviewRequestActionHandler(BaseHandler):
                                 "actor_role": (user or {}).get("role", ""),
                                 "initiated_by": request.get("initiated_by")},
                         audit_writer=self.log_audit,
+                        commit=False,
                     )
+                    db.commit()
                 return self.error(str(exc), exc.status_code)
+            except _MonitoringDocumentRefreshError as exc:
+                _rollback_monitoring_transaction(db)
+                _mdc.audit_blocked(
+                    db,
+                    alert_id=alert_id,
+                    user=user,
+                    reason=str(exc),
+                    detail={
+                        "request_id": request_id,
+                        "verb": verb,
+                        "error_code": "document_refresh_error",
+                        "actor_role": (user or {}).get("role", ""),
+                        "initiated_by": request.get("initiated_by"),
+                    },
+                    audit_writer=self.log_audit,
+                    commit=False,
+                )
+                db.commit()
+                return self.error(str(exc), exc.status_code)
+            except _monitoring_state_machine.MonitoringTransitionError as exc:
+                _rollback_monitoring_transaction(db)
+                _mdc.audit_blocked(
+                    db, alert_id=alert_id, user=user,
+                    reason=str(exc),
+                    detail={
+                        "request_id": request_id,
+                        "verb": verb,
+                        "error_code": exc.error_code,
+                        "actor_role": (user or {}).get("role", ""),
+                        "initiated_by": request.get("initiated_by"),
+                    },
+                    audit_writer=self.log_audit,
+                    commit=False,
+                )
+                db.commit()
+                return self.error(str(exc), exc.status_code)
+            except _monitoring_state_machine.AuditInfrastructureError:
+                _rollback_monitoring_transaction(db)
+                logger.exception(
+                    "Monitoring review request audit failed: request_id=%s",
+                    request_id,
+                )
+                return self.error(
+                    "Monitoring Alert transition could not be completed.",
+                    500,
+                )
         except Exception:
             try:
                 db.rollback()
@@ -38059,10 +40733,21 @@ class MonitoringAlertDocumentReplacementUploadHandler(BaseHandler):
             if not alert:
                 return self.error("Alert not found", 404)
             alert = dict(alert)
+            if _monitoring_legacy_document_write_blocked(db, alert_id):
+                return self.error(
+                    "Legacy Monitoring replacement uploads are disabled while "
+                    "the canonical workflow owns new requests or an active "
+                    "canonical request owns this alert.",
+                    409,
+                )
             if not _is_document_refresh_alert(alert):
                 return self.error("Upload Replacement is only available for document expiry alerts", 400)
-            if str(alert.get("status") or "").lower() in ("resolved", "waived", "dismissed", "routed_to_edd", "routed_to_review"):
-                return self.error("Cannot upload a replacement for a terminal alert", 409)
+            if _monitoring_status.is_action_locked(alert.get("status")):
+                return self.error(
+                    "Cannot upload a replacement for a terminal or "
+                    "downstream-owned alert",
+                    409,
+                )
             app = db.execute(
                 "SELECT id, ref, client_id FROM applications WHERE id = ?",
                 (alert.get("application_id"),),
@@ -43289,6 +45974,559 @@ class PortalApplicationPeriodicReviewAttestationSubmitHandler(BaseHandler):
             db.close()
 
 
+class PortalDocumentRenewalRequestsHandler(BaseHandler):
+    """Client-owned, read-only list of canonical renewal requests."""
+
+    def get(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            return self.error("Only clients can view document renewal requests.", 403)
+        limit_value = self.get_argument("limit", "50")
+        offset_value = self.get_argument("offset", "0")
+        try:
+            limit = int(limit_value)
+            offset = int(offset_value)
+        except (TypeError, ValueError):
+            return self.error("limit and offset must be integers.", 400)
+        if not (
+            1 <= limit <= _monitoring_document_renewal.MAX_LIST_LIMIT
+            and 0 <= offset <= _monitoring_document_renewal.MAX_LIST_OFFSET
+        ):
+            return self.error("limit or offset is outside the allowed range.", 400)
+        include_cancelled_value = str(
+            self.get_argument("include_cancelled", "false") or ""
+        ).strip().lower()
+        if include_cancelled_value not in {"true", "false"}:
+            return self.error("include_cancelled must be true or false.", 400)
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT id, ref, client_id FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app = dict(app)
+            if str(app["client_id"]) != str(user.get("sub") or ""):
+                self.log_authz_denial(
+                    user,
+                    "authz_denied_not_owner",
+                    app.get("id", app.get("ref", "")),
+                    {"surface": "portal_document_renewal"},
+                )
+                return self.error("Application not found", 404)
+            include_cancelled = include_cancelled_value == "true"
+            rows = _monitoring_document_renewal.list_renewal_requests(
+                db,
+                application_id=app["id"],
+                customer_id=app["client_id"],
+                include_cancelled=include_cancelled,
+                limit=limit,
+                offset=offset,
+            )
+            total = _monitoring_document_renewal.count_renewal_requests(
+                db,
+                application_id=app["id"],
+                customer_id=app["client_id"],
+                include_cancelled=include_cancelled,
+            )
+            next_offset = offset + len(rows)
+            has_more = next_offset < total
+            self.success({
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "feature_enabled": (
+                    _monitoring_document_renewal.renewal_feature_enabled()
+                ),
+                "renewal_requests": [
+                    _monitoring_renewal_public_projection(row, portal=True)
+                    for row in rows
+                ],
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": has_more,
+                "next_offset": next_offset if has_more else None,
+            })
+        except _monitoring_document_renewal.RenewalError as exc:
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            logger.exception(
+                "portal_document_renewal_list_failed app_id=%s request_id=%s",
+                app_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal requests are temporarily unavailable.", 500)
+        finally:
+            db.close()
+
+
+class PortalDocumentRenewalUploadHandler(BaseHandler):
+    """Stage a client renewal upload without touching canonical documents."""
+
+    async def post(self, app_id, request_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            return self.error("Only clients can upload renewal documents.", 403)
+        if not _monitoring_document_renewal.renewal_feature_enabled():
+            return self.error(
+                "Document renewal requests are not enabled.",
+                409,
+            )
+        if not self.check_sensitive_rate_limit(
+            "document_renewal_upload",
+            max_attempts=20,
+            window_seconds=60,
+        ):
+            return
+
+        db = get_db()
+        file_path = None
+        s3_key = None
+        artifact = None
+        renewal_record_committed = False
+        try:
+            app = db.execute(
+                "SELECT id, ref, client_id FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app = dict(app)
+            if str(app["client_id"]) != str(user.get("sub") or ""):
+                self.log_authz_denial(
+                    user,
+                    "authz_denied_not_owner",
+                    app.get("id", app.get("ref", "")),
+                    {"surface": "portal_document_renewal_upload"},
+                )
+                return self.error("Application not found", 404)
+            request_scope = db.execute(
+                """
+                SELECT request_id, application_id, customer_id
+                  FROM monitoring_document_renewal_requests
+                 WHERE request_id = ?
+                """,
+                (request_id,),
+            ).fetchone()
+            if not request_scope:
+                # Keep the supplied request identifier outside durable
+                # evidence. The owned route application is sufficient to
+                # correlate this cloaked object probe.
+                _log_monitoring_renewal_upload_authz_denial(
+                    self,
+                    user,
+                    app["id"],
+                )
+                return self.error("Document renewal request not found", 404)
+            request_scope = dict(request_scope)
+            request_customer_matches = (
+                str(request_scope.get("customer_id") or "")
+                == str(app["client_id"])
+            )
+            request_application_matches = (
+                str(request_scope.get("application_id") or "") == str(app["id"])
+            )
+            if not request_customer_matches:
+                # Cross-client request identifiers stay outside the foreign
+                # request's domain history. Record only a sanitized security
+                # denial against the caller-owned route scope.
+                _log_monitoring_renewal_upload_authz_denial(
+                    self,
+                    user,
+                    app["id"],
+                )
+                return self.error("Document renewal request not found", 404)
+            if not request_application_matches:
+                # Both applications are owned by this client, so the exact
+                # cross-application mismatch can be audited without leaking
+                # another customer's request. Preserve the public 404 cloak.
+                _log_monitoring_renewal_upload_authz_denial(
+                    self,
+                    user,
+                    app["id"],
+                )
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    "wrong_application",
+                    "Document renewal request not found",
+                    404,
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
+                )
+            request = _monitoring_document_renewal.get_renewal_request(
+                db,
+                request_id,
+                include_history=False,
+            )
+            if request.get("request_status") == "cancelled":
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    "request_cancelled",
+                    "This renewal request was cancelled and cannot accept an upload.",
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
+                )
+            if (
+                request.get("request_status") == "upload_received"
+                and request.get("binding_current") is False
+            ):
+                binding_error = request.get("binding_error") or {}
+                binding_code = _monitoring_renewal_public_rejection_code(
+                    binding_error.get("code"),
+                    allowed=(
+                        _monitoring_document_renewal.UPLOAD_BINDING_REJECTION_CODES
+                    ),
+                    default="binding_missing",
+                )
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    binding_code,
+                    "This renewal request requires manual review before an upload can be accepted.",
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
+                )
+            if request.get("request_status") == "upload_received":
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    "upload_already_received",
+                    "This renewal request already has an uploaded document.",
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
+                )
+            if request.get("request_expired") is True:
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    "request_expired",
+                    "This renewal request has expired and cannot accept an upload.",
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
+                )
+            if request.get("linkage_current") is not True:
+                linkage_error = request.get("linkage_error") or {}
+                linkage_code = _monitoring_renewal_public_rejection_code(
+                    linkage_error.get("code"),
+                    allowed=(
+                        _monitoring_document_renewal.UPLOAD_LINKAGE_REJECTION_CODES
+                    ),
+                    default="linkage_not_authoritative",
+                )
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    linkage_code,
+                    "This renewal request requires manual review before an upload can be accepted.",
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
+                )
+            if request.get("upload_allowed") is not True:
+                return _write_monitoring_renewal_rejection(
+                    self,
+                    "invalid_request_state",
+                    "This renewal request is not awaiting an upload.",
+                    db=db,
+                    request_id=request_id,
+                    actor=user,
+                    expected_application_id=app["id"],
+                    expected_customer_id=app["client_id"],
+                    correlation_id=(_obs_get_request_id() or ""),
+                )
+            if "file" not in self.request.files:
+                return self.error("No file provided", 400)
+            file_info = self.request.files["file"][0]
+            filename = os.path.basename(file_info.get("filename") or "")
+            body = file_info.get("body") or b""
+            content_type = file_info.get(
+                "content_type",
+                "application/octet-stream",
+            )
+            if len(body) > MAX_UPLOAD_MB * 1024 * 1024:
+                return self.error(f"File exceeds {MAX_UPLOAD_MB}MB limit", 400)
+            valid, _reason_code, upload_error = (
+                FileUploadValidator.validate_with_reason(
+                    filename,
+                    content_type,
+                    body,
+                )
+            )
+            if not valid:
+                return self.error(f"File rejected: {upload_error}", 400)
+
+            upload_id = uuid.uuid4().hex
+            cleanup_id = uuid.uuid4().hex
+            extension = os.path.splitext(filename)[1].lower()
+            if not re.fullmatch(r"\.[a-z0-9]{1,20}", extension or ""):
+                extension = ""
+            safe_name = f"{upload_id}{extension}"
+            digest = hashlib.sha256(body).hexdigest()
+            correlation_id = (_obs_get_request_id() or "")
+
+            if HAS_S3:
+                if not _try_acquire_document_renewal_upload_capacity():
+                    return self.error(
+                        "Document upload capacity is temporarily busy. Please retry.",
+                        503,
+                    )
+                upload_capacity_owned_by_handler = True
+                try:
+                    s3 = get_s3_client()
+                    s3_key = s3.build_monitoring_renewal_candidate_key(
+                        str(app["client_id"]),
+                        str(request_id),
+                        upload_id,
+                        filename,
+                    )
+                    artifact = _reserve_monitoring_renewal_upload_artifact(
+                        db,
+                        request=request,
+                        actor=user,
+                        cleanup_id=cleanup_id,
+                        upload_id=upload_id,
+                        backend="s3",
+                        storage_key=s3_key,
+                        file_extension=extension,
+                        correlation_id=correlation_id,
+                    )
+                    # Reservation is durable. Release the pooled connection
+                    # before bounded network I/O so concurrent client uploads
+                    # cannot starve unrelated API requests of DB connections.
+                    db.close()
+                    db = None
+                    upload_future = _submit_document_renewal_upload(
+                        lambda: s3.upload_monitoring_renewal_candidate(
+                            key=s3_key,
+                            file_data=body,
+                            customer_id=str(app["client_id"]),
+                            request_id=str(request_id),
+                            upload_id=upload_id,
+                            cleanup_id=cleanup_id,
+                            original_filename=filename,
+                            content_type=content_type,
+                            file_sha256=digest,
+                        ),
+                    )
+                    upload_capacity_owned_by_handler = False
+                    success, upload_result = await asyncio.wrap_future(
+                        upload_future
+                    )
+                    if (
+                        not success
+                        or not isinstance(upload_result, dict)
+                        or str(upload_result.get("key") or "").strip() != s3_key
+                    ):
+                        non_owning_conflict = (
+                            not success
+                            and isinstance(upload_result, str)
+                            and upload_result
+                            in {
+                                "candidate_already_exists",
+                                "candidate_upload_conflict",
+                            }
+                        )
+                        if non_owning_conflict:
+                            _mark_monitoring_renewal_artifact_not_owned(
+                                cleanup_id,
+                                error_code=str(upload_result),
+                            )
+                        else:
+                            _mark_monitoring_renewal_artifact_cleanup_pending(
+                                cleanup_id,
+                                error_code="durable_upload_rejected",
+                            )
+                            await _attempt_monitoring_renewal_inline_cleanup(
+                                cleanup_id
+                            )
+                        return self.error(
+                            "Document upload failed: unable to store the file "
+                            "durably. Please retry.",
+                            500,
+                        )
+                    db = get_db()
+                    _mark_monitoring_renewal_artifact_stored(
+                        db,
+                        artifact,
+                        actor=user,
+                        s3_version_id=upload_result.get("version_id"),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Renewal candidate durable upload failed "
+                        "renewal_request_id=%s request_id=%s",
+                        request_id,
+                        correlation_id,
+                    )
+                    if artifact:
+                        _mark_monitoring_renewal_artifact_cleanup_pending(
+                            cleanup_id,
+                            error_code="durable_upload_failed",
+                        )
+                        await _attempt_monitoring_renewal_inline_cleanup(cleanup_id)
+                    return self.error(
+                        "Document upload failed: unable to store the file "
+                        "durably. Please retry.",
+                        500,
+                    )
+                finally:
+                    if upload_capacity_owned_by_handler:
+                        _DOCUMENT_RENEWAL_UPLOAD_ADMISSION.release()
+            elif is_production() or is_staging():
+                return self.error(
+                    "Document upload failed: durable storage is unavailable.",
+                    500,
+                )
+            else:
+                directory_fd, candidate_dir = (
+                    _open_monitoring_renewal_local_candidate_directory(
+                        create=True
+                    )
+                )
+                try:
+                    file_path = os.path.join(candidate_dir, safe_name)
+                    storage_key = (
+                        _MONITORING_RENEWAL_LOCAL_STORAGE_PREFIX + safe_name
+                    )
+                    artifact = _reserve_monitoring_renewal_upload_artifact(
+                        db,
+                        request=request,
+                        actor=user,
+                        cleanup_id=cleanup_id,
+                        upload_id=upload_id,
+                        backend="local",
+                        storage_key=storage_key,
+                        file_extension=extension,
+                        local_path=file_path,
+                        correlation_id=correlation_id,
+                    )
+                    db.close()
+                    db = None
+                    file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                    file_flags |= getattr(os, "O_NOFOLLOW", 0)
+                    descriptor = os.open(
+                        safe_name, file_flags, 0o600, dir_fd=directory_fd
+                    )
+                    try:
+                        os.fchmod(descriptor, 0o600)
+                        with os.fdopen(descriptor, "wb") as handle:
+                            descriptor = -1
+                            handle.write(body)
+                    finally:
+                        if descriptor >= 0:
+                            os.close(descriptor)
+                finally:
+                    os.close(directory_fd)
+                db = get_db()
+                _mark_monitoring_renewal_artifact_stored(
+                    db,
+                    artifact,
+                    actor=user,
+                )
+
+            storage_key = s3_key or artifact["storage_key"]
+            result = _monitoring_document_renewal.record_renewal_upload(
+                db,
+                request_id,
+                actor=user,
+                expected_revision=int(request.get("revision")),
+                expected_application_id=app["id"],
+                expected_customer_id=app["client_id"],
+                expected_person_id=request.get("person_id"),
+                expected_original_document_id=request.get("document_id"),
+                expected_document_type=request.get("document_type"),
+                artifact_reservation_id=cleanup_id,
+                upload_id=upload_id,
+                original_filename=filename,
+                storage_key=storage_key,
+                file_size=len(body),
+                mime_type=content_type,
+                file_sha256=digest,
+                correlation_id=correlation_id,
+            )
+            renewal_record_committed = True
+            public_request = _monitoring_renewal_public_projection(
+                result,
+                portal=True,
+            )
+            response = {
+                "status": "upload_received",
+                "request": public_request,
+            }
+            if public_request.get("upload_binding"):
+                response["binding"] = public_request["upload_binding"]
+            self.success(
+                response,
+                201,
+            )
+        except _monitoring_document_renewal.RenewalError as exc:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            if not renewal_record_committed:
+                if artifact:
+                    _mark_monitoring_renewal_artifact_cleanup_pending(
+                        artifact["cleanup_id"],
+                        error_code="upload_record_failed",
+                    )
+                    await _attempt_monitoring_renewal_inline_cleanup(
+                        artifact["cleanup_id"]
+                    )
+            _write_monitoring_renewal_error(self, exc)
+        except Exception:
+            if db is not None:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            if not renewal_record_committed:
+                if artifact:
+                    _mark_monitoring_renewal_artifact_cleanup_pending(
+                        artifact["cleanup_id"],
+                        error_code="upload_record_failed",
+                    )
+                    await _attempt_monitoring_renewal_inline_cleanup(
+                        artifact["cleanup_id"]
+                    )
+            logger.exception(
+                "portal_document_renewal_upload_failed app_id=%s "
+                "renewal_request_id=%s request_id=%s",
+                app_id,
+                request_id,
+                (_obs_get_request_id() or ""),
+            )
+            self.error("Document renewal upload could not be recorded.", 500)
+        finally:
+            if db is not None:
+                db.close()
+
+
 class PortalApplicationEnhancedRequirementsHandler(BaseHandler):
     """GET /api/portal/applications/:id/enhanced-requirements.
 
@@ -43403,6 +46641,18 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
             ).fetchone()
             raw_req = serialize_application_requirement(requirement_row)
             is_monitoring_refresh = _is_monitoring_document_refresh_requirement(raw_req)
+            if (
+                is_monitoring_refresh
+                and raw_req.get("monitoring_alert_id") not in (None, "")
+                and _monitoring_legacy_document_write_blocked(
+                    db, raw_req.get("monitoring_alert_id")
+                )
+            ):
+                return self.error(
+                    "Legacy Monitoring replacement uploads are disabled while "
+                    "a canonical renewal request owns this alert.",
+                    409,
+                )
             policy_info = enhanced_requirement_document_policy((raw_req or {}).get("requirement_key"))
             mapped_doc_type = policy_info.get("document_type") or "supporting_document"
             if is_monitoring_refresh:
@@ -44127,6 +47377,11 @@ def make_app():
         (r"/api/monitoring/alerts/([^/]+)/escalate-overdue", MonitoringAlertOverdueEscalationHandler),
         (r"/api/monitoring/alerts/([^/]+)/followups/([0-9]+)/resolve", MonitoringAlertFollowupResolveHandler),
         (r"/api/monitoring/alerts/([^/]+)/followups", MonitoringAlertFollowupHandler),
+        (r"/api/monitoring/alerts/([0-9]+)/renewal-request", MonitoringAlertRenewalRequestHandler),
+        (r"/api/monitoring/alerts/([0-9]+)/linkage", MonitoringAlertLinkageHandler),
+        (r"/api/monitoring/renewal-requests/([A-Za-z0-9_-]+)/resend", MonitoringRenewalRequestResendHandler),
+        (r"/api/monitoring/renewal-requests/([A-Za-z0-9_-]+)/due-date", MonitoringRenewalRequestDueDateHandler),
+        (r"/api/monitoring/renewal-requests/([A-Za-z0-9_-]+)/cancel", MonitoringRenewalRequestCancelHandler),
         (r"/api/monitoring/alerts/([^/]+)", MonitoringAlertDetailHandler),
         (r"/api/monitoring/alerts", MonitoringAlertCreateHandler),
         # Agents
@@ -44216,6 +47471,10 @@ def make_app():
         (r"/api/applications/([^/]+)/profile-versions/([^/]+)", ApplicationProfileVersionDetailHandler),
         (r"/api/applications/([^/]+)/profile-versions", EntityProfileVersionsHandler),
         (r"/api/profile-versions/([^/]+)", EntityProfileVersionDetailHandler),
+        (r"/api/portal/applications/([^/]+)/renewal-requests/([A-Za-z0-9_-]+)/upload",
+         PortalDocumentRenewalUploadHandler),
+        (r"/api/portal/applications/([^/]+)/renewal-requests",
+         PortalDocumentRenewalRequestsHandler),
         (r"/api/portal/applications/([^/]+)/enhanced-requirements/([^/]+)/upload",
          PortalApplicationEnhancedRequirementUploadHandler),
         (r"/api/portal/applications/([^/]+)/enhanced-requirements/([^/]+)/response",
@@ -44240,8 +47499,8 @@ def make_app():
         # Prometheus Metrics
         (r"/metrics", MetricsHandler),
 
-        # Root redirect
-        (r"/", tornado.web.RedirectHandler, {"url": "/portal"}),
+        # Root redirect (R3-BSA-013: security headers on the front-door 301)
+        (r"/", SecureRootRedirectHandler, {"url": "/portal"}),
 
         # Serve portal HTML files and static assets
         (r"/portal", PortalHandler),
@@ -44291,6 +47550,23 @@ def _singleton_tick(name):
     def decorate(fn):
         import functools
 
+        if asyncio.iscoroutinefunction(fn):
+            @functools.wraps(fn)
+            async def async_wrapper(*args, **kwargs):
+                from db import acquire_scheduler_lock
+                lease = acquire_scheduler_lock(name)
+                if not lease.acquired:
+                    logger.debug(
+                        "%s: another task holds the scheduler lock — skipping this tick",
+                        name,
+                    )
+                    return None
+                try:
+                    return await fn(*args, **kwargs)
+                finally:
+                    lease.release()
+            return async_wrapper
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             from db import acquire_scheduler_lock
@@ -44306,6 +47582,47 @@ def _singleton_tick(name):
                 lease.release()
         return wrapper
     return decorate
+
+
+# ── R3-BSA-001: deployment capability readiness ──────────────────────
+# Several production-capability modules import under a caught ImportError and
+# set a HAS_* flag False on failure (GDPR purge, doc-verification, PDF,
+# supervisor, Claude client, change-management). That is correct for local unit
+# tests, but on a DEPLOYED box (staging/production) a missing capability means
+# the container silently serves a degraded compliance platform — e.g. no GDPR
+# purge, no document verification — instead of failing the deploy. This gate
+# emits a readiness manifest every boot and, in deployed envs, refuses to start
+# when a mandatory capability is unavailable (matching the psycopg2 / security-
+# hardening / migration fail-closed precedents).
+_DEPLOY_MANDATORY_CAPABILITIES = (
+    ("document_verification", lambda: HAS_DOC_VERIFICATION),
+    ("pdf_generator", lambda: HAS_PDF_GENERATOR),
+    ("supervisor_framework", lambda: SUPERVISOR_AVAILABLE),
+    ("gdpr_purge", lambda: HAS_GDPR_PURGE),
+    ("claude_client", lambda: HAS_CLAUDE_CLIENT),
+    ("change_management", lambda: HAS_CHANGE_MANAGEMENT),
+)
+
+
+def enforce_capability_readiness():
+    """Emit the capability readiness manifest; fail closed in deployed envs."""
+    manifest = {name: bool(check()) for name, check in _DEPLOY_MANDATORY_CAPABILITIES}
+    logger.info("startup: capability readiness manifest: %s", json.dumps(manifest))
+    missing = sorted(name for name, ok in manifest.items() if not ok)
+    if not missing:
+        return
+    if is_production() or is_staging():
+        logger.critical(
+            "STARTUP BLOCKED — mandatory capabilities unavailable in %s: %s. "
+            "A deployed compliance platform must not run degraded. Fix the "
+            "failed import(s) (usually a missing dependency) before deploying.",
+            ENV, missing,
+        )
+        sys.exit(1)
+    logger.warning(
+        "capability readiness: %s unavailable (tolerated in %s — deployed envs "
+        "would refuse to start)", missing, ENV,
+    )
 
 
 if __name__ == "__main__":
@@ -44435,6 +47752,11 @@ if __name__ == "__main__":
     logger.info("startup: entering enforce_startup_safety (+%s)", _elapsed())
     enforce_startup_safety()
     logger.info("startup: completed enforce_startup_safety (+%s)", _elapsed())
+
+    # R3-BSA-001: capability readiness manifest + deployed-env fail-closed.
+    logger.info("startup: entering enforce_capability_readiness (+%s)", _elapsed())
+    enforce_capability_readiness()
+    logger.info("startup: completed enforce_capability_readiness (+%s)", _elapsed())
 
     # DCI-008 boot probe: in fail-closed environments, surface a broken live
     # risk config IMMEDIATELY at boot (operators should not discover it via
@@ -44653,6 +47975,268 @@ if __name__ == "__main__":
             logger.info("document-health-scheduler: disabled (explicit opt-in required)")
     except Exception:
         logger.exception("document-health-scheduler: startup registration failed")
+        if ENVIRONMENT in ("production", "staging"):
+            raise
+
+    # Candidate-artifact reconciliation is a safety control, not a workflow
+    # consumer. It remains active after the governed feature is turned OFF so
+    # a prior process death cannot strand an unattached regulated upload.
+    try:
+        if ENVIRONMENT != "testing":
+            try:
+                _renewal_cleanup_interval_seconds = int(
+                    os.environ.get(
+                        "DOCUMENT_RENEWAL_UPLOAD_CLEANUP_SECONDS",
+                        "900",
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "DOCUMENT_RENEWAL_UPLOAD_CLEANUP_SECONDS must be an integer"
+                ) from exc
+            _renewal_cleanup_interval_seconds = max(
+                300,
+                _renewal_cleanup_interval_seconds,
+            )
+
+            def _document_renewal_upload_cleanup_worker():
+                return process_monitoring_renewal_upload_cleanup(limit=25)
+
+            @_singleton_tick("document_renewal_upload_cleanup")
+            async def _document_renewal_upload_cleanup_tick():
+                try:
+                    cleanup_summary = await asyncio.get_running_loop().run_in_executor(
+                        _DOCUMENT_RENEWAL_CLEANUP_EXECUTOR,
+                        _document_renewal_upload_cleanup_worker,
+                    )
+                    logger.info(
+                        "document-renewal-upload-cleanup: run complete "
+                        "scanned=%s cleaned=%s attached=%s deferred=%s",
+                        cleanup_summary.get("scanned", 0),
+                        cleanup_summary.get("cleaned", 0),
+                        cleanup_summary.get("attached", 0),
+                        cleanup_summary.get("deferred", 0),
+                    )
+                except Exception:
+                    logger.exception(
+                        "document-renewal-upload-cleanup: scheduled run failed"
+                    )
+
+            _document_renewal_cleanup_cb = tornado.ioloop.PeriodicCallback(
+                _document_renewal_upload_cleanup_tick,
+                _renewal_cleanup_interval_seconds * 1000,
+            )
+            tornado.ioloop.IOLoop.current().call_later(
+                180,
+                lambda: tornado.ioloop.IOLoop.current().spawn_callback(
+                    _document_renewal_upload_cleanup_tick
+                ),
+            )
+            _document_renewal_cleanup_cb.start()
+            logger.info(
+                "document-renewal-upload-cleanup: registered (interval=%ss)",
+                _renewal_cleanup_interval_seconds,
+            )
+    except Exception:
+        logger.exception(
+            "document-renewal-upload-cleanup: startup registration failed"
+        )
+        if ENVIRONMENT in ("production", "staging"):
+            raise
+
+    # PR-MON-DOC-RENEWAL-REQUEST-1 request eligibility + reminder generation.
+    # Registration and execution share the canonical feature gate. The tick
+    # creates only exact, linked request orchestration records and idempotent
+    # reminder intents; it sends no email, invokes no agent, and never mutates
+    # documents or Monitoring Alert lifecycle state.
+    try:
+        if _monitoring_document_renewal.renewal_feature_enabled():
+            try:
+                _renewal_reminder_interval_seconds = int(
+                    os.environ.get(
+                        "DOCUMENT_RENEWAL_REMINDER_SWEEP_SECONDS",
+                        "3600",
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "DOCUMENT_RENEWAL_REMINDER_SWEEP_SECONDS must be an integer"
+                ) from exc
+            _renewal_reminder_interval_seconds = max(
+                300,
+                _renewal_reminder_interval_seconds,
+            )
+            _renewal_reminder_days_raw = os.environ.get(
+                "DOCUMENT_RENEWAL_REMINDER_INTERVAL_DAYS",
+                "14,7,3,1",
+            )
+            try:
+                _renewal_reminder_days = tuple(
+                    sorted(
+                        {
+                            int(value.strip())
+                            for value in _renewal_reminder_days_raw.split(",")
+                            if value.strip()
+                        },
+                        reverse=True,
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "DOCUMENT_RENEWAL_REMINDER_INTERVAL_DAYS must contain "
+                    "comma-separated integers"
+                ) from exc
+            if not _renewal_reminder_days or any(
+                value < 1 or value > 365 for value in _renewal_reminder_days
+            ):
+                raise RuntimeError(
+                    "DOCUMENT_RENEWAL_REMINDER_INTERVAL_DAYS must contain "
+                    "values from 1 to 365"
+                )
+            try:
+                _renewal_reminder_initial_delay = int(
+                    os.environ.get(
+                        "DOCUMENT_RENEWAL_REMINDER_INITIAL_DELAY_SECONDS",
+                        "120",
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "DOCUMENT_RENEWAL_REMINDER_INITIAL_DELAY_SECONDS must be "
+                    "an integer"
+                ) from exc
+            _renewal_reminder_initial_delay = max(
+                0,
+                _renewal_reminder_initial_delay,
+            )
+
+            def _document_renewal_workflow_worker():
+                db = None
+                try:
+                    db = get_db()
+                    eligibility_summary = (
+                        _monitoring_document_renewal.generate_eligible_renewal_requests(
+                            db,
+                            actor={
+                                "sub": "system:document-renewal-eligibility",
+                                "name": "Document Renewal Eligibility Scheduler",
+                                "role": "system",
+                                "type": "system",
+                            },
+                            limit=100,
+                        )
+                    )
+                    reminder_summary = (
+                        _monitoring_document_renewal.generate_due_reminders(
+                            db,
+                            actor={
+                                "sub": "system:document-renewal-reminders",
+                                "name": "Document Renewal Reminder Scheduler",
+                                "role": "system",
+                                "type": "system",
+                            },
+                            intervals=_renewal_reminder_days,
+                            limit=100,
+                        )
+                    )
+                    return eligibility_summary, reminder_summary
+                except Exception:
+                    if db is not None:
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+                    raise
+                finally:
+                    if db is not None:
+                        try:
+                            db.close()
+                        except Exception:
+                            pass
+
+            @_singleton_tick("document_renewal_reminders")
+            async def _document_renewal_reminder_tick():
+                try:
+                    eligibility_summary, reminder_summary = (
+                        await asyncio.get_running_loop().run_in_executor(
+                            _DOCUMENT_RENEWAL_SCHEDULER_EXECUTOR,
+                            _document_renewal_workflow_worker,
+                        )
+                    )
+                    degraded = bool(
+                        eligibility_summary.get("degraded")
+                        or reminder_summary.get("degraded")
+                    )
+                    log_method = logger.error if degraded else logger.info
+                    log_method(
+                        "document-renewal: run %s eligibility_scanned=%s "
+                        "requests_created=%s eligibility_blocked=%s "
+                        "eligibility_failure_codes=%s "
+                        "reminders_scanned=%s reminders_generated=%s "
+                        "reminders_blocked=%s reminders_unchanged=%s "
+                        "reminder_failure_codes=%s",
+                        (
+                            "degraded"
+                            if degraded
+                            else "complete"
+                        ),
+                        eligibility_summary.get("scanned", 0),
+                        eligibility_summary.get("created", 0),
+                        eligibility_summary.get("blocked", 0),
+                        sorted(
+                            {
+                                str(item.get("code") or "")
+                                for item in eligibility_summary.get(
+                                    "degraded_failures", []
+                                )
+                                if item.get("code")
+                            }
+                        ),
+                        reminder_summary.get("scanned", 0),
+                        reminder_summary.get("generated", 0),
+                        reminder_summary.get("blocked", 0),
+                        reminder_summary.get("unchanged", 0),
+                        sorted(
+                            {
+                                str(item.get("code") or "")
+                                for item in reminder_summary.get(
+                                    "degraded_failures", []
+                                )
+                                if item.get("code")
+                            }
+                        ),
+                    )
+                except Exception:
+                    logger.exception(
+                        "document-renewal-reminders: scheduled run failed"
+                    )
+
+            _document_renewal_reminder_cb = tornado.ioloop.PeriodicCallback(
+                _document_renewal_reminder_tick,
+                _renewal_reminder_interval_seconds * 1000,
+            )
+            tornado.ioloop.IOLoop.current().call_later(
+                _renewal_reminder_initial_delay,
+                lambda: tornado.ioloop.IOLoop.current().spawn_callback(
+                    _document_renewal_reminder_tick
+                ),
+            )
+            _document_renewal_reminder_cb.start()
+            logger.info(
+                "document-renewal-reminders: registered "
+                "(interval=%ss initial_delay=%ss offsets=%s)",
+                _renewal_reminder_interval_seconds,
+                _renewal_reminder_initial_delay,
+                _renewal_reminder_days,
+            )
+        else:
+            logger.info(
+                "document-renewal-reminders: disabled by governed feature flag"
+            )
+    except Exception:
+        logger.exception(
+            "document-renewal-reminders: startup registration failed"
+        )
         if ENVIRONMENT in ("production", "staging"):
             raise
 

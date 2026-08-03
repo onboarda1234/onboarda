@@ -40,8 +40,10 @@ class TestPartA_AISurfacesIdentified:
     def test_compliance_memo_section_exists(self, backoffice_html):
         assert 'id="detail-memo"' in backoffice_html
 
-    def test_memo_validation_panel_exists(self, backoffice_html):
-        assert 'id="memo-validation-panel"' in backoffice_html
+    def test_memo_pdf_workspace_replaces_validation_panel(self, backoffice_html):
+        assert 'id="compliance-memo-workspace"' in backoffice_html
+        assert 'id="memo-pdf-preview"' in backoffice_html
+        assert 'id="memo-validation-panel"' not in backoffice_html
 
     def test_supervisor_pipeline_exists(self, backoffice_html):
         assert 'id="sv-pipeline-results"' in backoffice_html
@@ -52,8 +54,11 @@ class TestPartA_AISurfacesIdentified:
     def test_verification_results_function(self, backoffice_html):
         assert 'function buildVerificationResultsHtml' in backoffice_html
 
-    def test_render_memo_sections_function(self, backoffice_html):
-        assert 'function renderMemoSections' in backoffice_html
+    def test_html_memo_renderer_is_disabled(self, backoffice_html):
+        fn_start = backoffice_html.rindex('function renderMemoSections()')
+        fn_end = backoffice_html.index('function renderMemoGovernanceSummary()', fn_start)
+        fn_region = backoffice_html[fn_start:fn_end]
+        assert "return '';" in fn_region
 
     def test_render_supervisor_results_function(self, backoffice_html):
         assert 'function renderSupervisorResults' in backoffice_html
@@ -71,39 +76,29 @@ class TestPartB_AdvisoryLabeling:
         assert '.ai-advisory-banner' in backoffice_html
         assert '.ai-advisory-badge' in backoffice_html
 
-    def test_memo_header_has_advisory_badge(self, backoffice_html):
-        # The memo header should contain the advisory badge
-        memo_header_match = re.search(
-            r'Compliance Onboarding Memo.*?ai-advisory-badge.*?System-Generated.*?Advisory Only',
-            backoffice_html,
-            re.DOTALL
-        )
-        assert memo_header_match is not None, \
-            "Memo header should have 'System-Generated — Advisory Only' badge"
+    def test_memo_header_is_document_control_only(self, backoffice_html):
+        overview = _extract_detail_tab_region(backoffice_html, 'overview', 'kyc-docs')
+        assert 'Memo Version' in overview
+        assert 'Memo Status' in overview
+        assert 'Application Snapshot Timestamp' in overview
+        assert 'ai-advisory-badge' not in overview
 
-    def test_memo_rendered_content_has_advisory_banner(self, backoffice_html):
-        # renderMemoSections() must add an advisory banner
-        assert "System-Generated — Advisory Only" in backoffice_html
-        # Verify it's inside the function (use next function as boundary)
-        fn_start = backoffice_html.index('function renderMemoSections')
-        fn_end = backoffice_html.index('function generateComplianceMemo', fn_start)
-        fn_region = backoffice_html[fn_start:fn_end]
-        assert 'ai-advisory-banner' in fn_region, \
-            "renderMemoSections must include the AI advisory banner"
+    def test_memo_content_is_the_generated_pdf(self, backoffice_html):
+        workspace_start = backoffice_html.index('// ── Compliance Memo document workspace')
+        workspace_end = backoffice_html.index('// ══════════════════════════════════════════════════════════\n// AI SUPERVISOR', workspace_start)
+        workspace_region = backoffice_html[workspace_start:workspace_end]
+        assert 'id="memo-pdf-preview"' in _extract_detail_tab_region(backoffice_html, 'overview', 'kyc-docs')
+        assert 'frame.src = url' in workspace_region
+        assert 'ai-advisory-banner' not in _extract_detail_tab_region(backoffice_html, 'overview', 'kyc-docs')
 
-    def test_validation_panel_has_advisory_badge(self, backoffice_html):
-        validation_match = re.search(
-            r'memo-validation-panel.*?ai-advisory-badge.*?System-Generated.*?Advisory Only',
-            backoffice_html,
-            re.DOTALL
-        )
-        assert validation_match is not None, \
-            "Validation panel should have advisory badge"
+    def test_memo_validation_dashboard_is_not_rendered(self, backoffice_html):
+        assert 'id="memo-validation-panel"' not in backoffice_html
+        assert 'id="memo-quality-gauge"' not in backoffice_html
 
     def test_supervisor_tab_has_advisory_banner(self, backoffice_html):
         supervisor_region = _extract_detail_tab_region(backoffice_html, 'supervisor', 'lifecycle')
         assert 'Coming Soon — Enterprise Module' in supervisor_region
-        assert 'The AI Compliance Supervisor will provide advanced supervisory oversight' in supervisor_region
+        assert 'RegMind AI Compliance Supervisor will provide advanced supervisory oversight' in supervisor_region
         assert 'Not active in pilot' in supervisor_region
 
     def test_ai_explainability_layer_moved_to_supervisor_tab(self, backoffice_html):
@@ -139,12 +134,12 @@ class TestPartB_AdvisoryLabeling:
         assert 'AI Agent Pipeline Results' not in supervisor_region, \
             "AI Agent Pipeline Results should not appear operational in pilot"
 
-    def test_supervisor_tab_renamed_to_ai_compliance_supervisor(self, backoffice_html):
+    def test_supervisor_tab_renamed_to_ai_supervisor(self, backoffice_html):
         detail_nav_start = backoffice_html.index('id="tab-overview"')
         detail_nav_end = backoffice_html.index('id="detail-tab-overview"', detail_nav_start)
         detail_nav = backoffice_html[detail_nav_start:detail_nav_end]
 
-        assert 'AI Compliance Supervisor' in detail_nav
+        assert 'AI Supervisor' in detail_nav
 
     def test_ai_governance_evidence_trail_is_collapsible(self, backoffice_html):
         supervisor_region = _extract_detail_tab_region(backoffice_html, 'supervisor', 'lifecycle')
@@ -175,18 +170,10 @@ class TestPartB_AdvisoryLabeling:
         assert 'ai-advisory-banner' not in fn_region, \
             "per-document verification results must not repeat the AI advisory banner"
 
-    def test_supervisor_verdict_panel_has_advisory(self, backoffice_html):
-        # The SUPERVISOR VERDICT label and ai-advisory-badge should co-occur
-        # within the renderMemoSections function output
-        fn_start = backoffice_html.index('function renderMemoSections')
-        fn_end = backoffice_html.index('function generateComplianceMemo', fn_start)
-        fn_region = backoffice_html[fn_start:fn_end]
-        assert 'SUPERVISOR VERDICT' in fn_region
-        # Find the section and check for advisory badge
-        sv_idx = fn_region.index('SUPERVISOR VERDICT')
-        sv_region = fn_region[sv_idx:sv_idx + 800]
-        assert 'ai-advisory-badge' in sv_region, \
-            "Supervisor verdict panel must have advisory badge"
+    def test_memo_workspace_has_no_supervisor_panel(self, backoffice_html):
+        overview = _extract_detail_tab_region(backoffice_html, 'overview', 'kyc-docs')
+        assert 'SUPERVISOR VERDICT' not in overview
+        assert 'supervisor panel' not in overview.lower()
 
     def test_supervisor_sub_panels_have_advisory(self, backoffice_html):
         """Operational supervisor panels are not shown in pilot."""
@@ -232,7 +219,7 @@ class TestPartC_OfficerSignoffGate:
             "confirmOverride must show an error message about sign-off"
 
     def test_approve_memo_checks_signoff(self, backoffice_html):
-        fn_start = backoffice_html.index('async function approveMemo()')
+        fn_start = backoffice_html.rindex('async function approveMemo()')
         fn_region = backoffice_html[fn_start:fn_start + 2000]
         assert 'memo-officer-signoff' in fn_region, \
             "approveMemo must check the memo officer sign-off checkbox"
@@ -312,12 +299,9 @@ class TestPartD_MockSimulatedLabeling:
         assert 'Simulated — Not From Live AI' in fn_region, \
             "Verification checks must label mock results as simulated"
 
-    def test_ai_source_surfaced_as_tag(self, backoffice_html):
-        fn_start = backoffice_html.index('function renderMemoSections')
-        fn_end = backoffice_html.index('function generateComplianceMemo', fn_start)
-        fn_region = backoffice_html[fn_start:fn_end]
-        assert 'ai-source-tag' in fn_region, \
-            "renderMemoSections should surface ai_source as a tag"
+    def test_memo_workspace_does_not_surface_ai_source_tags(self, backoffice_html):
+        overview = _extract_detail_tab_region(backoffice_html, 'overview', 'kyc-docs')
+        assert 'ai-source-tag' not in overview
 
     def test_screening_simulated_blocks_approval(self, backoffice_html):
         """Simulated screening badge indicates not from live + blocks approval."""
@@ -359,14 +343,9 @@ class TestPartE_VisualDistinction:
         assert "Rule-Based" in fn_region
         assert "AI-Generated" in fn_region
 
-    def test_rule_engine_panel_labeled_deterministic(self, backoffice_html):
-        fn_start = backoffice_html.index('function renderMemoSections')
-        fn_end = backoffice_html.index('function generateComplianceMemo', fn_start)
-        fn_region = backoffice_html[fn_start:fn_end]
-        re_idx = fn_region.index('PRE-GENERATION RULE ENGINE')
-        re_region = fn_region[re_idx:re_idx + 800]
-        assert 'Deterministic' in re_region, \
-            "Rule Engine panel should be labeled as Deterministic"
+    def test_rule_engine_panel_is_not_duplicated_in_memo_workspace(self, backoffice_html):
+        overview = _extract_detail_tab_region(backoffice_html, 'overview', 'kyc-docs')
+        assert 'PRE-GENERATION RULE ENGINE' not in overview
 
     def test_rules_triggered_panel_labeled_rule_based(self, backoffice_html):
         supervisor_region = _extract_detail_tab_region(backoffice_html, 'supervisor', 'lifecycle')
@@ -383,14 +362,14 @@ class TestNonRegression:
     """Verify existing compliance gates are not weakened by EX-11 changes."""
 
     def test_existing_memo_gates_preserved(self, backoffice_html):
-        fn_start = backoffice_html.index('async function approveMemo()')
-        fn_region = backoffice_html[fn_start:fn_start + 3000]
-        # All 5 original gates must still be present
-        assert 'GATE 1' in fn_region
-        assert 'GATE 2' in fn_region
-        assert 'GATE 3' in fn_region
-        assert 'GATE 4' in fn_region
-        assert 'GATE 5' in fn_region
+        fn_start = backoffice_html.rindex('async function approveMemo()')
+        fn_region = backoffice_html[fn_start:fn_start + 4000]
+        assert "memoWorkspaceLifecycle(app, memoData) === 'STALE'" in fn_region
+        assert '(memoData.metadata || {}).blocked' in fn_region
+        assert "consistency.verdict === 'INCONSISTENT'" in fn_region
+        assert 'ruleEngine.total_violations > 0' in fn_region
+        assert "validationStatus === 'fail' || validationStatus === 'pending'" in fn_region
+        assert 'Officer rationale is required before approval.' in fn_region
 
     def test_decision_still_requires_reason(self, backoffice_html):
         fn_start = backoffice_html.index('async function confirmDecision()')
@@ -407,7 +386,7 @@ class TestNonRegression:
         assert '/memo/approve' in backoffice_html
 
     def test_supervisor_verdict_gating_preserved(self, backoffice_html):
-        fn_start = backoffice_html.index('async function approveMemo()')
+        fn_start = backoffice_html.rindex('async function approveMemo()')
         fn_region = backoffice_html[fn_start:fn_start + 3000]
         assert 'INCONSISTENT' in fn_region
         assert 'can_approve' in fn_region

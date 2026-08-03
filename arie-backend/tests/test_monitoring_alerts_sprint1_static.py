@@ -179,7 +179,7 @@ def test_dashboard_monitoring_metric_is_not_mislabelled_as_alerts():
     server = SERVER_PY.read_text()
 
     assert "High-risk applications" in html
-    assert "Periodic Review Queue" in _view_region(html, "view-dashboard", "view-kpis")
+    assert "RegMind Periodic Reviews" in _view_region(html, "view-dashboard", "view-kpis")
     assert "Scheduled reviews stay separate" in _view_region(html, "view-dashboard", "view-kpis")
     assert "Active Monitoring Alerts" not in _view_region(html, "view-dashboard", "view-kpis")
     assert "high_risk_applications" in html

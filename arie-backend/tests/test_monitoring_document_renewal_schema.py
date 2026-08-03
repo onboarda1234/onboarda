@@ -1,0 +1,1154 @@
+"""Schema contracts for the staged Monitoring document-renewal workflow.
+
+The request, event, upload, authoritative binding, and cleanup tables are
+additive regulated-evidence stores; the sixth table is an operational fairness
+cursor. They never backfill or mutate ``documents`` / ``monitoring_alerts`` and
+their parent foreign keys are deliberately RESTRICT rather than cascade-delete.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sqlite3
+import sys
+from pathlib import Path
+
+import pytest
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BACKEND_ROOT))
+
+from tests._migration_idempotency_helpers import fresh_migration_db
+
+
+MIGRATION_PATH = (
+    BACKEND_ROOT
+    / "migrations"
+    / "scripts"
+    / "migration_058_monitoring_document_renewal.sql"
+)
+UPLOAD_BINDING_MIGRATION_PATH = (
+    BACKEND_ROOT
+    / "migrations"
+    / "scripts"
+    / "migration_059_monitoring_document_renewal_upload_binding.sql"
+)
+
+REQUEST_COLUMNS = """
+    request_id, application_id, customer_id, person_id, person_type,
+    document_id, document_type, document_slot_key, document_version, monitoring_alert_id,
+    request_reason, request_status, due_date, created_by, sent_at,
+    cancelled_at, cancelled_by, cancel_reason, contract_version,
+    eligibility_fingerprint
+"""
+
+
+@pytest.fixture
+def renewal_db(tmp_path, monkeypatch):
+    with fresh_migration_db(tmp_path, monkeypatch) as db:
+        # The application deliberately leaves SQLite FK enforcement to test /
+        # development callers; production PostgreSQL enforces it natively.
+        # Enable it here so the declared RESTRICT contract is exercised.
+        db.execute("PRAGMA foreign_keys = ON")
+        _seed_binding_schema_parents(db)
+        db.commit()
+        yield db
+
+
+def _seed_binding_schema_parents(db):
+    db.execute(
+        """INSERT INTO clients (id, email, password_hash, company_name)
+           VALUES (?, ?, ?, ?)""",
+        ("renewal-client", "renewal-schema@example.test", "hash", "Renewal Schema Ltd"),
+    )
+    db.execute(
+        """INSERT INTO applications (id, ref, client_id, company_name)
+           VALUES (?, ?, ?, ?)""",
+        ("renewal-app", "ARF-RENEWAL-SCHEMA", "renewal-client", "Renewal Schema Ltd"),
+    )
+    for document_id, document_type in (
+        ("renewal-doc-a", "passport"),
+        ("renewal-doc-b", "proof_of_address"),
+    ):
+        db.execute(
+            """INSERT INTO documents
+                   (id, application_id, person_id, person_type, doc_type,
+                    doc_name, file_path, version)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                document_id,
+                "renewal-app",
+                "director-1",
+                "director",
+                document_type,
+                f"{document_type}.pdf",
+                f"staged/{document_id}.pdf",
+                1,
+            ),
+        )
+    for alert_id, source_reference in (
+        (58001, "renewal-doc-a"),
+        (58002, "renewal-doc-b"),
+        (58003, "renewal-doc-b-manual"),
+    ):
+        db.execute(
+            """INSERT INTO monitoring_alerts
+                   (id, application_id, alert_type, severity, detected_by,
+                    summary, source_reference)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                alert_id,
+                "renewal-app",
+                "document_expired",
+                "medium",
+                "schema_test",
+                "Document renewal schema test",
+                source_reference,
+            ),
+        )
+
+
+def _insert_request(
+    db,
+    *,
+    request_id="renewal-request-1",
+    document_id="renewal-doc-a",
+    document_type="passport",
+    alert_id=58001,
+    status="created",
+    person_id="director-1",
+    person_type="director",
+    sent_at=None,
+    cancelled_at=None,
+    cancelled_by=None,
+    cancel_reason=None,
+    document_version=1,
+    revision=1,
+    fingerprint=None,
+):
+    db.execute(
+        f"""INSERT INTO monitoring_document_renewal_requests ({REQUEST_COLUMNS}, revision)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            request_id,
+            "renewal-app",
+            "renewal-client",
+            person_id,
+            person_type,
+            document_id,
+            document_type,
+            f"person:director:director-1:{document_type}",
+            document_version,
+            alert_id,
+            "expired",
+            status,
+            "2030-01-31T00:00:00Z",
+            "officer-1",
+            sent_at,
+            cancelled_at,
+            cancelled_by,
+            cancel_reason,
+            "monitoring_document_renewal_request_v1",
+            fingerprint or ("a" * 64),
+            revision,
+        ),
+    )
+
+
+def _table_types(db, table):
+    return {
+        row["name"]: (row["type"] or "").upper()
+        for row in db.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+
+
+def _insert_upload(db, *, upload_id="upload-1", request_id="renewal-request-1"):
+    db.execute(
+        """INSERT INTO monitoring_document_renewal_uploads
+               (upload_id, request_id, application_id, customer_id,
+                original_filename, storage_key, file_size, mime_type,
+                file_sha256, uploaded_at, uploaded_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            upload_id,
+            request_id,
+            "renewal-app",
+            "renewal-client",
+            "replacement.pdf",
+            f"monitoring-renewals/{request_id}/{upload_id}.pdf",
+            1234,
+            "application/pdf",
+            "b" * 64,
+            "2030-01-01T00:00:00Z",
+            "renewal-client",
+        ),
+    )
+
+
+def _insert_binding(
+    db,
+    *,
+    upload_id="upload-1",
+    request_id="renewal-request-1",
+    uploaded_document_id=None,
+    application_id="renewal-app",
+    customer_id="renewal-client",
+    person_id="director-1",
+    person_type="director",
+    original_document_id="renewal-doc-a",
+    original_document_version=1,
+    document_type="passport",
+    binding_status="bound",
+    contract_version="monitoring_document_renewal_upload_binding_v1",
+    binding_fingerprint=None,
+):
+    db.execute(
+        """INSERT INTO monitoring_document_renewal_upload_bindings
+               (upload_id, renewal_request_id, application_id, customer_id,
+                person_id, person_type, original_document_id,
+                original_document_version, uploaded_document_id, document_type,
+                upload_timestamp, uploaded_by, binding_status,
+                contract_version, binding_fingerprint)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            upload_id,
+            request_id,
+            application_id,
+            customer_id,
+            person_id,
+            person_type,
+            original_document_id,
+            original_document_version,
+            uploaded_document_id or f"renewal-candidate:{upload_id}",
+            document_type,
+            "2030-01-01T00:00:00Z",
+            "renewal-client",
+            binding_status,
+            contract_version,
+            binding_fingerprint or ("c" * 64),
+        ),
+    )
+
+
+def test_fresh_sqlite_schema_has_exact_tables_types_and_empty_inventory(renewal_db):
+    expected = {
+        "monitoring_document_renewal_requests",
+        "monitoring_document_renewal_events",
+        "monitoring_document_renewal_uploads",
+        "monitoring_document_renewal_upload_bindings",
+        "monitoring_document_renewal_upload_cleanup",
+        "monitoring_document_renewal_scheduler_state",
+    }
+    present = {
+        row["name"]
+        for row in renewal_db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    assert expected <= present
+    assert _table_types(renewal_db, "monitoring_document_renewal_requests")["created_at"] == "TEXT"
+    assert _table_types(renewal_db, "monitoring_document_renewal_events")["payload"] == "TEXT"
+    assert _table_types(renewal_db, "monitoring_document_renewal_uploads")["uploaded_at"] == "TEXT"
+    assert _table_types(renewal_db, "monitoring_document_renewal_upload_bindings")["upload_timestamp"] == "TEXT"
+    assert _table_types(renewal_db, "monitoring_document_renewal_upload_cleanup")["lease_expires_at"] == "TEXT"
+    assert _table_types(renewal_db, "monitoring_document_renewal_scheduler_state")["updated_at"] == "TEXT"
+    for table in expected:
+        assert renewal_db.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"] == 0
+
+
+def test_request_constraints_and_person_pair_fail_closed(renewal_db):
+    _insert_request(renewal_db)
+
+    bad_cases = (
+        {"request_id": "bad-version", "document_id": "renewal-doc-b", "document_type": "proof_of_address", "alert_id": 58002, "document_version": 0},
+        {"request_id": "bad-revision", "document_id": "renewal-doc-b", "document_type": "proof_of_address", "alert_id": 58002, "revision": 0},
+        {"request_id": "bad-person", "document_id": "renewal-doc-b", "document_type": "proof_of_address", "alert_id": 58002, "person_type": None},
+        {"request_id": "bad-fingerprint", "document_id": "renewal-doc-b", "document_type": "proof_of_address", "alert_id": 58002, "fingerprint": "ABC"},
+        {
+            "request_id": "bad-status",
+            "document_id": "renewal-doc-b",
+            "document_type": "proof_of_address",
+            "alert_id": 58002,
+            "status": "verified",
+        },
+        {
+            "request_id": "bad-awaiting",
+            "document_id": "renewal-doc-b",
+            "document_type": "proof_of_address",
+            "alert_id": 58002,
+            "status": "awaiting_upload",
+        },
+        {
+            "request_id": "bad-cancelled",
+            "document_id": "renewal-doc-b",
+            "document_type": "proof_of_address",
+            "alert_id": 58002,
+            "status": "cancelled",
+        },
+    )
+    for case in bad_cases:
+        with pytest.raises(sqlite3.IntegrityError):
+            _insert_request(renewal_db, **case)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        renewal_db.execute(
+            f"""INSERT INTO monitoring_document_renewal_requests ({REQUEST_COLUMNS})
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "bad-reason",
+                "renewal-app",
+                "renewal-client",
+                "director-1",
+                "director",
+                "renewal-doc-b",
+                "proof_of_address",
+                "person:director:director-1:proof_of_address",
+                1,
+                58002,
+                "approximately_expired",
+                "created",
+                "2030-01-31",
+                "officer-1",
+                None,
+                None,
+                None,
+                None,
+                "monitoring_document_renewal_request_v1",
+                "b" * 64,
+            ),
+        )
+
+
+def test_partial_unique_active_identity_allows_new_request_only_after_cancel(renewal_db):
+    _insert_request(renewal_db)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_request(
+            renewal_db,
+            request_id="renewal-request-duplicate",
+            alert_id=58002,
+        )
+
+    renewal_db.execute(
+        """UPDATE monitoring_document_renewal_requests
+              SET request_status = 'cancelled',
+                  cancelled_at = ?, cancelled_by = ?, cancel_reason = ?
+            WHERE request_id = ?""",
+        ("2029-12-01T00:00:00Z", "officer-2", "Superseded request", "renewal-request-1"),
+    )
+    _insert_request(
+        renewal_db,
+        request_id="renewal-request-after-cancel",
+        alert_id=58002,
+    )
+    assert renewal_db.execute(
+        "SELECT COUNT(*) AS c FROM monitoring_document_renewal_requests"
+    ).fetchone()["c"] == 2
+
+
+def test_partial_unique_active_alert_is_independent_of_document_identity(renewal_db):
+    _insert_request(renewal_db)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_request(
+            renewal_db,
+            request_id="renewal-request-same-alert",
+            document_id="renewal-doc-b",
+            document_type="proof_of_address",
+            alert_id=58001,
+        )
+
+
+def test_events_are_idempotent_typed_and_request_restricted(renewal_db):
+    _insert_request(renewal_db)
+    renewal_db.execute(
+        """INSERT INTO monitoring_document_renewal_events
+               (event_id, request_id, event_sequence, event_type, event_key, created_by)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        ("event-1", "renewal-request-1", 1, "request_created", "request-1:created", "officer-1"),
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        renewal_db.execute(
+            """INSERT INTO monitoring_document_renewal_events
+                   (event_id, request_id, event_sequence, event_type, event_key, created_by)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            ("event-2", "renewal-request-1", 2, "request_sent", "request-1:created", "officer-1"),
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        renewal_db.execute(
+            """INSERT INTO monitoring_document_renewal_events
+                   (event_id, request_id, event_sequence, event_type, event_key, created_by)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            ("event-3", "renewal-request-1", 2, "reminder_generated", "request-1:reminder", "scheduler"),
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        renewal_db.execute(
+            """INSERT INTO monitoring_document_renewal_events
+                   (event_id, request_id, event_sequence, event_type, event_key, created_by,
+                    reminder_interval_days)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            ("event-4", "renewal-request-1", 3, "request_sent", "request-1:bad-reminder", "officer-1", 7),
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        renewal_db.execute(
+            """INSERT INTO monitoring_document_renewal_events
+                   (event_id, request_id, event_sequence, event_type, event_key, created_by)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            ("event-5", "missing-request", 1, "request_created", "missing:created", "officer-1"),
+        )
+
+
+def test_uploads_are_staged_evidence_with_no_document_fk_or_verification_fields(renewal_db):
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+    columns = _table_types(renewal_db, "monitoring_document_renewal_uploads")
+    assert "document_id" not in columns
+    assert "verification_status" not in columns
+    with pytest.raises(sqlite3.IntegrityError):
+        renewal_db.execute(
+            """INSERT INTO monitoring_document_renewal_uploads
+                   (upload_id, request_id, application_id, customer_id,
+                    original_filename, storage_key, file_size, mime_type,
+                    file_sha256, uploaded_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "upload-negative",
+                "renewal-request-1",
+                "renewal-app",
+                "renewal-client",
+                "replacement.pdf",
+                "monitoring-renewals/negative.pdf",
+                -1,
+                "application/pdf",
+                "c" * 64,
+                "renewal-client",
+            ),
+        )
+
+
+def test_upload_binding_is_exact_immutable_identity_not_a_canonical_document(renewal_db):
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+    _insert_binding(renewal_db)
+
+    columns = set(_table_types(renewal_db, "monitoring_document_renewal_upload_bindings"))
+    assert columns == {
+        "upload_id",
+        "renewal_request_id",
+        "application_id",
+        "customer_id",
+        "person_id",
+        "person_type",
+        "original_document_id",
+        "original_document_version",
+        "uploaded_document_id",
+        "document_type",
+        "upload_timestamp",
+        "uploaded_by",
+        "binding_status",
+        "contract_version",
+        "binding_fingerprint",
+    }
+    assert "verification_status" not in columns
+    assert "review_status" not in columns
+    assert "canonical_replacement_id" not in columns
+
+    foreign_keys = renewal_db.execute(
+        "PRAGMA foreign_key_list(monitoring_document_renewal_upload_bindings)"
+    ).fetchall()
+    assert {
+        (row["from"], row["table"], row["to"])
+        for row in foreign_keys
+    } >= {
+        ("upload_id", "monitoring_document_renewal_uploads", "upload_id"),
+        (
+            "renewal_request_id",
+            "monitoring_document_renewal_requests",
+            "request_id",
+        ),
+        ("application_id", "applications", "id"),
+        ("customer_id", "clients", "id"),
+        ("original_document_id", "documents", "id"),
+    }
+    assert {row["on_delete"].upper() for row in foreign_keys} == {"RESTRICT"}
+    assert all(row["from"] != "uploaded_document_id" for row in foreign_keys)
+
+    identity_indexes = renewal_db.execute(
+        """SELECT name
+             FROM sqlite_master
+            WHERE type = 'index'
+              AND name IN (
+                    'uq_monitoring_doc_renewal_app_customer',
+                    'uq_monitoring_doc_renewal_upload_identity',
+                    'uq_monitoring_doc_renewal_request_identity',
+                    'uq_monitoring_doc_renewal_request_person',
+                    'uq_monitoring_doc_renewal_document_identity',
+                    'uq_monitoring_doc_renewal_document_person'
+               )"""
+    ).fetchall()
+    assert identity_indexes == []
+    guard_names = {
+        row["name"]
+        for row in renewal_db.execute(
+            """SELECT name
+                 FROM sqlite_master
+                WHERE type = 'trigger'
+                  AND name LIKE 'trg_monitoring_doc_renewal_binding_identity_%'"""
+        ).fetchall()
+    }
+    assert guard_names == {
+        "trg_monitoring_doc_renewal_binding_identity_insert",
+        "trg_monitoring_doc_renewal_binding_identity_update",
+    }
+
+    indexes = renewal_db.execute(
+        "PRAGMA index_list(monitoring_document_renewal_upload_bindings)"
+    ).fetchall()
+    unique_column_sets = {
+        tuple(
+            row["name"]
+            for row in renewal_db.execute(
+                f"PRAGMA index_info({index['name']})"
+            ).fetchall()
+        )
+        for index in indexes
+        if index["unique"]
+    }
+    assert ("renewal_request_id",) in unique_column_sets
+    assert ("uploaded_document_id",) in unique_column_sets
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"binding_status": "verified"},
+        {"contract_version": "monitoring_document_renewal_upload_binding_v0"},
+        {"binding_fingerprint": "C" * 64},
+        {"binding_fingerprint": "z" * 64},
+        {"original_document_version": 0},
+        {"person_type": None},
+        {"uploaded_document_id": "document:guessed"},
+    ],
+)
+def test_upload_binding_constraints_fail_closed(renewal_db, override):
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_binding(renewal_db, **override)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"application_id": "renewal-app-other", "customer_id": "renewal-client-other"},
+        {"customer_id": "renewal-client-other"},
+        {"person_id": None, "person_type": None},
+        {"person_id": "director-2", "person_type": "director"},
+        {
+            "original_document_id": "renewal-doc-b",
+            "document_type": "proof_of_address",
+        },
+        {"original_document_version": 2},
+    ],
+)
+def test_upload_binding_database_rejects_cross_wired_valid_identity(
+    renewal_db,
+    override,
+):
+    renewal_db.execute(
+        """INSERT INTO clients (id, email, password_hash, company_name)
+           VALUES (?, ?, ?, ?)""",
+        (
+            "renewal-client-other",
+            "renewal-schema-other@example.test",
+            "hash",
+            "Renewal Schema Other Ltd",
+        ),
+    )
+    renewal_db.execute(
+        """INSERT INTO applications (id, ref, client_id, company_name)
+           VALUES (?, ?, ?, ?)""",
+        (
+            "renewal-app-other",
+            "ARF-RENEWAL-SCHEMA-OTHER",
+            "renewal-client-other",
+            "Renewal Schema Other Ltd",
+        ),
+    )
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_binding(renewal_db, **override)
+
+
+@pytest.mark.parametrize(
+    "column,value",
+    [
+        ("upload_timestamp", "2030-01-02T00:00:00Z"),
+        ("uploaded_by", "another-valid-actor"),
+        ("person_id", None),
+    ],
+)
+def test_upload_binding_identity_trigger_rejects_null_safe_or_upload_mismatch(
+    renewal_db,
+    column,
+    value,
+):
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+    person_type = None if column == "person_id" else "director"
+    with pytest.raises(sqlite3.IntegrityError):
+        renewal_db.execute(
+            """INSERT INTO monitoring_document_renewal_upload_bindings
+                    (upload_id, renewal_request_id, application_id, customer_id,
+                     person_id, person_type, original_document_id,
+                     original_document_version, uploaded_document_id, document_type,
+                     upload_timestamp, uploaded_by, binding_status,
+                     contract_version, binding_fingerprint)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'bound', ?, ?)""",
+            (
+                "upload-1",
+                "renewal-request-1",
+                "renewal-app",
+                "renewal-client",
+                value if column == "person_id" else "director-1",
+                person_type,
+                "renewal-doc-a",
+                1,
+                "renewal-candidate:upload-1",
+                "passport",
+                value if column == "upload_timestamp" else "2030-01-01T00:00:00Z",
+                value if column == "uploaded_by" else "renewal-client",
+                "monitoring_document_renewal_upload_binding_v1",
+                "c" * 64,
+            ),
+        )
+
+
+def test_upload_binding_identity_trigger_rejects_cross_wired_update(renewal_db):
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+    _insert_binding(renewal_db)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        renewal_db.execute(
+            """UPDATE monitoring_document_renewal_upload_bindings
+                  SET upload_timestamp = ?
+                WHERE upload_id = ?""",
+            ("2030-01-02T00:00:00Z", "upload-1"),
+        )
+    assert renewal_db.execute(
+        """SELECT upload_timestamp
+             FROM monitoring_document_renewal_upload_bindings
+            WHERE upload_id = ?""",
+        ("upload-1",),
+    ).fetchone()["upload_timestamp"] == "2030-01-01T00:00:00Z"
+
+
+def test_upload_binding_uniqueness_and_parent_restriction(renewal_db):
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+    _insert_binding(renewal_db)
+
+    _insert_request(
+        renewal_db,
+        request_id="renewal-request-2",
+        document_id="renewal-doc-b",
+        document_type="proof_of_address",
+        alert_id=58002,
+    )
+    _insert_upload(
+        renewal_db,
+        upload_id="upload-2",
+        request_id="renewal-request-2",
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_binding(
+            renewal_db,
+            upload_id="upload-2",
+            request_id="renewal-request-1",
+            uploaded_document_id="renewal-candidate:upload-2",
+            original_document_id="renewal-doc-b",
+            document_type="proof_of_address",
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        # Use the raw disposable SQLite test connection so the database FK is
+        # exercised beneath the independent regulated-deletion application
+        # guard (which correctly rejects this DELETE even earlier).
+        renewal_db.conn.execute(
+            "DELETE FROM monitoring_document_renewal_uploads WHERE upload_id = ?",
+            ("upload-1",),
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        renewal_db.conn.execute(
+            "DELETE FROM documents WHERE id = ?",
+            ("renewal-doc-a",),
+        )
+
+
+def test_upload_cleanup_ledger_is_identity_bound_and_state_constrained(renewal_db):
+    _insert_request(renewal_db)
+    renewal_db.execute(
+        """
+        INSERT INTO monitoring_document_renewal_upload_cleanup
+            (cleanup_id, upload_id, request_id, application_id, customer_id,
+             backend, storage_key, file_extension, local_path)
+        VALUES (?, ?, ?, ?, ?, 'local', ?, '.pdf', ?)
+        """,
+        (
+            "cleanup-1",
+            "a" * 32,
+            "renewal-request-1",
+            "renewal-app",
+            "renewal-client",
+            "monitoring-renewal-candidate/" + "a" * 32 + ".pdf",
+            "/tmp/monitoring-renewal-candidates/" + "a" * 32 + ".pdf",
+        ),
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        renewal_db.execute(
+            """
+            INSERT INTO monitoring_document_renewal_upload_cleanup
+                (cleanup_id, upload_id, request_id, application_id, customer_id,
+                 backend, storage_key, file_extension, local_path,
+                 artifact_state)
+            VALUES (?, ?, ?, ?, ?, 'local', ?, '.PDF', ?, 'verified')
+            """,
+            (
+                "cleanup-bad",
+                "b" * 32,
+                "renewal-request-1",
+                "renewal-app",
+                "renewal-client",
+                "monitoring-renewal-candidate/" + "b" * 32 + ".PDF",
+                "/tmp/monitoring-renewal-candidates/" + "b" * 32 + ".PDF",
+            ),
+        )
+    foreign_keys = renewal_db.execute(
+        "PRAGMA foreign_key_list(monitoring_document_renewal_upload_cleanup)"
+    ).fetchall()
+    assert {row["table"] for row in foreign_keys} == {
+        "applications",
+        "clients",
+        "monitoring_document_renewal_requests",
+    }
+    assert {row["on_delete"].upper() for row in foreign_keys} == {"RESTRICT"}
+
+
+def test_parent_foreign_keys_restrict_hard_delete(renewal_db):
+    _insert_request(renewal_db)
+    foreign_keys = renewal_db.execute(
+        "PRAGMA foreign_key_list(monitoring_document_renewal_requests)"
+    ).fetchall()
+    assert {row["table"] for row in foreign_keys} == {
+        "applications",
+        "clients",
+        "documents",
+        "monitoring_alerts",
+    }
+    assert {row["on_delete"].upper() for row in foreign_keys} == {"RESTRICT"}
+    with pytest.raises(sqlite3.IntegrityError):
+        renewal_db.execute("DELETE FROM documents WHERE id = ?", ("renewal-doc-a",))
+
+
+def test_migration_is_idempotent_preserves_rows_and_contains_no_backfill(renewal_db):
+    sql = MIGRATION_PATH.read_text(encoding="utf-8")
+    executable_sql = "\n".join(
+        line for line in sql.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert re.search(r"^\s*(INSERT|UPDATE|DELETE)\b", executable_sql, re.MULTILINE | re.IGNORECASE) is None
+
+    # Force the migration path instead of relying on init_db's inline DDL.
+    renewal_db.execute("DROP TABLE monitoring_document_renewal_upload_cleanup")
+    renewal_db.execute("DROP TABLE monitoring_document_renewal_uploads")
+    renewal_db.execute("DROP TABLE monitoring_document_renewal_events")
+    renewal_db.execute("DROP TABLE monitoring_document_renewal_requests")
+    renewal_db.execute("DROP TABLE monitoring_document_renewal_scheduler_state")
+    renewal_db.executescript(sql)
+    assert _table_types(renewal_db, "monitoring_document_renewal_events")["payload"] == "TEXT"
+    assert _table_types(renewal_db, "monitoring_document_renewal_requests")["created_at"] == "TEXT"
+
+    _insert_request(renewal_db)
+    renewal_db.executescript(sql)
+    renewal_db.executescript(sql)
+    row = renewal_db.execute(
+        """SELECT request_id, request_status, document_id
+             FROM monitoring_document_renewal_requests"""
+    ).fetchone()
+    assert dict(row) == {
+        "request_id": "renewal-request-1",
+        "request_status": "created",
+        "document_id": "renewal-doc-a",
+    }
+
+
+def test_upload_binding_migration_is_additive_idempotent_and_never_guesses_rows(
+    renewal_db,
+):
+    sql = UPLOAD_BINDING_MIGRATION_PATH.read_text(encoding="utf-8")
+    executable_sql = "\n".join(
+        line for line in sql.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert (
+        re.search(
+            r"^\s*(INSERT|UPDATE|DELETE)\b",
+            executable_sql,
+            re.MULTILINE | re.IGNORECASE,
+        )
+        is None
+    )
+
+    renewal_db.execute("DROP TABLE monitoring_document_renewal_upload_bindings")
+    renewal_db.executescript(sql)
+    assert (
+        _table_types(
+            renewal_db, "monitoring_document_renewal_upload_bindings"
+        )["upload_timestamp"]
+        == "TEXT"
+    )
+    assert renewal_db.execute(
+        "SELECT COUNT(*) AS c FROM monitoring_document_renewal_upload_bindings"
+    ).fetchone()["c"] == 0
+
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+    _insert_binding(renewal_db)
+    renewal_db.executescript(sql)
+    renewal_db.executescript(sql)
+    row = renewal_db.execute(
+        """SELECT upload_id, renewal_request_id, original_document_id,
+                         uploaded_document_id, binding_status, contract_version
+              FROM monitoring_document_renewal_upload_bindings"""
+    ).fetchone()
+    assert dict(row) == {
+        "upload_id": "upload-1",
+        "renewal_request_id": "renewal-request-1",
+        "original_document_id": "renewal-doc-a",
+        "uploaded_document_id": "renewal-candidate:upload-1",
+        "binding_status": "bound",
+        "contract_version": "monitoring_document_renewal_upload_binding_v1",
+    }
+
+
+def test_runner_059_installs_tuple_guard_before_recording_version(renewal_db):
+    from migrations.runner import run_migration
+
+    renewal_db.execute("DROP TABLE monitoring_document_renewal_upload_bindings")
+    renewal_db.execute("DELETE FROM schema_version WHERE version = ?", ("059",))
+    renewal_db.commit()
+
+    run_migration(
+        renewal_db,
+        "059",
+        UPLOAD_BINDING_MIGRATION_PATH,
+        "monitoring document renewal upload binding",
+    )
+    trigger_names = {
+        row["name"]
+        for row in renewal_db.execute(
+            """SELECT name
+                 FROM sqlite_master
+                WHERE type = 'trigger'
+                  AND name LIKE 'trg_monitoring_doc_renewal_binding_identity_%'"""
+        ).fetchall()
+    }
+    assert trigger_names == {
+        "trg_monitoring_doc_renewal_binding_identity_insert",
+        "trg_monitoring_doc_renewal_binding_identity_update",
+    }
+    assert renewal_db.execute(
+        "SELECT 1 FROM schema_version WHERE version = ?", ("059",)
+    ).fetchone() is not None
+
+    _insert_request(renewal_db)
+    _insert_upload(renewal_db)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_binding(
+            renewal_db,
+            original_document_id="renewal-doc-b",
+            document_type="proof_of_address",
+        )
+    renewal_db.rollback()
+
+
+def test_migration_059_avoids_redundant_parent_identity_indexes():
+    sql = UPLOAD_BINDING_MIGRATION_PATH.read_text(encoding="utf-8")
+    assert "CREATE UNIQUE INDEX" not in sql.upper()
+    import db as db_module
+    postgres_schema = db_module._get_postgres_schema()
+    sqlite_schema = db_module._get_sqlite_schema()
+    for prohibited in (
+        "uq_monitoring_doc_renewal_app_customer",
+        "uq_monitoring_doc_renewal_upload_identity",
+        "uq_monitoring_doc_renewal_request_identity",
+        "uq_monitoring_doc_renewal_request_person",
+        "uq_monitoring_doc_renewal_document_identity",
+        "uq_monitoring_doc_renewal_document_person",
+    ):
+        assert prohibited not in sql
+        assert prohibited not in postgres_schema
+        assert prohibited not in sqlite_schema
+
+    runner_source = (
+        BACKEND_ROOT / "migrations" / "runner.py"
+    ).read_text(encoding="utf-8")
+    assert 'if version == "059"' in runner_source
+    assert "ensure_monitoring_document_renewal_upload_binding_guard(db)" in (
+        runner_source
+    )
+
+
+def test_renewal_tables_are_regulated_and_not_unattended_purge_targets():
+    from regulated_deletion import EPHEMERAL_TABLES, REGULATED_TABLES
+
+    tables = {
+        "monitoring_document_renewal_requests",
+        "monitoring_document_renewal_events",
+        "monitoring_document_renewal_uploads",
+        "monitoring_document_renewal_upload_bindings",
+        "monitoring_document_renewal_upload_cleanup",
+    }
+    assert tables <= REGULATED_TABLES
+    assert tables.isdisjoint(EPHEMERAL_TABLES)
+
+
+def test_live_postgres_schema_and_file_migration_types(monkeypatch):
+    if not (os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("DATABASE_URL_TEST")):
+        pytest.skip("Set TEST_POSTGRES_DSN or DATABASE_URL_TEST for PostgreSQL schema validation")
+
+    from tests.test_migration_chain_full import _fresh_pg
+
+    db_module, db = _fresh_pg(monkeypatch)
+    try:
+        db.execute("DROP TABLE monitoring_document_renewal_upload_bindings")
+        db.execute("DROP TABLE monitoring_document_renewal_upload_cleanup")
+        db.execute("DROP TABLE monitoring_document_renewal_uploads")
+        db.execute("DROP TABLE monitoring_document_renewal_events")
+        db.execute("DROP TABLE monitoring_document_renewal_requests")
+        db.execute("DROP TABLE monitoring_document_renewal_scheduler_state")
+        db.execute("DELETE FROM schema_version WHERE version = ?", ("059",))
+        db.commit()
+        db.executescript(MIGRATION_PATH.read_text(encoding="utf-8"))
+        from migrations.runner import run_migration
+        run_migration(
+            db,
+            "059",
+            UPLOAD_BINDING_MIGRATION_PATH,
+            "monitoring document renewal upload binding",
+        )
+
+        trigger = db.execute(
+            """SELECT 1
+                 FROM pg_trigger
+                WHERE tgname = 'trg_monitoring_doc_renewal_binding_identity'
+                  AND NOT tgisinternal"""
+        ).fetchone()
+        assert trigger is not None
+
+        rows = db.execute(
+            """SELECT table_name, column_name, data_type
+                 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name IN (
+                      'monitoring_document_renewal_requests',
+                      'monitoring_document_renewal_events',
+                      'monitoring_document_renewal_uploads',
+                      'monitoring_document_renewal_upload_bindings',
+                      'monitoring_document_renewal_upload_cleanup',
+                      'monitoring_document_renewal_scheduler_state'
+                  )
+                  AND column_name IN (
+                      'created_at', 'payload', 'uploaded_at', 'upload_timestamp', 'stored_at',
+                      'attached_at', 'cleaned_at', 'updated_at',
+                      'lease_expires_at', 'next_retry_at'
+                  )"""
+        ).fetchall()
+        types = {
+            (row["table_name"], row["column_name"]): row["data_type"]
+            for row in rows
+        }
+        assert types[("monitoring_document_renewal_events", "payload")] == "jsonb"
+        assert types[("monitoring_document_renewal_requests", "created_at")].startswith("timestamp")
+        assert types[("monitoring_document_renewal_uploads", "uploaded_at")].startswith("timestamp")
+        assert types[("monitoring_document_renewal_upload_bindings", "upload_timestamp")].startswith(
+            "timestamp"
+        )
+        for column in (
+            "created_at",
+            "stored_at",
+            "attached_at",
+            "cleaned_at",
+            "updated_at",
+            "lease_expires_at",
+            "next_retry_at",
+        ):
+            assert types[("monitoring_document_renewal_upload_cleanup", column)].startswith(
+                "timestamp"
+            )
+        assert types[("monitoring_document_renewal_scheduler_state", "updated_at")].startswith(
+            "timestamp"
+        )
+
+        # CREATE TABLE / INDEX IF NOT EXISTS remains a no-op on rerun.
+        db.executescript(MIGRATION_PATH.read_text(encoding="utf-8"))
+        db.executescript(UPLOAD_BINDING_MIGRATION_PATH.read_text(encoding="utf-8"))
+        from monitoring_document_renewal_schema import (
+            ensure_monitoring_document_renewal_upload_binding_guard,
+        )
+        ensure_monitoring_document_renewal_upload_binding_guard(db)
+        db.commit()
+    finally:
+        db.close()
+        db_module.close_pg_pool()
+
+
+def test_live_postgres_binding_identity_guard_rejects_cross_wired_rows(monkeypatch):
+    if not (os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("DATABASE_URL_TEST")):
+        pytest.skip("Set TEST_POSTGRES_DSN or DATABASE_URL_TEST for PostgreSQL schema validation")
+
+    import psycopg2
+    from tests.test_migration_chain_full import _fresh_pg
+
+    db_module, db = _fresh_pg(monkeypatch)
+    try:
+        _seed_binding_schema_parents(db)
+        _insert_request(db)
+        _insert_upload(db)
+        db.commit()
+
+        trigger = db.execute(
+            """SELECT 1
+                 FROM pg_trigger
+                WHERE tgname = 'trg_monitoring_doc_renewal_binding_identity'
+                  AND NOT tgisinternal"""
+        ).fetchone()
+        assert trigger is not None
+
+        for override in (
+            {"customer_id": "independently-valid-but-wrong-customer"},
+            {"person_id": None, "person_type": None},
+            {"original_document_version": 2},
+        ):
+            if "customer_id" in override:
+                db.execute(
+                    """INSERT INTO clients (id, email, password_hash, company_name)
+                       VALUES (?, ?, ?, ?) ON CONFLICT (id) DO NOTHING""",
+                    (
+                        override["customer_id"],
+                        "wrong-renewal-customer@example.test",
+                        "hash",
+                        "Wrong Renewal Customer",
+                    ),
+                )
+                db.commit()
+            with pytest.raises(psycopg2.IntegrityError):
+                _insert_binding(db, **override)
+            db.rollback()
+
+        _insert_binding(db)
+        db.commit()
+        with pytest.raises(psycopg2.IntegrityError):
+            db.execute(
+                """UPDATE monitoring_document_renewal_upload_bindings
+                      SET upload_timestamp = ?
+                    WHERE upload_id = ?""",
+                ("2030-01-02T00:00:00Z", "upload-1"),
+            )
+        db.rollback()
+        assert str(
+            db.execute(
+                """SELECT upload_timestamp
+                     FROM monitoring_document_renewal_upload_bindings
+                    WHERE upload_id = ?""",
+                ("upload-1",),
+            ).fetchone()["upload_timestamp"]
+        ).startswith("2030-01-01 00:00:00")
+    finally:
+        db.close()
+        db_module.close_pg_pool()
+
+
+def test_live_postgres_guard_install_does_not_lock_app_or_document_writers(
+    monkeypatch,
+):
+    dsn = os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("DATABASE_URL_TEST")
+    if not dsn:
+        pytest.skip("Set TEST_POSTGRES_DSN or DATABASE_URL_TEST for PostgreSQL validation")
+
+    import psycopg2
+    from monitoring_document_renewal_schema import (
+        ensure_monitoring_document_renewal_upload_binding_guard,
+    )
+    from tests.test_migration_chain_full import _fresh_pg
+
+    db_module, db = _fresh_pg(monkeypatch)
+    blocker = None
+    try:
+        db.execute(
+            "DROP TRIGGER trg_monitoring_doc_renewal_binding_identity "
+            "ON monitoring_document_renewal_upload_bindings"
+        )
+        db.commit()
+
+        blocker = psycopg2.connect(dsn)
+        with blocker.cursor() as cursor:
+            cursor.execute("LOCK TABLE applications IN ROW EXCLUSIVE MODE")
+            cursor.execute("LOCK TABLE documents IN ROW EXCLUSIVE MODE")
+
+        db.execute("SET LOCAL lock_timeout = '500ms'")
+        ensure_monitoring_document_renewal_upload_binding_guard(db)
+        db.commit()
+
+        assert db.execute(
+            """SELECT 1
+                 FROM pg_trigger
+                WHERE tgname = 'trg_monitoring_doc_renewal_binding_identity'
+                  AND NOT tgisinternal"""
+        ).fetchone() is not None
+    finally:
+        if blocker is not None:
+            blocker.rollback()
+            blocker.close()
+        db.close()
+        db_module.close_pg_pool()
+
+
+def test_live_postgres_guard_convergence_repairs_incomplete_trigger(monkeypatch):
+    dsn = os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("DATABASE_URL_TEST")
+    if not dsn:
+        pytest.skip("Set TEST_POSTGRES_DSN or DATABASE_URL_TEST for PostgreSQL validation")
+
+    from monitoring_document_renewal_schema import (
+        ensure_monitoring_document_renewal_upload_binding_guard,
+    )
+    from tests.test_migration_chain_full import _fresh_pg
+
+    db_module, db = _fresh_pg(monkeypatch)
+    try:
+        db.execute(
+            "DROP TRIGGER trg_monitoring_doc_renewal_binding_identity "
+            "ON monitoring_document_renewal_upload_bindings"
+        )
+        db.execute(
+            """CREATE TRIGGER trg_monitoring_doc_renewal_binding_identity
+               BEFORE INSERT ON monitoring_document_renewal_upload_bindings
+               FOR EACH STATEMENT
+               EXECUTE FUNCTION monitoring_document_renewal_binding_identity_guard()"""
+        )
+        db.commit()
+
+        ensure_monitoring_document_renewal_upload_binding_guard(db)
+        db.commit()
+
+        definition = db.execute(
+            """SELECT pg_get_triggerdef(t.oid) AS definition
+                 FROM pg_trigger t
+                WHERE t.tgname = 'trg_monitoring_doc_renewal_binding_identity'
+                  AND NOT t.tgisinternal"""
+        ).fetchone()["definition"].upper()
+        assert "BEFORE INSERT OR UPDATE" in definition
+        assert "FOR EACH ROW" in definition
+    finally:
+        db.close()
+        db_module.close_pg_pool()

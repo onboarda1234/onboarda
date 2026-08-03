@@ -5,16 +5,15 @@ These exercise ``lifecycle_queue.build_lifecycle_queue`` and
 ``lifecycle_queue.build_application_lifecycle_summary`` directly
 against a real (sqlite) database, with no HTTP layer. They prove:
 
-  * active vs historical partitioning matches the PR-02 / PR-03 / PR-04
-    terminal vocabularies
+  * active vs historical partitioning matches the canonical Monitoring
+    state machine and the PR-03 / PR-04 downstream vocabularies
   * type filtering works for alerts / reviews / edd
   * ownership names are batch-resolved from the users table
   * aging is reported in seconds and days
   * required-item count surfaces from periodic_reviews.required_items
   * PR-04 active memo context surfaces on EDD items, including the
     PR-04a onboarding-attachment-confirmed flag
-  * PR-02 reverse-link displacement is honoured (alerts terminal once
-    routed, with linkage IDs visible)
+  * downstream handoff alerts remain active, action-locked, and linked
   * PR-03 outcome and legacy decision are surfaced as DISJOINT fields
   * application-summary view emits the cross-table linkage edge set
 """
@@ -200,14 +199,27 @@ class _LifecycleQueueBase(unittest.TestCase):
 # Vocabulary parity with engines (PR-02 / PR-03)
 # ───────────────────────────────────────────────────────────────────
 class TestVocabularyParity(_LifecycleQueueBase):
-    def test_alert_terminal_set_matches_monitoring_routing(self):
+    def test_alert_sets_match_canonical_state_machine(self):
         import lifecycle_queue as lq
-        import monitoring_routing as mr
-        # Sets must be equal. If PR-02 changes the terminal vocabulary
-        # the queue must be updated explicitly -- this test is the
-        # tripwire.
+        from monitoring_alert_state_machine import (
+            ACTIVE_STATUSES,
+            CANONICAL_STATUS_SET,
+            HANDOFF_STATUSES,
+            TERMINAL_STATUSES,
+        )
         self.assertEqual(set(lq.HISTORICAL_ALERT_STATUSES),
-                         set(mr.TERMINAL_ALERT_STATUSES))
+                         set(TERMINAL_STATUSES))
+        self.assertEqual(set(lq.HANDOFF_ALERT_STATUSES),
+                         set(HANDOFF_STATUSES))
+        self.assertEqual(set(lq.ACTIVE_ALERT_STATUSES),
+                         set(ACTIVE_STATUSES | HANDOFF_STATUSES))
+        self.assertEqual(
+            set(lq.ACTIVE_ALERT_STATUSES) | set(lq.HISTORICAL_ALERT_STATUSES),
+            set(CANONICAL_STATUS_SET),
+        )
+        self.assertFalse(
+            set(lq.ACTIVE_ALERT_STATUSES) & set(lq.HISTORICAL_ALERT_STATUSES)
+        )
 
     def test_edd_terminal_set_matches_monitoring_routing(self):
         import lifecycle_queue as lq
@@ -248,7 +260,7 @@ class TestActiveVsHistorical(_LifecycleQueueBase):
     def test_include_historical_returns_only_terminal(self):
         import lifecycle_queue as lq
         self._alert(status="open")
-        self._alert(status="routed_to_review")
+        self._alert(status="resolved")
         self._review(status="completed")
         self._edd(stage="edd_rejected")
 
@@ -256,6 +268,50 @@ class TestActiveVsHistorical(_LifecycleQueueBase):
         for it in result["items"]:
             self.assertTrue(it["is_historical"])
             self.assertFalse(it["is_active"])
+
+    def test_handoffs_are_active_nonterminal_and_action_locked(self):
+        import lifecycle_queue as lq
+        review_id = self._alert(status="routed_to_review")
+        edd_id = self._alert(status="routed_to_edd")
+
+        result = lq.build_lifecycle_queue(
+            self._conn, include="active", types=("alert",)
+        )
+        by_id = {item["id"]: item for item in result["items"]}
+
+        self.assertEqual(set(by_id), {review_id, edd_id})
+        self.assertTrue(all(item["is_active"] for item in by_id.values()))
+        self.assertTrue(all(not item["is_historical"] for item in by_id.values()))
+        self.assertTrue(all(item["is_action_locked"] for item in by_id.values()))
+        self.assertEqual(
+            by_id[review_id]["next_action"], "Continue in periodic review"
+        )
+        self.assertEqual(by_id[edd_id]["next_action"], "Continue in EDD case")
+
+    def test_escalated_is_active_and_not_action_locked(self):
+        import lifecycle_queue as lq
+        alert_id = self._alert(status="escalated")
+        result = lq.build_lifecycle_queue(
+            self._conn, include="active", types=("alert",)
+        )
+        item = next(item for item in result["items"] if item["id"] == alert_id)
+        self.assertTrue(item["is_active"])
+        self.assertFalse(item["is_historical"])
+        self.assertFalse(item["is_action_locked"])
+        self.assertEqual(item["next_action"], "Senior review and disposition")
+
+    def test_resolved_at_does_not_override_active_status(self):
+        import lifecycle_queue as lq
+        alert_id = self._alert(
+            status="open",
+            resolved_at=datetime.now(timezone.utc).isoformat(),
+        )
+        result = lq.build_lifecycle_queue(
+            self._conn, include="active", types=("alert",)
+        )
+        item = next(item for item in result["items"] if item["id"] == alert_id)
+        self.assertTrue(item["is_active"])
+        self.assertFalse(item["is_historical"])
 
     def test_include_all_returns_both(self):
         import lifecycle_queue as lq
@@ -359,13 +415,17 @@ class TestLinkageAndOutcome(_LifecycleQueueBase):
     def test_alert_linked_to_review_surfaced(self):
         import lifecycle_queue as lq
         rid = self._review(status="in_progress")
-        # PR-02 reality: a routed alert is HISTORICAL but linkage is
-        # still visible (so officers can navigate to the downstream).
+        # A routed alert is an active, action-locked handoff whose linkage
+        # remains visible so officers can navigate to the downstream owner.
         aid = self._alert(status="routed_to_review",
                           linked_periodic_review_id=rid)
-        r = lq.build_lifecycle_queue(self._conn, include="historical",
+        r = lq.build_lifecycle_queue(self._conn, include="active",
                                      types=("alert",))
-        self.assertEqual(r["items"][0]["linked_periodic_review_id"], rid)
+        item = next(item for item in r["items"] if item["id"] == aid)
+        self.assertEqual(item["linked_periodic_review_id"], rid)
+        self.assertTrue(item["is_active"])
+        self.assertFalse(item["is_historical"])
+        self.assertTrue(item["is_action_locked"])
 
     def test_review_outcome_disjoint_from_legacy_decision(self):
         import lifecycle_queue as lq
@@ -729,13 +789,12 @@ class TestFetchAlertsParamBindingRegression(_LifecycleQueueBase):
 
         active_id = self._alert(status="open")
         historical_id = self._alert(status="dismissed")
-        ghost_vocab_id = self._alert(status="escalated")
         ghost_unscopable_id = self._alert(status="open", application_id=None)
 
         expected = {
             "active": {active_id},
             "historical": {historical_id},
-            "legacy_unmapped": {ghost_vocab_id, ghost_unscopable_id},
+            "legacy_unmapped": {ghost_unscopable_id},
             "all": {active_id, historical_id},
         }
 
@@ -792,7 +851,22 @@ class _LegacySchemaDB:
             if "linked_periodic_review_id" in lower or "linked_edd_case_id" in lower:
                 self.alert_quarantine_attempted = True
                 raise Exception("no such column: linked_periodic_review_id")
-            self.alert_fallback_attempted = True
+            if "coalesce(status" in lower:
+                self.alert_quarantine_attempted = True
+                from lifecycle_quarantine import is_legacy_unmapped
+                if "and not (" in lower:
+                    rows = [
+                        row for row in self._alert_rows
+                        if not is_legacy_unmapped(row)[0]
+                    ]
+                else:
+                    rows = [
+                        row for row in self._alert_rows
+                        if is_legacy_unmapped(row)[0]
+                    ]
+                return _StaticCursor(rows)
+            else:
+                self.alert_fallback_attempted = True
             return _StaticCursor(self._alert_rows)
         if "from periodic_reviews" in lower:
             # If _fetch_reviews starts referencing linkage columns, this fake DB
@@ -810,7 +884,7 @@ class _LegacySchemaDB:
 
 
 class TestLegacySchemaFallbacks(unittest.TestCase):
-    def test_alert_fallback_path_is_exercised_and_include_modes_remain_correct(self):
+    def test_alert_query_avoids_legacy_linkage_columns_and_modes_remain_correct(self):
         import lifecycle_queue as lq
 
         rows = [
@@ -833,7 +907,7 @@ class TestLegacySchemaFallbacks(unittest.TestCase):
             {
                 "id": 3,
                 "application_id": "app-1",
-                "status": "escalated",
+                "status": "legacy_ghost",
                 "created_at": "2026-01-03 00:00:00",
                 "linked_periodic_review_id": None,
                 "linked_edd_case_id": None,
@@ -861,7 +935,7 @@ class TestLegacySchemaFallbacks(unittest.TestCase):
             returned_ids = {it["id"] for it in result["items"]}
             self.assertEqual(returned_ids, expected_ids, f"include={include}")
             self.assertTrue(db.alert_quarantine_attempted, f"include={include}")
-            self.assertTrue(db.alert_fallback_attempted, f"include={include}")
+            self.assertFalse(db.alert_fallback_attempted, f"include={include}")
 
     def test_fetch_reviews_is_safe_on_legacy_schema_without_quarantine_columns(self):
         import lifecycle_queue as lq

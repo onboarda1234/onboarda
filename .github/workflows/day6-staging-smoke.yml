@@ -44,6 +44,9 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    # Bounded so a hung smoke run cannot sit against the staging environment for
+    # GitHub's 6-hour default.
+    timeout-minutes: 30
     environment: staging
     defaults:
       run:

@@ -26,8 +26,111 @@ on:
 # not need supersede-cancel badly enough to risk the deploy pipeline.
 
 jobs:
+  protected-module-regression:
+    name: protected-module-regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: arie-backend
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: arie-backend/requirements*.txt
+
+      - name: Install protected-suite dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Enable SSL on protected-suite PostgreSQL
+        run: |
+          openssl req -new -x509 -days 365 -nodes \
+            -out /tmp/protected-pg-server.crt \
+            -keyout /tmp/protected-pg-server.key \
+            -subj '/CN=localhost' 2>/dev/null
+
+          PG_CTR=$(docker ps -q --filter "ancestor=postgres:15" | head -1)
+          [ -n "$PG_CTR" ] || { echo "ERROR: PostgreSQL service container not found"; exit 1; }
+          docker cp /tmp/protected-pg-server.crt "$PG_CTR:/var/lib/postgresql/data/server.crt"
+          docker cp /tmp/protected-pg-server.key "$PG_CTR:/var/lib/postgresql/data/server.key"
+          docker exec "$PG_CTR" bash -c "
+            chmod 600 /var/lib/postgresql/data/server.key &&
+            chown postgres:postgres /var/lib/postgresql/data/server.crt &&
+            chown postgres:postgres /var/lib/postgresql/data/server.key &&
+            echo 'ssl = on' >> /var/lib/postgresql/data/postgresql.conf
+          "
+          docker restart "$PG_CTR"
+
+          for i in $(seq 1 30); do
+            if pg_isready -h localhost -p 5432 -U postgres 2>/dev/null; then
+              echo "Protected-suite PostgreSQL ready with SSL after ${i}s"
+              break
+            fi
+            [ "$i" -lt 30 ] || { echo "ERROR: PostgreSQL SSL restart timed out"; docker logs "$PG_CTR"; exit 1; }
+            sleep 1
+          done
+
+      - name: Create protected-suite PostgreSQL database
+        env:
+          PGPASSWORD: postgres
+        run: |
+          DB_NAME="protected_module_${{ github.run_id }}_${{ github.run_attempt }}"
+          psql 'postgresql://postgres:postgres@localhost:5432/postgres?sslmode=require' \
+            -c "SELECT current_setting('ssl') = 'on' AS ssl_enabled" \
+            | grep -Eq '^[[:space:]]*t[[:space:]]*$'
+          psql 'postgresql://postgres:postgres@localhost:5432/postgres?sslmode=require' \
+            -c "CREATE DATABASE \"${DB_NAME}\";"
+          echo "TEST_POSTGRES_DSN=postgresql://postgres:postgres@localhost:5432/${DB_NAME}" >> "$GITHUB_ENV"
+
+      - name: Validate immutable protected inventory
+        env:
+          ENVIRONMENT: testing
+          SECRET_KEY: protected-module-regression-ci-key
+          ADMIN_INITIAL_PASSWORD: ProtectedRegression123
+        run: |
+          python -m pytest \
+            tests/test_protected_module_regression_contract.py \
+            tests/test_protected_module_staging_smoke_contract.py \
+            -q --tb=short
+
+      - name: Run protected-module regression
+        env:
+          ENVIRONMENT: testing
+          SECRET_KEY: protected-module-regression-ci-key
+          ADMIN_INITIAL_PASSWORD: ProtectedRegression123
+        run: python scripts/qa/run_protected_module_regression.py -- --tb=short
+
   lint-and-test:
     runs-on: ubuntu-latest
+    # Without this the job inherits GitHub's 6-hour default. deploy-staging.yml
+    # serialises on `concurrency: deploy-staging` with cancel-in-progress:false,
+    # so one hung run blocks every staging deploy behind it for those 6 hours —
+    # observed 2026-07-31, run 1159 stuck 95m on "Run tests with coverage" while
+    # the next deploy sat pending. Typical duration is ~33m, so 60m fails a hang
+    # fast while leaving ~2x headroom for a slow runner.
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: arie-backend
@@ -258,6 +361,9 @@ jobs:
 
   docker-validate:
     runs-on: ubuntu-latest
+    # Typical duration under a minute; bounded so a stalled image build cannot
+    # hold the serialised staging deploy queue (see lint-and-test above).
+    timeout-minutes: 30
     needs: lint-and-test
     defaults:
       run:
@@ -348,6 +454,8 @@ jobs:
 
   pdf-tests:
     runs-on: ubuntu-latest
+    # Typical duration under a minute; bounded for the same reason as above.
+    timeout-minutes: 20
     needs: lint-and-test
     defaults:
       run:

@@ -1,0 +1,150 @@
+name: Container Security
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-sha-container-scan:
+    name: exact-sha-container-scan
+    runs-on: ubuntu-latest
+    # Typical duration under a minute; bounded so a stalled scan cannot leave a
+    # PR's required check pending for GitHub's 6-hour default.
+    timeout-minutes: 30
+    env:
+      TRIVY_IMAGE: >-
+        aquasec/trivy:0.72.0@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
+      SCAN_DIR: ${{ github.workspace }}/container-security-evidence
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Derive exact reviewed checkout SHA
+        id: context
+        env:
+          EXPECTED_GITHUB_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_SHA="$(git rev-parse HEAD)"
+          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "FAIL: checkout SHA is not full 40-character lowercase hexadecimal"
+            exit 1
+          fi
+          if [ "$RELEASE_SHA" != "$EXPECTED_GITHUB_SHA" ]; then
+            echo "FAIL: checkout SHA does not match github.sha"
+            exit 1
+          fi
+          mkdir -p "$SCAN_DIR"
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Copy HTML files into backend build context
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp arie-portal.html arie-backend/arie-portal.html
+          cp arie-backoffice.html arie-backend/arie-backoffice.html
+
+      - name: Build exact SHA linux-amd64 image
+        env:
+          RELEASE_SHA: ${{ steps.context.outputs.release_sha }}
+          RELEASE_REF: ${{ github.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_TIME="$(git show -s --format=%cI "$RELEASE_SHA")"
+          docker build --platform linux/amd64 \
+            --build-arg "GIT_SHA=$RELEASE_SHA" \
+            --build-arg "BUILD_TIME=$BUILD_TIME" \
+            --build-arg "IMAGE_TAG=$RELEASE_SHA" \
+            --label "git.sha=$RELEASE_SHA" \
+            --label "git.ref=$RELEASE_REF" \
+            --label "build.time=$BUILD_TIME" \
+            -t "regmind-backend:$RELEASE_SHA" \
+            arie-backend
+          docker image inspect "regmind-backend:$RELEASE_SHA" \
+            --format '{{json .Config}}' > "$SCAN_DIR/image-config.json"
+          RELEASE_SHA="$RELEASE_SHA" python3 - "$SCAN_DIR/image-config.json" <<'PY'
+          import json
+          import os
+          import sys
+
+          sha = os.environ["RELEASE_SHA"]
+          config = json.load(open(sys.argv[1], encoding="utf-8"))
+          labels = config.get("Labels") or {}
+          env = dict(
+              value.split("=", 1)
+              for value in config.get("Env") or []
+              if "=" in value
+          )
+          if labels.get("git.sha") != sha:
+              raise SystemExit("FAIL: built image git.sha label mismatch")
+          if env.get("GIT_SHA") != sha or env.get("IMAGE_TAG") != sha:
+              raise SystemExit("FAIL: built image SHA environment mismatch")
+          PY
+
+      - name: Run pinned Trivy vulnerability scan
+        id: trivy
+        env:
+          RELEASE_SHA: ${{ steps.context.outputs.release_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/trivy-cache"
+          if ! docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache/" \
+            -v "$SCAN_DIR:/scan" \
+            "$TRIVY_IMAGE" image \
+              --scanners vuln \
+              --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+              --format json \
+              --output /scan/trivy-raw.json \
+              "regmind-backend:$RELEASE_SHA"; then
+            printf '%s\n' \
+              '{"schema_version":"container_scan_failure_v1","ok":false,"error":"Trivy scanner or vulnerability database unavailable"}' \
+              > "$SCAN_DIR/scan-evidence.json"
+            exit 1
+          fi
+          if [ ! -s "$SCAN_DIR/trivy-raw.json" ]; then
+            printf '%s\n' \
+              '{"schema_version":"container_scan_failure_v1","ok":false,"error":"Trivy scan output is missing"}' \
+              > "$SCAN_DIR/scan-evidence.json"
+            exit 1
+          fi
+
+      - name: Apply fail-closed vulnerability acceptance policy
+        env:
+          RELEASE_SHA: ${{ steps.context.outputs.release_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 arie-backend/scripts/qa/release_image_control.py trivy \
+            --input "$SCAN_DIR/trivy-raw.json" \
+            --sha "$RELEASE_SHA" \
+            --output "$SCAN_DIR/scan-evidence.json"
+          rm -f "$SCAN_DIR/trivy-raw.json" "$SCAN_DIR/image-config.json"
+
+      - name: Remove raw scan material after failure
+        if: failure()
+        shell: bash
+        run: |
+          rm -f "$SCAN_DIR/trivy-raw.json" "$SCAN_DIR/image-config.json"
+
+      - name: Upload sanitized container scan evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: container-security-${{ github.sha }}
+          path: container-security-evidence/scan-evidence.json
+          if-no-files-found: error
+          retention-days: 90

@@ -59,7 +59,7 @@
 |---|---|
 | Working branch is `main` | `git branch --show-current` → `main` |
 | No uncommitted changes to tracked files | `git status --short` shows only untracked files |
-| All tests pass locally | `python3.11 -m pytest tests/ -x -q --tb=short --ignore=tests/test_pdf_generator.py` → 365 passed |
+| All tests pass locally | `python3.11 -m pytest tests/ -x -q --tb=short --ignore=tests/test_pdf_generator.py`; every collected non-PDF test passes under the current CI manifest |
 | HTML files are up to date | Root `arie-portal.html` and `arie-backoffice.html` contain the latest changes |
 
 ### Infrastructure readiness
@@ -87,13 +87,36 @@ All secrets must exist in `regmind/staging` in AWS Secrets Manager:
 - `ADMIN_OFFICER_RESET_CONFIRMATION` — required for admin officer-password reset endpoint
 - `METRICS_TOKEN` — optional bearer token for Prometheus scraping when `/metrics` is enabled
 
+The `staging` GitHub environment must contain the Actions secrets
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Their values must never be
+documented or uploaded as release evidence. The associated staging deployment
+identity must be able to call `secretsmanager:GetSecretValue` for the exact AWS
+secret ID `regmind/staging`. During the authenticated version gate, the
+workflow extracts only `JWT_SECRET`, masks the derived bearer token, and mints
+a 15-minute token in the same step that consumes it. No long-lived
+`STAGING_VERSION_BEARER_TOKEN` is required or stored. A missing Actions secret,
+missing IAM permission, missing `JWT_SECRET`, authentication failure, or
+version mismatch is a hard deployment failure.
+
 **Sumsub note:** `SUMSUB_LEVEL_NAME` (env var, currently `basic-kyc-level`) must match a level configured in the Sumsub dashboard. If KYC applicant creation returns 404, verify this first.
 
-**Rollback awareness:** Before deploying, note the current task definition revision:
+**Rollback awareness:** Before deploying, capture the exact task definitions
+currently used by both live services, plus their immutable image digest. Do not
+guess from the latest registered family revision:
 ```bash
-aws ecs describe-services --cluster regmind-staging --services regmind-backend \
-  --region af-south-1 --query 'services[0].taskDefinition' --output text
+cd arie-backend
+mkdir -p release-evidence
+python3 scripts/qa/staging_deployment_control.py capture-predeploy \
+  --region af-south-1 \
+  --cluster regmind-staging \
+  --output release-evidence/predeploy.json
+jq '{services, task_definitions, rollback}' \
+  release-evidence/predeploy.json
 ```
+The captured evidence must contain both live service/task-definition pairs,
+each task definition's exact image reference and provenance, the shared
+immutable image tag and digest, and the paired rollback commands. A missing or
+inconsistent value is a hard stop.
 
 ---
 
@@ -106,9 +129,11 @@ aws ecs describe-services --cluster regmind-staging --services regmind-backend \
 cd ~/Desktop/Onboarda/arie-backend
 python3.11 -m pytest tests/ -x -q --tb=short --ignore=tests/test_pdf_generator.py
 ```
-Expected: `365 passed`. Do not proceed if tests fail.
+Expected: every collected non-PDF test passes. The exact count evolves with
+the repository; use the current CI manifest rather than a stale fixed count.
+Do not proceed if any test fails.
 
-### Step 2: Build Docker image
+### Step 2: Validate the exact-SHA Docker build locally
 
 > **Note:** HTML files (`arie-portal.html`, `arie-backoffice.html`) are copied from the repo root
 > into `arie-backend/` automatically by CI/CD workflows and the Render build command.
@@ -117,44 +142,66 @@ Expected: `365 passed`. Do not proceed if tests fail.
 
 ```bash
 cd arie-backend
-docker build --platform linux/amd64 -t regmind-backend .
+GIT_SHA="$(git rev-parse HEAD)"
+[[ "$GIT_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[[ "$(git branch --show-current)" == "main" ]] || exit 1
+BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+IMAGE="782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:$GIT_SHA"
+
+docker build --platform linux/amd64 \
+  --build-arg "GIT_SHA=$GIT_SHA" \
+  --build-arg "IMAGE_TAG=$GIT_SHA" \
+  --build-arg "BUILD_TIME=$BUILD_TIME" \
+  --label "git.sha=$GIT_SHA" \
+  --label "git.ref=refs/heads/main" \
+  --label "build.time=$BUILD_TIME" \
+  -t "$IMAGE" .
 ```
-Must use `--platform linux/amd64` (dev machine is ARM, ECS runs amd64).
+This is local validation only. Do not push the locally built image and do not
+use a convenience tag. The approved staging release path is
+`.github/workflows/deploy-staging.yml`.
 
-### Step 3: Tag and push to ECR
-```bash
-GIT_SHA=$(git rev-parse HEAD)
-docker tag regmind-backend:latest 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:$GIT_SHA
+### Step 3: Run the approved staging workflow
 
-aws ecr get-login-password --region af-south-1 | docker login --username AWS \
-  --password-stdin 782913119880.dkr.ecr.af-south-1.amazonaws.com
+A full-SHA `main` push triggers the workflow. A manual dispatch is also allowed
+only when its checked-out ref resolves to `refs/heads/main`. Do not deploy with
+raw `docker push`, `aws ecs register-task-definition`, or
+`aws ecs update-service` commands: those paths do not independently provide all
+required scan, provenance, evidence, and rollback gates.
 
-docker push 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:$GIT_SHA
-```
-If push returns `403 Forbidden`, re-run the login command.
+The workflow uses `release_image_control.py prepare` to resolve the exact tag.
+If the immutable SHA tag exists, it verifies provenance and reuses its digest.
+If absent, it builds and pushes the exact SHA once. It never deletes, retags,
+or overwrites an immutable release image. An immutable-tag collision or
+provenance mismatch fails closed.
 
-> **Note:** Do not push `:latest`. Staging deployments are SHA-tagged only so ECR can be configured with immutable tags and every running task can be traced to one commit.
+### Step 4: Observe gated deployment and task registration
 
-### Step 4: Register new task definition and deploy to ECS
+The workflow registers new task definitions from the exact revisions currently
+used by the live backend and worker. It never uses the most recently registered
+family revision as an implicit source. Before registration it requires:
 
-The CI/CD workflow now registers a new task definition with the SHA-pinned image automatically.
-For manual deployment:
-```bash
-# Get current task def and update image
-TASK_DEF=$(aws ecs describe-task-definition --task-definition regmind-staging \
-  --region af-south-1 --query 'taskDefinition' --output json)
+- ECR reports exactly `IMMUTABLE`;
+- the exact SHA image provenance matches;
+- the exact image digest has a `COMPLETE` ECR registry scan;
+- pinned Trivy analysis of that same digest contains both OS-package and
+  Python-package targets;
+- zero CRITICAL and zero unaccepted HIGH findings.
 
-# Update container image to SHA-tagged version (use python or jq)
-# Then register and deploy:
-aws ecs update-service --cluster regmind-staging --service regmind-backend \
-  --task-definition <NEW_TASK_DEF_ARN> \
-  --force-new-deployment --region af-south-1
-```
+The separate pull-request container-security workflow is a required review
+check, but it is not used as deployment evidence by timing alone. The staging
+workflow independently repeats the comprehensive pinned Trivy gate against the
+exact immutable ECR digest before registering either task definition. A
+missing scanner database, missing raw report, missing OS/Python coverage, or
+policy failure stops the deployment.
 
-### Step 5: Wait for stabilisation
-```bash
-sleep 120
-```
+### Step 5: Wait for the workflow gates
+
+Do not treat task registration or an ECS update as deployment completion. Wait
+for both services to stabilize and for the runtime digest, ALB target health,
+authenticated `/api/version`, CloudWatch review, and final evidence steps to
+complete. A failed or incomplete evidence upload is diagnostic only and is not
+a successful release.
 
 ### Step 6: Verify health
 ```bash
@@ -201,6 +248,7 @@ BACKOFFICE_TOKEN="$STAGING_BACKOFFICE_TOKEN" \
 python3 arie-backend/scripts/qa/staging_release_evidence.py \
   --api-base https://staging.regmind.co/api \
   --expected-sha "$GIT_SHA" \
+  --expected-environment staging \
   --evidence-dir "$EVIDENCE_DIR" \
   --run-api-smoke \
   --strict
@@ -271,11 +319,26 @@ Run these after every Phase hardening deployment before declaring the environmen
 Capture command output in the release evidence pack:
 
 ```bash
+set -euo pipefail
+[[ "$GIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+
 aws ecr describe-repositories --repository-names regmind-backend \
   --region af-south-1 --query 'repositories[0].imageTagMutability'
 
+mkdir -p release-evidence
+IMAGE_DIGEST="$(aws ecr describe-images \
+  --repository-name regmind-backend \
+  --image-ids "imageTag=$GIT_SHA" \
+  --region af-south-1 \
+  --query 'imageDetails[0].imageDigest' \
+  --output text)"
+[[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+printf '%s\n' "$IMAGE_DIGEST" \
+  > "release-evidence/ecr-image-digest-$GIT_SHA.txt"
 aws ecr describe-image-scan-findings --repository-name regmind-backend \
-  --image-id imageTag=$GIT_SHA --region af-south-1
+  --image-id "imageDigest=$IMAGE_DIGEST" \
+  --region af-south-1 \
+  | tee "release-evidence/ecr-scan-$GIT_SHA.json"
 
 aws rds describe-db-instances --db-instance-identifier regmind-staging-db \
   --region af-south-1 --query 'DBInstances[0].{BackupRetentionPeriod:BackupRetentionPeriod,DeletionProtection:DeletionProtection}'
@@ -287,7 +350,7 @@ aws logs describe-log-groups --log-group-name-prefix /ecs/regmind-staging \
   --region af-south-1 --query 'logGroups[].{name:logGroupName,retention:retentionInDays}'
 ```
 
-Expected Phase 5 baseline: ECR tags immutable; no unaccepted HIGH image findings; RDS backup retention at least 7 days and deletion protection enabled; ALB access logs enabled; CloudWatch log retention set; alarms exist for ALB 5xx, ECS running task count, RDS CPU/storage, failed-login spike, memo/EDD failure, and `Invalid encryption token`.
+Expected Phase 5 baseline: ECR tags immutable; zero CRITICAL image findings and no unaccepted HIGH image findings; RDS backup retention at least 7 days and deletion protection enabled; ALB access logs enabled; CloudWatch log retention set; alarms exist for ALB 5xx, ECS running task count, RDS CPU/storage, failed-login spike, memo/EDD failure, and `Invalid encryption token`.
 
 ### Log review
 ```bash
@@ -306,11 +369,19 @@ Attach this ledger to every Day 6 staging deployment note before the deployment 
 |---|---|---|
 | Deployed commit | `staging_release_evidence.py` authenticated `version.json` | `git_sha` equals the reviewed `main` commit; `image_tag` contains the same SHA |
 | Build provenance | GitHub Actions `deploy-staging.yml` run | Run URL, run number, and actor recorded |
-| ECS service | `aws ecs describe-services --cluster regmind-staging --services regmind-backend --region af-south-1` | `deployments[0].rolloutState` is `COMPLETED`; task definition revision recorded |
+| ECS services | `aws ecs describe-services --cluster regmind-staging --services regmind-backend regmind-verification-worker --region af-south-1` | Both services have one completed rollout at expected counts; both task-definition ARNs recorded |
 | Runtime logs | CloudWatch log group `/ecs/regmind-staging` | No new `ERROR`, `connection pool exhausted`, or `falling back to mock mode` entries after deploy |
 | Reporting smoke | `arie-backend/scripts/qa/day5_closing_smoke.py` | `ok: true`, reconciliation passes, CSV/report `canonical_view: applications_report_v1`, dashboard `canonical_view: dashboard_metrics_v2`, and live dashboard/report/application counts agree |
 | Authenticated browser smoke | `arie-backend/scripts/qa/staging_browser_smoke.js` | Real QA login succeeds; required back-office pages/tabs load; screenshots and `report.json` attached; no token injection or auth bypass |
-| Rollback handle | Previous ECS task definition | Previous `regmind-staging:<REVISION>` recorded before deployment |
+| Rollback handles | Sanitized pre-deployment evidence | Previous backend and worker task-definition ARNs plus their shared immutable image tag and digest recorded before deployment |
+
+The automated evidence artifact must additionally contain the immutable image
+digest, exact-digest scan summary, previous and new task definitions for both
+backend and worker, all running-task image digests, ALB target-health counts,
+CloudWatch error-window review, the authenticated version response, and the
+paired rollback commands. A partial diagnostic artifact may be uploaded after
+a failure, but only `workflow-status.json` with `status=complete` and a validated
+`release-evidence.json` constitute release evidence.
 
 Recommended evidence bundle command:
 
@@ -320,6 +391,7 @@ BACKOFFICE_TOKEN="$STAGING_BACKOFFICE_TOKEN" \
 python3 arie-backend/scripts/qa/staging_release_evidence.py \
   --api-base https://staging.regmind.co/api \
   --expected-sha "$GIT_SHA" \
+  --expected-environment staging \
   --evidence-dir "$EVIDENCE_DIR" \
   --run-api-smoke \
   --strict
@@ -342,34 +414,46 @@ Use `--token-env BACKOFFICE_TOKEN` if the token is stored under a different envi
 
 ## 6. Rollback Procedure
 
-> **Rollback is now reliable:** With SHA-tagged images (introduced in CI/CD improvements), each deployment creates a uniquely-tagged image in ECR that is not overwritten. Rolling back to a previous task definition revision will use the correct image.
+> **Rollback is now reliable:** Every reviewed SHA resolves to one immutable ECR tag; a rerun verifies and reuses the matching image rather than overwriting it. Rollback restores the exact captured backend and worker task-definition ARN pair after verifying their shared immutable image digest.
 >
 > **Note:** Database migrations are NOT rolled back. If a migration was applied during the failed deploy, the old code may encounter schema mismatches. Assess backward compatibility before rolling back.
 
-### If a previous image is still available in ECR
+### If the previous immutable image is still available in ECR
 
-**Step 1:** Identify the previous task definition revision:
-```bash
-aws ecs list-task-definitions --family-prefix regmind-staging \
-  --region af-south-1 --query 'taskDefinitionArns' --output json
-```
+**Step 1:** Use the exact backend and worker task-definition ARNs captured
+before the failed deployment. Do not choose `latest - 1`; an undeployed
+registration may exist.
 
-**Step 2:** Update service to previous revision:
+Verify that both captured task definitions' image tags still resolve to the
+captured immutable digest.
+
+**Step 2:** Restore both services:
 ```bash
 aws ecs update-service --cluster regmind-staging --service regmind-backend \
-  --task-definition regmind-staging:<PREVIOUS_REVISION> \
+  --task-definition <PREVIOUS_BACKEND_TASK_DEFINITION_ARN> \
+  --force-new-deployment --region af-south-1
+aws ecs update-service --cluster regmind-staging \
+  --service regmind-verification-worker \
+  --task-definition <PREVIOUS_WORKER_TASK_DEFINITION_ARN> \
   --force-new-deployment --region af-south-1
 ```
 
 **Step 3:** Wait and verify:
 ```bash
-sleep 120
-curl -s https://staging.regmind.co/api/liveness | python3 -m json.tool
+aws ecs wait services-stable --cluster regmind-staging \
+  --services regmind-backend regmind-verification-worker \
+  --region af-south-1
+
+# Then repeat authenticated /api/version, running-task imageDigest, ALB,
+# CloudWatch, liveness, portal, and backoffice evidence.
 ```
 
 ### If the SHA image is missing
 
-Treat this as a release incident. The ECR repository should have immutable SHA tags and no `:latest` dependency. Rebuild from the previous known-good commit, push that SHA tag, register a task definition with that SHA-tagged image, and redeploy.
+Treat this as a release incident. Do not recreate a deleted historical SHA tag
+and present the newly built digest as the original artifact. Rebuild through a
+separately reviewed recovery release, scan its new immutable digest, register
+new task definitions, and record that provenance break explicitly.
 
 **Database note:** Task definition rollback does NOT roll back database migrations. If a migration was applied during the failed deploy, the old code may encounter schema mismatches. Assess backward compatibility before rolling back.
 
@@ -444,8 +528,8 @@ aws rds reboot-db-instance --db-instance-identifier regmind-staging-db --region 
 ```
 PRE-DEPLOY
 [ ] On branch main, no uncommitted tracked changes
-[ ] 365 tests pass locally
-[ ] Note current task definition revision: regmind-staging:___
+[ ] Every collected test in the current CI manifest passes locally
+[ ] Record both live service task-definition ARNs and their shared immutable image tag/digest
 [ ] Docker Desktop running
 [ ] AWS CLI configured (af-south-1)
 [ ] ECR repository is immutable
@@ -455,17 +539,22 @@ PRE-DEPLOY
 
 BUILD
 [ ] cp ../arie-portal.html . && cp ../arie-backoffice.html .  (run from `arie-backend/`; local builds only; CI does this automatically)
-[ ] docker build --platform linux/amd64 -t regmind-backend .
-[ ] docker tag → 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:$GIT_SHA
-[ ] aws ecr get-login-password (if >12h since last login)
-[ ] docker push SHA tag only
+[ ] derive and validate the full `main` GIT_SHA before the local build
+[ ] docker build linux/amd64 with exact-SHA tag, build args, and provenance labels
+[ ] do not push the local validation image or create a convenience tag
 
 DEPLOY
-[ ] Register task definition with SHA-tagged image
-[ ] aws ecs update-service --task-definition <NEW_TASK_DEF_ARN> --force-new-deployment
-[ ] sleep 120
+[ ] approved `deploy-staging.yml` workflow is running for the reviewed main SHA
+[ ] exact immutable SHA image is verified/reused or pushed once
+[ ] exact-digest scan gate passes before either ECS mutation
+[ ] wait for every mandatory workflow evidence gate
 
 VERIFY
+[ ] ECR exact image digest scan → COMPLETE; 0 CRITICAL; 0 unaccepted HIGH
+[ ] pinned Trivy exact-digest scan → OS + Python coverage; 0 CRITICAL; 0 unaccepted HIGH
+[ ] every backend/worker running task imageDigest equals the scanned ECR digest
+[ ] ECS desired == running, pending == 0, rollout complete for both services
+[ ] every ALB target healthy
 [ ] authenticated /api/version → deployed SHA and image tag match
 [ ] /api/liveness → ok, hardened headers
 [ ] /api/readiness unauthenticated → 401
@@ -476,8 +565,9 @@ VERIFY
 [ ] Logs: no "mock mode" or "connection pool exhausted"
 
 ROLLBACK (if needed — reliable with SHA-tagged images)
-[ ] aws ecs update-service --task-definition regmind-staging:___ (previous revision)
-[ ] sleep 120
+[ ] Restore captured backend task definition: ___
+[ ] Restore captured worker task definition: ___
+[ ] Wait for both services, then repeat digest/version/ALB/CloudWatch evidence
 [ ] Verify health
 ```
 

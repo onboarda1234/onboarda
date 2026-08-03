@@ -11,11 +11,10 @@ Design contract
 * Read-only. NEVER mutates the database.
 * Additive. Does NOT change the shape or semantics of any existing endpoint.
 * Provider-agnostic. Does NOT touch screening / Sumsub / ComplyAdvantage.
-* Respects PR-01..PR-04a contracts:
-    - PR-02 alert routing vocabulary (open / triaged / assigned / dismissed /
-      routed_to_review / routed_to_edd) and the rule that
-      monitoring-originated reviews are first-class reviews
-    - PR-02 reverse-link displacement reality (alerts terminal once routed)
+* Respects the canonical Monitoring Alert state-machine contract:
+    - all ten stored statuses are classified explicitly
+    - routed alerts remain active downstream handoffs, not terminal decisions
+    - monitoring-originated reviews are first-class reviews
     - PR-03 review state model + outcome semantics (state and outcome are
       DISJOINT; legacy ``decision`` is preserved unchanged but not used as
       the outcome source of truth)
@@ -45,7 +44,13 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import monitoring_routing as mr
+import monitoring_status as ms
+from monitoring_alert_state_machine import (
+    ACTIVE_STATUSES as _ACTIVE_ALERT_STATUS_SET,
+    CANONICAL_STATUSES as _CANONICAL_ALERT_STATUSES,
+    HANDOFF_STATUSES as _HANDOFF_ALERT_STATUS_SET,
+    TERMINAL_STATUSES as _TERMINAL_ALERT_STATUS_SET,
+)
 from periodic_review_projection_service import list_review_projections
 
 # ── Active / historical vocabularies ─────────────────────────────────
@@ -54,13 +59,18 @@ from periodic_review_projection_service import list_review_projections
 # the source of truth for transitions; this module is the source of truth
 # only for "is this row currently active work for an officer?".
 
-# Monitoring alerts: terminal once dismissed or routed (see
-# monitoring_routing.TERMINAL_ALERT_STATUSES).
-HISTORICAL_ALERT_STATUSES = mr.TERMINAL_ALERT_STATUSES
-ACTIVE_ALERT_STATUSES = (
-    "open",
-    "triaged",
-    "assigned",
+# Monitoring alerts: handoffs stay active but action-locked in Monitoring.
+HISTORICAL_ALERT_STATUSES = tuple(
+    status for status in _CANONICAL_ALERT_STATUSES
+    if status in _TERMINAL_ALERT_STATUS_SET
+)
+ACTIVE_ALERT_STATUSES = tuple(
+    status for status in _CANONICAL_ALERT_STATUSES
+    if status in (_ACTIVE_ALERT_STATUS_SET | _HANDOFF_ALERT_STATUS_SET)
+)
+HANDOFF_ALERT_STATUSES = tuple(
+    status for status in _CANONICAL_ALERT_STATUSES
+    if status in _HANDOFF_ALERT_STATUS_SET
 )
 
 # Periodic reviews: terminal once completed. PR-03 introduced the
@@ -219,11 +229,9 @@ def _normalise_review_state(row) -> str:
 
 
 def _normalise_alert_state(row) -> str:
-    status = str(_row_get(row, "status", "open") or "open").strip().lower()
-    src = str(_row_get(row, "source_reference", "") or "").strip().upper()
-    if status == "in_review" and src.startswith("FIX_SCEN"):
-        return "triaged"
-    return status
+    raw = str(_row_get(row, "status", "") or "").strip().lower()
+    canonical = ms.lifecycle_status(raw)
+    return canonical if canonical is not None else raw
 
 
 def _user_name_map(db, user_ids: List[str]) -> Dict[str, str]:
@@ -251,8 +259,12 @@ def _next_action_for_alert(status: str) -> Optional[str]:
     return {
         "open": "Triage and assign",
         "triaged": "Assign to officer",
-        "assigned": "Investigate and route",
+        "assigned": "Start review",
+        "in_review": "Investigate and disposition",
+        "escalated": "Senior review and disposition",
         "dismissed": None,
+        "resolved": None,
+        "waived": None,
         "routed_to_review": "Continue in periodic review",
         "routed_to_edd": "Continue in EDD case",
     }.get(status)
@@ -465,8 +477,9 @@ def _materialise_alert(row, *, user_names: Dict[str, str],
         # PR-A: a quarantined row is NEITHER active NOR historical even
         # if its status would otherwise place it in one of those buckets.
         # The third bucket is explicit and additive.
-        "is_active": (not is_quarantined) and mr.is_alert_unresolved(row) and status in ACTIVE_ALERT_STATUSES,
-        "is_historical": (not is_quarantined) and mr.is_alert_terminal(row),
+        "is_active": (not is_quarantined) and status in ACTIVE_ALERT_STATUSES,
+        "is_historical": (not is_quarantined) and status in HISTORICAL_ALERT_STATUSES,
+        "is_action_locked": (not is_quarantined) and status in HANDOFF_ALERT_STATUSES,
         "is_legacy_unmapped": is_quarantined,
         "quarantine_reasons": quarantine_reasons,
         "severity": _row_get(row, "severity"),
@@ -726,9 +739,9 @@ def _row_matches_alert_include(row, include: str) -> bool:
     status = _normalise_alert_state(row)
     is_quarantined, _ = is_legacy_unmapped(row)
     if include == "active":
-        return (not is_quarantined) and mr.is_alert_unresolved(row) and status in ACTIVE_ALERT_STATUSES
+        return (not is_quarantined) and status in ACTIVE_ALERT_STATUSES
     if include == "historical":
-        return (not is_quarantined) and mr.is_alert_terminal(row)
+        return (not is_quarantined) and status in HISTORICAL_ALERT_STATUSES
     if include == "legacy_unmapped":
         return is_quarantined
     if include == "all":
@@ -1140,6 +1153,7 @@ def build_application_lifecycle_summary(
 
 __all__ = [
     "ACTIVE_ALERT_STATUSES",
+    "HANDOFF_ALERT_STATUSES",
     "HISTORICAL_ALERT_STATUSES",
     "ACTIVE_REVIEW_STATES",
     "HISTORICAL_REVIEW_STATES",

@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Onboarda — Client Onboarding Portal</title>
+<title>RegMind Portal — Applicant Workspace</title>
+<link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -1733,14 +1734,7 @@
 <!-- NAVBAR -->
 <nav class="navbar" role="navigation" aria-label="Main navigation">
   <div class="logo">
-    <div class="logo-icon">
-      <svg viewBox="0 0 38 30" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:26px;height:20px">
-        <path d="M19 2L37 28H27.5L23 17H15L10.5 28H1L19 2Z" fill="white" opacity="0.95"/>
-        <path d="M16.5 19h5l-2.5-7-2.5 7z" fill="var(--brand)"/>
-        <ellipse cx="19" cy="28" rx="4.5" ry="2.5" fill="#06080E"/>
-      </svg>
-    </div>
-    Onboarda
+    RegMind Portal
   </div>
   <div class="flex items-center gap-2">
     <div class="nav-badge">
@@ -1810,7 +1804,7 @@
   ══════════════════════════════════════ -->
   <div id="view-landing">
     <div class="landing">
-      <div class="landing-tag">⚡ FSC Licensed · Mauritius PIS</div>
+      <div class="landing-tag">Secure Applicant Workspace</div>
       <h1>Your gateway to<br/><span class="gradient">seamless payments</span></h1>
       <p>Open your corporate account through a secure guided workflow with bank-grade security and clear application updates.</p>
       <div class="btn-group">
@@ -1829,8 +1823,8 @@
       </div>
     </div>
     <div class="disclaimer">
-      Onboarda Ltd is licensed by the Financial Services Commission of Mauritius as a Payment Intermediary Services Provider.
-      All data is encrypted and processed in accordance with the Data Protection Act 2017.
+      RegMind provides the secure application workspace. Your financial institution remains responsible for
+      licensing, account terms, privacy notices, and application decisions.
     </div>
   </div>
 
@@ -1842,17 +1836,10 @@
     <div class="auth-wrap">
       <div class="auth-card">
         <div class="auth-logo">
-          <div class="logo-icon">
-            <svg viewBox="0 0 38 30" fill="none" style="width:24px;height:19px">
-              <path d="M19 2L37 28H27.5L23 17H15L10.5 28H1L19 2Z" fill="white" opacity="0.95"/>
-              <path d="M16.5 19h5l-2.5-7-2.5 7z" fill="var(--brand)"/>
-              <ellipse cx="19" cy="28" rx="4.5" ry="2.5" fill="#06080E"/>
-            </svg>
-          </div>
-          <div class="auth-logo-text">Onboarda</div>
+          <div class="auth-logo-text">RegMind Portal</div>
         </div>
         <div class="auth-title">Create your account</div>
-        <div class="auth-sub">Open a corporate account with Onboarda — the regulated payments platform built for international SMEs.</div>
+        <div class="auth-sub">Start your application in a secure workspace provided by RegMind.</div>
 
         <form id="register-form" onsubmit="submitRegister(event)">
           <div class="form-grid mb-2">
@@ -1914,7 +1901,7 @@
           </div>
           <div class="consent-box mb-3">
             <input type="checkbox" id="r-terms" required />
-            <p>I agree to Onboarda's <a href="#" style="color:var(--gold);">Terms of Service</a> and <a href="#" style="color:var(--gold);">Privacy Policy</a>, and consent to the processing of my personal data for account onboarding purposes. <span class="req">*</span></p>
+            <p>I agree to the financial institution's <a href="#" style="color:var(--gold);">Terms of Service</a> and <a href="#" style="color:var(--gold);">Privacy Policy</a>, and consent to the processing of my personal data for account onboarding purposes. <span class="req">*</span></p>
           </div>
           <button type="submit" class="btn-submit" id="register-btn">
             🚀 Create Account &amp; Start Onboarding
@@ -1923,8 +1910,8 @@
 
         <div class="auth-switch">Already have an account? <a onclick="showView('login')">Sign in →</a></div>
         <div class="auth-terms">
-          Onboarda Ltd is licensed by the Financial Services Commission of Mauritius.<br/>
-          Your data is encrypted and processed under the Data Protection Act 2017.
+          RegMind provides this secure applicant workspace.<br/>
+          Your financial institution's legal terms and privacy notices apply.
         </div>
       </div>
     </div>
@@ -1937,14 +1924,7 @@
     <div class="auth-wrap">
       <div class="auth-card">
         <div class="auth-logo">
-          <div class="logo-icon">
-            <svg viewBox="0 0 38 30" fill="none" style="width:24px;height:19px">
-              <path d="M19 2L37 28H27.5L23 17H15L10.5 28H1L19 2Z" fill="white" opacity="0.95"/>
-              <path d="M16.5 19h5l-2.5-7-2.5 7z" fill="var(--brand)"/>
-              <ellipse cx="19" cy="28" rx="4.5" ry="2.5" fill="#06080E"/>
-            </svg>
-          </div>
-          <div class="auth-logo-text">Onboarda</div>
+          <div class="auth-logo-text">RegMind Portal</div>
         </div>
         <div class="auth-title">Welcome back</div>
         <div class="auth-sub">Sign in to continue your onboarding application.</div>
@@ -2993,7 +2973,7 @@
             </div>
             <div class="form-group span-2">
               <label>Detailed Overview of Business Operations <span class="req">*</span></label>
-              <textarea id="f-biz-overview" placeholder="Describe your business model, products/services offered, revenue streams, and how you intend to use the Onboarda account…" style="min-height:120px;" required></textarea>
+              <textarea id="f-biz-overview" placeholder="Describe your business model, products/services offered, revenue streams, and how you intend to use the proposed account…" style="min-height:120px;" required></textarea>
             </div>
             <div class="form-group">
               <label>Target Markets / Countries you deal with <span class="req">*</span></label>
@@ -3117,7 +3097,7 @@
             </div>
             <div class="form-group" style="display:flex;flex-direction:column;">
               <label>Initial Source of Funds <span class="req">*</span></label>
-              <p style="font-size:11px;color:var(--text3);margin:-2px 0 8px 0;line-height:1.4;min-height:44px;">Where will the first deposit into your Onboarda account come from? This refers to the specific origin of the initial transfer.</p>
+              <p style="font-size:11px;color:var(--text3);margin:-2px 0 8px 0;line-height:1.4;min-height:44px;">Where will the first deposit into the proposed account come from? This refers to the specific origin of the initial transfer.</p>
               <select id="f-source-init-type" required>
                 <option value="">Select primary source…</option>
                 <option value="Transfer from company bank account">Transfer from company bank account</option>
@@ -3241,10 +3221,10 @@
           <div class="section-title">Referral & Introduction</div>
           <div class="form-grid">
             <div class="form-group">
-              <label>How were you introduced to Onboarda? <span class="req">*</span></label>
+              <label>How were you introduced to this service? <span class="req">*</span></label>
               <select id="f-intro-method" required>
                 <option value="">Select…</option>
-                <option value="Direct application — client initiated">Direct application — I found Onboarda myself</option>
+                <option value="Direct application — client initiated">Direct application — I found the service myself</option>
                 <option value="Introduced by regulated intermediary / agent">Introduced by a regulated intermediary / agent</option>
                 <option value="Introduced by non-regulated intermediary">Introduced by a non-regulated intermediary</option>
                 <option value="Unsolicited / unknown referral source">Other / Unsolicited</option>
@@ -3363,7 +3343,7 @@
           <div class="timeline-item">
             <div class="timeline-dot"></div>
             <div class="timeline-date">Account activation</div>
-            <div class="timeline-text">Account opened — welcome to Onboarda</div>
+            <div class="timeline-text">Account opened — welcome</div>
           </div>
         </div>
       </div>
@@ -3417,7 +3397,7 @@
               <span style="font-size:10px;color:var(--text3);margin-left:auto;">Hidden</span>
             </div>
             <div style="font-size:12px;color:var(--text2);line-height:1.7;margin-bottom:14px;">
-              Your application is being processed by Onboarda.
+              Your application is being processed through RegMind Portal.
             </div>
             <div id="portal-explain-dimensions" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;"></div>
             <div id="portal-explain-summary" style="padding:12px 16px;border-radius:8px;font-size:12px;line-height:1.6;"></div>
@@ -3553,7 +3533,7 @@
             </table>
 
             <div class="pricing-disclaimer">
-              <strong>Important Notice:</strong> The pricing above is based on the information provided in your application. Onboarda reserves the right to revise the applicable pricing if the information changes or if additional information is required before approval. Final pricing will be confirmed in your service agreement following full account approval.
+              <strong>Important Notice:</strong> The pricing above is based on the information provided in your application. Your financial institution reserves the right to revise the applicable pricing if the information changes or if additional information is required before approval. Final pricing will be confirmed in your service agreement following full account approval.
             </div>
 
             <div id="pricing-party-integrity-error" role="alert" aria-live="assertive" style="display:none;margin-top:16px;padding:12px 14px;border:1px solid #dc2626;border-left:4px solid #dc2626;border-radius:8px;background:#fef2f2;color:#991b1b;font-size:12px;line-height:1.5;"></div>
@@ -3562,7 +3542,7 @@
               <div class="consent-section-title">📋 Terms & Conditions</div>
               <div class="consent-check">
                 <input type="checkbox" id="pricing-tc-accept" />
-                <p><strong>I accept the Terms & Conditions</strong><br/>By checking this box, I acknowledge and accept the fee schedule above, understand that pricing is subject to revision upon final compliance review, and agree to the <span class="legal-link" onclick="showToast('info','Terms & Conditions','Full Terms & Conditions for Payment Intermediary Services will be provided in the service agreement. Contact compliance@onboarda.com for a copy.')">Terms & Conditions</span> governing Onboarda Ltd Payment Intermediary Services. I further confirm that I am duly authorised to enter into this arrangement on behalf of the entity.</p>
+                <p><strong>I accept the Terms & Conditions</strong><br/>By checking this box, I acknowledge and accept the fee schedule above, understand that pricing is subject to revision upon final compliance review, and agree to the <span class="legal-link" onclick="showToast('info','Terms & Conditions','Full Terms & Conditions will be provided in the service agreement. Contact your financial institution for a copy.')">Terms & Conditions</span> governing the financial institution's services. I further confirm that I am duly authorised to enter into this arrangement on behalf of the entity.</p>
               </div>
             </div>
 
@@ -3609,6 +3589,17 @@
       <div id="portal-party-hydration-errors" role="alert" aria-live="assertive" style="display:none;margin-bottom:16px;padding:14px 16px;border:1px solid #dc2626;border-left:4px solid #dc2626;border-radius:8px;background:#fef2f2;color:#991b1b;">
         <div style="font-size:13px;font-weight:700;margin-bottom:4px;">Ownership parties could not be loaded safely</div>
         <div id="portal-party-hydration-errors-detail" style="font-size:12px;line-height:1.5;"></div>
+      </div>
+
+      <div class="card portal-document-renewal-card" id="portal-renewal-onboarding-card" data-portal-renewal-surface="onboarding" style="display:none;">
+        <div class="card-header">
+          <div class="card-icon amber">&#8635;</div>
+          <div>
+            <div class="card-title">Document Renewal Requests</div>
+            <div class="card-sub">Upload requested renewal evidence for this application.</div>
+          </div>
+        </div>
+        <div id="portal-renewal-onboarding-container" style="display:grid;gap:12px;"></div>
       </div>
 
       <!-- Section A: Corporate Documents -->
@@ -4112,7 +4103,7 @@
         <div class="consent-section-title">✍️ Final Submission Declaration</div>
         <div class="consent-check">
           <input type="checkbox" id="kyc-final-declaration" />
-          <p><strong>I confirm that all documents uploaded are authentic, unaltered, and belong to the declared entity or individuals. <span class="req">*</span></strong><br/>I understand that submitting fraudulent, forged, or misleading documents is a criminal offence under Mauritius law. I authorise Onboarda Ltd to verify the authenticity of all documents submitted with the relevant issuing authorities and third-party verification providers.</p>
+          <p><strong>I confirm that all documents uploaded are authentic, unaltered, and belong to the declared entity or individuals. <span class="req">*</span></strong><br/>I understand that submitting fraudulent, forged, or misleading documents may be a criminal offence. I authorise the financial institution and its approved service providers to verify submitted documents with relevant issuing authorities and verification providers.</p>
         </div>
       </div>
 
@@ -4364,6 +4355,17 @@
         </div>
       </div>
 
+      <div class="card portal-document-renewal-card" id="portal-renewal-approved-card" data-portal-renewal-surface="approved" style="display:none;">
+        <div class="card-header">
+          <div class="card-icon amber">&#8635;</div>
+          <div>
+            <div class="card-title">Document Renewal Requests</div>
+            <div class="card-sub">Compliance-requested renewal evidence for this application.</div>
+          </div>
+        </div>
+        <div id="portal-renewal-approved-container" style="display:grid;gap:12px;"></div>
+      </div>
+
       <div class="card approved-card" style="text-align:center;margin-top:16px;">
         <div style="font-size:28px;margin-bottom:10px;">🚀</div>
         <div class="font-bold" style="font-size:17px; margin-bottom:8px;">Next Steps</div>
@@ -4421,7 +4423,7 @@
           Need assistance? Our team is here to help.
         </p>
         <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
-          <a href="mailto:support@onboarda.com" class="btn btn-outline">📧 Contact Support</a>
+          <a href="mailto:support@regmind.co" class="btn btn-outline">📧 Contact Support</a>
           <button class="btn btn-outline" onclick="startNewApplication()">↩ Start New Application</button>
         </div>
       </div>
@@ -4464,7 +4466,7 @@
           Need assistance? Our team is here to help.
         </p>
         <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
-          <a href="mailto:support@onboarda.com" class="btn btn-outline">📧 Contact Support</a>
+          <a href="mailto:support@regmind.co" class="btn btn-outline">📧 Contact Support</a>
           <button class="btn btn-outline" onclick="startNewApplication()">↩ Start New Application</button>
         </div>
       </div>
@@ -5507,6 +5509,15 @@ let pricingPartyIntegrityErrors = [];
 let currentRMIRequests = [];
 let currentEnhancedRequirements = [];
 let portalEnhancedRequirementBusy = {};
+let portalDocumentRenewalApplicationId = '';
+let portalDocumentRenewalRequests = [];
+let portalDocumentRenewalBusy = {};
+let portalDocumentRenewalPageBusy = {};
+let portalDocumentRenewalFeatureEnabled = false;
+let portalDocumentRenewalNextOffset = null;
+let portalDocumentRenewalTotal = 0;
+let portalDocumentRenewalGeneration = 0;
+var PORTAL_DOCUMENT_RENEWAL_PAGE_LIMIT = 50;
 var TOTAL_REQUIRED_DOCS = 11;
 var APP_TABLE_COLSPAN = 7;
 var portalSidebarApplications = [];
@@ -5874,6 +5885,7 @@ function resetPortalApplicationState() {
   setApprovedApplicationRef('');
   currentEnhancedRequirements = [];
   renderPortalEnhancedRequirements([]);
+  clearPortalDocumentRenewalRequests();
   if (autoSaveTimer) {
     clearInterval(autoSaveTimer);
     autoSaveTimer = null;
@@ -6168,7 +6180,9 @@ function showLicenceDocs() {
 // Views where the persistent client sidebar is shown
 const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','pricing','pre-approval-hold','compliance-hold','onboarding','submission-review','docs-review','approved','rejected','withdrawn','client-notifications','account-security','portal-changes'];
 
-function showView(name) {
+function showView(name, options) {
+  var viewOptions = options || {};
+  var enhancedRequirementsLoad = Promise.resolve(false);
   if (name === 'backoffice') {
     console.warn('Staff workspace is not served from the client portal.');
     name = 'landing';
@@ -6196,9 +6210,13 @@ function showView(name) {
   if (name === 'my-apps' || name === 'view-my-apps') {
     loadMyApplications();
   }
-  if (name === 'onboarding' && AUTH_TOKEN && currentApplicationId) {
-    loadPortalEnhancedRequirements();
+  if (viewOptions.skipEnhancedRequirementsLoad !== true && name === 'onboarding' && AUTH_TOKEN && currentApplicationId) {
+    enhancedRequirementsLoad = loadPortalEnhancedRequirements();
   }
+  if ((name === 'onboarding' || name === 'approved') && AUTH_TOKEN && currentApplicationId) {
+    loadPortalDocumentRenewalRequests();
+  }
+  return enhancedRequirementsLoad;
 }
 
 function setSidebarActive(viewName) {
@@ -7966,7 +7984,7 @@ async function submitPrescreening(e) {
   var incCountry = document.getElementById('f-inc-country');
   if (incCountry && !checkSanctionedCountry(incCountry)) {
     btn.disabled = false; btn.innerHTML = '🚀 Submit Initial Review';
-    showToast('error', 'Restricted Jurisdiction', 'Onboarda cannot onboard clients from sanctioned jurisdictions.');
+    showToast('error', 'Restricted Jurisdiction', 'Applications from sanctioned jurisdictions cannot proceed through RegMind Portal.');
     return;
   }
   if (incCountry && isEnhancedRiskJurisdiction(incCountry.value) && !getFieldValue('f-jurisdiction-rationale')) {
@@ -8010,7 +8028,7 @@ async function submitPrescreening(e) {
   });
   if (sanctionedFound) {
     btn.disabled = false; btn.innerHTML = '🚀 Submit Initial Review';
-    showToast('error', 'Restricted Jurisdiction', 'Onboarda cannot onboard clients involved in sanctioned or prohibited jurisdictions. Flagged: ' + sanctionedField);
+    showToast('error', 'Restricted Jurisdiction', 'Applications involving sanctioned or prohibited jurisdictions cannot proceed through RegMind Portal. Flagged: ' + sanctionedField);
     return;
   }
   // Incorporation date validation
@@ -10894,10 +10912,10 @@ function startAutoSave() {
 
 // Update save bar when entering onboarding view
 var origShowView = showView;
-showView = async function(name) {
+showView = async function(name, options) {
   var canNavigateWithoutConfirm = _confirmDiscardUnsavedChangesForNavigation(name);
   function continueNavigation() {
-    origShowView(name);
+    var enhancedRequirementsLoad = origShowView(name, options);
     if (portalAutosaveAllowedForView(name)) {
       var refDisplay = document.getElementById('save-ref-display');
       if (refDisplay) refDisplay.textContent = appRef ? 'Ref: ' + appRef : '';
@@ -10917,16 +10935,16 @@ showView = async function(name) {
     if (name === 'client-notifications') {
       loadClientNotifications();
     }
+    return enhancedRequirementsLoad;
   }
   if (canNavigateWithoutConfirm) {
-    continueNavigation();
-    return;
+    return continueNavigation();
   }
   try {
     var confirmed = await _showDraftDiscardConfirmDialog('your unsaved draft changes', 'Leave without saving');
     if (!confirmed) return;
     _draftDirty = false;
-    continueNavigation();
+    return continueNavigation();
   } catch (err) {
     console.warn('navigation discard confirmation failed:', err);
   }
@@ -11748,6 +11766,266 @@ function updateClientStatusTracker(status) {
   }
 }
 
+function clearPortalDocumentRenewalRequests() {
+  portalDocumentRenewalGeneration += 1;
+  portalDocumentRenewalApplicationId = '';
+  portalDocumentRenewalRequests = [];
+  portalDocumentRenewalFeatureEnabled = false;
+  portalDocumentRenewalNextOffset = null;
+  portalDocumentRenewalTotal = 0;
+  ['onboarding', 'approved'].forEach(function(surface) {
+    var card = document.getElementById('portal-renewal-' + surface + '-card');
+    var container = document.getElementById('portal-renewal-' + surface + '-container');
+    if (card) card.style.display = 'none';
+    if (container) container.innerHTML = '';
+  });
+}
+
+function renderPortalDocumentRenewalUnavailable(applicationId) {
+  if (String(applicationId || '') !== String(currentApplicationId || '')) return false;
+  portalDocumentRenewalApplicationId = String(applicationId || '');
+  portalDocumentRenewalRequests = [];
+  portalDocumentRenewalFeatureEnabled = false;
+  portalDocumentRenewalNextOffset = null;
+  portalDocumentRenewalTotal = 0;
+  var html = '<div class="doc-item portal-document-renewal-unavailable" role="status" style="color:var(--text2);"><strong>Renewal requests are temporarily unavailable.</strong><div style="font-size:11px;color:var(--text3);margin-top:6px;">Retry by reopening this application. No upload control is available until current request state is confirmed.</div></div>';
+  ['onboarding', 'approved'].forEach(function(surface) {
+    var card = document.getElementById('portal-renewal-' + surface + '-card');
+    var container = document.getElementById('portal-renewal-' + surface + '-container');
+    if (container) container.innerHTML = html;
+    if (card) card.style.display = '';
+  });
+  return true;
+}
+
+function portalDocumentRenewalStatusLabel(status) {
+  var labels = {
+    created: 'Renewal requested',
+    awaiting_upload: 'Awaiting upload',
+    upload_received: 'Uploaded',
+    cancelled: 'Cancelled'
+  };
+  var key = String(status || '').trim().toLowerCase();
+  return labels[key] || key.replace(/_/g, ' ').replace(/\b\w/g, function(ch) { return ch.toUpperCase(); });
+}
+
+function portalDocumentRenewalReasonLabel(reason) {
+  var labels = {
+    expired: 'Document expired',
+    expiring_soon: 'Document expiring soon',
+    manual: 'Requested by Compliance'
+  };
+  return labels[String(reason || '').trim().toLowerCase()] || 'Renewal requested';
+}
+
+function portalDocumentRenewalCardHtml(request, applicationId, featureEnabled) {
+  var requestId = String((request && request.request_id) || '');
+  var status = String((request && request.request_status) || '').trim().toLowerCase();
+  var documentLabel = (request && (request.document_type_label || request.document_type)) || 'Requested document';
+  var subjectLabel = (request && request.subject_display_label) || 'Application participant';
+  // due_date is a date-only contract. Rendering it directly prevents a UTC
+  // conversion from showing the prior day in western time zones.
+  var dueDate = request && request.due_date ? String(request.due_date).slice(0, 10) : 'Not set';
+  var uploadControl = '';
+  if (request && request.manual_review_required === true) {
+    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--red-dim);color:var(--red);font-size:11px;font-weight:700;">This request requires Compliance review because its canonical document linkage changed or is unavailable. Upload is disabled.</div>';
+  } else if (status === 'awaiting_upload' && featureEnabled === true && request && request.upload_allowed === true) {
+    uploadControl = '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">' +
+      '<input type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style="display:none;" onchange="uploadPortalDocumentRenewal(this)" />' +
+      '<button type="button" class="btn btn-primary btn-sm" onclick="selectPortalDocumentRenewalFile(this)">Upload Renewal Document</button>' +
+      '<span class="portal-renewal-upload-result" role="status" style="display:block;margin-top:7px;font-size:11px;color:var(--text3);"></span>' +
+    '</div>';
+  } else if (status === 'awaiting_upload' && request && request.request_expired === true) {
+    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--red-dim);color:var(--red);font-size:11px;font-weight:700;">This renewal request has expired. Contact Compliance if a new due date or replacement request is required.</div>';
+  } else if (status === 'awaiting_upload' && featureEnabled !== true) {
+    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--surface2);color:var(--text3);font-size:11px;font-weight:700;">Renewal uploads are currently read-only while the governed workflow is OFF.</div>';
+  } else if (status === 'awaiting_upload') {
+    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--red-dim);color:var(--red);font-size:11px;font-weight:700;">Upload is unavailable until Compliance confirms the authoritative request binding.</div>';
+  } else if (status === 'upload_received') {
+    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--green-dim);color:var(--green);font-size:11px;font-weight:700;"><strong>Awaiting Verification</strong><div style="margin-top:4px;font-weight:600;">Your upload is securely bound to this renewal request. Compliance has not verified or accepted it, and your canonical document has not been replaced.</div></div>';
+  }
+  return '<div class="doc-item portal-document-renewal-item" data-renewal-application-id="' + escapeHtml(String(applicationId || '')) + '" data-renewal-request-id="' + escapeHtml(requestId) + '">' +
+    '<div class="doc-item-top">' +
+      '<span class="doc-item-icon">&#128196;</span>' +
+      '<div><div class="doc-item-name">' + escapeHtml(documentLabel) + '</div>' +
+      '<div class="doc-item-desc">' + escapeHtml(subjectLabel) + ' · ' + escapeHtml(portalDocumentRenewalReasonLabel(request && request.request_reason)) + '</div></div>' +
+    '</div>' +
+    '<span class="' + (status === 'upload_received' ? 'doc-optional' : 'doc-required') + '">' + escapeHtml(portalDocumentRenewalStatusLabel(status)) + '</span>' +
+    '<div style="font-size:12px;color:var(--text2);margin-top:10px;"><strong>Due date:</strong> ' + escapeHtml(dueDate) + '</div>' +
+    '<div style="font-size:11px;color:var(--text3);margin-top:5px;">Request ID: ' + escapeHtml(requestId) + '</div>' +
+    uploadControl +
+  '</div>';
+}
+
+function renderPortalDocumentRenewalRequests(requests, applicationId, featureEnabled, pagination, append) {
+  var boundApplicationId = String(applicationId || '');
+  if (!boundApplicationId || boundApplicationId !== String(currentApplicationId || '')) return false;
+  portalDocumentRenewalApplicationId = boundApplicationId;
+  portalDocumentRenewalFeatureEnabled = featureEnabled === true;
+  var pageRequests = (Array.isArray(requests) ? requests : []).filter(function(request) {
+    return request && String(request.application_id || '') === boundApplicationId && request.request_id;
+  });
+  var combined = append === true ? portalDocumentRenewalRequests.concat(pageRequests) : pageRequests;
+  var requestIds = {};
+  portalDocumentRenewalRequests = combined.filter(function(request) {
+    var requestId = String(request.request_id || '');
+    if (!requestId || requestIds[requestId]) return false;
+    requestIds[requestId] = true;
+    return true;
+  });
+  var total = Number(pagination && pagination.total);
+  portalDocumentRenewalTotal = Number.isInteger(total) && total >= portalDocumentRenewalRequests.length
+    ? total
+    : portalDocumentRenewalRequests.length;
+  var nextOffset = Number(pagination && pagination.next_offset);
+  var hasMore = pagination && pagination.has_more === true;
+  portalDocumentRenewalNextOffset = (
+    hasMore && Number.isInteger(nextOffset) && nextOffset > 0 && nextOffset <= 10000
+  ) ? nextOffset : null;
+  var html = portalDocumentRenewalRequests.map(function(request) {
+    return portalDocumentRenewalCardHtml(request, boundApplicationId, portalDocumentRenewalFeatureEnabled);
+  }).join('');
+  if (html) {
+    html += '<div class="portal-renewal-pagination" style="margin-top:10px;font-size:11px;color:var(--text3);">Showing ' +
+      escapeHtml(String(portalDocumentRenewalRequests.length)) + ' of ' +
+      escapeHtml(String(portalDocumentRenewalTotal)) + ' renewal request(s).';
+    if (portalDocumentRenewalNextOffset !== null) {
+      html += '<button type="button" class="btn btn-secondary btn-sm" style="margin-left:10px;" onclick="loadMorePortalDocumentRenewalRequests(this)">Load more</button>';
+    } else if (hasMore || portalDocumentRenewalRequests.length < portalDocumentRenewalTotal) {
+      html += '<span style="display:block;margin-top:6px;color:var(--red);">Additional renewal requests are unavailable. Reopen the application and try again.</span>';
+    }
+    html += '</div>';
+  }
+  ['onboarding', 'approved'].forEach(function(surface) {
+    var card = document.getElementById('portal-renewal-' + surface + '-card');
+    var container = document.getElementById('portal-renewal-' + surface + '-container');
+    if (container) container.innerHTML = html;
+    if (card) card.style.display = html ? '' : 'none';
+  });
+  return true;
+}
+
+async function loadPortalDocumentRenewalRequests() {
+  if (!AUTH_TOKEN || !currentApplicationId) {
+    clearPortalDocumentRenewalRequests();
+    return false;
+  }
+  var requestedApplicationId = String(currentApplicationId);
+  clearPortalDocumentRenewalRequests();
+  var requestedGeneration = portalDocumentRenewalGeneration;
+  try {
+    var response = await apiCall('GET', '/portal/applications/' + encodeURIComponent(requestedApplicationId) + '/renewal-requests?limit=' + PORTAL_DOCUMENT_RENEWAL_PAGE_LIMIT + '&offset=0');
+    if (String(currentApplicationId || '') !== requestedApplicationId) return false;
+    if (portalDocumentRenewalGeneration !== requestedGeneration) return false;
+    if (response && response.application_id && String(response.application_id) !== requestedApplicationId) return false;
+    return renderPortalDocumentRenewalRequests(
+      (response && response.renewal_requests) || [],
+      requestedApplicationId,
+      response && response.feature_enabled === true,
+      response || {},
+      false
+    );
+  } catch (err) {
+    if (
+      String(currentApplicationId || '') === requestedApplicationId &&
+      portalDocumentRenewalGeneration === requestedGeneration
+    ) renderPortalDocumentRenewalUnavailable(requestedApplicationId);
+    return false;
+  }
+}
+
+async function loadMorePortalDocumentRenewalRequests(button) {
+  var applicationId = String(portalDocumentRenewalApplicationId || '');
+  var offset = portalDocumentRenewalNextOffset;
+  var generation = portalDocumentRenewalGeneration;
+  if (!AUTH_TOKEN || !applicationId || applicationId !== String(currentApplicationId || '')) return false;
+  if (!Number.isInteger(offset) || offset < 1 || offset > 10000) return false;
+  if (portalDocumentRenewalPageBusy[applicationId]) return false;
+  portalDocumentRenewalPageBusy[applicationId] = true;
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Loading...';
+  }
+  try {
+    var response = await apiCall('GET', '/portal/applications/' + encodeURIComponent(applicationId) + '/renewal-requests?limit=' + PORTAL_DOCUMENT_RENEWAL_PAGE_LIMIT + '&offset=' + encodeURIComponent(String(offset)));
+    if (applicationId !== String(currentApplicationId || '')) return false;
+    if (generation !== portalDocumentRenewalGeneration) return false;
+    if (!response || String(response.application_id || '') !== applicationId) return false;
+    if (Number(response.offset) !== offset) return false;
+    return renderPortalDocumentRenewalRequests(
+      response.renewal_requests || [],
+      applicationId,
+      response.feature_enabled === true,
+      response,
+      true
+    );
+  } catch (err) {
+    if (
+      applicationId === String(currentApplicationId || '') &&
+      generation === portalDocumentRenewalGeneration
+    ) {
+      if (button) button.textContent = 'Retry load more';
+      showToast('error', 'Renewal Requests Unavailable', 'Could not load the next renewal-request page.');
+    }
+    return false;
+  } finally {
+    delete portalDocumentRenewalPageBusy[applicationId];
+    if (button && button.isConnected) {
+      button.disabled = false;
+      if (button.textContent === 'Loading...') button.textContent = 'Load more';
+    }
+  }
+}
+
+function selectPortalDocumentRenewalFile(button) {
+  var card = button && button.closest ? button.closest('[data-renewal-request-id]') : null;
+  var input = card && card.querySelector('input[type="file"]');
+  if (input) input.click();
+}
+
+async function uploadPortalDocumentRenewal(input) {
+  var card = input && input.closest ? input.closest('[data-renewal-request-id]') : null;
+  var requestId = card && card.getAttribute('data-renewal-request-id');
+  var applicationId = card && card.getAttribute('data-renewal-application-id');
+  var result = card && card.querySelector('.portal-renewal-upload-result');
+  var file = input && input.files && input.files[0];
+  if (!AUTH_TOKEN || !file || !requestId || !applicationId) return;
+  if (!portalDocumentRenewalFeatureEnabled) {
+    if (result) result.textContent = 'Renewal uploads are currently read-only.';
+    return;
+  }
+  if (String(currentApplicationId || '') !== applicationId || portalDocumentRenewalApplicationId !== applicationId) {
+    if (result) result.textContent = 'This request belongs to a different application. Reopen the application and try again.';
+    return;
+  }
+  var request = portalDocumentRenewalRequests.find(function(item) {
+    return String(item.request_id || '') === requestId && String(item.application_id || '') === applicationId;
+  });
+  if (!request || String(request.request_status || '') !== 'awaiting_upload' || request.upload_allowed !== true || request.manual_review_required === true) {
+    if (result) result.textContent = 'This request is no longer awaiting an upload.';
+    return;
+  }
+  var busyKey = applicationId + ':' + requestId;
+  if (portalDocumentRenewalBusy[busyKey]) return;
+  portalDocumentRenewalBusy[busyKey] = true;
+  input.disabled = true;
+  if (result) result.textContent = 'Uploading...';
+  var formData = new FormData();
+  formData.append('file', file, file.name);
+  try {
+    await apiCall('POST', '/portal/applications/' + encodeURIComponent(applicationId) + '/renewal-requests/' + encodeURIComponent(requestId) + '/upload', formData, true);
+    input.value = '';
+    showToast('success', 'Renewal Upload Bound', 'Uploaded and awaiting verification. Your canonical document has not been replaced.');
+    await loadPortalDocumentRenewalRequests();
+  } catch (err) {
+    if (result) result.textContent = err.message || 'Upload failed.';
+    showToast('error', 'Upload Failed', err.message || 'Could not upload this renewal document.');
+  } finally {
+    delete portalDocumentRenewalBusy[busyKey];
+    input.disabled = false;
+  }
+}
+
 function portalEnhancedRequirementTone(status) {
   var s = String(status || 'required').toLowerCase();
   if (s === 'uploaded') s = 'submitted';
@@ -12332,7 +12610,7 @@ function recheckMSSanctions(id) {
     var err = document.createElement('div');
     err.id = errId;
     err.style.cssText = 'color:#dc2626;font-size:12px;font-weight:600;margin-top:6px;padding:8px 12px;background:rgba(220,38,38,0.06);border:1px solid rgba(220,38,38,0.15);border-radius:8px;';
-    err.textContent = 'Onboarda cannot onboard clients involved in sanctioned or prohibited jurisdictions. Restricted: ' + flagged.join(', ') + '.';
+    err.textContent = 'Applications involving sanctioned or prohibited jurisdictions cannot proceed through RegMind Portal. Restricted: ' + flagged.join(', ') + '.';
     wrap.parentElement.appendChild(err);
   }
 }
@@ -12659,7 +12937,7 @@ function checkSanctionedCountry(selectEl) {
     var err = document.createElement('div');
     err.id = errId;
     err.style.cssText = 'color:#dc2626;font-size:12px;font-weight:600;margin-top:6px;padding:8px 12px;background:rgba(220,38,38,0.06);border:1px solid rgba(220,38,38,0.15);border-radius:8px;';
-    err.textContent = 'Onboarda cannot onboard clients involved in sanctioned or prohibited jurisdictions.';
+    err.textContent = 'Applications involving sanctioned or prohibited jurisdictions cannot proceed through RegMind Portal.';
     selectEl.parentElement.appendChild(err);
     selectEl.style.borderColor = '#dc2626';
     return false;
@@ -12733,7 +13011,7 @@ function submitRegister(e) {
       prefillApplicationForm();
       showView('company-lookup');
       resetLookup();
-      showToast('success', 'Account created!', 'Welcome to Onboarda. Let\'s complete your application.');
+      showToast('success', 'Account created!', 'Welcome to RegMind Portal. Let\'s complete your application.');
     } catch (err) {
       btn.disabled = false; btn.innerHTML = '🚀 Create Account & Start Onboarding';
       showToast('error', 'Registration Failed', err.message || 'Could not create account. Please try again.');
@@ -13005,14 +13283,15 @@ async function loadPortalChangeRequests() {
 
 // Load portal changes when that view is shown
 var _originalShowView = showView;
-showView = function(name) {
-  _originalShowView(name);
+showView = function(name, options) {
+  var enhancedRequirementsLoad = _originalShowView(name, options);
   if (name === 'portal-changes') {
     var form = document.getElementById('portal-change-form');
     if (form) form.style.display = '';
     loadPortalChangeApps();
     loadPortalChangeRequests();
   }
+  return enhancedRequirementsLoad;
 };
 
 // ─── Password helpers ────────────────────────────────────────
@@ -13948,7 +14227,7 @@ function renderCompanyIntakePSCs() {
     html += '<div class="company-intake-alert info">These are candidates for compliance review, not final approved UBOs.</div>';
     html += renderCompanyIntakePscOwners(owners);
   } else if (state === 'no_psc') {
-    html += '<div class="company-intake-alert info">Companies House did not return an active PSC record. ARIE may still require ownership confirmation during compliance review.</div>';
+    html += '<div class="company-intake-alert info">Companies House did not return an active PSC record. The compliance team may still require ownership confirmation during review.</div>';
   } else if (state === 'psc_exempt') {
     html += '<div class="company-intake-alert warn">Companies House indicates PSC information may be exempt or unavailable. This will be flagged for compliance review.</div>';
   } else if (state === 'corporate_psc') {
@@ -15091,6 +15370,10 @@ async function resumeApplication(ref, stage) {
         prefillPortalContactDetailsFromSession();
       }
 
+      // Load special-evidence ownership before any final KYC card or document
+      // hydration. The final view switch below suppresses its duplicate GET.
+      await loadPortalEnhancedRequirements();
+
       // Sync KYC cards now that party rows are populated
       if (typeof syncDirectorsUBOsToKYC === 'function') {
         try { syncDirectorsUBOsToKYC(); } catch(e) { console.warn('syncDirectorsUBOsToKYC on resume:', e); }
@@ -15102,7 +15385,6 @@ async function resumeApplication(ref, stage) {
       restorePepDeclarationList(psDirs);
       restorePepDeclarationList(psUbos);
       renderRMIRequests(app.rmi_requests || []);
-      await loadPortalEnhancedRequirements();
     }
   } catch (err) {
     console.error('Failed to load application detail for resume:', err);
@@ -15110,7 +15392,9 @@ async function resumeApplication(ref, stage) {
     showView('my-apps');
     return;
   }
-  showView(target);
+  // No awaited work may occur between this final rebuild and document
+  // hydration: clients must never interact with provisional KYC cards.
+  showView(target, { skipEnhancedRequirementsLoad: true });
   applyApplicationViewState(target);
   // applyApplicationViewState rebuilds KYC person cards for KYC-facing views.
   // Hydrate persisted documents only after that final rebuild so clean-login

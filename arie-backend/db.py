@@ -16,6 +16,10 @@ import secrets
 import subprocess
 from pathlib import Path
 
+from monitoring_alert_state_machine import (
+    CANONICAL_STATUSES as MONITORING_ALERT_STATUS_VALUES,
+)
+
 logger = logging.getLogger(__name__)
 
 MONITORING_ALERT_DISCOVERED_VIA_VALUES = (
@@ -26,6 +30,17 @@ MONITORING_ALERT_DISCOVERED_VIA_VALUES = (
     "officer_created",
     "document_health",
 )
+
+# PR-MON-M1-STATE-MACHINE-1: exact persisted Monitoring Alert vocabulary.
+#
+# This tuple is intentionally limited to values already supported by current
+# runtime contracts and the post-PR #902 staging dataset.  Future workflow
+# states must not be added speculatively: changing this tuple requires an
+# explicit compatibility audit, migration analysis, and state-machine version
+# update.  ``in_review`` remains canonical because it is the controlled
+# backfill's recorded rollback target. The state-machine module is the single
+# source; this database alias drives preflight and constraint installation.
+MONITORING_ALERT_STATUS_CONSTRAINT = "monitoring_alerts_status_check"
 
 RMI_REQUEST_STATUS_VALUES = (
     "open",
@@ -269,7 +284,8 @@ def close_pg_pool():
 # ============================================================================
 # Every ECS task runs the same Tornado PeriodicCallbacks, so before this fix
 # every scheduled job (GDPR purge, monitoring automation, document health,
-# memo recovery, PRS-6 notifications) executed once PER TASK per interval —
+# memo recovery, PRS-6 notifications, document-renewal reminders) executed
+# once PER TASK per interval —
 # duplicate purges and duplicate client notifications with 2+ tasks. Each
 # tick now first takes a PostgreSQL session advisory lock on a DEDICATED
 # (non-pooled) connection; whoever gets it runs, everyone else skips that
@@ -284,6 +300,8 @@ SCHEDULER_LOCK_KEYS = {
     "document_health": 8674309933,
     "memo_recovery": 8674309934,
     "prs6_notifications": 8674309935,
+    "document_renewal_reminders": 8674309936,
+    "document_renewal_upload_cleanup": 8674309937,
 }
 
 
@@ -409,6 +427,13 @@ class DBConnection:
         if "AUTOINCREMENT" in sql.upper():
             import re
             sql = re.sub(r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT', 'SERIAL PRIMARY KEY', sql, flags=re.IGNORECASE)
+        # 2d. File migrations are shared by SQLite and PostgreSQL.  The
+        # explicit marker keeps SQLite's JSON payload columns as TEXT while
+        # installing a native JSONB column on PostgreSQL.  It is deliberately
+        # opt-in so existing TEXT columns and arbitrary query text are never
+        # rewritten.
+        sql = sql.replace("TEXT /* JSONB_ON_POSTGRES */", "JSONB")
+        sql = sql.replace("TEXT /* TIMESTAMP_ON_POSTGRES */", "TIMESTAMP")
         # 3. INSERT OR IGNORE -> INSERT ... ON CONFLICT DO NOTHING
         #    Pattern: INSERT OR IGNORE INTO table (...) VALUES (...)
         if "INSERT OR IGNORE" in sql.upper():
@@ -1314,7 +1339,9 @@ def _get_postgres_schema() -> str:
         summary TEXT,
         source_reference TEXT,
         ai_recommendation TEXT,
-        status TEXT DEFAULT 'open',
+        status TEXT NOT NULL DEFAULT 'open'
+            CONSTRAINT monitoring_alerts_status_check
+            CHECK(status IN ('open','triaged','assigned','in_review','escalated','routed_to_review','routed_to_edd','dismissed','resolved','waived')),
         officer_action TEXT,
         officer_notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1325,6 +1352,226 @@ def _get_postgres_schema() -> str:
         triaged_at TIMESTAMP,
         assigned_at TIMESTAMP,
         resolved_at TIMESTAMP
+    );
+
+    -- PR-MON-DOC-RENEWAL-REQUEST-1: staged, non-canonical renewal workflow.
+    -- These rows point at the authoritative KYC document but never replace or
+    -- verify it.  All foreign keys are RESTRICT because requests, events and
+    -- staged uploads are regulated evidence, not cascade-cleanup artefacts.
+    CREATE TABLE IF NOT EXISTS monitoring_document_renewal_requests (
+        request_id TEXT PRIMARY KEY,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE RESTRICT,
+        customer_id TEXT NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+        person_id TEXT,
+        person_type TEXT,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+        document_type TEXT NOT NULL,
+        document_slot_key TEXT NOT NULL,
+        document_version INTEGER NOT NULL CHECK(document_version >= 1),
+        monitoring_alert_id INTEGER NOT NULL REFERENCES monitoring_alerts(id) ON DELETE RESTRICT,
+        request_reason TEXT NOT NULL CHECK(request_reason IN ('expired','expiring_soon','manual')),
+        request_status TEXT NOT NULL CHECK(request_status IN ('created','awaiting_upload','upload_received','cancelled')),
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        due_date TIMESTAMP NOT NULL,
+        created_by TEXT NOT NULL,
+        sent_at TIMESTAMP,
+        cancelled_at TIMESTAMP,
+        cancelled_by TEXT,
+        cancel_reason TEXT,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT,
+        revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+        contract_version TEXT NOT NULL,
+        eligibility_fingerprint TEXT NOT NULL,
+        CHECK(
+            (person_id IS NULL AND person_type IS NULL)
+            OR (person_id IS NOT NULL AND person_type IS NOT NULL)
+        ),
+        CHECK(
+            request_status NOT IN ('awaiting_upload','upload_received')
+            OR sent_at IS NOT NULL
+        ),
+        CHECK(
+            (
+                request_status = 'cancelled'
+                AND cancelled_at IS NOT NULL
+                AND cancelled_by IS NOT NULL
+                AND cancel_reason IS NOT NULL
+                AND length(trim(cancel_reason)) > 0
+            )
+            OR (
+                request_status <> 'cancelled'
+                AND cancelled_at IS NULL
+                AND cancelled_by IS NULL
+                AND cancel_reason IS NULL
+            )
+        ),
+        CHECK(length(trim(document_type)) > 0),
+        CHECK(length(trim(document_slot_key)) > 0),
+        CHECK(length(trim(created_by)) > 0),
+        CHECK(length(trim(contract_version)) > 0),
+        CHECK(length(eligibility_fingerprint) = 64),
+        CHECK(eligibility_fingerprint = lower(eligibility_fingerprint))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_active_identity
+        ON monitoring_document_renewal_requests(
+            application_id,
+            COALESCE(person_id, ''),
+            document_slot_key
+        )
+        WHERE request_status <> 'cancelled';
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_active_alert
+        ON monitoring_document_renewal_requests(monitoring_alert_id)
+        WHERE request_status <> 'cancelled';
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_alert
+        ON monitoring_document_renewal_requests(monitoring_alert_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_application
+        ON monitoring_document_renewal_requests(application_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_customer
+        ON monitoring_document_renewal_requests(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_status
+        ON monitoring_document_renewal_requests(request_status);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_due
+        ON monitoring_document_renewal_requests(due_date);
+
+    CREATE TABLE IF NOT EXISTS monitoring_document_renewal_events (
+        event_id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL REFERENCES monitoring_document_renewal_requests(request_id) ON DELETE RESTRICT,
+        event_sequence INTEGER NOT NULL CHECK(event_sequence > 0),
+        event_type TEXT NOT NULL CHECK(event_type IN (
+            'request_created','request_sent','reminder_generated','request_resent',
+            'due_date_changed','upload_received','request_cancelled'
+        )),
+        event_key TEXT NOT NULL UNIQUE,
+        payload JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by TEXT NOT NULL,
+        due_date_snapshot TIMESTAMP,
+        reminder_interval_days INTEGER CHECK(reminder_interval_days IS NULL OR reminder_interval_days > 0),
+        CHECK(
+            (event_type = 'reminder_generated' AND reminder_interval_days IS NOT NULL)
+            OR (event_type <> 'reminder_generated' AND reminder_interval_days IS NULL)
+        ),
+        CHECK(length(trim(created_by)) > 0)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_event_sequence
+        ON monitoring_document_renewal_events(request_id, event_sequence);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_events_request_time
+        ON monitoring_document_renewal_events(request_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_events_time
+        ON monitoring_document_renewal_events(created_at);
+
+    CREATE TABLE IF NOT EXISTS monitoring_document_renewal_uploads (
+        upload_id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL REFERENCES monitoring_document_renewal_requests(request_id) ON DELETE RESTRICT,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE RESTRICT,
+        customer_id TEXT NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+        original_filename TEXT NOT NULL,
+        storage_key TEXT NOT NULL,
+        file_size INTEGER NOT NULL CHECK(file_size >= 0),
+        mime_type TEXT NOT NULL,
+        file_sha256 TEXT NOT NULL,
+        uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        uploaded_by TEXT NOT NULL,
+        CHECK(length(trim(original_filename)) > 0),
+        CHECK(length(trim(storage_key)) > 0),
+        CHECK(length(file_sha256) = 64),
+        CHECK(file_sha256 = lower(file_sha256)),
+        CHECK(length(trim(uploaded_by)) > 0)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_uploads_request
+        ON monitoring_document_renewal_uploads(request_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_uploads_application
+        ON monitoring_document_renewal_uploads(application_id);
+
+    CREATE TABLE IF NOT EXISTS monitoring_document_renewal_upload_bindings (
+        upload_id TEXT PRIMARY KEY
+            REFERENCES monitoring_document_renewal_uploads(upload_id) ON DELETE RESTRICT,
+        renewal_request_id TEXT NOT NULL UNIQUE
+            REFERENCES monitoring_document_renewal_requests(request_id) ON DELETE RESTRICT,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE RESTRICT,
+        customer_id TEXT NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+        person_id TEXT,
+        person_type TEXT,
+        original_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+        original_document_version INTEGER NOT NULL CHECK(original_document_version >= 1),
+        uploaded_document_id TEXT NOT NULL UNIQUE,
+        document_type TEXT NOT NULL,
+        upload_timestamp TIMESTAMP NOT NULL,
+        uploaded_by TEXT NOT NULL,
+        binding_status TEXT NOT NULL CHECK(binding_status = 'bound'),
+        contract_version TEXT NOT NULL,
+        binding_fingerprint TEXT NOT NULL,
+        CHECK(
+            (person_id IS NULL AND person_type IS NULL)
+            OR (person_id IS NOT NULL AND person_type IS NOT NULL)
+        ),
+        CHECK(length(trim(original_document_id)) > 0),
+        CHECK(length(trim(uploaded_document_id)) > 0),
+        CHECK(uploaded_document_id = 'renewal-candidate:' || upload_id),
+        CHECK(length(trim(document_type)) > 0),
+        CHECK(length(trim(uploaded_by)) > 0),
+        CHECK(contract_version = 'monitoring_document_renewal_upload_binding_v1'),
+        CHECK(length(binding_fingerprint) = 64),
+        CHECK(binding_fingerprint = lower(binding_fingerprint)),
+        CHECK(length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(binding_fingerprint, '0', ''), '1', ''), '2', ''), '3', ''), '4', ''), '5', ''), '6', ''), '7', ''), '8', ''), '9', ''), 'a', ''), 'b', ''), 'c', ''), 'd', ''), 'e', ''), 'f', '')) = 0)
+    );
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_binding_application
+        ON monitoring_document_renewal_upload_bindings(application_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_binding_customer
+        ON monitoring_document_renewal_upload_bindings(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_binding_document
+        ON monitoring_document_renewal_upload_bindings(original_document_id);
+
+    CREATE TABLE IF NOT EXISTS monitoring_document_renewal_upload_cleanup (
+        cleanup_id TEXT PRIMARY KEY,
+        upload_id TEXT NOT NULL UNIQUE,
+        request_id TEXT NOT NULL REFERENCES monitoring_document_renewal_requests(request_id) ON DELETE RESTRICT,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE RESTRICT,
+        customer_id TEXT NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+        backend TEXT NOT NULL CHECK(backend IN ('s3','local')),
+        storage_key TEXT NOT NULL,
+        file_extension TEXT NOT NULL,
+        local_path TEXT,
+        s3_version_id TEXT,
+        artifact_state TEXT NOT NULL DEFAULT 'reserved' CHECK(artifact_state IN ('reserved','stored','attached','cleanup_pending','cleaned')),
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+        last_error_code TEXT,
+        correlation_id TEXT,
+        lease_owner TEXT,
+        lease_expires_at TIMESTAMP,
+        next_retry_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        stored_at TIMESTAMP,
+        attached_at TIMESTAMP,
+        cleaned_at TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CHECK(length(trim(storage_key)) > 0),
+        CHECK(file_extension = '' OR substr(file_extension, 1, 1) = '.'),
+        CHECK(length(file_extension) <= 21),
+        CHECK(file_extension = lower(file_extension)),
+        CHECK(
+            (backend = 'local' AND local_path IS NOT NULL AND length(trim(local_path)) > 0 AND s3_version_id IS NULL)
+            OR (backend = 's3' AND local_path IS NULL)
+        ),
+        CHECK(
+            (artifact_state = 'reserved' AND stored_at IS NULL AND attached_at IS NULL AND cleaned_at IS NULL)
+            OR (artifact_state = 'stored' AND stored_at IS NOT NULL AND attached_at IS NULL AND cleaned_at IS NULL)
+            OR (artifact_state = 'cleanup_pending' AND attached_at IS NULL AND cleaned_at IS NULL)
+            OR (artifact_state = 'attached' AND stored_at IS NOT NULL AND attached_at IS NOT NULL AND cleaned_at IS NULL)
+            OR (artifact_state = 'cleaned' AND attached_at IS NULL AND cleaned_at IS NOT NULL)
+        )
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_cleanup_storage
+        ON monitoring_document_renewal_upload_cleanup(backend, storage_key);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_cleanup_pending
+        ON monitoring_document_renewal_upload_cleanup(artifact_state, next_retry_at, created_at);
+
+    CREATE TABLE IF NOT EXISTS monitoring_document_renewal_scheduler_state (
+        scheduler_key TEXT PRIMARY KEY CHECK(scheduler_key IN ('eligibility','reminders')),
+        cursor_primary TEXT,
+        cursor_secondary TEXT,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS complyadvantage_webhook_deliveries (
@@ -1533,6 +1780,8 @@ def _get_postgres_schema() -> str:
         dismissal_reason TEXT,
         rationale TEXT,
         evidence_ref TEXT,
+        transition_evidence TEXT,
+        source_alert_status TEXT,
         state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','rejected','senior_cleared')),
         initiated_by TEXT,
         initiated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1786,6 +2035,23 @@ def _get_postgres_schema() -> str:
         pdf_generated_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- Immutable canonical PDF bytes for each memo lifecycle artefact.  Draft
+    -- and final are distinct because officer sign-off changes the regulated
+    -- document while the memo row/version remains the same.
+    CREATE TABLE IF NOT EXISTS compliance_memo_pdf_artifacts (
+        id SERIAL PRIMARY KEY,
+        memo_id INTEGER NOT NULL REFERENCES compliance_memos(id) ON DELETE CASCADE,
+        artifact_state TEXT NOT NULL CHECK(artifact_state IN ('draft','final')),
+        pdf_bytes BYTEA NOT NULL,
+        pdf_sha256 TEXT NOT NULL,
+        byte_length INTEGER NOT NULL,
+        renderer_build_sha TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(memo_id, artifact_state)
+    );
+    CREATE INDEX IF NOT EXISTS idx_compliance_memo_pdf_artifacts_memo
+        ON compliance_memo_pdf_artifacts(memo_id);
 
     CREATE TABLE IF NOT EXISTS edd_findings (
         id SERIAL PRIMARY KEY,
@@ -2779,7 +3045,9 @@ def _get_sqlite_schema() -> str:
         summary TEXT,
         source_reference TEXT,
         ai_recommendation TEXT,
-        status TEXT DEFAULT 'open',
+        status TEXT NOT NULL DEFAULT 'open'
+            CONSTRAINT monitoring_alerts_status_check
+            CHECK(status IN ('open','triaged','assigned','in_review','escalated','routed_to_review','routed_to_edd','dismissed','resolved','waived')),
         officer_action TEXT,
         officer_notes TEXT,
         created_at TEXT DEFAULT (datetime('now')),
@@ -2790,6 +3058,226 @@ def _get_sqlite_schema() -> str:
         triaged_at TEXT,
         assigned_at TEXT,
         resolved_at TEXT
+    );
+
+    -- PR-MON-DOC-RENEWAL-REQUEST-1: staged, non-canonical renewal workflow.
+    -- These rows point at the authoritative KYC document but never replace or
+    -- verify it.  All foreign keys are RESTRICT because requests, events and
+    -- staged uploads are regulated evidence, not cascade-cleanup artefacts.
+    CREATE TABLE IF NOT EXISTS monitoring_document_renewal_requests (
+        request_id TEXT PRIMARY KEY,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE RESTRICT,
+        customer_id TEXT NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+        person_id TEXT,
+        person_type TEXT,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+        document_type TEXT NOT NULL,
+        document_slot_key TEXT NOT NULL,
+        document_version INTEGER NOT NULL CHECK(document_version >= 1),
+        monitoring_alert_id INTEGER NOT NULL REFERENCES monitoring_alerts(id) ON DELETE RESTRICT,
+        request_reason TEXT NOT NULL CHECK(request_reason IN ('expired','expiring_soon','manual')),
+        request_status TEXT NOT NULL CHECK(request_status IN ('created','awaiting_upload','upload_received','cancelled')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        due_date TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        sent_at TEXT,
+        cancelled_at TEXT,
+        cancelled_by TEXT,
+        cancel_reason TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_by TEXT,
+        revision INTEGER NOT NULL DEFAULT 1 CHECK(revision >= 1),
+        contract_version TEXT NOT NULL,
+        eligibility_fingerprint TEXT NOT NULL,
+        CHECK(
+            (person_id IS NULL AND person_type IS NULL)
+            OR (person_id IS NOT NULL AND person_type IS NOT NULL)
+        ),
+        CHECK(
+            request_status NOT IN ('awaiting_upload','upload_received')
+            OR sent_at IS NOT NULL
+        ),
+        CHECK(
+            (
+                request_status = 'cancelled'
+                AND cancelled_at IS NOT NULL
+                AND cancelled_by IS NOT NULL
+                AND cancel_reason IS NOT NULL
+                AND length(trim(cancel_reason)) > 0
+            )
+            OR (
+                request_status <> 'cancelled'
+                AND cancelled_at IS NULL
+                AND cancelled_by IS NULL
+                AND cancel_reason IS NULL
+            )
+        ),
+        CHECK(length(trim(document_type)) > 0),
+        CHECK(length(trim(document_slot_key)) > 0),
+        CHECK(length(trim(created_by)) > 0),
+        CHECK(length(trim(contract_version)) > 0),
+        CHECK(length(eligibility_fingerprint) = 64),
+        CHECK(eligibility_fingerprint = lower(eligibility_fingerprint))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_active_identity
+        ON monitoring_document_renewal_requests(
+            application_id,
+            COALESCE(person_id, ''),
+            document_slot_key
+        )
+        WHERE request_status <> 'cancelled';
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_active_alert
+        ON monitoring_document_renewal_requests(monitoring_alert_id)
+        WHERE request_status <> 'cancelled';
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_alert
+        ON monitoring_document_renewal_requests(monitoring_alert_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_application
+        ON monitoring_document_renewal_requests(application_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_customer
+        ON monitoring_document_renewal_requests(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_status
+        ON monitoring_document_renewal_requests(request_status);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_due
+        ON monitoring_document_renewal_requests(due_date);
+
+    CREATE TABLE IF NOT EXISTS monitoring_document_renewal_events (
+        event_id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL REFERENCES monitoring_document_renewal_requests(request_id) ON DELETE RESTRICT,
+        event_sequence INTEGER NOT NULL CHECK(event_sequence > 0),
+        event_type TEXT NOT NULL CHECK(event_type IN (
+            'request_created','request_sent','reminder_generated','request_resent',
+            'due_date_changed','upload_received','request_cancelled'
+        )),
+        event_key TEXT NOT NULL UNIQUE,
+        payload TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        created_by TEXT NOT NULL,
+        due_date_snapshot TEXT,
+        reminder_interval_days INTEGER CHECK(reminder_interval_days IS NULL OR reminder_interval_days > 0),
+        CHECK(
+            (event_type = 'reminder_generated' AND reminder_interval_days IS NOT NULL)
+            OR (event_type <> 'reminder_generated' AND reminder_interval_days IS NULL)
+        ),
+        CHECK(length(trim(created_by)) > 0)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_event_sequence
+        ON monitoring_document_renewal_events(request_id, event_sequence);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_events_request_time
+        ON monitoring_document_renewal_events(request_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_events_time
+        ON monitoring_document_renewal_events(created_at);
+
+    CREATE TABLE IF NOT EXISTS monitoring_document_renewal_uploads (
+        upload_id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL REFERENCES monitoring_document_renewal_requests(request_id) ON DELETE RESTRICT,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE RESTRICT,
+        customer_id TEXT NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+        original_filename TEXT NOT NULL,
+        storage_key TEXT NOT NULL,
+        file_size INTEGER NOT NULL CHECK(file_size >= 0),
+        mime_type TEXT NOT NULL,
+        file_sha256 TEXT NOT NULL,
+        uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+        uploaded_by TEXT NOT NULL,
+        CHECK(length(trim(original_filename)) > 0),
+        CHECK(length(trim(storage_key)) > 0),
+        CHECK(length(file_sha256) = 64),
+        CHECK(file_sha256 = lower(file_sha256)),
+        CHECK(length(trim(uploaded_by)) > 0)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_uploads_request
+        ON monitoring_document_renewal_uploads(request_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_uploads_application
+        ON monitoring_document_renewal_uploads(application_id);
+
+    CREATE TABLE IF NOT EXISTS monitoring_document_renewal_upload_bindings (
+        upload_id TEXT PRIMARY KEY
+            REFERENCES monitoring_document_renewal_uploads(upload_id) ON DELETE RESTRICT,
+        renewal_request_id TEXT NOT NULL UNIQUE
+            REFERENCES monitoring_document_renewal_requests(request_id) ON DELETE RESTRICT,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE RESTRICT,
+        customer_id TEXT NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+        person_id TEXT,
+        person_type TEXT,
+        original_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+        original_document_version INTEGER NOT NULL CHECK(original_document_version >= 1),
+        uploaded_document_id TEXT NOT NULL UNIQUE,
+        document_type TEXT NOT NULL,
+        upload_timestamp TEXT NOT NULL,
+        uploaded_by TEXT NOT NULL,
+        binding_status TEXT NOT NULL CHECK(binding_status = 'bound'),
+        contract_version TEXT NOT NULL,
+        binding_fingerprint TEXT NOT NULL,
+        CHECK(
+            (person_id IS NULL AND person_type IS NULL)
+            OR (person_id IS NOT NULL AND person_type IS NOT NULL)
+        ),
+        CHECK(length(trim(original_document_id)) > 0),
+        CHECK(length(trim(uploaded_document_id)) > 0),
+        CHECK(uploaded_document_id = 'renewal-candidate:' || upload_id),
+        CHECK(length(trim(document_type)) > 0),
+        CHECK(length(trim(uploaded_by)) > 0),
+        CHECK(contract_version = 'monitoring_document_renewal_upload_binding_v1'),
+        CHECK(length(binding_fingerprint) = 64),
+        CHECK(binding_fingerprint = lower(binding_fingerprint)),
+        CHECK(length(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(binding_fingerprint, '0', ''), '1', ''), '2', ''), '3', ''), '4', ''), '5', ''), '6', ''), '7', ''), '8', ''), '9', ''), 'a', ''), 'b', ''), 'c', ''), 'd', ''), 'e', ''), 'f', '')) = 0)
+    );
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_binding_application
+        ON monitoring_document_renewal_upload_bindings(application_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_binding_customer
+        ON monitoring_document_renewal_upload_bindings(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_binding_document
+        ON monitoring_document_renewal_upload_bindings(original_document_id);
+
+    CREATE TABLE IF NOT EXISTS monitoring_document_renewal_upload_cleanup (
+        cleanup_id TEXT PRIMARY KEY,
+        upload_id TEXT NOT NULL UNIQUE,
+        request_id TEXT NOT NULL REFERENCES monitoring_document_renewal_requests(request_id) ON DELETE RESTRICT,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE RESTRICT,
+        customer_id TEXT NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+        backend TEXT NOT NULL CHECK(backend IN ('s3','local')),
+        storage_key TEXT NOT NULL,
+        file_extension TEXT NOT NULL,
+        local_path TEXT,
+        s3_version_id TEXT,
+        artifact_state TEXT NOT NULL DEFAULT 'reserved' CHECK(artifact_state IN ('reserved','stored','attached','cleanup_pending','cleaned')),
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+        last_error_code TEXT,
+        correlation_id TEXT,
+        lease_owner TEXT,
+        lease_expires_at TEXT,
+        next_retry_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        stored_at TEXT,
+        attached_at TEXT,
+        cleaned_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        CHECK(length(trim(storage_key)) > 0),
+        CHECK(file_extension = '' OR substr(file_extension, 1, 1) = '.'),
+        CHECK(length(file_extension) <= 21),
+        CHECK(file_extension = lower(file_extension)),
+        CHECK(
+            (backend = 'local' AND local_path IS NOT NULL AND length(trim(local_path)) > 0 AND s3_version_id IS NULL)
+            OR (backend = 's3' AND local_path IS NULL)
+        ),
+        CHECK(
+            (artifact_state = 'reserved' AND stored_at IS NULL AND attached_at IS NULL AND cleaned_at IS NULL)
+            OR (artifact_state = 'stored' AND stored_at IS NOT NULL AND attached_at IS NULL AND cleaned_at IS NULL)
+            OR (artifact_state = 'cleanup_pending' AND attached_at IS NULL AND cleaned_at IS NULL)
+            OR (artifact_state = 'attached' AND stored_at IS NOT NULL AND attached_at IS NOT NULL AND cleaned_at IS NULL)
+            OR (artifact_state = 'cleaned' AND attached_at IS NULL AND cleaned_at IS NOT NULL)
+        )
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_doc_renewal_cleanup_storage
+        ON monitoring_document_renewal_upload_cleanup(backend, storage_key);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_doc_renewal_cleanup_pending
+        ON monitoring_document_renewal_upload_cleanup(artifact_state, next_retry_at, created_at);
+
+    CREATE TABLE IF NOT EXISTS monitoring_document_renewal_scheduler_state (
+        scheduler_key TEXT PRIMARY KEY CHECK(scheduler_key IN ('eligibility','reminders')),
+        cursor_primary TEXT,
+        cursor_secondary TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     -- Periodic Reviews
@@ -2943,6 +3431,8 @@ def _get_sqlite_schema() -> str:
         dismissal_reason TEXT,
         rationale TEXT,
         evidence_ref TEXT,
+        transition_evidence TEXT,
+        source_alert_status TEXT,
         state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','rejected','senior_cleared')),
         initiated_by TEXT,
         initiated_at TEXT DEFAULT (datetime('now')),
@@ -3196,6 +3686,21 @@ def _get_sqlite_schema() -> str:
         pdf_generated_at TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
+
+    -- Immutable canonical PDF bytes for each memo lifecycle artefact.
+    CREATE TABLE IF NOT EXISTS compliance_memo_pdf_artifacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        memo_id INTEGER NOT NULL REFERENCES compliance_memos(id) ON DELETE CASCADE,
+        artifact_state TEXT NOT NULL CHECK(artifact_state IN ('draft','final')),
+        pdf_bytes BLOB NOT NULL,
+        pdf_sha256 TEXT NOT NULL,
+        byte_length INTEGER NOT NULL,
+        renderer_build_sha TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(memo_id, artifact_state)
+    );
+    CREATE INDEX IF NOT EXISTS idx_compliance_memo_pdf_artifacts_memo
+        ON compliance_memo_pdf_artifacts(memo_id);
 
     CREATE TABLE IF NOT EXISTS edd_findings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3670,14 +4175,61 @@ def init_db():
         _ensure_supervisor_human_review_persistence_schema(db)
         logger.info("startup: completed supervisor evidence schema preflight (v2.52)")
 
+        # Migration 024 compatibility preflight.  The authoritative renewal
+        # binding trigger resolves documents.version/person ownership. Long-
+        # lived databases created before those fields existed must receive the
+        # additive columns before the guard is installed; the full repair still
+        # runs later in the normal inline-migration sequence.
+        if _safe_table_exists(db, "documents"):
+            logger.info("startup: entering document versioning schema preflight")
+            _ensure_kyc_party_document_integrity_columns(db)
+            _ensure_document_versioning_columns(db)
+            db.commit()
+            logger.info("startup: completed document versioning schema preflight")
+
         if USE_POSTGRESQL:
             schema = _get_postgres_schema()
         else:
             schema = _get_sqlite_schema()
         logger.info("startup: executing schema DDL (%d chars)…", len(schema))
         db.executescript(schema)
+        logger.info("startup: converging renewal upload-binding identity guard")
+        from monitoring_document_renewal_schema import (
+            ensure_monitoring_document_renewal_upload_binding_guard,
+        )
+        ensure_monitoring_document_renewal_upload_binding_guard(db)
         db.commit()
         logger.info("startup: schema DDL committed — Database schema initialized")
+
+        # Migration 054 / PR-MON-M1-STATE-MACHINE-1.  This must run before
+        # migration files are marked as covered by init_db: long-lived
+        # PostgreSQL databases receive a strict, no-rewrite compatibility
+        # preflight and the validated named CHECK/NOT NULL hardening here.
+        # Any incompatible row aborts startup and leaves migration 054
+        # unapplied so an operator cannot mistake a failed guard for success.
+        logger.info("startup: entering Monitoring Alert status constraint preflight (v2.54)")
+        _ensure_monitoring_alert_status_constraint(db)
+        db.commit()
+        logger.info("startup: completed Monitoring Alert status constraint preflight (v2.54)")
+
+        # Migration 055 / PR-MON-M1-STATE-MACHINE-1. Existing review-request
+        # ledgers receive one nullable JSON-text field for the typed evidence
+        # identifiers validated by the transition service. This additive step
+        # has no default and never rewrites evidence_ref or any existing row.
+        logger.info("startup: entering Monitoring review transition-evidence schema (v2.55)")
+        _ensure_monitoring_review_transition_evidence_schema(db)
+        db.commit()
+        logger.info("startup: completed Monitoring review transition-evidence schema (v2.55)")
+
+        # Migration 056 / PR-MON-M1-STATE-MACHINE-1. Bind each newly created
+        # review request to the exact canonical alert status protected by the
+        # creation-time row lock. The nullable additive column preserves
+        # historical rows; approval treats a missing binding as stale and
+        # requires reject/recreate rather than guessing.
+        logger.info("startup: entering Monitoring review source-status schema (v2.56)")
+        _ensure_monitoring_review_source_status_schema(db)
+        db.commit()
+        logger.info("startup: completed Monitoring review source-status schema (v2.56)")
 
         # Fresh installs are already on the current schema because init_db()
         # creates it in one shot. Mark every known file migration as covered
@@ -3863,20 +4415,20 @@ def _ensure_default_compliance_resources(db: DBConnection):
         },
         {
             "slug": "regulatory-compliance-report",
-            "title": "Onboarda Regulatory Compliance Report",
+            "title": "RegMind Regulatory Compliance Report",
             "description": "Internal compliance reference report for regulatory obligations and remediation context.",
             "category": "internal",
             "resource_type": "system",
-            "path": repo_root / "docs" / "compliance" / "Onboarda_Regulatory_Compliance_Report.docx",
+            "path": repo_root / "docs" / "compliance" / "RegMind_Regulatory_Compliance_Report.docx",
             "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         },
         {
             "slug": "sample-compliance-memo",
-            "title": "Onboarda Sample Compliance Memo",
+            "title": "RegMind Sample Compliance Memo",
             "description": "Reference memo format used by officers when reviewing onboarding decisions.",
             "category": "internal",
             "resource_type": "system",
-            "path": repo_root / "docs" / "compliance" / "Onboarda_Sample_Compliance_Memo.pdf",
+            "path": repo_root / "docs" / "compliance" / "RegMind_Sample_Compliance_Memo.pdf",
             "mime_type": "application/pdf",
         },
     ]
@@ -4213,6 +4765,290 @@ def _safe_table_exists(db: DBConnection, table: str) -> bool:
             return True
         except Exception:
             return False
+
+
+def _monitoring_review_transition_evidence_column_metadata(
+    db: DBConnection,
+) -> Optional[Dict[str, Any]]:
+    """Return current-schema metadata for the migration-055 column."""
+    if db.is_postgres:
+        row = db.execute(
+            "SELECT data_type, is_nullable, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_schema = current_schema() "
+            "AND table_name = ? AND column_name = ?",
+            ("monitoring_alert_review_requests", "transition_evidence"),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    rows = db.execute(
+        "PRAGMA table_info(monitoring_alert_review_requests)"
+    ).fetchall()
+    for row in rows:
+        item = dict(row)
+        if item.get("name") == "transition_evidence":
+            return {
+                "data_type": str(item.get("type") or "").lower(),
+                "is_nullable": "NO" if item.get("notnull") else "YES",
+                "column_default": item.get("dflt_value"),
+            }
+    return None
+
+
+MONITORING_PENDING_REVIEW_UNIQUE_INDEX = (
+    "uq_monitoring_review_requests_one_pending"
+)
+
+
+def _monitoring_pending_review_duplicates(
+    db: DBConnection,
+) -> List[Dict[str, Any]]:
+    rows = db.execute(
+        "SELECT alert_id, COUNT(*) AS pending_count "
+        "FROM monitoring_alert_review_requests "
+        "WHERE state = 'pending' "
+        "GROUP BY alert_id HAVING COUNT(*) > 1 "
+        "ORDER BY alert_id LIMIT 20"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _monitoring_pending_review_index_definition(
+    db: DBConnection,
+) -> Optional[str]:
+    if db.is_postgres:
+        row = db.execute(
+            "SELECT pg_get_indexdef(i.indexrelid) AS indexdef, "
+            "i.indisunique, i.indisvalid, i.indisready "
+            "FROM pg_index i "
+            "JOIN pg_class idx ON idx.oid = i.indexrelid "
+            "JOIN pg_class tbl ON tbl.oid = i.indrelid "
+            "JOIN pg_namespace ns ON ns.oid = tbl.relnamespace "
+            "WHERE ns.nspname = current_schema() AND tbl.relname = ? "
+            "AND idx.relname = ?",
+            (
+                "monitoring_alert_review_requests",
+                MONITORING_PENDING_REVIEW_UNIQUE_INDEX,
+            ),
+        ).fetchone()
+        if row is None:
+            return None
+        if not (
+            bool(row.get("indisunique"))
+            and bool(row.get("indisvalid"))
+            and bool(row.get("indisready"))
+        ):
+            # Preserve "present but invalid" as distinct from missing so the
+            # installer refuses it instead of attempting a same-name CREATE.
+            return ""
+        return str(row.get("indexdef") or "")
+    row = db.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type = 'index' AND tbl_name = ? AND name = ?",
+        (
+            "monitoring_alert_review_requests",
+            MONITORING_PENDING_REVIEW_UNIQUE_INDEX,
+        ),
+    ).fetchone()
+    return str(row.get("sql") or "") if row else None
+
+
+def _is_valid_monitoring_pending_review_index(definition: Optional[str]) -> bool:
+    normalized = " ".join(
+        str(definition or "")
+        .strip()
+        .rstrip(";")
+        .lower()
+        .replace('"', "")
+        .replace("`", "")
+        .replace("[", "")
+        .replace("]", "")
+        .split()
+    )
+    match = re.fullmatch(
+        r"create unique index "
+        + re.escape(MONITORING_PENDING_REVIEW_UNIQUE_INDEX)
+        + r" on (?:(?:[a-z_][a-z0-9_$]*)\.)?"
+        + r"monitoring_alert_review_requests"
+        + r"(?: using btree)?\s*\(([^()]*)\)\s*where\s+(.+)",
+        normalized,
+    )
+    if not match:
+        return False
+    key_columns = [
+        column.strip()
+        for column in match.group(1).split(",")
+        if column.strip()
+    ]
+    if key_columns != ["alert_id"]:
+        return False
+    predicate = (
+        match.group(2)
+        .replace("::text", "")
+        .replace("(", "")
+        .replace(")", "")
+        .replace(" ", "")
+    )
+    return predicate == "state='pending'"
+
+
+def _ensure_monitoring_review_transition_evidence_schema(
+    db: DBConnection,
+) -> Dict[str, Any]:
+    """Install the additive typed-evidence persistence column idempotently.
+
+    ``transition_evidence`` is nullable TEXT with no default. The controlled
+    transition layer owns JSON validation and permits only its supported typed
+    evidence identifiers. This schema step deliberately performs no UPDATE,
+    does not inspect or reinterpret ``evidence_ref``, and preserves every
+    existing review-request row byte-for-byte.
+    """
+    if not _safe_table_exists(db, "monitoring_alert_review_requests"):
+        raise RuntimeError(
+            "Migration 055 blocked: monitoring_alert_review_requests is missing"
+        )
+
+    duplicates = _monitoring_pending_review_duplicates(db)
+    if duplicates:
+        summary = ", ".join(
+            f"alert_id={row.get('alert_id')} count={row.get('pending_count')}"
+            for row in duplicates
+        )
+        raise RuntimeError(
+            "Migration 055 blocked: multiple pending Monitoring review "
+            f"requests exist ({summary}); manual reconciliation is required"
+        )
+
+    metadata = _monitoring_review_transition_evidence_column_metadata(db)
+    changed = metadata is None
+    if changed:
+        db.execute(
+            "ALTER TABLE monitoring_alert_review_requests "
+            "ADD COLUMN transition_evidence TEXT"
+        )
+        metadata = _monitoring_review_transition_evidence_column_metadata(db)
+
+    if metadata is None:
+        raise RuntimeError(
+            "Migration 055 failed: transition_evidence was not installed"
+        )
+
+    data_type = str(metadata.get("data_type") or "").strip().lower()
+    if data_type != "text":
+        raise RuntimeError(
+            "Migration 055 blocked: transition_evidence must be TEXT"
+        )
+    if metadata.get("is_nullable") != "YES":
+        raise RuntimeError(
+            "Migration 055 blocked: transition_evidence must remain nullable"
+        )
+    if metadata.get("column_default") is not None:
+        raise RuntimeError(
+            "Migration 055 blocked: transition_evidence must not have a default"
+        )
+
+    index_definition = _monitoring_pending_review_index_definition(db)
+    index_changed = index_definition is None
+    if index_changed:
+        db.execute(
+            "CREATE UNIQUE INDEX "
+            f"{MONITORING_PENDING_REVIEW_UNIQUE_INDEX} "
+            "ON monitoring_alert_review_requests(alert_id) "
+            "WHERE state = 'pending'"
+        )
+        index_definition = _monitoring_pending_review_index_definition(db)
+    if not _is_valid_monitoring_pending_review_index(index_definition):
+        raise RuntimeError(
+            "Migration 055 blocked: pending-review uniqueness index has an "
+            "unexpected definition"
+        )
+
+    return {
+        "engine": "postgresql" if db.is_postgres else "sqlite",
+        "changed": changed,
+        "index_changed": index_changed,
+        "nullable": True,
+        "default": None,
+    }
+
+
+def _monitoring_review_source_status_column_metadata(
+    db: DBConnection,
+) -> Optional[Dict[str, Any]]:
+    """Return current-schema metadata for the migration-056 binding column."""
+    if db.is_postgres:
+        row = db.execute(
+            "SELECT data_type, is_nullable, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_schema = current_schema() "
+            "AND table_name = ? AND column_name = ?",
+            ("monitoring_alert_review_requests", "source_alert_status"),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    rows = db.execute(
+        "PRAGMA table_info(monitoring_alert_review_requests)"
+    ).fetchall()
+    for row in rows:
+        item = dict(row)
+        if item.get("name") == "source_alert_status":
+            return {
+                "data_type": str(item.get("type") or "").lower(),
+                "is_nullable": "NO" if item.get("notnull") else "YES",
+                "column_default": item.get("dflt_value"),
+            }
+    return None
+
+
+def _ensure_monitoring_review_source_status_schema(
+    db: DBConnection,
+) -> Dict[str, Any]:
+    """Install the additive creation-time alert-status binding idempotently.
+
+    Existing rows remain NULL because no historical source state can be
+    reconstructed safely. Approval treats NULL, noncanonical, or changed
+    source status as stale and fails closed; rejection remains available so
+    operators can retire and recreate such requests deliberately.
+    """
+    if not _safe_table_exists(db, "monitoring_alert_review_requests"):
+        raise RuntimeError(
+            "Migration 056 blocked: monitoring_alert_review_requests is missing"
+        )
+
+    metadata = _monitoring_review_source_status_column_metadata(db)
+    changed = metadata is None
+    if changed:
+        db.execute(
+            "ALTER TABLE monitoring_alert_review_requests "
+            "ADD COLUMN source_alert_status TEXT"
+        )
+        metadata = _monitoring_review_source_status_column_metadata(db)
+
+    if metadata is None:
+        raise RuntimeError(
+            "Migration 056 failed: source_alert_status was not installed"
+        )
+
+    data_type = str(metadata.get("data_type") or "").strip().lower()
+    if data_type != "text":
+        raise RuntimeError(
+            "Migration 056 blocked: source_alert_status must be TEXT"
+        )
+    if metadata.get("is_nullable") != "YES":
+        raise RuntimeError(
+            "Migration 056 blocked: source_alert_status must remain nullable"
+        )
+    if metadata.get("column_default") is not None:
+        raise RuntimeError(
+            "Migration 056 blocked: source_alert_status must not have a default"
+        )
+
+    return {
+        "engine": "postgresql" if db.is_postgres else "sqlite",
+        "changed": changed,
+        "nullable": True,
+        "default": None,
+    }
 
 
 def _supervisor_column_metadata(db: DBConnection, table: str, column: str):
@@ -5816,6 +6652,445 @@ def _pg_quote_identifier(identifier: str) -> str:
 def _sql_literal_list(values) -> str:
     """Return a single-quoted SQL literal list for static enum values."""
     return ", ".join("'" + str(value).replace("'", "''") + "'" for value in values)
+
+
+def _monitoring_alert_status_column_metadata(db: DBConnection):
+    """Return status-column metadata without probing a missing PG column.
+
+    The PostgreSQL lookup is scoped to ``current_schema()`` so a same-named
+    table elsewhere on the search path cannot satisfy the migration preflight.
+    """
+    if db.is_postgres:
+        row = db.execute(
+            """
+            SELECT is_nullable, column_default
+              FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = ?
+               AND column_name = ?
+            """,
+            ("monitoring_alerts", "status"),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    rows = db.execute("PRAGMA table_info(monitoring_alerts)").fetchall()
+    for row in rows:
+        item = dict(row)
+        if item.get("name") == "status":
+            return {
+                "is_nullable": "NO" if item.get("notnull") else "YES",
+                "column_default": item.get("dflt_value"),
+            }
+    return None
+
+
+def _monitoring_alert_status_offenders(db: DBConnection) -> List[Dict[str, Any]]:
+    """Return grouped non-canonical status values without changing any row."""
+    placeholders = ", ".join("?" for _ in MONITORING_ALERT_STATUS_VALUES)
+    rows = db.execute(
+        "SELECT status AS status_value, COUNT(*) AS row_count "
+        "FROM monitoring_alerts "
+        "WHERE status IS NULL "
+        "   OR TRIM(status) = '' "
+        f"   OR status NOT IN ({placeholders}) "
+        "GROUP BY status "
+        "ORDER BY CASE WHEN status IS NULL THEN 0 ELSE 1 END, status",
+        tuple(MONITORING_ALERT_STATUS_VALUES),
+    ).fetchall()
+    return [
+        {
+            "status": row["status_value"],
+            "count": int(row["row_count"]),
+        }
+        for row in rows
+    ]
+
+
+def _postgres_monitoring_alert_status_constraints(
+    db: DBConnection,
+) -> List[Dict[str, Any]]:
+    """Return CHECK constraints that directly constrain the status column."""
+    if not db.is_postgres:
+        return []
+    rows = db.execute(
+        """
+        SELECT c.conname,
+               pg_get_constraintdef(c.oid, false) AS definition,
+               c.convalidated
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+         WHERE n.nspname = current_schema()
+           AND t.relname = ?
+           AND c.contype = 'c'
+           AND EXISTS (
+                SELECT 1
+                  FROM pg_attribute a
+                 WHERE a.attrelid = c.conrelid
+                   AND a.attnum = ANY(c.conkey)
+                   AND a.attname = ?
+           )
+         ORDER BY c.conname
+        """,
+        ("monitoring_alerts", "status"),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _postgres_monitoring_status_check_is_canonical(definition: str) -> bool:
+    """Semantically match the exact approved PostgreSQL status CHECK.
+
+    ``pg_get_constraintdef`` decompiles an expression tree; redundant
+    parentheses and lossless TEXT/VARCHAR cast placement can differ across
+    PostgreSQL versions or equivalent DDL.  Parse only the narrow grammar
+    PostgreSQL emits for ``status = ANY (ARRAY[...])`` and consume every token.
+    Extra operators, functions, clauses, unsafe casts, or values fail closed.
+    """
+
+    tokens: List[Tuple[str, str]] = []
+    text = str(definition or "")
+    index = 0
+    depth = 0
+    while index < len(text):
+        char = text[index]
+        if char.isspace():
+            index += 1
+            continue
+        if text.startswith("::", index):
+            tokens.append(("symbol", "::"))
+            index += 2
+            continue
+        if char in "(),=[]":
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth < 0:
+                    return False
+            else:
+                tokens.append(("symbol", char))
+            index += 1
+            continue
+        if char == "'":
+            index += 1
+            value = []
+            while index < len(text):
+                if text[index] != "'":
+                    value.append(text[index])
+                    index += 1
+                    continue
+                if index + 1 < len(text) and text[index + 1] == "'":
+                    value.append("'")
+                    index += 2
+                    continue
+                index += 1
+                tokens.append(("string", "".join(value)))
+                break
+            else:
+                return False
+            continue
+        if char == '"':
+            index += 1
+            value = []
+            while index < len(text):
+                if text[index] != '"':
+                    value.append(text[index])
+                    index += 1
+                    continue
+                if index + 1 < len(text) and text[index + 1] == '"':
+                    value.append('"')
+                    index += 2
+                    continue
+                index += 1
+                tokens.append(("quoted", "".join(value)))
+                break
+            else:
+                return False
+            continue
+        if char.isalpha() or char == "_":
+            end = index + 1
+            while end < len(text) and (
+                text[end].isalnum() or text[end] in {"_", "$"}
+            ):
+                end += 1
+            tokens.append(("word", text[index:end].lower()))
+            index = end
+            continue
+        if char == ".":
+            tokens.append(("symbol", "."))
+            index += 1
+            continue
+        return False
+    if depth != 0:
+        return False
+
+    position = 0
+
+    def _take(kind: str, value: str) -> bool:
+        nonlocal position
+        if position >= len(tokens) or tokens[position] != (kind, value):
+            return False
+        position += 1
+        return True
+
+    def _take_word(value: str) -> bool:
+        return _take("word", value)
+
+    def _take_status_column() -> bool:
+        nonlocal position
+        if position >= len(tokens):
+            return False
+        token = tokens[position]
+        if token not in {("word", "status"), ("quoted", "status")}:
+            return False
+        position += 1
+        return True
+
+    def _take_type(*, array: bool, allow_varchar: bool) -> bool:
+        nonlocal position
+        start = position
+        if (
+            position + 1 < len(tokens)
+            and tokens[position] == ("word", "pg_catalog")
+            and tokens[position + 1] == ("symbol", ".")
+        ):
+            position += 2
+        if _take_word("text"):
+            pass
+        elif allow_varchar and _take_word("varchar"):
+            pass
+        elif allow_varchar and _take_word("character"):
+            if not _take_word("varying"):
+                position = start
+                return False
+        else:
+            position = start
+            return False
+        if array and not (
+            _take("symbol", "[") and _take("symbol", "]")
+        ):
+            position = start
+            return False
+        return True
+
+    if not _take_word("check") or not _take_status_column():
+        return False
+    while _take("symbol", "::"):
+        if not _take_type(array=False, allow_varchar=False):
+            return False
+    if not (
+        _take("symbol", "=")
+        and _take_word("any")
+        and _take_word("array")
+        and _take("symbol", "[")
+    ):
+        return False
+
+    values: List[str] = []
+    while True:
+        if position >= len(tokens) or tokens[position][0] != "string":
+            return False
+        values.append(tokens[position][1])
+        position += 1
+        while _take("symbol", "::"):
+            if not _take_type(array=False, allow_varchar=True):
+                return False
+        if _take("symbol", ","):
+            continue
+        break
+    if not _take("symbol", "]"):
+        return False
+    while _take("symbol", "::"):
+        if not _take_type(array=True, allow_varchar=False):
+            return False
+    if _take_word("not") and not _take_word("valid"):
+        return False
+    return (
+        position == len(tokens)
+        and tuple(values) == tuple(MONITORING_ALERT_STATUS_VALUES)
+    )
+
+
+def _postgres_constraint_is_validated(value: Any) -> bool:
+    return value is True or str(value).strip().lower() in {"1", "t", "true", "yes"}
+
+
+def _sqlite_monitoring_status_check_is_canonical(definition: str) -> bool:
+    """Return whether SQLite table DDL contains the exact named status CHECK."""
+    compact = re.sub(r"\s+", "", definition or "")
+    expected_literals = ",".join(
+        "'" + value.replace("'", "''") + "'"
+        for value in MONITORING_ALERT_STATUS_VALUES
+    )
+    expected = (
+        "CONSTRAINTmonitoring_alerts_status_check"
+        f"CHECK(statusIN({expected_literals}))"
+    )
+    return expected in compact
+
+
+def _ensure_monitoring_alert_status_constraint(db: DBConnection) -> Dict[str, Any]:
+    """Fail-closed Monitoring Alert status hardening (migration 054).
+
+    No row is ever rewritten by this helper.  Existing NULL, blank, or
+    non-canonical values abort startup before any constraint DDL is attempted.
+    PostgreSQL receives the named CHECK via ``NOT VALID`` followed by explicit
+    validation and ``SET NOT NULL`` in the caller's transaction.  SQLite fresh
+    schemas enforce the same contract inline; long-lived SQLite databases are
+    scanned safely because SQLite cannot add a CHECK constraint in place.
+    """
+    metadata = _monitoring_alert_status_column_metadata(db)
+    if metadata is None:
+        raise RuntimeError(
+            "Migration 054 blocked: monitoring_alerts.status is missing; "
+            "no schema or data changes were made"
+        )
+
+    offenders = _monitoring_alert_status_offenders(db)
+    if offenders:
+        summary = {
+            "<NULL>" if item["status"] is None else repr(str(item["status"])): item["count"]
+            for item in offenders
+        }
+        raise RuntimeError(
+            "Migration 054 blocked: monitoring_alerts.status contains "
+            f"non-canonical rows {summary}; rows were preserved and no "
+            "constraint DDL was attempted"
+        )
+
+    if not db.is_postgres:
+        ddl_row = db.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'monitoring_alerts'"
+        ).fetchone()
+        ddl = str(ddl_row["sql"] or "") if ddl_row is not None else ""
+        constrained = (
+            _sqlite_monitoring_status_check_is_canonical(ddl)
+            and metadata.get("is_nullable") == "NO"
+        )
+        if not constrained:
+            logger.warning(
+                "Migration 054: monitoring_alerts.status data is compatible, "
+                "but this long-lived SQLite table cannot be hardened in place; "
+                "fresh SQLite schemas enforce the named CHECK and NOT NULL"
+            )
+        return {
+            "engine": "sqlite",
+            "compatible_rows": True,
+            "constraint_enforced": constrained,
+            "changed": False,
+        }
+
+    constraints = _postgres_monitoring_alert_status_constraints(db)
+    unexpected = [
+        item.get("conname")
+        for item in constraints
+        if item.get("conname") != MONITORING_ALERT_STATUS_CONSTRAINT
+    ]
+    if unexpected:
+        raise RuntimeError(
+            "Migration 054 blocked: unexpected PostgreSQL CHECK constraint(s) "
+            f"also govern monitoring_alerts.status: {unexpected}; no constraints "
+            "were removed"
+        )
+
+    named = next(
+        (
+            item
+            for item in constraints
+            if item.get("conname") == MONITORING_ALERT_STATUS_CONSTRAINT
+        ),
+        None,
+    )
+    named_is_canonical = bool(
+        named
+        and _postgres_monitoring_status_check_is_canonical(
+            named.get("definition") or ""
+        )
+    )
+    named_is_validated = bool(
+        named and _postgres_constraint_is_validated(named.get("convalidated"))
+    )
+    not_null = metadata.get("is_nullable") == "NO"
+
+    if named_is_canonical and named_is_validated and not_null:
+        return {
+            "engine": "postgresql",
+            "compatible_rows": True,
+            "constraint_enforced": True,
+            "changed": False,
+        }
+
+    quoted_table = _pg_quote_identifier("monitoring_alerts")
+    quoted_column = _pg_quote_identifier("status")
+    quoted_constraint = _pg_quote_identifier(MONITORING_ALERT_STATUS_CONSTRAINT)
+
+    if named is not None and not named_is_canonical:
+        db.execute(
+            f"ALTER TABLE {quoted_table} "
+            f"DROP CONSTRAINT {quoted_constraint}"
+        )
+        named = None
+        named_is_validated = False
+
+    if named is None:
+        db.execute(
+            f"ALTER TABLE {quoted_table} "
+            f"ADD CONSTRAINT {quoted_constraint} "
+            f"CHECK ({quoted_column} IN "
+            f"({_sql_literal_list(MONITORING_ALERT_STATUS_VALUES)})) NOT VALID"
+        )
+        named_is_validated = False
+
+    if not named_is_validated:
+        db.execute(
+            f"ALTER TABLE {quoted_table} "
+            f"VALIDATE CONSTRAINT {quoted_constraint}"
+        )
+
+    if not not_null:
+        db.execute(
+            f"ALTER TABLE {quoted_table} "
+            f"ALTER COLUMN {quoted_column} SET NOT NULL"
+        )
+
+    verified_metadata = _monitoring_alert_status_column_metadata(db)
+    verified_constraints = _postgres_monitoring_alert_status_constraints(db)
+    verified_named = next(
+        (
+            item
+            for item in verified_constraints
+            if item.get("conname") == MONITORING_ALERT_STATUS_CONSTRAINT
+        ),
+        None,
+    )
+    if (
+        verified_metadata is None
+        or verified_metadata.get("is_nullable") != "NO"
+        or not _postgres_monitoring_status_check_is_canonical(
+            (verified_named or {}).get("definition") or ""
+        )
+        or not _postgres_constraint_is_validated(
+            (verified_named or {}).get("convalidated")
+        )
+    ):
+        raise RuntimeError(
+            "Migration 054 failed verification: PostgreSQL did not retain the "
+            "exact validated Monitoring Alert status CHECK and NOT NULL contract"
+        )
+
+    logger.info(
+        "Migration 054: installed validated PostgreSQL constraint %s with %d "
+        "canonical values; no Monitoring Alert rows were rewritten",
+        MONITORING_ALERT_STATUS_CONSTRAINT,
+        len(MONITORING_ALERT_STATUS_VALUES),
+    )
+    return {
+        "engine": "postgresql",
+        "compatible_rows": True,
+        "constraint_enforced": True,
+        "changed": True,
+    }
 
 
 def _postgres_check_constraints_for_column(db: DBConnection, table: str, column: str):

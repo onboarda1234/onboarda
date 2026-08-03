@@ -113,6 +113,45 @@ def test_screening_queue_payload_uses_application_level_metrics(db, temp_db):
     assert "Registry not found" in review_company_row["entity_context"]
 
 
+def test_screening_queue_exact_application_ref_isolates_canonical_handoff(
+    db,
+    temp_db,
+):
+    from server import _build_screening_queue_payload
+
+    _insert_sq2_screened_director(
+        db,
+        app_id="app_exact_handoff_1",
+        ref="ARF-EXACT-HANDOFF-1",
+        subject_name="Exact One",
+        case_id="case-exact-1",
+        alert_id="alert-exact-1",
+    )
+    _insert_sq2_screened_director(
+        db,
+        app_id="app_exact_handoff_10",
+        ref="ARF-EXACT-HANDOFF-10",
+        subject_name="Exact Ten",
+        case_id="case-exact-10",
+        alert_id="alert-exact-10",
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(
+        db,
+        {"type": "officer", "sub": "admin001"},
+        show_fixtures=True,
+        filters={"exact_application_ref": "ARF-EXACT-HANDOFF-1"},
+        include_evidence=True,
+    )
+
+    assert payload["rows"]
+    assert {row["application_ref"] for row in payload["rows"]} == {
+        "ARF-EXACT-HANDOFF-1"
+    }
+    assert payload["metrics"]["applications_scanned"] == 1
+
+
 def test_screening_queue_separates_declared_pep_from_provider_pep(db, temp_db):
     from server import _build_screening_queue_payload
 

@@ -1,0 +1,1861 @@
+{
+  "alerts": [
+    {
+      "alert_type": "Sanctions Match",
+      "application_has_test_like_name": false,
+      "application_id": null,
+      "application_is_fixture": null,
+      "application_ref": null,
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": "admin001",
+        "role": "admin"
+      },
+      "audit_trail": [
+        {
+          "action": "lifecycle.alert.quarantined",
+          "alert_id": 1,
+          "has_after_state": true,
+          "has_before_state": true,
+          "request_id": null,
+          "timestamp": "2026-04-20 05:05:53.856088",
+          "user_role": "system"
+        }
+      ],
+      "case_identifier": null,
+      "change_request_links": [],
+      "classification": "Orphaned",
+      "client": {
+        "id": null
+      },
+      "client_id": null,
+      "client_record_exists": false,
+      "created_at": "2026-04-02 06:45:59.609843",
+      "detected_by": {
+        "kind": "system",
+        "label": "Sanctions/PEP Agent"
+      },
+      "discovered_at": "2026-05-01 05:53:54.481901",
+      "discovered_via": "webhook_live",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 1,
+        "application_ids": [],
+        "case_count": 0,
+        "case_identifiers": [],
+        "evidence_count": 0,
+        "provider_count": 0,
+        "providers": []
+      },
+      "future_status": null,
+      "id": 1,
+      "linkage_findings": [
+        "missing_application_link",
+        "missing_screening_case_link"
+      ],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "missing_application_link",
+        "missing_screening_case_link"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": null,
+      "resolution_evidence": {
+        "has_officer_notes": true,
+        "officer_action": "escalate",
+        "resolved_at": null,
+        "reviewed_at": "2026-04-02 06:46:00.420080"
+      },
+      "screening_review_context": [],
+      "severity": "Critical",
+      "source_reference": {
+        "hmac_sha256": "036662a6c79d6fffd0b029e27e611e9cd3478efd88ad8fd7e22e624e50f77877",
+        "kind": "opaque_text"
+      },
+      "status": "escalated",
+      "status_validity": "Legacy",
+      "test_like_non_fixture": false,
+      "updated_at": "2026-05-01 05:53:54.481901",
+      "workflow_owner": "Screening Review"
+    },
+    {
+      "alert_type": "Risk Drift",
+      "application_has_test_like_name": false,
+      "application_id": null,
+      "application_is_fixture": null,
+      "application_ref": null,
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": "admin001",
+        "role": "admin"
+      },
+      "audit_trail": [
+        {
+          "action": "lifecycle.alert.quarantined",
+          "alert_id": 2,
+          "has_after_state": true,
+          "has_before_state": true,
+          "request_id": null,
+          "timestamp": "2026-04-20 05:05:53.856088",
+          "user_role": "system"
+        }
+      ],
+      "case_identifier": null,
+      "change_request_links": [],
+      "classification": "Orphaned",
+      "client": {
+        "id": null
+      },
+      "client_id": null,
+      "client_record_exists": false,
+      "created_at": "2026-04-02 06:48:05.600035",
+      "detected_by": {
+        "kind": "system",
+        "label": "Risk Drift Agent"
+      },
+      "discovered_at": "2026-05-01 05:53:54.481901",
+      "discovered_via": "webhook_live",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 2,
+        "application_ids": [],
+        "case_count": 0,
+        "case_identifiers": [],
+        "evidence_count": 0,
+        "provider_count": 0,
+        "providers": []
+      },
+      "future_status": "dismissed",
+      "id": 2,
+      "linkage_findings": [
+        "missing_application_link"
+      ],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "missing_application_link",
+        "terminal_status_without_resolved_at"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": null,
+      "resolution_evidence": {
+        "has_officer_notes": true,
+        "officer_action": "dismiss",
+        "resolved_at": null,
+        "reviewed_at": "2026-04-02 06:48:06.068024"
+      },
+      "screening_review_context": [],
+      "severity": "Low",
+      "source_reference": {
+        "hmac_sha256": "703469cedbaa55b8558bb585a5d2683744c9bd6f9fdc5f88ab821fa84ab42be9",
+        "kind": "opaque_text"
+      },
+      "status": "dismissed",
+      "status_validity": "Valid",
+      "test_like_non_fixture": false,
+      "updated_at": "2026-05-01 05:53:54.481901",
+      "workflow_owner": "Manual"
+    },
+    {
+      "alert_type": "manual_pr290_schema_validation",
+      "application_has_test_like_name": false,
+      "application_id": null,
+      "application_is_fixture": null,
+      "application_ref": null,
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [],
+      "case_identifier": null,
+      "change_request_links": [],
+      "classification": "Orphaned",
+      "client": {
+        "id": null
+      },
+      "client_id": null,
+      "client_record_exists": false,
+      "created_at": "2026-05-11 10:25:38.635857",
+      "detected_by": {
+        "hmac_sha256": "a526e51ab7ffbdc6480c5038a8d08ee8a79240e5ca15b08276bcd136dee79664",
+        "kind": "pseudonymous"
+      },
+      "discovered_at": "2026-05-11 10:25:38.635857",
+      "discovered_via": "manual",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 54,
+        "application_ids": [],
+        "case_count": 0,
+        "case_identifiers": [],
+        "evidence_count": 0,
+        "provider_count": 0,
+        "providers": []
+      },
+      "future_status": "open",
+      "id": 54,
+      "linkage_findings": [
+        "missing_application_link"
+      ],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "missing_application_link"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": null,
+      "resolution_evidence": {
+        "has_officer_notes": false,
+        "officer_action": null,
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [],
+      "severity": "medium",
+      "source_reference": {
+        "hmac_sha256": "2c9659578c1e9273be6f804197a1d24a8217e2a8cd85ae77dc1823deae419f44",
+        "kind": "opaque_text"
+      },
+      "status": "open",
+      "status_validity": "Valid",
+      "test_like_non_fixture": false,
+      "updated_at": "2026-05-11 10:25:38.635857",
+      "workflow_owner": "Manual"
+    },
+    {
+      "alert_type": "other",
+      "application_has_test_like_name": false,
+      "application_id": null,
+      "application_is_fixture": null,
+      "application_ref": null,
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [],
+      "case_identifier": null,
+      "change_request_links": [],
+      "classification": "Orphaned",
+      "client": {
+        "id": null
+      },
+      "client_id": null,
+      "client_record_exists": false,
+      "created_at": "2026-05-11 10:32:20.342848",
+      "detected_by": {
+        "hmac_sha256": "a526e51ab7ffbdc6480c5038a8d08ee8a79240e5ca15b08276bcd136dee79664",
+        "kind": "pseudonymous"
+      },
+      "discovered_at": "2026-05-11 10:32:20.342848",
+      "discovered_via": "manual",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 55,
+        "application_ids": [],
+        "case_count": 0,
+        "case_identifiers": [],
+        "evidence_count": 0,
+        "provider_count": 0,
+        "providers": []
+      },
+      "future_status": "open",
+      "id": 55,
+      "linkage_findings": [
+        "missing_application_link"
+      ],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "missing_application_link"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": null,
+      "resolution_evidence": {
+        "has_officer_notes": false,
+        "officer_action": null,
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [],
+      "severity": "medium",
+      "source_reference": {
+        "hmac_sha256": "703469cedbaa55b8558bb585a5d2683744c9bd6f9fdc5f88ab821fa84ab42be9",
+        "kind": "opaque_text"
+      },
+      "status": "open",
+      "status_validity": "Valid",
+      "test_like_non_fixture": false,
+      "updated_at": "2026-05-11 10:32:20.342848",
+      "workflow_owner": "Manual"
+    },
+    {
+      "alert_type": "adverse_media",
+      "application_has_test_like_name": false,
+      "application_id": "pcdv100000000004",
+      "application_is_fixture": true,
+      "application_ref": "RM-PILOT-004",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": "co001",
+        "role": "co"
+      },
+      "audit_trail": [
+        {
+          "action": "fixture.pilot_canonical_monitoring",
+          "alert_id": 581,
+          "has_after_state": true,
+          "has_before_state": false,
+          "request_id": null,
+          "timestamp": "2026-07-17 15:17:28.035833",
+          "user_role": "system"
+        }
+      ],
+      "case_identifier": "PILOT-004",
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": null
+      },
+      "client_id": null,
+      "client_record_exists": false,
+      "created_at": "2026-07-01 00:44:00",
+      "detected_by": {
+        "kind": "system",
+        "label": "fixture_seed"
+      },
+      "discovered_at": "2026-07-01 00:44:00",
+      "discovered_via": "manual",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 581,
+        "application_ids": [],
+        "case_count": 0,
+        "case_identifiers": [],
+        "evidence_count": 0,
+        "provider_count": 0,
+        "providers": []
+      },
+      "future_status": "dismissed",
+      "id": 581,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "terminal_status_without_resolved_at"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": "synthetic_fixture",
+      "resolution_evidence": {
+        "has_officer_notes": true,
+        "officer_action": "dismiss",
+        "resolved_at": null,
+        "reviewed_at": "2026-07-01 00:47:00"
+      },
+      "screening_review_context": [
+        {
+          "alert_id": 581,
+          "application_id": "pcdv100000000004",
+          "disposition": "cleared",
+          "has_second_review": false,
+          "requires_four_eyes": false,
+          "screening_review_id": 252,
+          "subject_type": "entity"
+        }
+      ],
+      "severity": "low",
+      "source_reference": {
+        "kind": "identifier",
+        "value": "RM-PILOT-004:MONITORING"
+      },
+      "status": "dismissed",
+      "status_validity": "Valid",
+      "test_like_non_fixture": false,
+      "updated_at": "2026-07-01 00:47:00",
+      "workflow_owner": "Screening Review"
+    },
+    {
+      "alert_type": "sanctions",
+      "application_has_test_like_name": false,
+      "application_id": "pcdv100000000005",
+      "application_is_fixture": true,
+      "application_ref": "RM-PILOT-005",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": "co001",
+        "role": "co"
+      },
+      "audit_trail": [
+        {
+          "action": "fixture.pilot_canonical_monitoring",
+          "alert_id": 582,
+          "has_after_state": true,
+          "has_before_state": false,
+          "request_id": null,
+          "timestamp": "2026-07-17 15:17:28.035833",
+          "user_role": "system"
+        }
+      ],
+      "case_identifier": "PILOT-005",
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": null
+      },
+      "client_id": null,
+      "client_record_exists": false,
+      "created_at": "2026-07-01 00:54:00",
+      "detected_by": {
+        "kind": "system",
+        "label": "fixture_seed"
+      },
+      "discovered_at": "2026-07-01 00:54:00",
+      "discovered_via": "manual",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 582,
+        "application_ids": [],
+        "case_count": 0,
+        "case_identifiers": [],
+        "evidence_count": 0,
+        "provider_count": 0,
+        "providers": []
+      },
+      "future_status": "resolved",
+      "id": 582,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "terminal_status_without_resolved_at"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [
+        {
+          "alert_direct_periodic_review_id": null,
+          "alert_id": 582,
+          "application_id": "pcdv100000000005",
+          "direction": "reverse",
+          "linked_monitoring_alert_id": 582,
+          "periodic_review_id": 176,
+          "status": "completed"
+        }
+      ],
+      "provider": "synthetic_fixture",
+      "resolution_evidence": {
+        "has_officer_notes": true,
+        "officer_action": "clear",
+        "resolved_at": null,
+        "reviewed_at": "2026-07-01 00:57:00"
+      },
+      "screening_review_context": [
+        {
+          "alert_id": 582,
+          "application_id": "pcdv100000000005",
+          "disposition": "cleared",
+          "has_second_review": false,
+          "requires_four_eyes": false,
+          "screening_review_id": 253,
+          "subject_type": "entity"
+        }
+      ],
+      "severity": "low",
+      "source_reference": {
+        "kind": "identifier",
+        "value": "RM-PILOT-005:MONITORING"
+      },
+      "status": "resolved",
+      "status_validity": "Valid",
+      "test_like_non_fixture": false,
+      "updated_at": "2026-07-01 00:57:00",
+      "workflow_owner": "Periodic Review"
+    },
+    {
+      "alert_type": "sanctions",
+      "application_has_test_like_name": false,
+      "application_id": "pcdv100000000024",
+      "application_is_fixture": true,
+      "application_ref": "RM-PILOT-024",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [
+        {
+          "action": "fixture.pilot_canonical_monitoring",
+          "alert_id": 583,
+          "has_after_state": true,
+          "has_before_state": false,
+          "request_id": null,
+          "timestamp": "2026-07-17 15:17:28.035833",
+          "user_role": "system"
+        }
+      ],
+      "case_identifier": "PILOT-024",
+      "change_request_links": [],
+      "classification": "Legacy",
+      "client": {
+        "id": null
+      },
+      "client_id": null,
+      "client_record_exists": false,
+      "created_at": "2026-07-01 04:04:00",
+      "detected_by": {
+        "kind": "system",
+        "label": "fixture_seed"
+      },
+      "discovered_at": "2026-07-01 04:04:00",
+      "discovered_via": "manual",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [
+        {
+          "alert_direct_edd_case_id": null,
+          "alert_id": 583,
+          "application_id": "pcdv100000000024",
+          "direction": "reverse",
+          "edd_case_id": 309,
+          "linked_monitoring_alert_id": 583,
+          "status": "analysis"
+        }
+      ],
+      "evidence": {
+        "alert_id": 583,
+        "application_ids": [],
+        "case_count": 0,
+        "case_identifiers": [],
+        "evidence_count": 0,
+        "provider_count": 0,
+        "providers": []
+      },
+      "future_status": "routed_to_edd",
+      "id": 583,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Candidate for future migration",
+      "migration_findings": [],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": "synthetic_fixture",
+      "resolution_evidence": {
+        "has_officer_notes": true,
+        "officer_action": "create_edd",
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [
+        {
+          "alert_id": 583,
+          "application_id": "pcdv100000000024",
+          "disposition": "escalated",
+          "has_second_review": false,
+          "requires_four_eyes": false,
+          "screening_review_id": 254,
+          "subject_type": "entity"
+        }
+      ],
+      "severity": "high",
+      "source_reference": {
+        "kind": "identifier",
+        "value": "RM-PILOT-024:MONITORING"
+      },
+      "status": "in_review",
+      "status_validity": "Legacy",
+      "test_like_non_fixture": false,
+      "updated_at": "2026-07-01 04:04:00",
+      "workflow_owner": "EDD"
+    },
+    {
+      "alert_type": "adverse_media",
+      "application_has_test_like_name": false,
+      "application_id": "pcdv100000000025",
+      "application_is_fixture": true,
+      "application_ref": "RM-PILOT-025",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [
+        {
+          "action": "fixture.pilot_canonical_monitoring",
+          "alert_id": 584,
+          "has_after_state": true,
+          "has_before_state": false,
+          "request_id": null,
+          "timestamp": "2026-07-17 15:17:28.035833",
+          "user_role": "system"
+        }
+      ],
+      "case_identifier": "PILOT-025",
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": null
+      },
+      "client_id": null,
+      "client_record_exists": false,
+      "created_at": "2026-07-01 04:14:00",
+      "detected_by": {
+        "kind": "system",
+        "label": "fixture_seed"
+      },
+      "discovered_at": "2026-07-01 04:14:00",
+      "discovered_via": "manual",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [
+        {
+          "alert_direct_edd_case_id": null,
+          "alert_id": 584,
+          "application_id": "pcdv100000000025",
+          "direction": "reverse",
+          "edd_case_id": 310,
+          "linked_monitoring_alert_id": 584,
+          "status": "analysis"
+        }
+      ],
+      "evidence": {
+        "alert_id": 584,
+        "application_ids": [],
+        "case_count": 0,
+        "case_identifiers": [],
+        "evidence_count": 0,
+        "provider_count": 0,
+        "providers": []
+      },
+      "future_status": "routed_to_edd",
+      "id": 584,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "active_status_conflicts_with_edd_owner_link"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": "synthetic_fixture",
+      "resolution_evidence": {
+        "has_officer_notes": true,
+        "officer_action": null,
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [
+        {
+          "alert_id": 584,
+          "application_id": "pcdv100000000025",
+          "disposition": "escalated",
+          "has_second_review": false,
+          "requires_four_eyes": false,
+          "screening_review_id": 255,
+          "subject_type": "entity"
+        }
+      ],
+      "severity": "medium",
+      "source_reference": {
+        "kind": "identifier",
+        "value": "RM-PILOT-025:MONITORING"
+      },
+      "status": "open",
+      "status_validity": "Valid",
+      "test_like_non_fixture": false,
+      "updated_at": "2026-07-01 04:14:00",
+      "workflow_owner": "EDD"
+    },
+    {
+      "alert_type": "adverse_media",
+      "application_has_test_like_name": false,
+      "application_id": "pcdv100000000041",
+      "application_is_fixture": true,
+      "application_ref": "RM-PILOT-041",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": "co001",
+        "role": "co"
+      },
+      "audit_trail": [
+        {
+          "action": "fixture.pilot_canonical_monitoring",
+          "alert_id": 585,
+          "has_after_state": true,
+          "has_before_state": false,
+          "request_id": null,
+          "timestamp": "2026-07-17 15:17:28.035833",
+          "user_role": "system"
+        }
+      ],
+      "case_identifier": "PILOT-041",
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": null
+      },
+      "client_id": null,
+      "client_record_exists": false,
+      "created_at": "2026-07-01 06:54:00",
+      "detected_by": {
+        "kind": "system",
+        "label": "fixture_seed"
+      },
+      "discovered_at": "2026-07-01 06:54:00",
+      "discovered_via": "manual",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 585,
+        "application_ids": [],
+        "case_count": 0,
+        "case_identifiers": [],
+        "evidence_count": 0,
+        "provider_count": 0,
+        "providers": []
+      },
+      "future_status": "dismissed",
+      "id": 585,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "terminal_status_without_resolved_at"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [
+        {
+          "alert_direct_periodic_review_id": null,
+          "alert_id": 585,
+          "application_id": "pcdv100000000041",
+          "direction": "reverse",
+          "linked_monitoring_alert_id": 585,
+          "periodic_review_id": 179,
+          "status": "completed"
+        }
+      ],
+      "provider": "synthetic_fixture",
+      "resolution_evidence": {
+        "has_officer_notes": true,
+        "officer_action": "dismiss",
+        "resolved_at": null,
+        "reviewed_at": "2026-07-01 06:57:00"
+      },
+      "screening_review_context": [
+        {
+          "alert_id": 585,
+          "application_id": "pcdv100000000041",
+          "disposition": "cleared",
+          "has_second_review": false,
+          "requires_four_eyes": false,
+          "screening_review_id": 257,
+          "subject_type": "entity"
+        }
+      ],
+      "severity": "low",
+      "source_reference": {
+        "kind": "identifier",
+        "value": "RM-PILOT-041:MONITORING"
+      },
+      "status": "dismissed",
+      "status_validity": "Valid",
+      "test_like_non_fixture": false,
+      "updated_at": "2026-07-01 06:57:00",
+      "workflow_owner": "Periodic Review"
+    },
+    {
+      "alert_type": "media",
+      "application_has_test_like_name": false,
+      "application_id": "f1xedqa000000006",
+      "application_is_fixture": true,
+      "application_ref": "ARF-QAFIX-006",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [],
+      "case_identifier": "019f78db-12e8-7c19-bff9-182aeeecf476",
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": "qafix-client"
+      },
+      "client_id": "qafix-client",
+      "client_record_exists": true,
+      "created_at": "2026-07-19 05:31:50.013190",
+      "detected_by": {
+        "kind": "system",
+        "label": "complyadvantage"
+      },
+      "discovered_at": "2026-07-19 05:31:50.013190",
+      "discovered_via": "webhook_live",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 586,
+        "application_ids": [
+          "f1xedqa000000006"
+        ],
+        "case_count": 1,
+        "case_identifiers": [
+          "019f78db-12e8-7c19-bff9-182aeeecf476"
+        ],
+        "evidence_count": 104,
+        "provider_count": 1,
+        "providers": [
+          "complyadvantage"
+        ]
+      },
+      "future_status": "open",
+      "id": 586,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Migration ready",
+      "migration_findings": [],
+      "migration_ready": true,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": "complyadvantage",
+      "resolution_evidence": {
+        "has_officer_notes": false,
+        "officer_action": null,
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [
+        {
+          "alert_id": 586,
+          "application_id": "f1xedqa000000006",
+          "disposition": "cleared",
+          "has_second_review": false,
+          "requires_four_eyes": true,
+          "screening_review_id": 263,
+          "subject_type": "entity"
+        },
+        {
+          "alert_id": 586,
+          "application_id": "f1xedqa000000006",
+          "disposition": "cleared",
+          "has_second_review": false,
+          "requires_four_eyes": true,
+          "screening_review_id": 264,
+          "subject_type": "director"
+        }
+      ],
+      "severity": "medium",
+      "source_reference": {
+        "alert_identifier": "019f78db-1186-746c-944c-f217500f4c01",
+        "case_identifier": "019f78db-12e8-7c19-bff9-182aeeecf476",
+        "provider": "complyadvantage",
+        "subject_kind": "subject",
+        "subject_scope": "person"
+      },
+      "status": "open",
+      "status_validity": "Valid",
+      "test_like_non_fixture": false,
+      "updated_at": "2026-07-19 05:31:50.013190",
+      "workflow_owner": "Screening Review"
+    },
+    {
+      "alert_type": "media",
+      "application_has_test_like_name": false,
+      "application_id": "f1xedqa000000006",
+      "application_is_fixture": true,
+      "application_ref": "ARF-QAFIX-006",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [],
+      "case_identifier": "019f78da-8c0f-7097-a24c-fe6f78817f71",
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": "qafix-client"
+      },
+      "client_id": "qafix-client",
+      "client_record_exists": true,
+      "created_at": "2026-07-19 05:31:55.138371",
+      "detected_by": {
+        "kind": "system",
+        "label": "complyadvantage"
+      },
+      "discovered_at": "2026-07-19 05:31:55.138371",
+      "discovered_via": "webhook_backfill",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 587,
+        "application_ids": [
+          "f1xedqa000000006"
+        ],
+        "case_count": 1,
+        "case_identifiers": [
+          "019f78da-8c0f-7097-a24c-fe6f78817f71"
+        ],
+        "evidence_count": 101,
+        "provider_count": 1,
+        "providers": [
+          "complyadvantage"
+        ]
+      },
+      "future_status": "open",
+      "id": 587,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Migration ready",
+      "migration_findings": [],
+      "migration_ready": true,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": "complyadvantage",
+      "resolution_evidence": {
+        "has_officer_notes": false,
+        "officer_action": null,
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [
+        {
+          "alert_id": 587,
+          "application_id": "f1xedqa000000006",
+          "disposition": "cleared",
+          "has_second_review": false,
+          "requires_four_eyes": true,
+          "screening_review_id": 263,
+          "subject_type": "entity"
+        },
+        {
+          "alert_id": 587,
+          "application_id": "f1xedqa000000006",
+          "disposition": "cleared",
+          "has_second_review": false,
+          "requires_four_eyes": true,
+          "screening_review_id": 264,
+          "subject_type": "director"
+        }
+      ],
+      "severity": "medium",
+      "source_reference": {
+        "alert_identifier": "019f78da-8a69-73a3-8736-964579f44b4d",
+        "case_identifier": "019f78da-8c0f-7097-a24c-fe6f78817f71",
+        "provider": "complyadvantage",
+        "subject_kind": "entity",
+        "subject_scope": "entity"
+      },
+      "status": "open",
+      "status_validity": "Valid",
+      "test_like_non_fixture": false,
+      "updated_at": "2026-07-19 05:31:55.138371",
+      "workflow_owner": "Screening Review"
+    },
+    {
+      "alert_type": "media",
+      "application_has_test_like_name": false,
+      "application_id": "f1xedqa000000007",
+      "application_is_fixture": true,
+      "application_ref": "ARF-QAFIX-007",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [],
+      "case_identifier": "019f79c8-fbfa-72fa-a0a0-7ab5b1d9e16e",
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": "qafix-client"
+      },
+      "client_id": "qafix-client",
+      "client_record_exists": true,
+      "created_at": "2026-07-19 09:52:15.724708",
+      "detected_by": {
+        "kind": "system",
+        "label": "complyadvantage"
+      },
+      "discovered_at": "2026-07-19 09:52:15.724708",
+      "discovered_via": "webhook_backfill",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 591,
+        "application_ids": [
+          "f1xedqa000000007"
+        ],
+        "case_count": 1,
+        "case_identifiers": [
+          "019f79c8-fbfa-72fa-a0a0-7ab5b1d9e16e"
+        ],
+        "evidence_count": 101,
+        "provider_count": 1,
+        "providers": [
+          "complyadvantage"
+        ]
+      },
+      "future_status": "open",
+      "id": 591,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Migration ready",
+      "migration_findings": [],
+      "migration_ready": true,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": "complyadvantage",
+      "resolution_evidence": {
+        "has_officer_notes": false,
+        "officer_action": null,
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [
+        {
+          "alert_id": 591,
+          "application_id": "f1xedqa000000007",
+          "disposition": "cleared",
+          "has_second_review": false,
+          "requires_four_eyes": true,
+          "screening_review_id": 262,
+          "subject_type": "entity"
+        }
+      ],
+      "severity": "medium",
+      "source_reference": {
+        "alert_identifier": "019f79c8-fae1-7637-8854-d9cfa36dc1b3",
+        "case_identifier": "019f79c8-fbfa-72fa-a0a0-7ab5b1d9e16e",
+        "provider": "complyadvantage",
+        "subject_kind": "entity",
+        "subject_scope": "entity"
+      },
+      "status": "open",
+      "status_validity": "Valid",
+      "test_like_non_fixture": false,
+      "updated_at": "2026-07-19 09:52:15.724708",
+      "workflow_owner": "Screening Review"
+    },
+    {
+      "alert_type": "media",
+      "application_has_test_like_name": false,
+      "application_id": "f1xedqa000000007",
+      "application_is_fixture": true,
+      "application_ref": "ARF-QAFIX-007",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [],
+      "case_identifier": "019f79c9-7f4e-7d2c-aab3-c835b444522e",
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": "qafix-client"
+      },
+      "client_id": "qafix-client",
+      "client_record_exists": true,
+      "created_at": "2026-07-19 09:52:52.744209",
+      "detected_by": {
+        "kind": "system",
+        "label": "complyadvantage"
+      },
+      "discovered_at": "2026-07-19 09:52:52.744209",
+      "discovered_via": "webhook_backfill",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 592,
+        "application_ids": [
+          "f1xedqa000000007"
+        ],
+        "case_count": 1,
+        "case_identifiers": [
+          "019f79c9-7f4e-7d2c-aab3-c835b444522e"
+        ],
+        "evidence_count": 104,
+        "provider_count": 1,
+        "providers": [
+          "complyadvantage"
+        ]
+      },
+      "future_status": "open",
+      "id": 592,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Migration ready",
+      "migration_findings": [],
+      "migration_ready": true,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": "complyadvantage",
+      "resolution_evidence": {
+        "has_officer_notes": false,
+        "officer_action": null,
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [
+        {
+          "alert_id": 592,
+          "application_id": "f1xedqa000000007",
+          "disposition": "cleared",
+          "has_second_review": false,
+          "requires_four_eyes": true,
+          "screening_review_id": 262,
+          "subject_type": "entity"
+        }
+      ],
+      "severity": "medium",
+      "source_reference": {
+        "alert_identifier": "019f79c9-7ed9-7e75-a3b0-f417e58d555b",
+        "case_identifier": "019f79c9-7f4e-7d2c-aab3-c835b444522e",
+        "provider": "complyadvantage",
+        "subject_kind": "subject",
+        "subject_scope": "person"
+      },
+      "status": "open",
+      "status_validity": "Valid",
+      "test_like_non_fixture": false,
+      "updated_at": "2026-07-19 09:52:52.744209",
+      "workflow_owner": "Screening Review"
+    },
+    {
+      "alert_type": "media",
+      "application_has_test_like_name": true,
+      "application_id": "ecf18d5d4d814108",
+      "application_is_fixture": false,
+      "application_ref": "ARF-2026-100432",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [],
+      "case_identifier": "019f97d7-bdcd-71e1-8935-ea216d74ccbe",
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": null
+      },
+      "client_id": null,
+      "client_record_exists": false,
+      "created_at": "2026-07-25 05:55:32.890563",
+      "detected_by": {
+        "kind": "system",
+        "label": "complyadvantage"
+      },
+      "discovered_at": "2026-07-25 05:55:32.890563",
+      "discovered_via": "webhook_live",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 603,
+        "application_ids": [
+          "ecf18d5d4d814108"
+        ],
+        "case_count": 1,
+        "case_identifiers": [
+          "019f97d7-bdcd-71e1-8935-ea216d74ccbe"
+        ],
+        "evidence_count": 5,
+        "provider_count": 1,
+        "providers": [
+          "complyadvantage"
+        ]
+      },
+      "future_status": "open",
+      "id": 603,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "test_like_non_fixture_requires_confirmation"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": "complyadvantage",
+      "resolution_evidence": {
+        "has_officer_notes": false,
+        "officer_action": null,
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [],
+      "severity": "medium",
+      "source_reference": {
+        "alert_identifier": "019f97d7-bd0d-7b68-9e4e-1a662bde9a3f",
+        "case_identifier": "019f97d7-bdcd-71e1-8935-ea216d74ccbe",
+        "provider": "complyadvantage",
+        "subject_kind": "subject",
+        "subject_scope": "person"
+      },
+      "status": "open",
+      "status_validity": "Valid",
+      "test_like_non_fixture": true,
+      "updated_at": "2026-07-25 05:55:32.890563",
+      "workflow_owner": "Screening Review"
+    },
+    {
+      "alert_type": "pep",
+      "application_has_test_like_name": true,
+      "application_id": "ecf18d5d4d814108",
+      "application_is_fixture": false,
+      "application_ref": "ARF-2026-100432",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [],
+      "case_identifier": "019f97d7-e029-7a3d-b02c-8c02bff0d0b3",
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": null
+      },
+      "client_id": null,
+      "client_record_exists": false,
+      "created_at": "2026-07-25 05:56:03.883936",
+      "detected_by": {
+        "kind": "system",
+        "label": "complyadvantage"
+      },
+      "discovered_at": "2026-07-25 05:56:03.883936",
+      "discovered_via": "webhook_live",
+      "document_links": [],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 606,
+        "application_ids": [
+          "ecf18d5d4d814108"
+        ],
+        "case_count": 1,
+        "case_identifiers": [
+          "019f97d7-e029-7a3d-b02c-8c02bff0d0b3"
+        ],
+        "evidence_count": 30,
+        "provider_count": 1,
+        "providers": [
+          "complyadvantage"
+        ]
+      },
+      "future_status": "open",
+      "id": 606,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "test_like_non_fixture_requires_confirmation"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": "complyadvantage",
+      "resolution_evidence": {
+        "has_officer_notes": false,
+        "officer_action": null,
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [],
+      "severity": "medium",
+      "source_reference": {
+        "alert_identifier": "019f97d7-de3d-7746-824a-ebc5bd47fafa",
+        "case_identifier": "019f97d7-e029-7a3d-b02c-8c02bff0d0b3",
+        "provider": "complyadvantage",
+        "subject_kind": "subject",
+        "subject_scope": "person"
+      },
+      "status": "open",
+      "status_validity": "Valid",
+      "test_like_non_fixture": true,
+      "updated_at": "2026-07-25 05:56:03.883936",
+      "workflow_owner": "Screening Review"
+    },
+    {
+      "alert_type": "document_expiry_missing",
+      "application_has_test_like_name": true,
+      "application_id": "4a247758771c4220",
+      "application_is_fixture": false,
+      "application_ref": "ARF-2026-100434",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [
+        {
+          "action": "monitoring.document_health_alert.created",
+          "alert_id": 608,
+          "has_after_state": true,
+          "has_before_state": false,
+          "request_id": null,
+          "timestamp": "2026-07-28 11:51:46.254528",
+          "user_role": "system"
+        }
+      ],
+      "case_identifier": null,
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": "3c14dd0540c843fa"
+      },
+      "client_id": "3c14dd0540c843fa",
+      "client_record_exists": true,
+      "created_at": "2026-07-28 11:51:46.254528",
+      "detected_by": {
+        "kind": "system",
+        "label": "document_health_monitor"
+      },
+      "discovered_at": "2026-07-28 11:51:46.254528",
+      "discovered_via": "document_health",
+      "document_links": [
+        {
+          "alert_id": 608,
+          "doc_type": "passport",
+          "document_application_id": "4a247758771c4220",
+          "document_id": "01ff40d269fb4444",
+          "is_current": true,
+          "review_status": "accepted",
+          "verification_status": "flagged"
+        }
+      ],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 608,
+        "application_ids": [],
+        "case_count": 0,
+        "case_identifiers": [],
+        "evidence_count": 0,
+        "provider_count": 0,
+        "providers": []
+      },
+      "future_status": "open",
+      "id": 608,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "test_like_non_fixture_requires_confirmation"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": null,
+      "resolution_evidence": {
+        "has_officer_notes": false,
+        "officer_action": null,
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [],
+      "severity": "medium",
+      "source_reference": {
+        "kind": "identifier",
+        "value": "document:01ff40d269fb4444"
+      },
+      "status": "open",
+      "status_validity": "Valid",
+      "test_like_non_fixture": true,
+      "updated_at": "2026-07-28 11:51:46.254528",
+      "workflow_owner": "Documents"
+    },
+    {
+      "alert_type": "document_expiry_missing",
+      "application_has_test_like_name": true,
+      "application_id": "4a247758771c4220",
+      "application_is_fixture": false,
+      "application_ref": "ARF-2026-100434",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [
+        {
+          "action": "monitoring.document_health_alert.created",
+          "alert_id": 609,
+          "has_after_state": true,
+          "has_before_state": false,
+          "request_id": null,
+          "timestamp": "2026-07-28 11:51:46.254528",
+          "user_role": "system"
+        }
+      ],
+      "case_identifier": null,
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": "3c14dd0540c843fa"
+      },
+      "client_id": "3c14dd0540c843fa",
+      "client_record_exists": true,
+      "created_at": "2026-07-28 11:51:46.254528",
+      "detected_by": {
+        "kind": "system",
+        "label": "document_health_monitor"
+      },
+      "discovered_at": "2026-07-28 11:51:46.254528",
+      "discovered_via": "document_health",
+      "document_links": [
+        {
+          "alert_id": 609,
+          "doc_type": "passport",
+          "document_application_id": "4a247758771c4220",
+          "document_id": "e867bf42f4e44db5",
+          "is_current": true,
+          "review_status": "accepted",
+          "verification_status": "flagged"
+        }
+      ],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 609,
+        "application_ids": [],
+        "case_count": 0,
+        "case_identifiers": [],
+        "evidence_count": 0,
+        "provider_count": 0,
+        "providers": []
+      },
+      "future_status": "open",
+      "id": 609,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "test_like_non_fixture_requires_confirmation"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": null,
+      "resolution_evidence": {
+        "has_officer_notes": false,
+        "officer_action": null,
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [],
+      "severity": "medium",
+      "source_reference": {
+        "kind": "identifier",
+        "value": "document:e867bf42f4e44db5"
+      },
+      "status": "open",
+      "status_validity": "Valid",
+      "test_like_non_fixture": true,
+      "updated_at": "2026-07-28 11:51:46.254528",
+      "workflow_owner": "Documents"
+    },
+    {
+      "alert_type": "document_expiry_missing",
+      "application_has_test_like_name": true,
+      "application_id": "85db5081e3454dd8",
+      "application_is_fixture": false,
+      "application_ref": "ARF-2026-100435",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [
+        {
+          "action": "monitoring.document_health_alert.created",
+          "alert_id": 610,
+          "has_after_state": true,
+          "has_before_state": false,
+          "request_id": null,
+          "timestamp": "2026-07-28 11:51:46.312243",
+          "user_role": "system"
+        }
+      ],
+      "case_identifier": null,
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": "3c14dd0540c843fa"
+      },
+      "client_id": "3c14dd0540c843fa",
+      "client_record_exists": true,
+      "created_at": "2026-07-28 11:51:46.312243",
+      "detected_by": {
+        "kind": "system",
+        "label": "document_health_monitor"
+      },
+      "discovered_at": "2026-07-28 11:51:46.312243",
+      "discovered_via": "document_health",
+      "document_links": [
+        {
+          "alert_id": 610,
+          "doc_type": "passport",
+          "document_application_id": "85db5081e3454dd8",
+          "document_id": "f20b7f8877004190",
+          "is_current": true,
+          "review_status": "accepted",
+          "verification_status": "flagged"
+        }
+      ],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 610,
+        "application_ids": [],
+        "case_count": 0,
+        "case_identifiers": [],
+        "evidence_count": 0,
+        "provider_count": 0,
+        "providers": []
+      },
+      "future_status": "open",
+      "id": 610,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "test_like_non_fixture_requires_confirmation"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": null,
+      "resolution_evidence": {
+        "has_officer_notes": false,
+        "officer_action": null,
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [],
+      "severity": "medium",
+      "source_reference": {
+        "kind": "identifier",
+        "value": "document:f20b7f8877004190"
+      },
+      "status": "open",
+      "status_validity": "Valid",
+      "test_like_non_fixture": true,
+      "updated_at": "2026-07-28 11:51:46.312243",
+      "workflow_owner": "Documents"
+    },
+    {
+      "alert_type": "document_expiry_missing",
+      "application_has_test_like_name": true,
+      "application_id": "85db5081e3454dd8",
+      "application_is_fixture": false,
+      "application_ref": "ARF-2026-100435",
+      "assigned_officer": {
+        "assigned_at": null,
+        "id": null,
+        "role": null
+      },
+      "audit_trail": [
+        {
+          "action": "monitoring.document_health_alert.created",
+          "alert_id": 611,
+          "has_after_state": true,
+          "has_before_state": false,
+          "request_id": null,
+          "timestamp": "2026-07-28 11:51:46.312243",
+          "user_role": "system"
+        }
+      ],
+      "case_identifier": null,
+      "change_request_links": [],
+      "classification": "Valid",
+      "client": {
+        "id": "3c14dd0540c843fa"
+      },
+      "client_id": "3c14dd0540c843fa",
+      "client_record_exists": true,
+      "created_at": "2026-07-28 11:51:46.312243",
+      "detected_by": {
+        "kind": "system",
+        "label": "document_health_monitor"
+      },
+      "discovered_at": "2026-07-28 11:51:46.312243",
+      "discovered_via": "document_health",
+      "document_links": [
+        {
+          "alert_id": 611,
+          "doc_type": "passport",
+          "document_application_id": "85db5081e3454dd8",
+          "document_id": "10fd30af4b3a4fe5",
+          "is_current": true,
+          "review_status": "accepted",
+          "verification_status": "flagged"
+        }
+      ],
+      "document_request_links": [],
+      "edd_links": [],
+      "evidence": {
+        "alert_id": 611,
+        "application_ids": [],
+        "case_count": 0,
+        "case_identifiers": [],
+        "evidence_count": 0,
+        "provider_count": 0,
+        "providers": []
+      },
+      "future_status": "open",
+      "id": 611,
+      "linkage_findings": [],
+      "linked_edd_case_id": null,
+      "linked_periodic_review_id": null,
+      "migration_disposition": "Manual review required",
+      "migration_findings": [
+        "test_like_non_fixture_requires_confirmation"
+      ],
+      "migration_ready": false,
+      "ownership_findings": [],
+      "periodic_review_links": [],
+      "provider": null,
+      "resolution_evidence": {
+        "has_officer_notes": false,
+        "officer_action": null,
+        "resolved_at": null,
+        "reviewed_at": null
+      },
+      "screening_review_context": [],
+      "severity": "medium",
+      "source_reference": {
+        "kind": "identifier",
+        "value": "document:10fd30af4b3a4fe5"
+      },
+      "status": "open",
+      "status_validity": "Valid",
+      "test_like_non_fixture": true,
+      "updated_at": "2026-07-28 11:51:46.312243",
+      "workflow_owner": "Documents"
+    }
+  ],
+  "audit_id": "PR-MON-M1-STATUS-AUDIT-1",
+  "collection": {
+    "captured_at": "2026-07-29T09:38:54.249298+00:00",
+    "completion": "ROLLBACK",
+    "deployed_git_sha": "4b8b27690fbe5e639494f39607e3257bc0feef2d",
+    "ecs_backend_task_definition": "regmind-staging:982",
+    "ecs_worker_task_definition": "regmind-verification-worker:430",
+    "environment": "staging",
+    "isolation_level": "REPEATABLE READ",
+    "monitoring_feature_flags": {
+      "ENABLE_AGENT1_REFRESH_VERIFICATION": false,
+      "ENABLE_DOCUMENT_RENEWAL_AUTOMATION": false,
+      "ENABLE_MONITORING_AUTO_RESOLUTION": false,
+      "ENABLE_MONITORING_SCREENING_CHANGE": false
+    },
+    "repository_base_sha": "4b8b27690fbe5e639494f39607e3257bc0feef2d",
+    "source_fingerprint": [
+      {
+        "md5_digest": "d41d8cd98f00b204e9800998ecf8427e",
+        "relation": "application_enhanced_requirements",
+        "row_count": 0
+      },
+      {
+        "md5_digest": "d41d8cd98f00b204e9800998ecf8427e",
+        "relation": "change_requests",
+        "row_count": 0
+      },
+      {
+        "md5_digest": "06e3e41858a3712488164917865f9afc",
+        "relation": "edd_cases",
+        "row_count": 2
+      },
+      {
+        "md5_digest": "fa2e8656510c9184f21a2163ac5382b1",
+        "relation": "monitoring_alert_audit_log",
+        "row_count": 295
+      },
+      {
+        "md5_digest": "e24308d420f121076a721514ec5cc664",
+        "relation": "monitoring_alert_evidence",
+        "row_count": 445
+      },
+      {
+        "md5_digest": "550cf672ab40b98d3ec177f12248ecb1",
+        "relation": "monitoring_alerts",
+        "row_count": 19
+      },
+      {
+        "md5_digest": "93e7fdd16411a03fa85c8caa2aba9e7e",
+        "relation": "periodic_reviews",
+        "row_count": 2
+      }
+    ],
+    "sql_statement_policy": "SELECT/WITH/SHOW only",
+    "transaction_read_only": true
+  },
+  "duplicate_groups": [],
+  "duplicate_source_reference_groups": [
+    {
+      "alert_ids": [
+        2,
+        55
+      ],
+      "source_identity_hmac_sha256": "7bb2abd4168c6782bb6bb5a8ff3fea5e7ea741ce84dc5c66f2a798d2a192435d"
+    }
+  ],
+  "multiple_workflow_owner_alerts": [],
+  "statistics": {
+    "broken_or_impossible_link_alerts": 0,
+    "duplicate_groups": 0,
+    "duplicate_source_reference_groups": 1,
+    "duplicates": 0,
+    "future_migration_candidates": 1,
+    "invalid": 0,
+    "legacy": 2,
+    "manual_review_required": 14,
+    "migration_ready": 4,
+    "missing_link_alerts": 4,
+    "missing_linkage": 4,
+    "multiple_workflow_owner_alerts": 0,
+    "open_exact": 13,
+    "orphaned": 4,
+    "per_alert_type": {
+      "Risk Drift": 1,
+      "Sanctions Match": 1,
+      "adverse_media": 3,
+      "document_expiry_missing": 4,
+      "manual_pr290_schema_validation": 1,
+      "media": 5,
+      "other": 1,
+      "pep": 1,
+      "sanctions": 2
+    },
+    "per_classification": {
+      "Legacy": 1,
+      "Orphaned": 4,
+      "Valid": 14
+    },
+    "per_owner_workflow": {
+      "Documents": 4,
+      "EDD": 2,
+      "Manual": 3,
+      "Periodic Review": 2,
+      "Screening Review": 8
+    },
+    "per_severity": {
+      "critical": 1,
+      "high": 1,
+      "low": 4,
+      "medium": 13
+    },
+    "per_status": {
+      "dismissed": 3,
+      "escalated": 1,
+      "in_review": 1,
+      "open": 13,
+      "resolved": 1
+    },
+    "per_status_validity": {
+      "Legacy": 2,
+      "Valid": 17
+    },
+    "resolved_exact": 1,
+    "terminal_total": 4,
+    "total_alerts": 19,
+    "unknown": 0,
+    "unresolved_similarity_groups": 4
+  },
+  "unresolved_similarity_groups": [
+    {
+      "alert_ids": [
+        608,
+        609
+      ],
+      "alert_type": "document_expiry_missing",
+      "application_id": "4a247758771c4220",
+      "assessment": "parallel unresolved alerts with distinct source identities",
+      "source_identity_count": 2,
+      "workflow_owner": "Documents"
+    },
+    {
+      "alert_ids": [
+        610,
+        611
+      ],
+      "alert_type": "document_expiry_missing",
+      "application_id": "85db5081e3454dd8",
+      "assessment": "parallel unresolved alerts with distinct source identities",
+      "source_identity_count": 2,
+      "workflow_owner": "Documents"
+    },
+    {
+      "alert_ids": [
+        586,
+        587
+      ],
+      "alert_type": "media",
+      "application_id": "f1xedqa000000006",
+      "assessment": "parallel unresolved alerts with distinct source identities",
+      "source_identity_count": 2,
+      "workflow_owner": "Screening Review"
+    },
+    {
+      "alert_ids": [
+        591,
+        592
+      ],
+      "alert_type": "media",
+      "application_id": "f1xedqa000000007",
+      "assessment": "parallel unresolved alerts with distinct source identities",
+      "source_identity_count": 2,
+      "workflow_owner": "Screening Review"
+    }
+  ]
+}

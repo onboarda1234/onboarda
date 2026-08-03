@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import lifecycle_linkage as ll
+import monitoring_alert_state_machine as sm
 
 logger = logging.getLogger("arie.monitoring_routing")
 
@@ -59,9 +60,8 @@ CRITICAL_SEVERITIES = ("critical",)
 # Roles accepted as a senior disposition authority for a critical dismissal.
 _SENIOR_DISPOSITION_ROLES = ("admin", "sco")
 
-# Alert statuses set by this module. The base `monitoring_alerts.status`
-# column is free-text in the schema (see arie-backend/db.py) so this
-# module is the source of truth for the routing-status vocabulary.
+# Backwards-compatible names for callers of this routing facade. The canonical
+# vocabulary and transition authority live in monitoring_alert_state_machine.
 STATUS_OPEN = "open"
 STATUS_TRIAGED = "triaged"
 STATUS_ASSIGNED = "assigned"
@@ -69,21 +69,18 @@ STATUS_DISMISSED = "dismissed"
 STATUS_ROUTED_REVIEW = "routed_to_review"
 STATUS_ROUTED_EDD = "routed_to_edd"
 STATUS_RESOLVED = "resolved"
-STATUS_CLOSED = "closed"
+TERMINAL_ALERT_STATUSES = tuple(sorted(sm.TERMINAL_STATUSES))
+HANDOFF_ALERT_STATUSES = tuple(sorted(sm.HANDOFF_STATUSES))
 
-TERMINAL_ALERT_STATUSES = (
-    STATUS_DISMISSED,
-    STATUS_ROUTED_REVIEW,
-    STATUS_ROUTED_EDD,
+# EDD stages considered "active" for duplicate-prevention. Together these
+# tuples mirror the CHECK constraint in db.py exactly; they are intentionally
+# duplicated rather than imported to avoid coupling to db.py internals.
+ACTIVE_EDD_STAGES = (
+    "triggered",
+    "information_gathering",
+    "analysis",
+    "pending_senior_review",
 )
-RESOLVED_ALERT_STATUS_ALIASES = (
-    STATUS_RESOLVED,
-    STATUS_CLOSED,
-)
-
-# EDD stages considered "active" for duplicate-prevention. Mirrors the
-# CHECK constraint in db.py exactly; intentionally duplicated rather
-# than imported to avoid coupling to db.py internals.
 TERMINAL_EDD_STAGES = ("edd_approved", "edd_rejected")
 
 
@@ -105,11 +102,11 @@ class InvalidDismissalReason(MonitoringRoutingError):
 
 
 class AlertAlreadyTerminal(MonitoringRoutingError):
-    """Raised when an action is attempted on an already-terminal alert.
+    """Raised when an action is attempted on an action-locked alert.
 
-    Terminal alerts (dismissed / routed_to_review / routed_to_edd) must
-    not be re-routed because doing so would either create duplicate
-    downstream objects or mute the original audit trail.
+    Terminal decisions and downstream handoffs must not be re-routed because
+    doing so would either create duplicate downstream objects or mute the
+    original audit trail. Handoffs remain nonterminal lifecycle states.
     """
 
 
@@ -169,15 +166,16 @@ def _row_get(row, key, default=None):
 
 
 def is_alert_terminal(alert_or_status, *, resolved_at=None):
-    """Return True when a monitoring alert should no longer be treated as open."""
+    """Return True only for an authoritative canonical terminal status.
+
+    ``resolved_at`` is retained in the signature for compatibility but is no
+    longer an independent lifecycle authority. Routed states are handoffs, not
+    terminal decisions.
+    """
     status = alert_or_status
     if isinstance(alert_or_status, dict) or hasattr(alert_or_status, "keys"):
         status = _row_get(alert_or_status, "status", STATUS_OPEN)
-        resolved_at = _row_get(alert_or_status, "resolved_at", resolved_at)
-    normalized = str(status or STATUS_OPEN).strip().lower()
-    if resolved_at not in (None, ""):
-        return True
-    return normalized in TERMINAL_ALERT_STATUSES or normalized in RESOLVED_ALERT_STATUS_ALIASES
+    return sm.is_terminal_status(status)
 
 
 def is_alert_unresolved(alert_or_status, *, resolved_at=None):
@@ -241,28 +239,22 @@ def _enforce_critical_dismissal_gate(alert_id, dismissal_notes, critical_clearan
         )
 
 
-def _set_alert_status(db, alert_id, *, status, officer_action,
-                      officer_notes, user):
-    """Single SQL update for the alert's officer-facing fields.
-
-    Kept narrow so that we never touch lifecycle-linkage columns from
-    here -- those are owned by lifecycle_linkage helpers.
-
-    RDI-007: this helper NO LONGER commits. Every public routing action
-    owns a single transaction and commits once at the end, so the status
-    update, lifecycle linkage, downstream row(s) and audit rows land (or
-    roll back) atomically.
-    """
+def _set_alert_metadata(db, alert_id, *, officer_action, officer_notes, user,
+                        reviewed_by=None):
+    """Update officer metadata without changing lifecycle state."""
     db.execute(
         "UPDATE monitoring_alerts SET "
-        "  status = ?, "
         "  officer_action = ?, "
         "  officer_notes = ?, "
         "  reviewed_at = CURRENT_TIMESTAMP, "
         "  reviewed_by = ? "
         "WHERE id = ?",
-        (status, officer_action, officer_notes,
-         (user or {}).get("sub", ""), alert_id),
+        (
+            officer_action,
+            officer_notes,
+            reviewed_by if reviewed_by is not None else (user or {}).get("sub", ""),
+            alert_id,
+        ),
     )
 
 
@@ -298,8 +290,25 @@ def _emit_routing_audit(audit_writer, user, action, alert_id,
     )
 
 
+def _alert_identity_evidence(alert):
+    source_reference = str(_row_get(alert, "source_reference", "") or "").strip()
+    if source_reference:
+        return {"source_reference": source_reference}
+    case_identifier = str(_row_get(alert, "case_identifier", "") or "").strip()
+    if case_identifier:
+        return {"case_identifier": case_identifier}
+    raise sm.MissingEvidence(
+        "The alert has no source_reference or case_identifier for controlled triage."
+    )
+
+
+def _finish(db, *, commit):
+    if commit:
+        db.commit()
+
+
 # ── Public actions -------------------------------------------------
-def triage_alert(db, alert_id, *, user, audit_writer):
+def triage_alert(db, alert_id, *, user, audit_writer, commit=True):
     """Mark a monitoring alert as triaged.
 
     Idempotent: re-triaging an already-triaged alert is a no-op for the
@@ -307,86 +316,138 @@ def triage_alert(db, alert_id, *, user, audit_writer):
     public status field to ``triaged`` if the alert is still ``open``.
     """
     _require_audit_writer(audit_writer)
-    alert = _fetch_alert(db, alert_id)
-    prior_status = _row_get(alert, "status", STATUS_OPEN)
-
-    # RDI-007: one transaction — linkage, status and routing audit commit
-    # together or roll back together.
     try:
-        ll.mark_alert_triaged(db, alert_id, user=user, audit_writer=audit_writer,
-                              commit=False)
-
-        new_status = prior_status
-        if prior_status == STATUS_OPEN:
-            new_status = STATUS_TRIAGED
-            _set_alert_status(
-                db, alert_id,
-                status=new_status,
-                officer_action="triage",
-                officer_notes=_row_get(alert, "officer_notes", "") or "",
-                user=user,
-            )
-
-        _emit_routing_audit(
-            audit_writer, user, "monitoring.alert.triaged", alert_id,
-            {"alert_id": alert_id, "status": new_status},
+        alert = sm.lock_alert_for_transition(db, alert_id)
+        prior_status = _row_get(alert, "status", STATUS_OPEN)
+        if prior_status == STATUS_TRIAGED:
+            _finish(db, commit=commit)
+            return {
+                "alert_id": alert_id,
+                "status": STATUS_TRIAGED,
+                "changed": False,
+                "state_machine_version": sm.STATE_MACHINE_VERSION,
+            }
+        result = sm.transition_alert_status(
             db,
-            before_state={"status": prior_status},
-            after_state={"status": new_status},
+            alert_id,
+            expected_status=prior_status,
+            target_status=STATUS_TRIAGED,
+            actor=user,
+            source_workflow="monitoring",
+            reason_code="triage",
+            reason="Monitoring Alert triaged by an authorised officer.",
+            evidence=_alert_identity_evidence(alert),
+            commit=False,
         )
-        db.commit()
-    except Exception:
-        _safe_rollback(db)
-        raise
-    return {"alert_id": alert_id, "status": new_status}
-
-
-def assign_alert(db, alert_id, *, user, audit_writer):
-    """Mark a monitoring alert as assigned to the acting officer.
-
-    Refuses to assign an already-resolved alert via lifecycle_linkage's
-    InvalidLifecycleTransition.
-    """
-    _require_audit_writer(audit_writer)
-    alert = _fetch_alert(db, alert_id)
-    prior_status = _row_get(alert, "status", STATUS_OPEN)
-
-    if prior_status in TERMINAL_ALERT_STATUSES:
-        raise AlertAlreadyTerminal(
-            f"cannot assign alert id={alert_id} in terminal status={prior_status!r}"
-        )
-
-    new_status = STATUS_ASSIGNED
-    # RDI-007: single atomic transaction.
-    try:
-        ll.mark_alert_assigned(db, alert_id, user=user, audit_writer=audit_writer,
-                               commit=False)
-
-        _set_alert_status(
-            db, alert_id,
-            status=new_status,
-            officer_action="assign",
+        _set_alert_metadata(
+            db,
+            alert_id,
+            officer_action="triage",
             officer_notes=_row_get(alert, "officer_notes", "") or "",
             user=user,
         )
+        _emit_routing_audit(
+            audit_writer, user, "monitoring.alert.triaged", alert_id,
+            {
+                "alert_id": alert_id,
+                "status": STATUS_TRIAGED,
+                "state_machine_version": sm.STATE_MACHINE_VERSION,
+            },
+            db,
+            before_state={"status": prior_status},
+            after_state={"status": STATUS_TRIAGED},
+        )
+        _finish(db, commit=commit)
+        return {
+            "alert_id": alert_id,
+            "status": STATUS_TRIAGED,
+            "changed": result["changed"],
+            "state_machine_version": sm.STATE_MACHINE_VERSION,
+        }
+    except sm.AlertNotFound as exc:
+        _safe_rollback(db)
+        raise AlertNotFound(f"monitoring_alert id={alert_id} not found") from exc
+    except Exception:
+        _safe_rollback(db)
+        raise
 
+
+def assign_alert(db, alert_id, *, user, audit_writer, assignee_id=None,
+                 commit=True):
+    """Assign an active alert without rewriting later workflow states."""
+    _require_audit_writer(audit_writer)
+    assignee = str(assignee_id or (user or {}).get("sub", "") or "").strip()
+    try:
+        alert = sm.lock_alert_for_transition(db, alert_id)
+        prior_status = str(_row_get(alert, "status", STATUS_OPEN) or "")
+        if prior_status in sm.TERMINAL_STATUSES or prior_status in sm.HANDOFF_STATUSES:
+            raise AlertAlreadyTerminal(
+                f"cannot assign alert id={alert_id} in status={prior_status!r}"
+            )
+        sm.validate_assignment_authority(db, user, assignee)
+        changed = prior_status in {STATUS_OPEN, STATUS_TRIAGED}
+        if changed:
+            sm.transition_alert_status(
+                db,
+                alert_id,
+                expected_status=prior_status,
+                target_status=STATUS_ASSIGNED,
+                actor=user,
+                source_workflow="monitoring",
+                reason_code="assign",
+                reason="Monitoring Alert assigned to an active officer.",
+                evidence={"officer_id": assignee},
+                commit=False,
+            )
+            new_status = STATUS_ASSIGNED
+        elif prior_status in {STATUS_ASSIGNED, "in_review", "escalated"}:
+            new_status = prior_status
+        else:
+            raise sm.InvalidTransition(
+                f"Assignment is prohibited from status {prior_status!r}."
+            )
+        _set_alert_metadata(
+            db,
+            alert_id,
+            officer_action="assign",
+            officer_notes=_row_get(alert, "officer_notes", "") or "",
+            user=user,
+            reviewed_by=assignee,
+        )
         _emit_routing_audit(
             audit_writer, user, "monitoring.alert.assigned", alert_id,
-            {"alert_id": alert_id, "assignee": (user or {}).get("sub", "")},
+            {
+                "alert_id": alert_id,
+                "assignee": assignee,
+                "status_changed": changed,
+                "state_machine_version": sm.STATE_MACHINE_VERSION,
+            },
             db,
             before_state={"status": prior_status},
             after_state={"status": new_status},
         )
-        db.commit()
+        _finish(db, commit=commit)
+        return {
+            "alert_id": alert_id,
+            "status": new_status,
+            "changed": changed,
+            "owner_id": assignee,
+            "state_machine_version": sm.STATE_MACHINE_VERSION,
+        }
+    except sm.AlertNotFound as exc:
+        _safe_rollback(db)
+        raise AlertNotFound(f"monitoring_alert id={alert_id} not found") from exc
     except Exception:
         _safe_rollback(db)
         raise
-    return {"alert_id": alert_id, "status": new_status}
 
 
 def dismiss_alert(db, alert_id, *, dismissal_reason,
                   dismissal_notes=None, user, audit_writer,
-                  critical_clearance=None):
+                  critical_clearance=None, review_request_id=None,
+                  screening_case_id=None, document_id=None,
+                  document_request_id=None, transition_evidence=None,
+                  commit=True):
     """Dismiss a monitoring alert with a structured reason.
 
     A dismissed alert is terminal: it records who dismissed it, when,
@@ -408,18 +469,6 @@ def dismiss_alert(db, alert_id, *, dismissal_reason,
             f"{VALID_DISMISSAL_REASONS}"
         )
 
-    alert = _fetch_alert(db, alert_id)
-    prior_status = _row_get(alert, "status", STATUS_OPEN)
-    if prior_status in TERMINAL_ALERT_STATUSES:
-        raise AlertAlreadyTerminal(
-            f"cannot dismiss alert id={alert_id} in terminal status={prior_status!r}"
-        )
-
-    # RDI-008: severity gate — fail closed before any mutation.
-    is_critical = _is_critical_severity(alert)
-    if is_critical:
-        _enforce_critical_dismissal_gate(alert_id, dismissal_notes, critical_clearance, user)
-
     structured_notes = json.dumps({
         "dismissal_reason": dismissal_reason,
         "dismissal_notes": dismissal_notes or "",
@@ -427,17 +476,67 @@ def dismiss_alert(db, alert_id, *, dismissal_reason,
         "dismissed_at": _utcnow_iso(),
     }, sort_keys=True)
 
-    # RDI-007: resolved_at, dismissed status and the routing audit are one
-    # atomic transaction — they commit together or roll back together.
     try:
-        # Persist the resolved_at timestamp via the PR-01 helper (also emits
-        # the lifecycle.alert.resolved audit event into the open transaction).
-        ll.mark_alert_resolved(db, alert_id, user=user, audit_writer=audit_writer,
-                               commit=False)
+        alert = sm.lock_alert_for_transition(db, alert_id)
+        prior_status = str(_row_get(alert, "status", STATUS_OPEN) or "")
+        if prior_status in sm.TERMINAL_STATUSES or prior_status in sm.HANDOFF_STATUSES:
+            raise AlertAlreadyTerminal(
+                f"cannot dismiss alert id={alert_id} in status={prior_status!r}"
+            )
 
-        _set_alert_status(
-            db, alert_id,
-            status=STATUS_DISMISSED,
+        is_critical = _is_critical_severity(alert)
+        if is_critical:
+            _enforce_critical_dismissal_gate(
+                alert_id, dismissal_notes, critical_clearance, user
+            )
+
+        evidence = dict(transition_evidence or {})
+        evidence.update({
+            "dismissal_reason": dismissal_reason,
+            "officer_rationale": str(dismissal_notes or "").strip()
+            or f"Dismissed as {dismissal_reason}.",
+        })
+        for key, value in (
+            ("review_request_id", review_request_id),
+            ("screening_case_id", screening_case_id),
+            ("document_id", document_id),
+            ("document_request_id", document_request_id),
+        ):
+            if value not in (None, ""):
+                evidence[key] = value
+        owner = sm.alert_owner(db, alert)
+        stored_case = str(_row_get(alert, "case_identifier", "") or "").strip()
+        if owner == "screening_review" and stored_case:
+            evidence["case_identifier"] = stored_case
+        source_reference = str(
+            _row_get(alert, "source_reference", "") or ""
+        ).strip()
+        if (
+            owner == "documents"
+            and "document_id" not in evidence
+            and "document_request_id" not in evidence
+            and source_reference.startswith("document:")
+        ):
+            linked_document_id = source_reference.split(":", 1)[1].strip()
+            if linked_document_id:
+                evidence["document_id"] = linked_document_id
+
+        transition = sm.transition_alert_status(
+            db,
+            alert_id,
+            expected_status=prior_status,
+            target_status=STATUS_DISMISSED,
+            actor=user,
+            source_workflow="monitoring",
+            reason_code=f"dismiss_{dismissal_reason}",
+            reason=str(dismissal_notes or "").strip()
+            or f"Monitoring Alert dismissed as {dismissal_reason}.",
+            evidence=evidence,
+            commit=False,
+        )
+        _set_alert_metadata(
+            db,
+            alert_id,
             officer_action="dismiss",
             officer_notes=structured_notes,
             user=user,
@@ -450,13 +549,17 @@ def dismiss_alert(db, alert_id, *, dismissal_reason,
                 "dismissal_reason": dismissal_reason,
                 "has_notes": bool(dismissal_notes),
                 "critical_gate_applied": is_critical,
+                "state_machine_version": sm.STATE_MACHINE_VERSION,
             },
             db,
             before_state={"status": prior_status},
             after_state={"status": STATUS_DISMISSED,
                          "dismissal_reason": dismissal_reason},
         )
-        db.commit()
+        _finish(db, commit=commit)
+    except sm.AlertNotFound as exc:
+        _safe_rollback(db)
+        raise AlertNotFound(f"monitoring_alert id={alert_id} not found") from exc
     except Exception:
         _safe_rollback(db)
         raise
@@ -464,6 +567,8 @@ def dismiss_alert(db, alert_id, *, dismissal_reason,
         "alert_id": alert_id,
         "status": STATUS_DISMISSED,
         "dismissal_reason": dismissal_reason,
+        "changed": transition["changed"],
+        "state_machine_version": sm.STATE_MACHINE_VERSION,
     }
 
 
@@ -561,61 +666,207 @@ def _create_edd_case_row(db, *, application_id, client_name, risk_level,
     ).fetchone()["id"]
 
 
-def _find_active_edd_for_application(db, application_id):
-    """Return the id of an existing non-terminal EDD case for the
-    given application, or None. Used to avoid duplicate active EDD
-    creation when multiple alerts on the same application all route
-    to EDD.
+def _lock_application_for_edd_routing(db, application_id):
+    """Serialize EDD routing for one application and verify its linkage."""
+    lock_clause = " FOR UPDATE" if getattr(db, "is_postgres", False) else ""
+    row = db.execute(
+        f"SELECT id FROM applications WHERE id = ?{lock_clause}",
+        (application_id,),
+    ).fetchone()
+    if row is None:
+        raise sm.LinkedObjectMissing(
+            "The Monitoring Alert's linked application does not exist."
+        )
+
+
+def _active_edds_for_application(db, application_id):
+    """Return every locked active EDD case for an application.
+
+    Callers hold the application row lock first. Querying all active cases,
+    including cases owned by another alert or review, prevents an ownership
+    conflict from being misread as permission to create a duplicate case.
     """
     if application_id is None:
-        return None
+        return ()
     placeholders = ",".join("?" for _ in TERMINAL_EDD_STAGES)
+    lock_clause = (
+        " FOR UPDATE"
+        if getattr(db, "is_postgres", False)
+        else ""
+    )
     rows = db.execute(
         f"SELECT * FROM edd_cases "
-        f"WHERE application_id = ? AND stage NOT IN ({placeholders}) "
-        f"ORDER BY id ASC",
+        f"WHERE application_id = ? "
+        f"AND (stage IS NULL OR stage NOT IN ({placeholders})) "
+        f"ORDER BY id ASC{lock_clause}",
         (application_id, *TERMINAL_EDD_STAGES),
     ).fetchall()
-    try:
-        from investigation_scope import is_routine_onboarding_policy_case
-    except Exception:
-        is_routine_onboarding_policy_case = None
-    formal_reusable_sources = {
-        "monitoring_alert",
-        "periodic_review",
-        "change_request",
-        "manual",
-        "manual_onboarding_escalation",
-        "onboarding_escalation",
-        "officer_decision",
-        "officer_correction",
-        "screening_update",
-    }
-    for row in rows:
-        if is_routine_onboarding_policy_case and is_routine_onboarding_policy_case(row):
-            continue
-        origin = str(_row_get(row, "origin_context", "") or "").strip().lower()
-        trigger_source = str(_row_get(row, "trigger_source", "") or "").strip().lower()
-        linked_alert = _row_get(row, "linked_monitoring_alert_id")
-        linked_review = _row_get(row, "linked_periodic_review_id")
-        if (
-            origin not in formal_reusable_sources
-            and trigger_source not in formal_reusable_sources
-            and linked_alert in (None, "")
-            and linked_review in (None, "")
-        ):
-            # Legacy active rows without an origin/source are ambiguous. Do
-            # not let a real monitoring alert attach to routine onboarding
-            # policy debris; create a monitoring-origin case instead.
-            continue
-        return row["id"]
-    return None
+    return tuple(dict(row) for row in rows)
+
+
+def _reject_unlinked_active_edds(active_rows, *, alert_id):
+    """Fail closed when any active EDD is not the alert's exact known link.
+
+    An EDD without a reverse owner pointer is not safe for Monitoring to claim:
+    its origin/trigger fields may be the only surviving downstream provenance.
+    A future cross-workflow association model may support non-destructive
+    multi-source linkage; v1 must not overwrite that evidence.
+    """
+    if not active_rows:
+        return
+    if len(active_rows) != 1:
+        raise sm.AmbiguousAlertOwner(
+            "Multiple active EDD cases already exist for this application."
+        )
+
+    active = active_rows[0]
+    if _row_get(active, "stage") not in ACTIVE_EDD_STAGES:
+        raise sm.AmbiguousAlertOwner(
+            "An active EDD case has an invalid or missing stage and cannot "
+            "be reused safely."
+        )
+    linked_alert = _row_get(active, "linked_monitoring_alert_id")
+    linked_review = _row_get(active, "linked_periodic_review_id")
+    if linked_alert not in (None, ""):
+        if str(linked_alert) == str(alert_id):
+            raise sm.EvidenceLinkMismatch(
+                "The active EDD case points to this alert but the alert linkage "
+                "is incomplete."
+            )
+        raise sm.AmbiguousAlertOwner(
+            "An active EDD case is already owned by another Monitoring Alert."
+        )
+    if linked_review not in (None, ""):
+        raise sm.AmbiguousAlertOwner(
+            "An active EDD case is already owned by Periodic Review."
+        )
+    raise sm.AmbiguousAlertOwner(
+        "An active EDD case already exists without an exact link to this "
+        "Monitoring Alert; its provenance cannot be overwritten."
+    )
+
+
+def _require_only_active_edd_link(active_rows, *, alert_id, edd_case_id):
+    """Require the alert's exact link to be the only active EDD case.
+
+    The alert and application rows are already locked by the caller.  Checking
+    the complete active set prevents an otherwise-valid exact link from hiding
+    a second active case on the same application.
+    """
+    if len(active_rows) != 1:
+        if len(active_rows) > 1:
+            raise sm.AmbiguousAlertOwner(
+                "Multiple active EDD cases already exist for this application."
+            )
+        raise sm.EvidenceLinkMismatch(
+            "The linked active EDD case was not found for this application."
+        )
+
+    active = active_rows[0]
+    if _row_get(active, "stage") not in ACTIVE_EDD_STAGES:
+        raise sm.AmbiguousAlertOwner(
+            "The linked active EDD case has an invalid or missing stage."
+        )
+    if str(_row_get(active, "id") or "") != str(edd_case_id):
+        raise sm.AmbiguousAlertOwner(
+            "A different active EDD case already exists for this application."
+        )
+    if str(_row_get(active, "linked_monitoring_alert_id") or "") != str(alert_id):
+        raise sm.EvidenceLinkMismatch(
+            "The linked active EDD case does not point back to this "
+            "Monitoring Alert."
+        )
+    if _row_get(active, "linked_periodic_review_id") not in (None, ""):
+        raise sm.AmbiguousAlertOwner(
+            "The linked active EDD case is also owned by Periodic Review."
+        )
+
+
+def _load_periodic_review_for_routing(db, review_id):
+    lock_clause = " FOR UPDATE" if getattr(db, "is_postgres", False) else ""
+    row = db.execute(
+        f"SELECT * FROM periodic_reviews WHERE id = ?{lock_clause}",
+        (review_id,),
+    ).fetchone()
+    if row is None:
+        raise sm.LinkedObjectMissing("The linked periodic review does not exist.")
+    return dict(row)
+
+
+def _load_edd_for_routing(db, edd_case_id):
+    lock_clause = " FOR UPDATE" if getattr(db, "is_postgres", False) else ""
+    row = db.execute(
+        f"SELECT * FROM edd_cases WHERE id = ?{lock_clause}",
+        (edd_case_id,),
+    ).fetchone()
+    if row is None:
+        raise sm.LinkedObjectMissing("The linked EDD case does not exist.")
+    return dict(row)
+
+
+def _validate_periodic_review_link(alert, review, *, allow_closed):
+    alert_id = _row_get(alert, "id")
+    review_id = _row_get(review, "id")
+    alert_application_id = _row_get(alert, "application_id")
+    review_application_id = _row_get(review, "application_id")
+    if (
+        alert_application_id in (None, "")
+        or review_application_id in (None, "")
+        or str(alert_application_id) != str(review_application_id)
+    ):
+        raise sm.EvidenceLinkMismatch(
+            "The linked periodic review has missing or conflicting application "
+            "linkage."
+        )
+    if str(_row_get(alert, "linked_periodic_review_id") or "") != str(review_id):
+        raise sm.EvidenceLinkMismatch(
+            "The Monitoring Alert does not point to the linked periodic review."
+        )
+    if str(_row_get(review, "linked_monitoring_alert_id") or "") != str(alert_id):
+        raise sm.EvidenceLinkMismatch(
+            "The periodic review does not point back to this Monitoring Alert."
+        )
+    review_status = str(_row_get(review, "status") or "").strip().lower()
+    if not allow_closed and (
+        _row_get(review, "closed_at") not in (None, "")
+        or review_status in {"completed", "cancelled", "canceled"}
+    ):
+        raise sm.InvalidTransition(
+            "A closed periodic review cannot receive a Monitoring Alert handoff."
+        )
+
+
+def _validate_edd_link(alert, edd, *, allow_terminal):
+    alert_id = _row_get(alert, "id")
+    edd_case_id = _row_get(edd, "id")
+    alert_application_id = _row_get(alert, "application_id")
+    edd_application_id = _row_get(edd, "application_id")
+    if (
+        alert_application_id in (None, "")
+        or edd_application_id in (None, "")
+        or str(alert_application_id) != str(edd_application_id)
+    ):
+        raise sm.EvidenceLinkMismatch(
+            "The linked EDD case has missing or conflicting application linkage."
+        )
+    if str(_row_get(alert, "linked_edd_case_id") or "") != str(edd_case_id):
+        raise sm.EvidenceLinkMismatch(
+            "The Monitoring Alert does not point to the linked EDD case."
+        )
+    if str(_row_get(edd, "linked_monitoring_alert_id") or "") != str(alert_id):
+        raise sm.EvidenceLinkMismatch(
+            "The EDD case does not point back to this Monitoring Alert."
+        )
+    if not allow_terminal and _row_get(edd, "stage") in TERMINAL_EDD_STAGES:
+        raise sm.InvalidTransition(
+            "A terminal EDD case cannot receive a Monitoring Alert handoff."
+        )
 
 
 def route_alert_to_periodic_review(db, alert_id, *,
                                    review_reason=None,
                                    priority=None,
-                                   user, audit_writer):
+                                   user, audit_writer, commit=True):
     """Route a monitoring alert to a real periodic review.
 
     Behaviour:
@@ -634,29 +885,56 @@ def route_alert_to_periodic_review(db, alert_id, *,
       deterministic instead of producing duplicate downstream objects.
     """
     _require_audit_writer(audit_writer)
-    alert = _fetch_alert(db, alert_id)
-    prior_status = _row_get(alert, "status", STATUS_OPEN)
-    application_id = _row_get(alert, "application_id")
-    client_name = _row_get(alert, "client_name", "")
-
-    if prior_status in (STATUS_DISMISSED,):
-        raise AlertAlreadyTerminal(
-            f"cannot route dismissed alert id={alert_id} to review"
-        )
-
-    existing_review_id = _row_get(alert, "linked_periodic_review_id")
-    created = False
-    reused = False
-    review_id = existing_review_id
-    new_status = STATUS_ROUTED_REVIEW
-
-    # RDI-007: downstream review creation, linkage, status transition and the
-    # routing audit are one atomic transaction.
     try:
+        alert = sm.lock_alert_for_transition(db, alert_id)
+        prior_status = str(_row_get(alert, "status", STATUS_OPEN) or "")
+        application_id = _row_get(alert, "application_id")
+        client_name = _row_get(alert, "client_name", "")
+        existing_review_id = _row_get(alert, "linked_periodic_review_id")
+        created = False
+        reused = False
+        review_id = existing_review_id
+        new_status = STATUS_ROUTED_REVIEW
+
+        if prior_status == STATUS_ROUTED_REVIEW:
+            if existing_review_id in (None, ""):
+                raise sm.EvidenceLinkMismatch(
+                    "The routed Monitoring Alert has no periodic review linkage."
+                )
+            existing_review = _load_periodic_review_for_routing(
+                db, existing_review_id
+            )
+            _validate_periodic_review_link(
+                alert,
+                existing_review,
+                allow_closed=True,
+            )
+            _finish(db, commit=commit)
+            return {
+                "alert_id": alert_id,
+                "periodic_review_id": existing_review_id,
+                "created": False,
+                "reused": True,
+                "status": new_status,
+                "changed": False,
+                "state_machine_version": sm.STATE_MACHINE_VERSION,
+            }
+        if prior_status in sm.TERMINAL_STATUSES or prior_status in sm.HANDOFF_STATUSES:
+            raise AlertAlreadyTerminal(
+                f"cannot route alert id={alert_id} from status={prior_status!r}"
+            )
+
         if existing_review_id is not None:
-            # Already linked: reuse and short-circuit. We deliberately do
-            # NOT re-emit lifecycle.link.alert_to_review.created because
-            # the link has not changed.
+            existing_review = _load_periodic_review_for_routing(
+                db, existing_review_id
+            )
+            _validate_periodic_review_link(
+                alert,
+                existing_review,
+                allow_closed=False,
+            )
+            # The exact bidirectional link is already present; reuse it without
+            # emitting another link-created event.
             reused = True
         else:
             # Create the downstream review, then bidirectionally link.
@@ -689,9 +967,21 @@ def route_alert_to_periodic_review(db, alert_id, *,
                 )
             created = True
 
-        _set_alert_status(
-            db, alert_id,
-            status=new_status,
+        transition = sm.transition_alert_status(
+            db,
+            alert_id,
+            expected_status=prior_status,
+            target_status=new_status,
+            actor=user,
+            source_workflow="monitoring",
+            reason_code="route_to_periodic_review",
+            reason=review_reason or "Monitoring Alert routed to Periodic Review.",
+            evidence={"periodic_review_id": review_id},
+            commit=False,
+        )
+        _set_alert_metadata(
+            db,
+            alert_id,
             officer_action="route_to_periodic_review",
             officer_notes=review_reason or _row_get(alert, "officer_notes", "") or "",
             user=user,
@@ -704,6 +994,7 @@ def route_alert_to_periodic_review(db, alert_id, *,
                 "periodic_review_id": review_id,
                 "created": created,
                 "reused": reused,
+                "state_machine_version": sm.STATE_MACHINE_VERSION,
             },
             db,
             before_state={"status": prior_status,
@@ -711,7 +1002,10 @@ def route_alert_to_periodic_review(db, alert_id, *,
             after_state={"status": new_status,
                          "linked_periodic_review_id": review_id},
         )
-        db.commit()
+        _finish(db, commit=commit)
+    except sm.AlertNotFound as exc:
+        _safe_rollback(db)
+        raise AlertNotFound(f"monitoring_alert id={alert_id} not found") from exc
     except Exception:
         _safe_rollback(db)
         raise
@@ -722,80 +1016,99 @@ def route_alert_to_periodic_review(db, alert_id, *,
         "created": created,
         "reused": reused,
         "status": new_status,
+        "changed": transition["changed"],
+        "state_machine_version": sm.STATE_MACHINE_VERSION,
     }
 
 
 def route_alert_to_edd(db, alert_id, *,
                        trigger_notes=None,
                        priority=None,
-                       user, audit_writer):
+                       user, audit_writer, commit=True):
     """Route a monitoring alert to a real EDD case.
 
     Behaviour:
     - If the alert is already linked to an EDD case AND that case is
       not in a terminal stage (edd_approved / edd_rejected), reuse it
       and emit a routing audit event with ``reused=True``.
-    - Else if there is any other active EDD case on the same
-      application, link to it and reuse it. This matches the existing
-      duplicate-prevention rule in EDDCreateHandler.post (server.py).
+    - Any other active EDD on the application fails closed. V1 never claims
+      an unlinked case or overwrites another workflow's provenance.
     - Else create a new edd_cases row, set origin_context to
       'monitoring_alert' via lifecycle_linkage.set_edd_origin, and
       bidirectionally link via lifecycle_linkage.link_alert_to_edd.
     - Refuse to route a dismissed alert.
     """
     _require_audit_writer(audit_writer)
-    alert = _fetch_alert(db, alert_id)
-    prior_status = _row_get(alert, "status", STATUS_OPEN)
-    application_id = _row_get(alert, "application_id")
-    client_name = _row_get(alert, "client_name", "")
-
-    if prior_status == STATUS_DISMISSED:
-        raise AlertAlreadyTerminal(
-            f"cannot route dismissed alert id={alert_id} to EDD"
-        )
-
-    if application_id is None:
-        raise MonitoringRoutingError(
-            f"alert id={alert_id} has no application_id; cannot create EDD case"
-        )
-
-    existing_link_id = _row_get(alert, "linked_edd_case_id")
-    created = False
-    reused = False
-    edd_case_id = None
-    new_status = STATUS_ROUTED_EDD
-
-    # RDI-007: EDD reuse/link/create, status transition and the routing audit
-    # are one atomic transaction.
     try:
+        alert = sm.lock_alert_for_transition(db, alert_id)
+        prior_status = str(_row_get(alert, "status", STATUS_OPEN) or "")
+        application_id = _row_get(alert, "application_id")
+        client_name = _row_get(alert, "client_name", "")
+        existing_link_id = _row_get(alert, "linked_edd_case_id")
+        created = False
+        reused = False
+        edd_case_id = None
+        new_status = STATUS_ROUTED_EDD
+
+        if prior_status == STATUS_ROUTED_EDD:
+            if existing_link_id in (None, ""):
+                raise sm.EvidenceLinkMismatch(
+                    "The routed Monitoring Alert has no EDD case linkage."
+                )
+            if application_id is None:
+                raise MonitoringRoutingError(
+                    f"alert id={alert_id} has no application_id; cannot route to EDD"
+                )
+            _lock_application_for_edd_routing(db, application_id)
+            active_edds = _active_edds_for_application(db, application_id)
+            existing_edd = _load_edd_for_routing(db, existing_link_id)
+            _validate_edd_link(alert, existing_edd, allow_terminal=True)
+            if _row_get(existing_edd, "stage") not in TERMINAL_EDD_STAGES:
+                _require_only_active_edd_link(
+                    active_edds,
+                    alert_id=alert_id,
+                    edd_case_id=existing_link_id,
+                )
+            _finish(db, commit=commit)
+            return {
+                "alert_id": alert_id,
+                "edd_case_id": existing_link_id,
+                "created": False,
+                "reused": True,
+                "status": new_status,
+                "changed": False,
+                "state_machine_version": sm.STATE_MACHINE_VERSION,
+            }
+        if prior_status in sm.TERMINAL_STATUSES or prior_status in sm.HANDOFF_STATUSES:
+            raise AlertAlreadyTerminal(
+                f"cannot route alert id={alert_id} from status={prior_status!r}"
+            )
+        if application_id is None:
+            raise MonitoringRoutingError(
+                f"alert id={alert_id} has no application_id; cannot create EDD case"
+            )
+        _lock_application_for_edd_routing(db, application_id)
+        active_edds = _active_edds_for_application(db, application_id)
+
         if existing_link_id is not None:
-            # Check whether the linked case is still active.
-            linked = db.execute(
-                "SELECT id, stage FROM edd_cases WHERE id = ?",
-                (existing_link_id,),
-            ).fetchone()
-            if linked and _row_get(linked, "stage") not in TERMINAL_EDD_STAGES:
-                edd_case_id = existing_link_id
-                reused = True
+            linked = _load_edd_for_routing(db, existing_link_id)
+            _validate_edd_link(alert, linked, allow_terminal=False)
+            _require_only_active_edd_link(
+                active_edds,
+                alert_id=alert_id,
+                edd_case_id=existing_link_id,
+            )
+            edd_case_id = existing_link_id
+            reused = True
 
         if edd_case_id is None:
-            # Look for any other active EDD case on the same application.
-            active_id = _find_active_edd_for_application(db, application_id)
-            if active_id is not None:
-                edd_case_id = active_id
-                ll.link_alert_to_edd(
-                    db, alert_id, edd_case_id,
-                    user=user, audit_writer=audit_writer, commit=False,
-                )
-                ll.set_edd_origin(
-                    db, edd_case_id,
-                    origin_context="monitoring_alert",
-                    linked_monitoring_alert_id=alert_id,
-                    user=user,
-                    audit_writer=audit_writer,
-                    commit=False,
-                )
-                reused = True
+            # The application lock serializes all Monitoring routes. Inspect
+            # every active case: owned, ambiguous, or duplicate cases fail
+            # closed instead of being mistaken for permission to create one.
+            _reject_unlinked_active_edds(
+                active_edds,
+                alert_id=alert_id,
+            )
 
         if edd_case_id is None:
             # No active EDD anywhere — create one.
@@ -827,9 +1140,21 @@ def route_alert_to_edd(db, alert_id, *,
                 )
             created = True
 
-        _set_alert_status(
-            db, alert_id,
-            status=new_status,
+        transition = sm.transition_alert_status(
+            db,
+            alert_id,
+            expected_status=prior_status,
+            target_status=new_status,
+            actor=user,
+            source_workflow="monitoring",
+            reason_code="route_to_edd",
+            reason=trigger_notes or "Monitoring Alert routed to EDD.",
+            evidence={"edd_case_id": edd_case_id},
+            commit=False,
+        )
+        _set_alert_metadata(
+            db,
+            alert_id,
             officer_action="route_to_edd",
             officer_notes=trigger_notes or _row_get(alert, "officer_notes", "") or "",
             user=user,
@@ -842,6 +1167,7 @@ def route_alert_to_edd(db, alert_id, *,
                 "edd_case_id": edd_case_id,
                 "created": created,
                 "reused": reused,
+                "state_machine_version": sm.STATE_MACHINE_VERSION,
             },
             db,
             before_state={"status": prior_status,
@@ -849,7 +1175,10 @@ def route_alert_to_edd(db, alert_id, *,
             after_state={"status": new_status,
                          "linked_edd_case_id": edd_case_id},
         )
-        db.commit()
+        _finish(db, commit=commit)
+    except sm.AlertNotFound as exc:
+        _safe_rollback(db)
+        raise AlertNotFound(f"monitoring_alert id={alert_id} not found") from exc
     except Exception:
         _safe_rollback(db)
         raise
@@ -860,4 +1189,6 @@ def route_alert_to_edd(db, alert_id, *,
         "created": created,
         "reused": reused,
         "status": new_status,
+        "changed": transition["changed"],
+        "state_machine_version": sm.STATE_MACHINE_VERSION,
     }

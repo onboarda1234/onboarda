@@ -209,7 +209,7 @@ def test_psc_branches_render_clear_compliance_review_messages():
     assert "psc_exempt" in render_body
     assert "corporate_psc" in render_body
     assert "These are candidates for compliance review, not final approved UBOs." in render_body
-    assert "Companies House did not return an active PSC record. ARIE may still require ownership confirmation during compliance review." in render_body
+    assert "Companies House did not return an active PSC record. The compliance team may still require ownership confirmation during review." in render_body
     assert "Companies House indicates PSC information may be exempt or unavailable. This will be flagged for compliance review." in render_body
     assert "A corporate PSC candidate was returned. A structure chart / ownership explanation may be required later." in render_body
 

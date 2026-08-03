@@ -19,7 +19,8 @@ def test_day6_deployment_observability_ledger_is_documented():
     assert "/ecs/regmind-staging" in runbook
     assert "arie-backend/scripts/qa/day5_closing_smoke.py" in runbook
     assert "applications_report_v1" in runbook
-    assert "regmind-staging:<REVISION>" in runbook
+    assert "Previous backend and worker task-definition ARNs" in runbook
+    assert "shared immutable image tag and digest" in runbook
 
 
 def test_day6_smoke_command_uses_token_env_not_literal_token():

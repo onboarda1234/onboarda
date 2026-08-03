@@ -33,6 +33,9 @@ _S3_METADATA_VALUE_UNSAFE_RE = re.compile(r"[^A-Za-z0-9 +\-=._:/@]")
 _S3_MAX_OBJECT_TAGS = 10
 _S3_MAX_USER_METADATA_BYTES = 2048
 _S3_ORIGINAL_FILENAME_METADATA_KEY = "original-filename-b64"
+_MONITORING_RENEWAL_CANDIDATE_SEGMENT = "monitoring_renewal_candidate"
+_MONITORING_RENEWAL_KEY_PART_RE = re.compile(r"^[A-Za-z0-9._=-]{1,120}$")
+_MONITORING_RENEWAL_FILE_RE = re.compile(r"^[a-f0-9]{32}(?:\.[A-Za-z0-9]{1,20})?$")
 
 
 def _strip_control_chars(value: str) -> str:
@@ -155,6 +158,46 @@ def _original_filename_from_metadata(metadata: Dict[str, str], fallback: str) ->
     return metadata.get('original-filename', fallback)
 
 
+def monitoring_renewal_candidate_key_allowed(key: str) -> bool:
+    """Allow only the dedicated, deterministic renewal-candidate namespace."""
+
+    parts = str(key or "").split("/")
+    return bool(
+        len(parts) == 5
+        and parts[0] == "clients"
+        and _MONITORING_RENEWAL_KEY_PART_RE.fullmatch(parts[1] or "")
+        and parts[2] == _MONITORING_RENEWAL_CANDIDATE_SEGMENT
+        and _MONITORING_RENEWAL_KEY_PART_RE.fullmatch(parts[3] or "")
+        and _MONITORING_RENEWAL_FILE_RE.fullmatch(parts[4] or "")
+        and all(part not in (".", "..") for part in parts)
+    )
+
+
+def build_monitoring_renewal_candidate_key(
+    customer_id: str,
+    request_id: str,
+    upload_id: str,
+    filename: str,
+) -> str:
+    """Build the exact deterministic key used by reservation and cleanup."""
+
+    safe_customer = _safe_s3_path_component(customer_id, "client")
+    safe_request = _safe_s3_path_component(request_id, "request")
+    normalized_upload = str(upload_id or "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{32}", normalized_upload):
+        raise ValueError("upload_id must be a 32-character lowercase hex value")
+    extension = os.path.splitext(_safe_s3_filename(filename))[1].lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,20}", extension or ""):
+        extension = ""
+    key = (
+        f"clients/{safe_customer}/{_MONITORING_RENEWAL_CANDIDATE_SEGMENT}/"
+        f"{safe_request}/{normalized_upload}{extension}"
+    )
+    if not monitoring_renewal_candidate_key_allowed(key):
+        raise ValueError("monitoring renewal candidate key is outside the allowlist")
+    return key
+
+
 class S3Client:
     """S3 client wrapper with document management functionality"""
 
@@ -223,6 +266,19 @@ class S3Client:
             connect_timeout=2,
             read_timeout=3,
             retries={'max_attempts': 1},
+        )
+        return boto3.client('s3', **kwargs)
+
+    def monitoring_renewal_candidate_client(self):
+        """Use bounded I/O for request staging and always-on cleanup retries."""
+
+        kwargs = dict(self._client_kwargs)
+        kwargs['config'] = Config(
+            signature_version='s3v4',
+            s3={'addressing_style': 'virtual'},
+            connect_timeout=3,
+            read_timeout=10,
+            retries={'max_attempts': 2, 'mode': 'standard'},
         )
         return boto3.client('s3', **kwargs)
 
@@ -312,6 +368,214 @@ class S3Client:
             error_msg = f"Unexpected error uploading document to bucket '{self.bucket_name}': {str(e)}"
             logger.error(f"S3 upload exception: {error_msg}")
             return False, error_msg
+
+    @staticmethod
+    def build_monitoring_renewal_candidate_key(
+        customer_id: str,
+        request_id: str,
+        upload_id: str,
+        filename: str,
+    ) -> str:
+        """Build the exact key reserved before a staged candidate is written."""
+
+        return build_monitoring_renewal_candidate_key(
+            customer_id,
+            request_id,
+            upload_id,
+            filename,
+        )
+
+    def upload_monitoring_renewal_candidate(
+        self,
+        *,
+        key: str,
+        file_data: bytes,
+        customer_id: str,
+        request_id: str,
+        upload_id: str,
+        cleanup_id: str,
+        original_filename: str,
+        content_type: str,
+        file_sha256: str,
+    ) -> Tuple[bool, Union[Dict[str, Optional[str]], str]]:
+        """Write one pre-reserved candidate and return its exact object version."""
+
+        try:
+            expected = self.build_monitoring_renewal_candidate_key(
+                customer_id,
+                request_id,
+                upload_id,
+                original_filename,
+            )
+        except (TypeError, ValueError):
+            return False, "invalid_reserved_key"
+        if key != expected or not monitoring_renewal_candidate_key_allowed(key):
+            return False, "invalid_reserved_key"
+        try:
+            metadata = _build_s3_metadata(
+                customer_id,
+                _MONITORING_RENEWAL_CANDIDATE_SEGMENT,
+                original_filename,
+            )
+            metadata.update(
+                {
+                    "renewal-request-id": _sanitize_s3_metadata_value(request_id, 256),
+                    "renewal-upload-id": _sanitize_s3_metadata_value(upload_id, 64),
+                    "renewal-cleanup-id": _sanitize_s3_metadata_value(cleanup_id, 64),
+                    "file-sha256": _sanitize_s3_metadata_value(file_sha256, 64),
+                }
+            )
+        except Exception:
+            logger.exception("S3 monitoring renewal candidate metadata failed")
+            return False, "candidate_upload_failed"
+        if _s3_user_metadata_size(metadata) > _S3_MAX_USER_METADATA_BYTES:
+            return False, "metadata_limit_exceeded"
+
+        def reconcile_conditional_write():
+            inspected, result = self.inspect_monitoring_renewal_candidate(key)
+            if not inspected or not isinstance(result, dict):
+                return None
+            if result.get("exists") is not True:
+                return False
+            identity_matches = all(
+                (
+                    str(result.get("request_id") or "") == str(request_id),
+                    str(result.get("upload_id") or "") == str(upload_id),
+                    str(result.get("cleanup_id") or "") == str(cleanup_id),
+                    str(result.get("file_sha256") or "") == str(file_sha256),
+                    result.get("content_length") == len(file_data),
+                )
+            )
+            if not identity_matches:
+                return False
+            return {
+                "key": key,
+                "version_id": str(result.get("version_id") or "").strip() or None,
+                "etag": str(result.get("etag") or "").strip() or None,
+                "reconciled": True,
+            }
+
+        for attempt in range(2):
+            try:
+                response = self.monitoring_renewal_candidate_client().put_object(
+                    Bucket=self.bucket_name,
+                    Key=key,
+                    Body=file_data,
+                    ContentType=content_type or "application/octet-stream",
+                    ServerSideEncryption="AES256",
+                    IfNoneMatch="*",
+                    Metadata=metadata,
+                    Tagging=(
+                        "doc_type=monitoring_renewal_candidate&"
+                        f"client_id={_url_quote(_sanitize_s3_tag_value(customer_id), safe='')}"
+                    ),
+                )
+                return True, {
+                    "key": key,
+                    "version_id": str(response.get("VersionId") or "").strip() or None,
+                    "etag": str(response.get("ETag") or "").strip() or None,
+                }
+            except ClientError as exc:
+                code = str((exc.response.get("Error") or {}).get("Code") or "")
+                if code in ("PreconditionFailed", "412"):
+                    reconciled = reconcile_conditional_write()
+                    if isinstance(reconciled, dict):
+                        return True, reconciled
+                    if reconciled is None:
+                        return False, "candidate_ownership_unconfirmed"
+                    return False, "candidate_already_exists"
+                if code in ("ConditionalRequestConflict", "409"):
+                    if attempt == 0:
+                        continue
+                    reconciled = reconcile_conditional_write()
+                    if isinstance(reconciled, dict):
+                        return True, reconciled
+                    if reconciled is None:
+                        return False, "candidate_ownership_unconfirmed"
+                    return False, "candidate_upload_conflict"
+                logger.exception("S3 monitoring renewal candidate upload failed")
+                return False, "candidate_upload_failed"
+            except Exception:
+                logger.exception("S3 monitoring renewal candidate upload failed")
+                return False, "candidate_upload_failed"
+        return False, "candidate_upload_conflict"
+
+    def inspect_monitoring_renewal_candidate(
+        self,
+        key: str,
+    ) -> Tuple[bool, Union[Dict[str, Optional[str]], str]]:
+        """Inspect only the allowlisted candidate key without exposing payloads."""
+
+        if not monitoring_renewal_candidate_key_allowed(key):
+            return False, "invalid_reserved_key"
+        try:
+            response = self.monitoring_renewal_candidate_client().head_object(
+                Bucket=self.bucket_name,
+                Key=key,
+            )
+            metadata = response.get("Metadata") or {}
+            try:
+                content_length = int(response.get("ContentLength"))
+            except (TypeError, ValueError):
+                content_length = None
+            return True, {
+                "exists": True,
+                "version_id": str(response.get("VersionId") or "").strip() or None,
+                "etag": str(response.get("ETag") or "").strip() or None,
+                "request_id": str(metadata.get("renewal-request-id") or ""),
+                "upload_id": str(metadata.get("renewal-upload-id") or ""),
+                "cleanup_id": str(metadata.get("renewal-cleanup-id") or ""),
+                "file_sha256": str(metadata.get("file-sha256") or ""),
+                "content_length": content_length,
+            }
+        except ClientError as exc:
+            code = str((exc.response.get("Error") or {}).get("Code") or "")
+            if code in ("404", "NoSuchKey", "NotFound"):
+                return True, {"exists": False, "version_id": None}
+            return False, "candidate_inspection_failed"
+        except Exception:
+            return False, "candidate_inspection_failed"
+
+    def delete_monitoring_renewal_candidate(
+        self,
+        key: str,
+        *,
+        version_id: Optional[str] = None,
+        expected_request_id: Optional[str] = None,
+        expected_upload_id: Optional[str] = None,
+        expected_cleanup_id: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """Delete the exact uncommitted object version, never a general document."""
+
+        if not monitoring_renewal_candidate_key_allowed(key):
+            return False, "invalid_reserved_key"
+        exact_version = str(version_id or "").strip() or None
+        if exact_version is None:
+            inspected, result = self.inspect_monitoring_renewal_candidate(key)
+            if not inspected or not isinstance(result, dict):
+                return False, "candidate_inspection_failed"
+            if result.get("exists") is not True:
+                return True, "candidate_absent"
+            expected_identity = {
+                "request_id": str(expected_request_id or ""),
+                "upload_id": str(expected_upload_id or ""),
+                "cleanup_id": str(expected_cleanup_id or ""),
+            }
+            if any(expected_identity.values()) and any(
+                str(result.get(field) or "") != value
+                for field, value in expected_identity.items()
+                if value
+            ):
+                return False, "candidate_ownership_mismatch"
+            exact_version = str(result.get("version_id") or "").strip() or None
+        try:
+            kwargs = {"Bucket": self.bucket_name, "Key": key}
+            if exact_version:
+                kwargs["VersionId"] = exact_version
+            self.monitoring_renewal_candidate_client().delete_object(**kwargs)
+            return True, "candidate_deleted"
+        except Exception:
+            return False, "candidate_delete_failed"
 
     def download_document(self, key: str) -> Tuple[bool, bytes | str]:
         """

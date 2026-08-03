@@ -235,15 +235,17 @@ def test_export_and_api_consumers_use_canonical_selector_static():
     assert "latest_compliance_memo_row(db, application_id, columns=\"id\")" in edd_py
 
 
-def test_memo_ui_captures_reason_and_collapses_diagnostics_static():
+def test_memo_ui_is_a_pdf_workspace_with_officer_rationale_static():
     html = _read("arie-backoffice.html")
 
-    assert 'id="memo-governance-summary"' in html
+    assert 'id="compliance-memo-workspace"' in html
+    assert 'id="memo-pdf-preview"' in html
     assert 'id="memo-approval-reason"' in html
-    assert "approval_reason: approvalReason" in html
-    assert "acknowledged: !!memoSignoff.checked" in html
-    assert "Enter the approval reason before submitting memo approval." in html
-    assert "Full Memo / Diagnostics" in html
-    assert "Validation failed, but no issue detail was returned" in html
+    assert "officer_rationale: currentMemoApprovalReason()" in html
+    assert "approval_reason: rationale" in html
+    assert "acknowledged: true" in html
+    assert "Review the generated PDF" in html
+    assert 'id="memo-governance-summary"' not in html
+    assert 'id="memo-validation-panel"' not in html
     assert "DETERMINISTIC (RULE-BASED) OUTPUT" not in html
-    assert "this UI does not capture or submit that reason yet" not in html
+    assert "window._memoPdfCache" in html

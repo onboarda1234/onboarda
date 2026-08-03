@@ -60,7 +60,7 @@ def audit_sink():
     events = []
 
     def writer(user, action, target, detail, db=None,
-               before_state=None, after_state=None):
+               before_state=None, after_state=None, commit=True):
         events.append({
             "user": dict(user) if user else {},
             "action": action,
@@ -68,6 +68,7 @@ def audit_sink():
             "detail": detail,
             "before_state": before_state,
             "after_state": after_state,
+            "commit": commit,
         })
 
     writer.events = events
@@ -203,7 +204,9 @@ class TestDocumentHealthMonitor:
         )
         assert len(_alerts(monitor_db)) == 1
 
-    def test_resolves_alert_when_document_replaced(self, monitor_db, audit_sink):
+    def test_reports_repeatable_resolution_candidate_without_mutation(
+        self, monitor_db, audit_sink,
+    ):
         from document_health_monitor import sync_document_health_alerts_for_application
 
         expired = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
@@ -221,11 +224,36 @@ class TestDocumentHealthMonitor:
             doc_type="passport",
             expiry_date=(datetime.now(timezone.utc) + timedelta(days=365)).date().isoformat(),
         )
-        sync_document_health_alerts_for_application(
+        first = sync_document_health_alerts_for_application(
             monitor_db, "app-doc-health", user=USER, audit_writer=audit_sink,
         )
-        rows = _alerts(monitor_db)
-        assert rows[0]["status"] == "resolved"
+        first_row = dict(_alerts(monitor_db)[0])
+        second = sync_document_health_alerts_for_application(
+            monitor_db, "app-doc-health", user=USER, audit_writer=audit_sink,
+        )
+        second_row = dict(_alerts(monitor_db)[0])
+
+        assert first["resolved"] == 0
+        assert first["resolution_deferred"] == 1
+        assert first["resolution_candidates"] == second["resolution_candidates"]
+        assert first["resolution_candidates"] == [{
+            "alert_id": first_row["id"],
+            "application_id": "app-doc-health",
+            "alert_type": "document_expired",
+            "source_reference": "document:doc-old",
+            "current_status": "open",
+            "reason": "document_issue_no_longer_current",
+        }]
+        assert first_row == second_row
+        assert first_row["status"] == "open"
+        assert first_row["officer_action"] is None
+        assert first_row["officer_notes"] is None
+        assert first_row["resolved_at"] is None
+        assert first_row["reviewed_at"] is None
+        assert not any(
+            event["action"] == "monitoring.document_health_alert.resolved"
+            for event in audit_sink.events
+        )
 
     def test_does_not_alert_for_non_current_superseded_document(self, monitor_db, audit_sink):
         from document_health_monitor import sync_document_health_alerts_for_application
@@ -257,8 +285,11 @@ class TestDocumentHealthMonitor:
         )
         assert any(e["action"] == "monitoring.document_health_alert.created"
                    for e in audit_sink.events)
+        assert all(e["commit"] is False for e in audit_sink.events)
 
-    def test_update_and_resolution_audits_include_before_after_state(self, monitor_db, audit_sink):
+    def test_update_audit_is_atomic_and_disappearance_is_deferred(
+        self, monitor_db, audit_sink,
+    ):
         from document_health_monitor import sync_document_health_alerts_for_application
 
         _insert_doc(
@@ -295,12 +326,46 @@ class TestDocumentHealthMonitor:
             (datetime.now(timezone.utc).isoformat(), "doc-audit-update"),
         )
         monitor_db.commit()
-        sync_document_health_alerts_for_application(
+        result = sync_document_health_alerts_for_application(
             monitor_db, "app-doc-health", user=USER, audit_writer=audit_sink,
         )
 
         update_event = next(e for e in audit_sink.events if e["action"] == "monitoring.document_health_alert.updated")
-        resolve_event = next(e for e in audit_sink.events if e["action"] == "monitoring.document_health_alert.resolved")
         assert update_event["before_state"]["summary"] != update_event["after_state"]["summary"]
-        assert resolve_event["before_state"]["status"] == "open"
-        assert resolve_event["after_state"]["status"] == "resolved"
+        assert update_event["commit"] is False
+        assert result["resolved"] == 0
+        assert result["resolution_deferred"] == 1
+        assert _alerts(monitor_db)[0]["status"] == "open"
+        assert not any(
+            event["action"] == "monitoring.document_health_alert.resolved"
+            for event in audit_sink.events
+        )
+
+    def test_audit_failure_rolls_back_alert_creation(self, monitor_db):
+        from document_health_monitor import sync_document_health_alerts_for_application
+
+        _insert_doc(
+            monitor_db,
+            doc_id="doc-audit-failure",
+            doc_type="passport",
+            expiry_date=(datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat(),
+        )
+        calls = []
+
+        def failing_audit_writer(
+            user, action, target, detail, db=None,
+            before_state=None, after_state=None, commit=True,
+        ):
+            calls.append(commit)
+            raise RuntimeError("audit unavailable")
+
+        with pytest.raises(RuntimeError, match="audit unavailable"):
+            sync_document_health_alerts_for_application(
+                monitor_db,
+                "app-doc-health",
+                user=USER,
+                audit_writer=failing_audit_writer,
+            )
+
+        assert calls == [False]
+        assert _alerts(monitor_db) == []

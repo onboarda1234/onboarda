@@ -1,0 +1,187 @@
+"""Closed vocabularies and version constants for the Supervisor foundation.
+
+Every value here is part of the reproducibility contract. Changing one changes
+review hashes, so each is a governed change requiring a version bump.
+"""
+
+from __future__ import annotations
+
+from enum import Enum
+
+
+# ── Version constants ────────────────────────────────────────────────
+# Bumping any of these changes review_hash for every subject.
+
+#: Canonical bundle contract version.
+#:
+#: **v1 → v2 (Phase 0B-2 preparation).** v2 adds four read-only projections that
+#: the approved 0B-2 probes require: per-subject screening evidence, stored D1–D5
+#: dimension scores, the stored EDD routing fact contract, and the periodic
+#: review policy version. See ``bundle.SCHEMA_V2_ADDITIONS``.
+#:
+#: **Hash semantics across versions.** v2 bundles hash differently from v1 for
+#: the same stored evidence. That is intended, not a regression: the bundle
+#: contract itself changed, so the hash identifies a different set of inputs.
+#: A v1 hash remains valid *as a v1 hash*. No equality is expected or meaningful
+#: across schema versions, and a v1 artifact must never be reinterpreted as v2 —
+#: ``meta.bundle_schema_version`` is carried in every bundle precisely so a
+#: consumer can refuse a version it does not understand.
+BUNDLE_SCHEMA_VERSION = "supervisor-bundle-v2"
+
+#: The finding contract: what a finding record carries and what ``review_hash``
+#: is computed over. Owned by the probe runner.
+REVIEW_SCHEMA_VERSION = "supervisor-review-v1"
+
+#: The aggregation contract: the shape of a ``SupervisorReview`` — its sections,
+#: its grouping rules, its status vocabulary. Versioned **separately** from
+#: ``REVIEW_SCHEMA_VERSION`` because the two change for different reasons: how a
+#: review is presented can be revised without the underlying findings changing
+#: at all, and the finding contract must be able to move without invalidating
+#: every stored presentation.
+#:
+#: Three hashes, three questions, and they are not interchangeable:
+#:
+#: * ``input_bundle_hash`` — what evidence was read
+#: * ``review_hash``       — what the probes concluded from it
+#: * ``aggregation_hash``  — how that was assembled into one review
+#:
+#: A change here moves ``aggregation_hash`` and leaves ``review_hash`` alone,
+#: which is exactly the discrimination an auditor needs: it distinguishes "the
+#: findings changed" from "the presentation changed".
+AGGREGATION_SCHEMA_VERSION = "supervisor-aggregation-v1"
+
+POLICY_CONTRACT_VERSION = "policy-contract-v1"
+
+#: The Phase 0B-2 probe set: P-02 risk factor resolution integrity, P-03 EDD
+#: routing divergence, P-04 screening reliance defensibility, P-06 monitoring
+#: requirement not established. See ``supervisor_foundation.probes.PROBES``.
+#:
+#: This identifies the *set*, not any one probe. Adding, removing or re-versioning
+#: a probe changes what a review means and must bump this value, which changes
+#: ``review_hash`` for every subject — that is the point: a stored review names
+#: the probe set that produced it and cannot be silently reinterpreted under a
+#: different one.
+#:
+#: Versioned independently of ``BUNDLE_SCHEMA_VERSION``. The bundle contract and
+#: the questions asked of it change for different reasons and on different
+#: schedules.
+PROBE_SET_VERSION = "probe-set-0b2-v1"
+
+
+class SubjectType(str, Enum):
+    """Review subject. Phase 0B-1 supports ``application`` only.
+
+    The other members are reserved by the Phase 0A framework so that later
+    phases do not force a schema version bump. ``assemble_application_bundle``
+    rejects anything other than ``APPLICATION``.
+    """
+
+    APPLICATION = "application"
+    CUSTOMER = "customer"
+    PERIODIC_REVIEW = "periodic_review"
+    MONITORING_EVENT = "monitoring_event"
+    CHANGE_REQUEST = "change_request"
+
+
+class FindingStatus(str, Enum):
+    """Outcome of evaluating a probe.
+
+    ``unavailable`` and ``not_replayable`` are distinct from ``clear`` and must
+    never be rendered, aggregated, or counted as ``clear``. A check that could
+    not be evaluated is not a check that passed.
+    """
+
+    HIT = "hit"
+    CLEAR = "clear"
+    UNAVAILABLE = "unavailable"
+    NOT_APPLICABLE = "not_applicable"
+    NOT_REPLAYABLE = "not_replayable"
+
+
+class AvailabilityStatus(str, Enum):
+    """Why a probe could or could not run.
+
+    Attached alongside ``FindingStatus`` so the reason a check did not run
+    survives into the output: an absent registry credential, a gated module and
+    an unconfigured policy are three different operational problems with three
+    different owners.
+    """
+
+    AVAILABLE = "available"
+    DEPENDENCY_GATED = "dependency_gated"
+    CREDENTIALS_ABSENT = "credentials_absent"
+    DATA_ABSENT = "data_absent"
+    SNAPSHOT_INCOMPLETE = "snapshot_incomplete"
+    POLICY_NOT_CONFIGURED = "policy_not_configured"
+
+
+#: Statuses that must never be presented as a passing check.
+NON_CLEAR_STATUSES = frozenset(
+    {FindingStatus.UNAVAILABLE, FindingStatus.NOT_REPLAYABLE}
+)
+
+SUBJECT_TYPES = tuple(member.value for member in SubjectType)
+FINDING_STATUSES = tuple(member.value for member in FindingStatus)
+AVAILABILITY_STATUSES = tuple(member.value for member in AvailabilityStatus)
+
+
+# ── Institution policy contract ──────────────────────────────────────
+# Input contract only. Phase 0B-1 introduces no persistence, no administration,
+# no approval workflow and no defaults. See §3.3.5 of the framework document.
+
+#: The eight configuration keys the framework declares. Declaring a key here
+#: does not configure it — an unset key is reported ``policy_not_configured``.
+POLICY_KEYS = (
+    "control_person_required",
+    "factor_evidence_mapping",
+    "factor_materiality_threshold",
+    "manual_acceptance_roles",
+    "ownership_exemption_types",
+    "ownership_reconciliation_tolerance",
+    "pep_evidence_requirements",
+    "ubo_identification_threshold",
+)
+
+
+# ── Bundle section names ─────────────────────────────────────────────
+#: Every section the canonical bundle carries, in canonical (sorted) order.
+#: The assembler emits all of them on every run; a section with no data is an
+#: explicit empty structure, never an omitted key.
+BUNDLE_SECTIONS = (
+    "application",
+    "availability",
+    "decision",
+    "document_gate",
+    "documents",
+    "edd",
+    "memo",
+    "meta",
+    "monitoring",
+    "parties",
+    "policy",
+    "risk",
+    "screening",
+    "supervisor_verdict",
+)
+
+
+#: Fields a probe must supply for every finding. The runner rejects a draft
+#: that omits any of them — a probe that cannot answer all five framework
+#: questions is not ready to ship.
+REQUIRED_FINDING_FIELDS = (
+    "availability_status",
+    "category",
+    "claim",
+    "close_condition",
+    "confidence",
+    "evidence_refs",
+    "officer_question",
+    "probe_id",
+    "probe_version",
+    "regulatory_or_policy_basis",
+    "required_action",
+    "severity",
+    "source_modules",
+    "status",
+    "why_it_matters",
+)

@@ -435,6 +435,40 @@ class TestLinkAlertToEdd:
         assert detail["previous_edd_case_id"] == edd1
         assert detail["displaced_by_relink_to"] == edd2
 
+    def test_cannot_overwrite_edd_reverse_link_owned_by_another_alert(
+        self, lifecycle_db, audit_sink
+    ):
+        from lifecycle_linkage import (
+            InvalidLifecycleTransition,
+            link_alert_to_edd,
+        )
+
+        owner_alert_id = _insert_alert(lifecycle_db, client_name="EDD owner")
+        other_alert_id = _insert_alert(lifecycle_db, client_name="EDD contender")
+        edd_id = _insert_edd(lifecycle_db, client_name="Owned EDD")
+        link_alert_to_edd(
+            lifecycle_db,
+            owner_alert_id,
+            edd_id,
+            user=USER,
+            audit_writer=audit_sink,
+        )
+
+        with pytest.raises(InvalidLifecycleTransition, match="another"):
+            link_alert_to_edd(
+                lifecycle_db,
+                other_alert_id,
+                edd_id,
+                user=USER,
+                audit_writer=audit_sink,
+            )
+
+        edd = lifecycle_db.execute(
+            "SELECT linked_monitoring_alert_id FROM edd_cases WHERE id = ?",
+            (edd_id,),
+        ).fetchone()
+        assert edd["linked_monitoring_alert_id"] == owner_alert_id
+
 
 # ===================================================================
 # link / unlink alert <-> review
@@ -511,6 +545,43 @@ class TestLinkAlertToReview:
         assert detail["previous_periodic_review_id"] == r1
         assert detail["displaced_by_relink_to"] == r2
 
+    def test_cannot_overwrite_review_reverse_link_owned_by_another_alert(
+        self, lifecycle_db, audit_sink
+    ):
+        from lifecycle_linkage import (
+            InvalidLifecycleTransition,
+            link_alert_to_review,
+        )
+
+        owner_alert_id = _insert_alert(lifecycle_db, client_name="Review owner")
+        other_alert_id = _insert_alert(
+            lifecycle_db,
+            client_name="Review contender",
+        )
+        review_id = _insert_review(lifecycle_db, client_name="Owned review")
+        link_alert_to_review(
+            lifecycle_db,
+            owner_alert_id,
+            review_id,
+            user=USER,
+            audit_writer=audit_sink,
+        )
+
+        with pytest.raises(InvalidLifecycleTransition, match="another"):
+            link_alert_to_review(
+                lifecycle_db,
+                other_alert_id,
+                review_id,
+                user=USER,
+                audit_writer=audit_sink,
+            )
+
+        review = lifecycle_db.execute(
+            "SELECT linked_monitoring_alert_id FROM periodic_reviews WHERE id = ?",
+            (review_id,),
+        ).fetchone()
+        assert review["linked_monitoring_alert_id"] == owner_alert_id
+
 
 # ===================================================================
 # lifecycle timestamp helpers
@@ -555,15 +626,24 @@ class TestLifecycleTimestamps:
                 user=USER, audit_writer=audit_sink,
             )
 
-    def test_mark_alert_resolved_writes_timestamp(self, lifecycle_db, audit_sink):
-        from lifecycle_linkage import mark_alert_resolved
+    def test_mark_alert_resolved_fails_closed(self, lifecycle_db, audit_sink):
+        from lifecycle_linkage import (
+            InvalidLifecycleTransition,
+            mark_alert_resolved,
+        )
         alert_id = _insert_alert(lifecycle_db)
-        mark_alert_resolved(lifecycle_db, alert_id, user=USER, audit_writer=audit_sink)
+        with pytest.raises(InvalidLifecycleTransition, match="canonical"):
+            mark_alert_resolved(
+                lifecycle_db,
+                alert_id,
+                user=USER,
+                audit_writer=audit_sink,
+            )
         row = lifecycle_db.execute(
             "SELECT resolved_at FROM monitoring_alerts WHERE id = ?",
             (alert_id,),
         ).fetchone()
-        assert row["resolved_at"] is not None
+        assert row["resolved_at"] is None
 
 
 # ===================================================================

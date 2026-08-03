@@ -165,6 +165,91 @@ def _routes(customer="cust-1", case_id="case-1"):
     }
 
 
+def _monitoring_alert_row(*, status="open"):
+    return {
+        "provider": COMPLYADVANTAGE_PROVIDER_NAME,
+        "case_identifier": "case-1",
+        "application_id": "app-1",
+        "client_name": "Synthetic Client",
+        "alert_type": "pep",
+        "severity": "high",
+        "detected_by": "complyadvantage",
+        "summary": "Historical provider evidence refreshed",
+        "source_reference": "{}",
+        "status": status,
+    }
+
+
+def test_historical_upsert_creates_only_open_alerts():
+    conn = _db()
+
+    outcome = hb._upsert_monitoring_alert_with_provenance(
+        conn,
+        _monitoring_alert_row(status="resolved"),
+        discovered_via="manual_backfill",
+        backfill_run_id="bf-create-open",
+    )
+    conn.commit()
+
+    stored = conn.execute(
+        "SELECT status, discovered_via FROM monitoring_alerts"
+    ).fetchone()
+    assert outcome == "inserted"
+    assert stored["status"] == "open"
+    assert stored["discovered_via"] == "manual_backfill"
+
+
+@pytest.mark.parametrize(
+    "existing_status",
+    ["dismissed", "resolved", "waived", "routed_to_edd", "escalated"],
+)
+def test_historical_upsert_preserves_existing_lifecycle_status(existing_status):
+    conn = _db()
+    row = _monitoring_alert_row()
+    conn.execute(
+        """
+        INSERT INTO monitoring_alerts
+            (provider, case_identifier, application_id, client_name, alert_type,
+             severity, detected_by, summary, source_reference, status,
+             discovered_via, discovered_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            row["provider"],
+            row["case_identifier"],
+            "old-application",
+            "Old Client",
+            row["alert_type"],
+            "low",
+            row["detected_by"],
+            "Old evidence",
+            '{"old": true}',
+            existing_status,
+            "webhook_live",
+            "2025-01-01T00:00:00",
+        ),
+    )
+    conn.commit()
+
+    outcome = hb._upsert_monitoring_alert_with_provenance(
+        conn,
+        row,
+        discovered_via="manual_backfill",
+        backfill_run_id="bf-preserve-status",
+    )
+    conn.commit()
+    stored = conn.execute(
+        "SELECT status, application_id, summary, discovered_via "
+        "FROM monitoring_alerts"
+    ).fetchone()
+
+    assert outcome == "updated"
+    assert stored["status"] == existing_status
+    assert stored["application_id"] == "app-1"
+    assert stored["summary"] == "Historical provider evidence refreshed"
+    assert stored["discovered_via"] == "webhook_live"
+
+
 def _company_media_risk_page(risk_id="risk-media"):
     return {
         "risks": [

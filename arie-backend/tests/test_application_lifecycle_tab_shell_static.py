@@ -316,13 +316,12 @@ def test_overview_periodic_review_baseline_loads_from_application_detail_without
     assert "Periodic review baseline can be configured after onboarding approval." in html
 
 
-def test_overview_memo_download_is_disabled_until_memo_exists():
+def test_overview_memo_download_is_disabled_until_final():
     html = _read_backoffice()
-    assert "function setMemoDownloadState(enabled, reason)" in html
-    assert "No compliance memo exists yet. Generate the memo before downloading a PDF." in html
-    assert "Generate a compliance memo before downloading the PDF." in html
-    assert "setMemoDownloadState(false" in html
-    assert "setMemoDownloadState(true" in html
+    assert 'id="btn-download-memo"' in html
+    assert "if (downloadBtn) downloadBtn.disabled = !isFinal;" in html
+    assert "if (lifecycle !== 'FINAL')" in html
+    assert "Final PDF download is available only after officer approval." in html
 
 
 def test_lifecycle_workspace_uses_scrollable_responsive_layout():
@@ -352,7 +351,7 @@ def test_ongoing_monitoring_review_surface_is_signal_only_launchpad():
     start = html.index('<div class="view" id="view-periodic-review-signals">')
     end = html.index('<div class="view" id="view-monitoring">', start)
     section = html[start:end]
-    assert "Periodic Review Queue" in section
+    assert "RegMind Periodic Reviews" in section
     assert "Scheduled review workflow for periodic and annual client reviews" in section
     assert "Monitoring Alerts remains a separate event-based signal inbox" in section
     assert "Open Lifecycle Queue" in section

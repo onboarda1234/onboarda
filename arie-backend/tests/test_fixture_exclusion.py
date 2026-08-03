@@ -126,10 +126,12 @@ class _FixtureExclusionBase(unittest.TestCase):
         # smoke/E2E fixture by ref/name. These must be hidden by default too.
         conn.execute(
             "INSERT INTO applications (id, ref, client_id, company_name, country, sector, "
-            "entity_type, status, risk_level, risk_score, is_fixture) VALUES (?,?,?,?,?,?,?,?,?,?,0)",
+            "entity_type, status, risk_level, risk_score, is_fixture, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,0,?)",
             (self.TEXT_FIX_APP_ID, self.TEXT_FIX_APP_REF, None,
              "RegMind Browser Smoke Ltd", "Mauritius", "fintech",
-             "company", "pricing_review", "LOW", 12.0),
+             "company", "pricing_review", "LOW", 12.0,
+             "2020-01-01 00:00:00"),
         )
 
         # Seed a monitoring alert for the REAL application

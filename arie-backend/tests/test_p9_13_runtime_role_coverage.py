@@ -582,7 +582,13 @@ class RuntimeRoleCoverageTest(AsyncHTTPTestCase):
             "subject_type": "company",
             "subject_name": "P913 Runtime Probe",
             "disposition": "follow_up_required",
-            "disposition_code": "pending_further_review",
+            # Review 2026-07-27: this was `pending_further_review`, which is NOT
+            # in _SCREENING_DISPOSITION_CODES — every officer role was rejected
+            # with 400 "Valid disposition_code is required" BEFORE any role logic
+            # ran, so the `!= 403` assertion below passed trivially and proved
+            # nothing about admission. Use a real follow_up_required code so the
+            # request actually reaches the authorization check.
+            "disposition_code": "needs_more_information",
             "rationale": "Synthetic role-boundary probe only; no workflow assertion.",
         }
         assert self._request("client", "/api/screening/review", method="POST",
@@ -591,6 +597,11 @@ class RuntimeRoleCoverageTest(AsyncHTTPTestCase):
             resp = self._request(role, "/api/screening/review", method="POST",
                                  payload=payload)
             assert resp.code != 403, (role, resp.code, resp.body[:200])
+            # Non-vacuity: prove the officer got PAST payload validation too, so
+            # a future rename of the code cannot silently restore the old
+            # always-400 (and therefore always-"not 403") condition.
+            assert b"Valid disposition_code is required" not in resp.body, (
+                role, resp.code, resp.body[:200])
 
     def test_screening_second_review_admits_co_then_refuses_at_senior_gate(self):
         app = self.apps["screening_second_review"]

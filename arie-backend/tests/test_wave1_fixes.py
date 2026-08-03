@@ -242,12 +242,12 @@ class TestW1_7_NoDomainStale:
         assert "arie-finance" not in src, \
             "Stale arie-finance.com domain still present in portal"
 
-    def test_onboarda_email_present(self):
+    def test_regmind_support_email_present(self):
         portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
         with open(portal_path, encoding="utf-8") as f:
             src = f.read()
-        assert "compliance@onboarda.com" in src, \
-            "compliance@onboarda.com should be used in portal T&C"
+        assert "support@regmind.co" in src
+        assert "@onboarda.com" not in src
 
 
 # ═══════════════════════════════════════════════════════════

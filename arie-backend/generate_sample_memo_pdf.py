@@ -56,7 +56,15 @@ def main():
         approved_at=datetime.now().isoformat(),
     )
 
-    output_path = "/sessions/magical-stoic-newton/mnt/Onboarda/Onboarda_Sample_Compliance_Memo.pdf"
+    output_path = os.environ.get(
+        "SAMPLE_MEMO_OUTPUT",
+        os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "docs",
+            "compliance",
+            "RegMind_Sample_Compliance_Memo.pdf",
+        ),
+    )
     with open(output_path, "wb") as f:
         f.write(pdf_bytes)
 

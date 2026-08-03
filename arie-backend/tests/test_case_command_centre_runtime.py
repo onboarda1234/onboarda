@@ -1351,7 +1351,7 @@ class TestCaseCommandCentreRuntime:
         assert "Business Profile" not in html
         assert 'id="detail-application-data" style="display:none;"' in html
         assert 'Coming Soon — Enterprise Module' in supervisor_region
-        assert 'The AI Compliance Supervisor will provide advanced supervisory oversight' in supervisor_region
+        assert 'RegMind AI Compliance Supervisor will provide advanced supervisory oversight' in supervisor_region
         assert 'Not active in pilot' in supervisor_region
         assert 'btn-run-supervisor' not in supervisor_region
         assert 'Run Analysis' not in supervisor_region

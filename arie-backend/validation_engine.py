@@ -400,7 +400,7 @@ def validate_compliance_memo(memo_data):
         "refinitiv",
         "complyadvantage",
         "comply advantage",
-        "onboarda screening engine",
+        "regmind screening engine",
         "live provider",
         "provider screening",
         "un security council",

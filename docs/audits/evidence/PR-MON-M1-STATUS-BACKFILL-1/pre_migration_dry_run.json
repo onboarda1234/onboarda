@@ -1,0 +1,63 @@
+{
+  "blocked_by_changed_preconditions": [],
+  "database_transaction": {
+    "isolation_level": "REPEATABLE READ",
+    "read_only": true,
+    "transaction_read_only": "on",
+    "completion": "ROLLBACK"
+  },
+  "duplicate_alert_ids": [],
+  "eligible_rows": [
+    {
+      "application_id": "pcdv100000000024",
+      "current_status": "in_review",
+      "id": 583,
+      "proposed_status": "routed_to_edd",
+      "reason": "PR #900 found an exact reverse EDD linkage and an existing create_edd officer action; the alert lifecycle status is the audited legacy synonym for the already-created EDD route."
+    }
+  ],
+  "environment": "staging",
+  "feature_flags": {
+    "ENABLE_AGENT1_REFRESH_VERIFICATION": false,
+    "ENABLE_DOCUMENT_RENEWAL_AUTOMATION": false,
+    "ENABLE_MONITORING_AUTO_RESOLUTION": false,
+    "ENABLE_MONITORING_SCREENING_CHANGE": false
+  },
+  "manifest_version": "1.0.0",
+  "manual_review_row_ids": [
+    1,
+    2,
+    54,
+    55,
+    581,
+    582,
+    584,
+    585,
+    603,
+    606,
+    608,
+    609,
+    610,
+    611
+  ],
+  "migration_id": "PR-MON-M1-STATUS-BACKFILL-1",
+  "normalized_monitoring_alerts_md5": "550cf672ab40b98d3ec177f12248ecb1",
+  "observed_eligible_count": 1,
+  "observed_status_counts": {
+    "dismissed": 3,
+    "escalated": 1,
+    "in_review": 1,
+    "open": 13,
+    "resolved": 1
+  },
+  "orphan_alert_ids": [
+    1,
+    2,
+    54,
+    55
+  ],
+  "phase": "pre_migration",
+  "plan_fingerprint": "c3c25cf9e417a648ebf35079ef2b98849ef455cdf1d53820ebc2a539245304fd",
+  "safe_to_apply": true,
+  "total_rows_scanned": 19
+}
