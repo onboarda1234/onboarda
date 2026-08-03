@@ -68,7 +68,7 @@ class PSField:
     INCORPORATION_DATE   = "incorporation_date"
     JURISDICTION         = "country_of_incorporation"
     REGISTERED_ADDRESS   = "registered_address"
-    AUTHORISED_CAPITAL   = "authorised_share_capital"
+    AUTHORISED_CAPITAL   = "authorised_share_capital"  # pre-screening capture only; DOC-13 check retired
     SHAREHOLDERS         = "shareholders"          # list
     UBOS                 = "ubos"                  # list
     DIRECTORS            = "directors"             # list
@@ -275,36 +275,10 @@ SECTION_A_CHECKS = {
                                "present (objects clause, share capital, subscribers/signatories). "
                                "PASS if complete. WARN if minor sections missing. FAIL if key sections absent.",
             ),
-            _check(
-                id_="DOC-MA-01",
-                label="Business Objects / Activities",
-                classification=CheckClassification.AI,
-                ps_field=PSField.BUSINESS_ACTIVITY,
-                why="Legal drafting of objects clauses requires reading comprehension — no deterministic "
-                    "comparison possible. Critical compliance check: does the MoA authorise the declared business?",
-                logic="AI reads objects clause. Determines whether the business_activity declared in "
-                      "pre-screening falls within the stated objects. Outputs verdict, reasoning, confidence, "
-                      "relevant clause citations.",
-                trigger=TriggerTiming.ASYNC_AI,
-                escalation=EscalationOutcome.ESCALATE,
-                ai_prompt_hint="Read the objects clause of this Memorandum of Association. Determine whether "
-                               "the declared business activity falls within the stated objects. "
-                               "PASS if declared activity is clearly within scope. "
-                               "WARN if scope is broad/ambiguous but plausibly includes declared activity. "
-                               "FAIL if declared activity appears outside objects.",
-            ),
-            _check(
-                id_="DOC-13",
-                label="Authorised Share Capital Match",
-                classification=CheckClassification.RULE,
-                ps_field=PSField.AUTHORISED_CAPITAL,
-                why="Numeric comparison is deterministic.",
-                logic="Parse currency and amount from document, compare with pre-screening "
-                      "authorised_share_capital.",
-                trigger=TriggerTiming.AFTER_OCR,
-                escalation=EscalationOutcome.FAIL,
-                rule_type="numeric",
-            ),
+            # NOTE: DOC-MA-01 Business Objects / Activities check REMOVED per policy decision
+            # NOTE: DOC-13 Authorised Share Capital Match check REMOVED per policy decision
+            #       The authorised_share_capital pre-screening field is still collected and
+            #       displayed; only the document-verification check is retired.
             CERTIFICATION_CHECK,
         ],
     },
@@ -1079,22 +1053,7 @@ SECTION_B_CHECKS = {
                                "bank details (name, branch, SWIFT/BIC). PASS if clearly identified. "
                                "WARN if partial details. FAIL if bank cannot be identified.",
             ),
-            _check(
-                id_="DOC-68",
-                label="Account Standing",
-                classification=CheckClassification.AI,
-                ps_field=None,
-                why="Banks use highly variable language for account standing. "
-                    "Keyword matching is unreliable. Requires semantic interpretation.",
-                logic="AI reads the reference letter, interprets the bank's assessment of account "
-                      "standing. Determines whether confirmed in good standing for ≥12 months.",
-                trigger=TriggerTiming.ASYNC_AI,
-                escalation=EscalationOutcome.ESCALATE,
-                ai_prompt_hint="Read this bank reference letter. Determine whether it confirms the "
-                               "account has been in good standing for at least 12 months. "
-                               "PASS if clearly confirmed. WARN if duration unclear. "
-                               "FAIL if not in good standing or adverse wording detected.",
-            ),
+            # NOTE: DOC-68 Account Standing check REMOVED per policy decision
             CERTIFICATION_CHECK,
         ],
     },

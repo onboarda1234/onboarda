@@ -8876,9 +8876,7 @@ var DOC_RULES = {
     name: 'Memorandum of Association',
     checks: [
       { id: 'name-match', label: 'Entity Name Match', rule: 'Company name must match application', type: 'name' },
-      { id: 'share-capital', label: 'Authorised Share Capital', rule: 'Authorised share capital must match the amount declared during initial review', type: 'content' },
       { id: 'completeness', label: 'Completeness', rule: 'All pages must be present and legible', type: 'quality' },
-      { id: 'objects', label: 'Business Objects / Activities', rule: 'Declared business activities must fall within the objects clause of the MoA', type: 'ai' },
       { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
@@ -9022,7 +9020,6 @@ var KYC_PERSON_DOC_RULES = {
       { id: 'date-check', label: 'Document Date', rule: 'Must be dated within the last 3 months', type: 'age', maxMonths: 3 },
       { id: 'name-match', label: 'Name Match', rule: 'Account holder name must match the declared person', type: 'name' },
       { id: 'bank-details', label: 'Bank Identification', rule: 'Must be on official bank letterhead with bank name clearly identifiable', type: 'content' },
-      { id: 'account-standing', label: 'Account Standing', rule: 'Must confirm account in good standing for at least 12 months', type: 'ai' },
       { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },

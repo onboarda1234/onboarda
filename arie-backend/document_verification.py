@@ -1227,43 +1227,8 @@ def run_rule_checks(doc_type: str, category: str,
                                      extracted_value=extracted_jur,
                                      rule_type=rtype))
 
-        # ��─ Authorised Share Capital Match (DOC-13) ──
-        elif id_ == "DOC-13":
-            declared_cap = ps_get(PSField.AUTHORISED_CAPITAL, "authorised_share_capital")
-            extracted_cap = ef.get("authorised_share_capital") or ef.get("share_capital")
-            if not declared_cap:
-                results.append(_warn(id_, label, cls,
-                                     "Authorised share capital not declared in pre-screening",
-                                     rule_type=rtype))
-                continue
-            if not extracted_cap:
-                results.append(_warn(id_, label, cls,
-                                     "Authorised share capital could not be extracted — manual check required",
-                                     rule_type=rtype))
-                continue
-            try:
-                d_val = float(re.sub(r"[^\d.]", "", str(declared_cap)))
-                e_val = float(re.sub(r"[^\d.]", "", str(extracted_cap)))
-                if abs(d_val - e_val) / max(d_val, 1) < 0.001:
-                    results.append(_pass(id_, label, cls,
-                                         f"Authorised share capital matches ({extracted_cap})",
-                                         ps_field=PSField.AUTHORISED_CAPITAL,
-                                         ps_value=str(declared_cap),
-                                         extracted_value=str(extracted_cap),
-                                         rule_type=rtype))
-                else:
-                    results.append(_fail(id_, label, cls,
-                                         f"Capital mismatch: document has '{extracted_cap}', "
-                                         f"declared is '{declared_cap}'",
-                                         ps_field=PSField.AUTHORISED_CAPITAL,
-                                         ps_value=str(declared_cap),
-                                         extracted_value=str(extracted_cap),
-                                         rule_type=rtype))
-            except (ValueError, TypeError):
-                results.append(_warn(id_, label, cls,
-                                     f"Could not parse capital values for comparison "
-                                     f"(declared: '{declared_cap}', extracted: '{extracted_cap}')",
-                                     rule_type=rtype))
+        # NOTE: DOC-13 Authorised Share Capital Match rule REMOVED per policy decision
+        # (matching check retired from verification_matrix.memarts).
 
         else:
             # Unknown rule check — return warn rather than silently skip
