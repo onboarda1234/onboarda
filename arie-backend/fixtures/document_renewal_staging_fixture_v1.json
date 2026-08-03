@@ -1,0 +1,62 @@
+{
+  "fixture": {
+    "deterministic_epoch": "2026-08-01T00:00:00+00:00",
+    "fixture_key": "document-renewal-expired-v1",
+    "fixture_marker": "FIX_DOC_RENEWAL_STAGING_V1",
+    "fixture_version": "document_renewal_staging_fixture_v1",
+    "non_production": true,
+    "permanent_baseline": true,
+    "synthetic": true
+  },
+  "client": {
+    "company_name": "FIX Document Renewal Harness Ltd",
+    "email": "doc-renewal-harness@fixture.invalid",
+    "id": "f1xedrnwcli00001",
+    "status": "inactive"
+  },
+  "application": {
+    "company_name": "FIX Document Renewal Harness Ltd",
+    "country": "Mauritius",
+    "entity_type": "company",
+    "id": "f1xedrnwapp00001",
+    "ref": "FX-DOC-RENEWAL-001",
+    "risk_level": "LOW",
+    "risk_score": 20.0,
+    "sector": "financial_services",
+    "status": "approved"
+  },
+  "person": {
+    "full_name": "FIX Renewal Synthetic Director",
+    "id": "f1xedrnwper00001",
+    "nationality": "Mauritius",
+    "person_key": "FX-DOC-RENEWAL-PERSON-001",
+    "person_type": "director"
+  },
+  "document": {
+    "doc_name": "FIX-DOC-RENEWAL-PASSPORT.pdf",
+    "document_type": "passport",
+    "expiry_date": "2025-01-01T00:00:00+00:00",
+    "expiry_source": "fixture_manifest",
+    "file_path": "fixture://FIX_DOC_RENEWAL_STAGING_V1_PASSPORT",
+    "id": "f1xedrnwdoc00001",
+    "is_current": true,
+    "review_status": "accepted",
+    "slot_key": "person:director:f1xedrnwper00001:passport",
+    "uploaded_at": "2024-01-01T00:00:00+00:00",
+    "verification_status": "verified",
+    "version": 1
+  },
+  "alert": {
+    "alert_type": "document_expired",
+    "detected_by": "document_health_monitor",
+    "discovered_via": "document_health",
+    "severity": "high",
+    "source_reference": "document:f1xedrnwdoc00001",
+    "status": "open",
+    "summary": "passport (FIX-DOC-RENEWAL-PASSPORT.pdf) has expired"
+  },
+  "renewal": {
+    "request_id": "fxrnwreq00000001",
+    "request_reason": "expired"
+  }
+}

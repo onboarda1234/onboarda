@@ -36,6 +36,7 @@ _S3_ORIGINAL_FILENAME_METADATA_KEY = "original-filename-b64"
 _MONITORING_RENEWAL_CANDIDATE_SEGMENT = "monitoring_renewal_candidate"
 _MONITORING_RENEWAL_KEY_PART_RE = re.compile(r"^[A-Za-z0-9._=-]{1,120}$")
 _MONITORING_RENEWAL_FILE_RE = re.compile(r"^[a-f0-9]{32}(?:\.[A-Za-z0-9]{1,20})?$")
+_MONITORING_RENEWAL_VERSION_INVENTORY_MAX_PAGES = 20
 
 
 def _strip_control_chars(value: str) -> str:
@@ -535,6 +536,86 @@ class S3Client:
             return False, "candidate_inspection_failed"
         except Exception:
             return False, "candidate_inspection_failed"
+
+    def inspect_monitoring_renewal_candidate_versions(
+        self,
+        key: str,
+    ) -> Tuple[bool, Union[Dict[str, object], str]]:
+        """Inventory every version and delete marker for one exact candidate key.
+
+        Cleanup must not mistake a current-key 404 for complete removal while
+        an older version or delete marker remains.  The listing is therefore
+        exact-key filtered, fully paginated and intentionally exposes only
+        deletion-relevant metadata -- never object payloads or user metadata.
+        """
+
+        if not monitoring_renewal_candidate_key_allowed(key):
+            return False, "invalid_reserved_key"
+        versions: List[Dict[str, object]] = []
+        delete_markers: List[Dict[str, object]] = []
+        seen_entries: set[Tuple[str, Optional[str]]] = set()
+        key_marker: Optional[str] = None
+        version_marker: Optional[str] = None
+        try:
+            client = self.monitoring_renewal_candidate_client()
+            for _page in range(_MONITORING_RENEWAL_VERSION_INVENTORY_MAX_PAGES):
+                kwargs: Dict[str, object] = {
+                    "Bucket": self.bucket_name,
+                    "Prefix": key,
+                    "MaxKeys": 1000,
+                }
+                if key_marker is not None:
+                    kwargs["KeyMarker"] = key_marker
+                if version_marker is not None:
+                    kwargs["VersionIdMarker"] = version_marker
+                response = client.list_object_versions(**kwargs)
+                for category, response_key, destination in (
+                    ("version", "Versions", versions),
+                    ("delete_marker", "DeleteMarkers", delete_markers),
+                ):
+                    for item in response.get(response_key) or []:
+                        if str(item.get("Key") or "") != key:
+                            continue
+                        version_id = str(item.get("VersionId") or "").strip() or None
+                        identity = (category, version_id)
+                        if identity in seen_entries:
+                            return False, "candidate_version_inventory_invalid"
+                        seen_entries.add(identity)
+                        entry: Dict[str, object] = {
+                            "version_id": version_id,
+                            "is_latest": bool(item.get("IsLatest")),
+                        }
+                        if category == "version":
+                            try:
+                                entry["size"] = int(item.get("Size"))
+                            except (TypeError, ValueError):
+                                entry["size"] = None
+                        destination.append(entry)
+                if not bool(response.get("IsTruncated")):
+                    versions.sort(key=lambda item: str(item.get("version_id") or ""))
+                    delete_markers.sort(
+                        key=lambda item: str(item.get("version_id") or "")
+                    )
+                    return True, {
+                        "key": key,
+                        "versions": versions,
+                        "delete_markers": delete_markers,
+                        "version_count": len(versions),
+                        "delete_marker_count": len(delete_markers),
+                    }
+                next_key_marker = str(response.get("NextKeyMarker") or "").strip()
+                next_version_marker = str(
+                    response.get("NextVersionIdMarker") or ""
+                ).strip()
+                if not next_key_marker:
+                    return False, "candidate_version_inventory_invalid"
+                next_cursor = (next_key_marker, next_version_marker or None)
+                if next_cursor == (key_marker, version_marker):
+                    return False, "candidate_version_inventory_invalid"
+                key_marker, version_marker = next_cursor
+            return False, "candidate_version_inventory_too_large"
+        except Exception:
+            return False, "candidate_version_inventory_failed"
 
     def delete_monitoring_renewal_candidate(
         self,

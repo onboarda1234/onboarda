@@ -246,6 +246,38 @@ def test_render_updates_only_release_provenance_and_preserves_live_configuration
     assert container["secrets"] == [{"name": "JWT_SECRET", "valueFrom": "secret-arn"}]
 
 
+@pytest.mark.parametrize(
+    "harness_name",
+    (
+        "DOCUMENT_RENEWAL_STAGING_HARNESS",
+        "DOCUMENT_RENEWAL_STAGING_HARNESS_RUN_ID",
+        "DOCUMENT_RENEWAL_STAGING_HARNESS_RELEASE_SHA",
+        "DOCUMENT_RENEWAL_STAGING_HARNESS_EXPIRES_AT",
+        "DOCUMENT_RENEWAL_STAGING_HARNESS_ORIGINAL_TASK_DEFINITION",
+    ),
+)
+def test_render_refuses_deployment_from_any_temporary_harness_lease(harness_name):
+    source = _task_definition(
+        BACKEND_TD,
+        OLD_SHA,
+        control.EXPECTED_BACKEND_SERVICE,
+    )
+    source["containerDefinitions"][0]["environment"].append(
+        {"name": harness_name, "value": "forged-or-active-lease"}
+    )
+    with pytest.raises(
+        control.StagingControlError,
+        match="recover it before deployment",
+    ):
+        control.render_task_definition(
+            source_task_definition=source,
+            image=IMAGE_PREFIX + SHA,
+            sha=SHA,
+            build_time="2026-07-30T13:00:00Z",
+            service_name=control.EXPECTED_BACKEND_SERVICE,
+        )
+
+
 def test_verify_runtime_proves_digest_counts_and_alb_health():
     result = control.verify_runtime(
         sha=SHA,

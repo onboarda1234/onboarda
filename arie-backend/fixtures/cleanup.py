@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from regulated_deletion import (
     FIXTURE_CLEANUP_CONFIRMATION,
     audit_log_maintenance_window,
+    is_verified_disposable_postgres_test_db,
     is_verified_isolated_test_database,
     sanctioned_delete_context,
 )
@@ -69,10 +70,19 @@ def fixture_cleanup_context(
         raise FixtureCleanupDenied("fixture cleanup is permitted only in testing or staging")
     if confirmation != FIXTURE_CLEANUP_CONFIRMATION:
         raise FixtureCleanupDenied("fixture cleanup confirmation is missing or invalid")
-    if environment in {"test", "testing"} and not is_verified_isolated_test_database(
-        getattr(db, "database_identity", None), getattr(db, "is_postgres", False)
+    if environment in {"test", "testing"} and not (
+        is_verified_isolated_test_database(
+            getattr(db, "database_identity", None), getattr(db, "is_postgres", False)
+        )
+        or is_verified_disposable_postgres_test_db(
+            getattr(db, "database_identity", None),
+            bool(getattr(db, "is_postgres", False)),
+            environment=environment,
+        )
     ):
-        raise FixtureCleanupDenied("testing cleanup requires a verified isolated SQLite database")
+        raise FixtureCleanupDenied(
+            "testing cleanup requires a verified isolated test database"
+        )
 
     app = db.execute(
         "SELECT id, is_fixture FROM applications WHERE id=?",

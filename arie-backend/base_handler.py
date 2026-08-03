@@ -713,7 +713,8 @@ class BaseHandler(tornado.web.RequestHandler):
             db = get_db()
             if actor_type == "client":
                 row = db.execute(
-                    "SELECT id, email, company_name, status FROM clients WHERE id = ?",
+                    "SELECT id, email, company_name, status, password_hash "
+                    "FROM clients WHERE id = ?",
                     (actor_id,),
                 ).fetchone()
             else:
@@ -734,7 +735,24 @@ class BaseHandler(tornado.web.RequestHandler):
             return None
 
         status = row.get("status")
-        if not self._is_active_status(status):
+        governed_fixture_client = False
+        if actor_type == "client" and not self._is_active_status(status):
+            try:
+                from document_renewal_staging_activation import (
+                    fixture_client_actor_allowed,
+                )
+
+                governed_fixture_client = fixture_client_actor_allowed(
+                    token_user,
+                    row,
+                    method=(self.request.method if hasattr(self, "request") else ""),
+                    path=(self.request.path if hasattr(self, "request") else ""),
+                )
+            except Exception:
+                # Any malformed/expired harness state preserves the ordinary
+                # fail-closed inactive-client contract.
+                governed_fixture_client = False
+        if not self._is_active_status(status) and not governed_fixture_client:
             self._log_inactive_token_denial(token_user, actor_type, "actor_inactive", status)
             return None
 

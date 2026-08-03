@@ -38366,7 +38366,9 @@ def _monitoring_legacy_document_write_blocked(db, alert_id):
     if not application_id or not document_id or "/" in document_id:
         return bool(
             canonical_exists_in_application(application_id)
-            or _monitoring_document_renewal.renewal_feature_enabled()
+            or _monitoring_document_renewal.renewal_feature_enabled_for_alert(
+                db, alert_id
+            )
         )
     document = db.execute(
         """
@@ -38378,7 +38380,9 @@ def _monitoring_legacy_document_write_blocked(db, alert_id):
     if not document or not str(document["slot_key"] or "").strip():
         return bool(
             canonical_exists_in_application(application_id)
-            or _monitoring_document_renewal.renewal_feature_enabled()
+            or _monitoring_document_renewal.renewal_feature_enabled_for_alert(
+                db, alert_id
+            )
         )
     if getattr(db, "is_postgres", False):
         db.execute(
@@ -38399,7 +38403,9 @@ def _monitoring_legacy_document_write_blocked(db, alert_id):
     ).fetchone()
     if canonical_for_document:
         return True
-    if not _monitoring_document_renewal.renewal_feature_enabled():
+    if not _monitoring_document_renewal.renewal_feature_enabled_for_alert(
+        db, alert_id
+    ):
         return False
     return not _monitoring_legacy_document_request_active(db, alert_id)
 
@@ -39292,7 +39298,9 @@ class MonitoringAlertRenewalRequestHandler(BaseHandler):
             )
             self.success({
                 "feature_enabled": (
-                    _monitoring_document_renewal.renewal_feature_enabled()
+                    _monitoring_document_renewal.renewal_feature_enabled_for_alert(
+                        db, alert_id
+                    )
                 ),
                 "request": (
                     _monitoring_renewal_public_projection(request)
@@ -39529,7 +39537,9 @@ class MonitoringAlertDetailHandler(BaseHandler):
         result["overdue_escalations"] = _monitoring_alert_overdue_escalations(db, alert_id)
         result["canonical_linkage"] = _monitoring_linkage_safe_envelope(db, alert_id)
         result["renewal_feature_enabled"] = (
-            _monitoring_document_renewal.renewal_feature_enabled()
+            _monitoring_document_renewal.renewal_feature_enabled_for_alert(
+                db, alert_id
+            )
         )
         try:
             _renewal_request = (
@@ -46038,7 +46048,11 @@ class PortalDocumentRenewalRequestsHandler(BaseHandler):
                 "application_id": app["id"],
                 "application_ref": app["ref"],
                 "feature_enabled": (
-                    _monitoring_document_renewal.renewal_feature_enabled()
+                    _monitoring_document_renewal.renewal_feature_enabled_for_application(
+                        db,
+                        app["id"],
+                        customer_id=app["client_id"],
+                    )
                 ),
                 "renewal_requests": [
                     _monitoring_renewal_public_projection(row, portal=True)
@@ -46072,18 +46086,46 @@ class PortalDocumentRenewalUploadHandler(BaseHandler):
             return
         if user.get("type") != "client":
             return self.error("Only clients can upload renewal documents.", 403)
-        if not _monitoring_document_renewal.renewal_feature_enabled():
-            return self.error(
-                "Document renewal requests are not enabled.",
-                409,
+        try:
+            from document_renewal_staging_activation import (
+                activation_state as _renewal_harness_activation_state,
+                harness_mode_configured as _renewal_harness_mode_configured,
             )
-        if not self.check_sensitive_rate_limit(
-            "document_renewal_upload",
-            max_attempts=20,
-            window_seconds=60,
-        ):
-            return
 
+            renewal_harness_mode = _renewal_harness_mode_configured()
+            renewal_harness_state = (
+                _renewal_harness_activation_state()
+                if renewal_harness_mode
+                else None
+            )
+            if renewal_harness_mode and not (
+                renewal_harness_state.active
+                and renewal_harness_state.run_id
+            ):
+                return self.error(
+                    "Document renewal requests are not enabled.",
+                    409,
+                )
+        except Exception:
+            # A malformed staging harness configuration must fail closed. The
+            # ordinary path is unaffected when the harness variable is absent.
+            return self.error("Document renewal requests are not enabled.", 409)
+        # Preserve the protected ordinary contract byte-for-behaviour: the
+        # global OFF gate and rate-limit run before any database/application
+        # lookup. Only the explicit staging harness defers them until exact
+        # application and request scope has been proven.
+        if not renewal_harness_mode:
+            if not _monitoring_document_renewal.renewal_feature_enabled():
+                return self.error(
+                    "Document renewal requests are not enabled.",
+                    409,
+                )
+            if not self.check_sensitive_rate_limit(
+                "document_renewal_upload",
+                max_attempts=20,
+                window_seconds=60,
+            ):
+                return
         db = get_db()
         file_path = None
         s3_key = None
@@ -46105,6 +46147,42 @@ class PortalDocumentRenewalUploadHandler(BaseHandler):
                     {"surface": "portal_document_renewal_upload"},
                 )
                 return self.error("Application not found", 404)
+            if renewal_harness_mode:
+                if not (
+                    _monitoring_document_renewal
+                    .renewal_feature_enabled_for_application(
+                        db,
+                        app["id"],
+                        customer_id=app["client_id"],
+                    )
+                ):
+                    return self.error(
+                        "Document renewal requests are not enabled.",
+                        409,
+                    )
+                # Harness mode narrows the real upload surface to the exact
+                # deterministic request before rate-limit state, rejection
+                # audit, artifact reservation, or durable storage is touched.
+                if not (
+                    _monitoring_document_renewal
+                    .renewal_feature_enabled_for_request(db, request_id)
+                ):
+                    return self.error(
+                        "Document renewal requests are not enabled.",
+                        409,
+                    )
+                if not self.check_sensitive_rate_limit(
+                    "document_renewal_upload",
+                    max_attempts=20,
+                    window_seconds=60,
+                    dimensions={
+                        "fixture_request": str(request_id),
+                        "harness_run": renewal_harness_state.run_id,
+                    },
+                    include_ip=False,
+                    include_user=True,
+                ):
+                    return
             request_scope = db.execute(
                 """
                 SELECT request_id, application_id, customer_id
@@ -47645,6 +47723,29 @@ if __name__ == "__main__":
     validate_environment()
     logger.info("startup: completed validate_environment (+%s)", _elapsed())
 
+    # The temporary Document Renewal staging harness is a short process-local
+    # lease, never a free-standing feature toggle.  Validate its complete
+    # reviewed manifest/SHA/expiry envelope before any database migration or
+    # listener startup.  An expired valid lease is safely OFF; malformed scope
+    # refuses the temporary rollout.
+    from document_renewal_staging_activation import (
+        validate_configured_activation as _validate_renewal_harness_activation,
+    )
+
+    _renewal_harness_state = _validate_renewal_harness_activation()
+    if _renewal_harness_state.configured:
+        logger.info(
+            "document-renewal-staging-harness: startup state=%s run_id=%s "
+            "expires_at=%s",
+            _renewal_harness_state.reason,
+            _renewal_harness_state.run_id,
+            (
+                _renewal_harness_state.expires_at.isoformat()
+                if _renewal_harness_state.expires_at
+                else "unavailable"
+            ),
+        )
+
     # B3 / PC-3: serialize the boot mutation phase (init_db → seeds →
     # migrations) across ECS tasks. A rolling deploy boots 2+ tasks
     # concurrently; unserialized they race CREATE/ALTER/seed inserts
@@ -48050,7 +48151,14 @@ if __name__ == "__main__":
     # reminder intents; it sends no email, invokes no agent, and never mutates
     # documents or Monitoring Alert lifecycle state.
     try:
-        if _monitoring_document_renewal.renewal_feature_enabled():
+        from document_renewal_staging_activation import harness_mode_configured
+
+        if harness_mode_configured():
+            logger.info(
+                "document-renewal-reminders: global scheduler disabled by "
+                "fixture-scoped staging harness"
+            )
+        elif _monitoring_document_renewal.renewal_feature_enabled():
             try:
                 _renewal_reminder_interval_seconds = int(
                     os.environ.get(
