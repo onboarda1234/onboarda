@@ -24,8 +24,18 @@ def test_portal_does_not_treat_blocked_reliance_as_verified():
 
     assert "data-reliance-state" in html
     assert "document_reliance_state" in html
-    assert "Verification skipped - manual review required" in html
-    assert "Blocked from use" in html
+
+    # The portal no longer renders reliance labels to the client, so the
+    # guarantee is enforced on the machine-readable state the submission gate
+    # reads: only 'verified' or 'manual_accepted' reliance counts as success,
+    # every other reliance state (including blocked and stale) does not.
+    render_body = _function_region(html, "renderPersistedVerification", "slotVerificationIsSuccessful")
+    assert "relianceState === 'verified' || relianceState === 'manual_accepted'" in render_body
+    assert (
+        "card.setAttribute('data-verification-success', verificationSucceeded ? 'true' : 'false');"
+        in render_body
+    )
+    assert "card.setAttribute('data-reliance-state'" in render_body
 
 
 def test_kyc_manual_acceptance_precedes_missing_policy_display():

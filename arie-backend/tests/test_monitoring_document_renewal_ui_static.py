@@ -246,9 +246,13 @@ def test_portal_renewal_cards_are_application_bound_and_upload_only():
     assert "request.request_status || '') !== 'awaiting_upload'" in renderer
     assert "Upload Renewal Document" in renderer
     assert "upload_received: 'Uploaded'" in renderer
-    assert "Awaiting Verification" in renderer
-    assert "Compliance has not verified or accepted it" in renderer
+    # Client-facing copy is neutral (no verification vocabulary); the
+    # canonical-document guarantee it carries is unchanged.
+    assert "<strong>Uploaded</strong>" in renderer
+    assert "Our compliance team will review this document" in renderer
     assert "canonical document has not been replaced" in renderer
+    assert "Awaiting Verification" not in renderer
+    assert "has not verified or accepted it" not in renderer
     assert "status === 'awaiting_upload' && featureEnabled === true" in renderer
     assert "portalDocumentRenewalFeatureEnabled = featureEnabled === true" in renderer
     assert "Renewal uploads are currently read-only while the governed workflow is OFF" in renderer
@@ -294,8 +298,9 @@ def test_portal_renewal_uses_dedicated_read_and_staging_upload_contract():
     assert "formData.append('file', file, file.name)" in upload
     assert "if (!portalDocumentRenewalFeatureEnabled)" in upload
     assert (
-        "showToast('success', 'Renewal Upload Bound', 'Uploaded and awaiting "
-        "verification. Your canonical document has not been replaced.')"
+        "showToast('success', 'Upload Successful', 'Uploaded successfully. "
+        "Our compliance team will review this document. Your canonical "
+        "document has not been replaced.')"
     ) in upload
     for prohibited in (
         "/enhanced-requirements/",

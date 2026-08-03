@@ -268,8 +268,13 @@ def test_portal_sanitizes_backend_verification_copy_before_rendering():
     assert "bank officer" in sanitizer_body
     assert "Officer review may be required" in sanitizer_body
     render_body = _extract_js_function(html, "renderPersistedVerification")
-    assert "sanitizeClientPortalCopy(check.message)" in render_body
-    assert "sanitizeClientPortalCopy(check.label || check.name || 'Check')" in render_body
+    # Backend-sourced copy still reaching the client (the stored document name)
+    # goes through the scrubber; every other backend verification string is no
+    # longer rendered in the portal at all.
+    assert (
+        "sanitizeClientPortalCopy(documentRecord.doc_name || documentRecord.doc_type "
+        "|| 'Uploaded document')"
+    ) in render_body
 
 
 def test_initial_review_submit_button_matches_reset_copy():

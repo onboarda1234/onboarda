@@ -578,9 +578,11 @@ def test_portal_license_toggle_and_review_summary_cleanup_are_present():
     assert 'id="licence-fields-group"' in src
     assert 'id="review-ai-summary"' not in src
     assert 'id="review-submit-note"' in src
-    assert "btn.textContent = 'Resolve Required Verification';" in src
-    assert "Submission Blocked — Verification Required" in src
-    assert "Verification Gate Active" in src
+    # The submission gate is unchanged; only its client-facing copy is now
+    # free of internal verification vocabulary (see test_client_portal_upload_privacy).
+    assert "btn.textContent = missingCount > 0 ? 'Complete Required Documents' : 'Submission Not Yet Available';" in src
+    assert "title.textContent = missingCount > 0 ? 'Documents Required' : 'Documents Under Review';" in src
+    assert "cardTitle.textContent = missingCount > 0 ? 'Documents Required' : 'Review In Progress';" in src
 
 
 def test_backoffice_incomplete_submission_banner_is_present():

@@ -35,8 +35,10 @@ def test_portal_upload_copy_does_not_claim_stored_and_verified():
 
     assert "Stored and verified" not in src
     assert "stored and verified" not in src
-    assert "verification_success !== true" in src
+    # The portal never claims a document is verified. Since the client-facing
+    # verification findings were removed it makes no verification claim at all,
+    # while the machine-readable state the submission gate reads is unchanged.
     assert "data-verification-success" in src
     assert "function kycDocumentVerificationState" in src
-    assert "ID + PoA stored — Not verified" in src
-    assert "Submission Blocked — Verification Required" in src
+    assert "(personDocsStored ? 'ID + PoA stored' : '❌ Documents Missing')" in src
+    assert "var PORTAL_INTERNAL_REVIEW_NOTICE = " in src
