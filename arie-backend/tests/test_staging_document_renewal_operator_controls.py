@@ -525,7 +525,8 @@ def test_every_running_task_inventory_fails_on_incomplete_ecs_description(path):
 def test_recovery_workflow_is_expired_only_exact_and_never_updates_worker():
     text = RECOVERY_WORKFLOW.read_text(encoding="utf-8")
     assert "workflow_run:" in text
-    assert "schedule:" in text
+    assert "workflow_dispatch:" in text
+    assert "schedule:" not in text
     job = text.index("  recover:")
     job_if = text.index("    if:", job)
     job_concurrency = text.index("    concurrency:", job)
