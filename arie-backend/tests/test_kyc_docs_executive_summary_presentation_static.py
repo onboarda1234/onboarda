@@ -193,6 +193,20 @@ assert(JSON.stringify(results) === before, 'check rendering must not mutate veri
     _run_node(script)
 
 
+def test_compact_check_rows_show_a_native_disclosure_affordance():
+    html = _backoffice_html()
+    check_row = _extract_function(html, "renderDocumentVerificationCheckRow")
+
+    assert 'grid-template-columns:minmax(0,1fr) auto 12px' in html
+    assert ".verification-check-row > summary::after" in html
+    assert "transform:rotate(-45deg)" in html
+    assert ".verification-check-row[open] > summary::after" in html
+    assert "transform:rotate(45deg)" in html
+    assert '<details class="verification-check-row ' in check_row
+    assert "<summary>" in check_row
+    assert "onclick=" not in check_row
+
+
 def test_actions_handlers_collapsed_audit_and_client_portal_remain_unchanged_in_scope():
     html = _backoffice_html()
     portal = PORTAL_HTML.read_text(encoding="utf-8")
