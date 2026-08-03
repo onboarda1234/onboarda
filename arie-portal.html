@@ -6856,10 +6856,39 @@ function clientUploadErrorMessage(err) {
   return CLIENT_UPLOAD_ERROR_COPY[classifyClientUploadError(err)] || CLIENT_UPLOAD_ERROR_COPY.generic;
 }
 
-function showClientUploadFailure(err) {
+// The toast auto-dismisses after 4s. On its own that leaves a rejected upload
+// indistinguishable from one never attempted — the slot reverts to "Click to
+// upload" and the client can reasonably believe the document was accepted. So
+// a failure also leaves a persistent state on the slot itself, which stays
+// until the next attempt. Presentation only: the slot is not marked uploaded,
+// this element is not .doc-verify-results, and no gate reads it.
+function clearClientUploadError(targetEl) {
+  if (!targetEl || !targetEl.querySelectorAll) return;
+  targetEl.querySelectorAll('.doc-upload-error').forEach(function(node) { node.remove(); });
+}
+
+function renderClientUploadError(targetEl, err) {
+  if (!targetEl || !targetEl.appendChild) return;
+  clearClientUploadError(targetEl);
+  var box = document.createElement('div');
+  box.className = 'doc-upload-error';
+  box.setAttribute('role', 'alert');
+  box.style.cssText = 'margin-top:10px;padding:9px 10px;border-radius:7px;' +
+    'background:var(--red-dim,#fff5f5);border:1px solid var(--red);color:var(--red);font-size:11px;';
+  box.innerHTML = '<strong>&#10060; Upload Failed</strong>' +
+    '<div style="margin-top:4px;font-weight:600;">' + escapeHtml(clientUploadErrorMessage(err)) + '</div>' +
+    '<div style="margin-top:4px;font-weight:600;">Select a file to try again.</div>';
+  targetEl.appendChild(box);
+}
+
+function showClientUploadFailure(err, targetEl) {
   // apiCall has already told the client and returned them to sign-in.
-  if (String((err && err.message) || '') === 'Session expired') return;
+  if (String((err && err.message) || '') === 'Session expired') {
+    clearClientUploadError(targetEl);
+    return;
+  }
   showToast('error', 'Upload Failed', clientUploadErrorMessage(err));
+  renderClientUploadError(targetEl, err);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -11524,6 +11553,7 @@ function clearUploadedDocument(docId) {
     var verificationList = item.querySelector('.doc-verify-results-list');
     if (verificationList) verificationList.remove();
   }
+  clearClientUploadError(item);
   if (fileInput) fileInput.value = '';
   uploadedDocs.delete(docId);
   updateProgress();
@@ -11566,6 +11596,7 @@ function handleUpload(docId, input) {
 
   // Build file names
   const names = Array.from(files).map(f => f.name).join(', ');
+  clearClientUploadError(item);
   label.textContent = '⏳ Uploading ' + names;
 
   // Upload to API if authenticated
@@ -11648,7 +11679,7 @@ function handleUpload(docId, input) {
       label.textContent = 'Click to upload';
       item.classList.remove('uploaded');
       input.value = '';
-      showClientUploadFailure(err);
+      showClientUploadFailure(err, item);
     });
     return;
   }
@@ -14524,6 +14555,7 @@ function handleKYCUpload(personId, docType, input, personType) {
     if (input) input.value = '';
   }
 
+  clearClientUploadError(area ? area.parentElement : null);
   if (lbl) lbl.textContent = '⏳ Uploading ' + fileName;
   if (area) { area.style.borderColor = 'var(--amber)'; area.style.color = 'var(--amber)'; }
 
@@ -14595,7 +14627,7 @@ function handleKYCUpload(personId, docType, input, personType) {
       console.warn('KYC doc upload error:', err);
       // Slot is reset so the client can immediately upload another file.
       resetUploadUI();
-      showClientUploadFailure(err);
+      showClientUploadFailure(err, area ? area.parentElement : null);
     });
   } else {
     resetUploadUI();

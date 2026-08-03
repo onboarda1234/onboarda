@@ -62,7 +62,7 @@ def test_every_upload_failure_path_uses_the_sanitised_reporter():
     html = _portal_html()
     for function_name in UPLOAD_FAILURE_FUNCTIONS:
         body = _extract_js_function(html, function_name)
-        assert "showClientUploadFailure(err)" in body, function_name
+        assert "showClientUploadFailure(err" in body, function_name
 
 
 def test_no_upload_path_renders_backend_error_text():
@@ -115,6 +115,59 @@ def test_failed_upload_leaves_the_slot_ready_for_another_file():
     reset = _extract_js_function(html, "resetUploadUI")
     assert "lbl.textContent = 'Click to upload'" in reset
     assert "input.value = ''" in reset
+
+
+def test_failure_leaves_a_persistent_state_on_the_slot():
+    """The toast auto-dismisses; the slot state must outlive it."""
+    html = _portal_html()
+
+    reporter = _extract_js_function(html, "showClientUploadFailure")
+    assert "renderClientUploadError(targetEl, err)" in reporter
+
+    render = _extract_js_function(html, "renderClientUploadError")
+    assert "box.className = 'doc-upload-error';" in render
+    assert "role', 'alert'" in render
+    assert "Upload Failed" in render
+    assert "escapeHtml(clientUploadErrorMessage(err))" in render
+    assert "Select a file to try again." in render
+    # No timer removes it — only a new attempt does.
+    assert "setTimeout" not in render
+
+    # The failing slot is passed in, so the state lands on that slot only.
+    entity = _extract_js_function(html, "handleUpload")
+    person = _extract_js_function(html, "handleKYCUpload")
+    assert "showClientUploadFailure(err, item)" in entity
+    assert "showClientUploadFailure(err, area ? area.parentElement : null)" in person
+
+    # A fresh attempt, and removing a stored document, clear it.
+    assert "clearClientUploadError(item);" in entity
+    assert "clearClientUploadError(area ? area.parentElement : null);" in person
+    assert "clearClientUploadError(item);" in _extract_js_function(html, "clearUploadedDocument")
+
+
+def test_persistent_failure_state_cannot_affect_the_submission_gate():
+    """The error element must be invisible to every gate-reading query."""
+    html = _portal_html()
+    render = _extract_js_function(html, "renderClientUploadError")
+
+    # Gate reads .doc-verify-results and its data-* attributes; the error box
+    # is a different class and carries none of them.
+    assert "doc-verify-results" not in render
+    for attribute in (
+        "data-verification-success",
+        "data-verification-state",
+        "data-reliance-state",
+        "data-doc-slot",
+    ):
+        assert attribute not in render, attribute
+
+    # It never marks the slot uploaded or touches the uploaded-document set.
+    assert "classList.add('uploaded')" not in render
+    assert "uploadedDocs" not in render
+
+    gate = _extract_js_function(html, "slotVerificationIsSuccessful")
+    assert "querySelectorAll('.doc-verify-results')" in gate
+    assert "doc-upload-error" not in gate
 
 
 def test_upload_success_and_gate_copy_are_unchanged_by_this_hotfix():
