@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import textwrap
 from urllib.error import HTTPError
@@ -122,7 +123,17 @@ def test_runner_parser_rejects_generic_command_and_environment_inputs(legacy_inp
         parser.parse_args([*base, *legacy_input])
 
 
-def test_secret_bearing_run_task_payload_is_stdin_only(monkeypatch):
+def _network_configuration():
+    return {
+        "awsvpcConfiguration": {
+            "subnets": ["subnet-00000000000000000"],
+            "securityGroups": ["sg-00000000000000000"],
+            "assignPublicIp": "DISABLED",
+        }
+    }
+
+
+def test_secret_bearing_run_task_overrides_are_stdin_only(monkeypatch):
     calls = []
 
     def fake_run(arguments, **kwargs):
@@ -131,14 +142,93 @@ def test_secret_bearing_run_task_payload_is_stdin_only(monkeypatch):
 
     monkeypatch.setattr(ecs_task.subprocess, "run", fake_run)
     secret = "do-not-place-on-command-line"
-    ecs_task._aws_stdin(
-        ["ecs", "run-task", "--region", "af-south-1"],
-        {"overrides": {"environment": [{"value": secret}]}},
+    overrides = {
+        "containerOverrides": [
+            {
+                "name": "regmind-backend",
+                "environment": [{"name": "FINGERPRINT", "value": secret}],
+            }
+        ]
+    }
+    ecs_task._aws_run_task(
+        task_definition=TASK_ARN,
+        network_configuration=_network_configuration(),
+        overrides=overrides,
+        started_by=f"{RUN_ID}-seed",
     )
     arguments, kwargs = calls[0]
     assert secret not in " ".join(arguments)
-    assert "file:///dev/stdin" in arguments
+    assert arguments[:3] == ["aws", "ecs", "run-task"]
+    assert arguments[arguments.index("--cluster") + 1] == "regmind-staging"
+    assert arguments[arguments.index("--task-definition") + 1] == TASK_ARN
+    assert arguments[arguments.index("--launch-type") + 1] == "FARGATE"
+    assert arguments[arguments.index("--count") + 1] == "1"
+    network_index = arguments.index("--network-configuration")
+    assert json.loads(arguments[network_index + 1]) == _network_configuration()
+    assert arguments[arguments.index("--started-by") + 1] == f"{RUN_ID}-seed"
+    assert arguments[arguments.index("--region") + 1] == "af-south-1"
+    assert "--cli-input-json" not in arguments
+    override_index = arguments.index("--overrides")
+    assert arguments[override_index + 1] == "file:///dev/stdin"
+    token_index = arguments.index("--client-token")
+    assert arguments[token_index + 1] == f"{RUN_ID}-seed"
     assert secret in kwargs["input"]
+    assert json.loads(kwargs["input"]) == overrides
+
+
+def test_run_task_cli_failure_never_exposes_captured_output(monkeypatch):
+    secret = "never-echo-this-fingerprint"
+
+    def fake_run(arguments, **kwargs):
+        return subprocess.CompletedProcess(
+            arguments,
+            252,
+            stdout=f"request={secret}",
+            stderr=f"validation={secret}",
+        )
+
+    monkeypatch.setattr(ecs_task.subprocess, "run", fake_run)
+    with pytest.raises(ecs_task.EcsHarnessTaskError) as raised:
+        ecs_task._aws_run_task(
+            task_definition=TASK_ARN,
+            network_configuration=_network_configuration(),
+            overrides={
+                "containerOverrides": [
+                    {"environment": [{"name": "FINGERPRINT", "value": secret}]}
+                ]
+            },
+            started_by=f"{RUN_ID}-seed",
+        )
+    assert str(raised.value) == "AWS stdin command failed"
+    assert secret not in str(raised.value)
+
+
+@pytest.mark.skipif(shutil.which("aws") is None, reason="AWS CLI is unavailable")
+def test_installed_aws_cli_accepts_run_task_overrides_from_stdin():
+    """Exercise CLI parsing without contacting ECS or creating a task."""
+
+    overrides = {
+        "containerOverrides": [
+            {
+                "name": "regmind-backend",
+                "environment": [{"name": "FINGERPRINT", "value": "b" * 64}],
+            }
+        ]
+    }
+    arguments = ecs_task._run_task_cli_arguments(
+        task_definition=TASK_ARN,
+        network_configuration=_network_configuration(),
+        started_by=f"{RUN_ID}-seed",
+    )
+    result = subprocess.run(
+        [*arguments, "--generate-cli-skeleton", "output"],
+        input=json.dumps(overrides, separators=(",", ":")),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert isinstance(json.loads(result.stdout), dict)
 
 
 def test_runner_rejects_wrong_registry_even_with_matching_sha(monkeypatch):
