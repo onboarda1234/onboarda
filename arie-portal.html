@@ -6469,7 +6469,7 @@ async function uploadPeriodicReviewDocumentRequest(requirementId, inputId, butto
       await loadPortalEnhancedRequirements();
     }
   } catch (err) {
-    showToast('error', 'Upload Failed', err.message || 'Could not upload this document.');
+    showClientUploadFailure(err);
   } finally {
     delete portalEnhancedRequirementBusy[busyKey];
     if (button) {
@@ -6827,6 +6827,39 @@ function showToast(type, title, msg) {
   const t = document.getElementById('toast');
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+// ─── Client-facing upload failure copy ───────────────────────────────────────
+// An upload failure is reported to the client as one of three fixed messages.
+// Backend error text is used only to classify the failure — it is never
+// rendered — so raw server strings, validation internals and stack traces stay
+// out of the client surface. Display only: the upload request, the workflow,
+// polling, the submission gate and the verification pipeline are untouched.
+var CLIENT_UPLOAD_ERROR_COPY = {
+  too_large: 'File exceeds the maximum allowed size. Please upload a smaller file.',
+  unsupported_type: 'This file type is not supported. Please upload one of the supported file formats.',
+  generic: 'We couldn’t upload your document. Please try again.'
+};
+
+function classifyClientUploadError(err) {
+  var raw = String((err && err.message) || '');
+  if (/exceeds\s+\d+\s*MB limit|exceeds maximum of|too large|entity too large/i.test(raw)) {
+    return 'too_large';
+  }
+  if (/not allowed|unsupported file|does not match claimed file type|magic bytes/i.test(raw)) {
+    return 'unsupported_type';
+  }
+  return 'generic';
+}
+
+function clientUploadErrorMessage(err) {
+  return CLIENT_UPLOAD_ERROR_COPY[classifyClientUploadError(err)] || CLIENT_UPLOAD_ERROR_COPY.generic;
+}
+
+function showClientUploadFailure(err) {
+  // apiCall has already told the client and returned them to sign-in.
+  if (String((err && err.message) || '') === 'Session expired') return;
+  showToast('error', 'Upload Failed', clientUploadErrorMessage(err));
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -11611,10 +11644,11 @@ function handleUpload(docId, input) {
       });
     }).catch(function(err) {
       console.error('API upload failed for', docId, err);
+      // Slot is reset so the client can immediately upload another file.
       label.textContent = 'Click to upload';
       item.classList.remove('uploaded');
       input.value = '';
-      showToast('error', 'Upload Failed', err.message || 'Could not upload this document. Please try again.');
+      showClientUploadFailure(err);
     });
     return;
   }
@@ -11996,8 +12030,8 @@ async function uploadPortalDocumentRenewal(input) {
     showToast('success', 'Upload Successful', 'Uploaded successfully. Our compliance team will review this document. Your canonical document has not been replaced.');
     await loadPortalDocumentRenewalRequests();
   } catch (err) {
-    if (result) result.textContent = err.message || 'Upload failed.';
-    showToast('error', 'Upload Failed', err.message || 'Could not upload this renewal document.');
+    if (result) result.textContent = clientUploadErrorMessage(err);
+    showClientUploadFailure(err);
   } finally {
     delete portalDocumentRenewalBusy[busyKey];
     input.disabled = false;
@@ -12258,7 +12292,7 @@ async function uploadPortalEnhancedRequirement(requirementId, input, button) {
     input.value = '';
     await loadPortalEnhancedRequirements();
   } catch (err) {
-    showToast('error', 'Upload Failed', err.message || 'Could not upload this document.');
+    showClientUploadFailure(err);
   } finally {
     delete portalEnhancedRequirementBusy[busyKey];
     if (button) {
@@ -12408,7 +12442,7 @@ async function uploadRMIItem(itemId, docType, input) {
       } catch(e) {}
     }
   } catch (err) {
-    showToast('error', 'Upload Failed', err.message || 'Could not upload this document.');
+    showClientUploadFailure(err);
   } finally {
     input.value = '';
   }
@@ -14559,13 +14593,9 @@ function handleKYCUpload(personId, docType, input, personType) {
       });
     }).catch(function(err) {
       console.warn('KYC doc upload error:', err);
+      // Slot is reset so the client can immediately upload another file.
       resetUploadUI();
-      var msg = err.message || '';
-      if (msg === 'Session expired') {
-        // Already handled above
-      } else {
-        showToast('error', 'Upload Failed', msg || 'Could not store this document. Please try again.');
-      }
+      showClientUploadFailure(err);
     });
   } else {
     resetUploadUI();
