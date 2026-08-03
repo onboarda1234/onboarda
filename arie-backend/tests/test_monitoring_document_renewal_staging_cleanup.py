@@ -30,6 +30,7 @@ from monitoring_document_renewal_staging_cleanup import (
     cleanup_renewal_harness_operational_state,
     compare_renewal_harness_baseline,
 )
+from regulated_deletion import DISPOSABLE_POSTGRES_TEST_DATABASE_PREFIX
 
 
 FLAGS_OFF = {name: False for name in MONITORING_FEATURE_FLAGS}
@@ -50,7 +51,10 @@ def disposable_postgres_cleanup_db(monkeypatch):
     import psycopg2
     from psycopg2 import sql
 
-    database_name = f"onboarda_test_renewal_harness_{uuid.uuid4().hex[:12]}"
+    database_name = (
+        f"{DISPOSABLE_POSTGRES_TEST_DATABASE_PREFIX}renewal_harness_"
+        f"{uuid.uuid4().hex[:12]}"
+    )
     dsn_parts = urlsplit(base_dsn)
     if dsn_parts.scheme.lower() not in {"postgres", "postgresql"}:
         pytest.skip("Disposable PostgreSQL harness test requires a URI-form DSN")
@@ -127,6 +131,48 @@ def test_cleanup_database_fingerprint_rejects_target_query_overrides():
             "postgresql://user:password@approved.internal/regmind_staging"
             "?host=production.internal&dbname=regmind_production"
         )
+
+
+def test_cleanup_cli_redacts_unexpected_connection_failure(monkeypatch, capsys):
+    import db as db_module
+
+    sentinel = "postgresql://secret-user:secret-password@private-host/staging"
+
+    def fail_get_db():
+        raise RuntimeError(sentinel)
+
+    monkeypatch.setattr(db_module, "get_db", fail_get_db)
+    assert cleanup_module.main(["snapshot", "--run-id", "fixture-run-redaction"]) == 2
+    output = capsys.readouterr().out
+    assert sentinel not in output
+    payload = json.loads(output)
+    assert payload["error_code"] == "cleanup_internal_error"
+    assert payload["error"] == "unexpected cleanup failure"
+    assert payload["error_type"] == "RuntimeError"
+
+
+def test_cleanup_cli_preserves_allowlisted_contract_error(monkeypatch, capsys):
+    import db as db_module
+
+    class Db:
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(db_module, "get_db", Db)
+    monkeypatch.setattr(
+        cleanup_module,
+        "_load_cli_fixture",
+        lambda _db: (_ for _ in ()).throw(
+            RenewalHarnessCleanupError("fixture baseline is not exact")
+        ),
+    )
+    assert cleanup_module.main(["plan", "--run-id", "fixture-run-contract"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error_code"] == "cleanup_contract_error"
+    assert payload["error"] == "fixture baseline is not exact"
 
 
 def test_cleanup_target_is_pinned_to_reviewed_fixture_manifest(cleanup_db):
@@ -405,6 +451,46 @@ def _cleanup(db, fixture, plan, **overrides):
     }
     values.update(overrides)
     return cleanup_renewal_harness_operational_state(db, fixture, **values)
+
+
+def test_plan_and_locked_cleanup_skip_global_isolation_scans(
+    cleanup_db,
+    monkeypatch,
+):
+    db, tmp_path = cleanup_db
+    fixture = _seed_fixture(db)
+    _seed_operational_graph(db, fixture, tmp_path)
+    original = cleanup_module._relation_rows
+    observed = []
+
+    def tracked_relation_rows(
+        connection,
+        spec,
+        *,
+        run_id,
+        include_isolation=True,
+    ):
+        observed.append(include_isolation)
+        return original(
+            connection,
+            spec,
+            run_id=run_id,
+            include_isolation=include_isolation,
+        )
+
+    monkeypatch.setattr(cleanup_module, "_relation_rows", tracked_relation_rows)
+    plan = build_renewal_harness_cleanup_plan(
+        db,
+        fixture,
+        run_id="fixture-run-isolation-scan-boundary",
+    )
+    assert observed == [False]
+
+    observed.clear()
+    _cleanup(db, fixture, plan)
+    # Locked replan and post-delete proof are fixture-only. The one final
+    # fingerprint deliberately retains the complete global isolation scan.
+    assert observed == [False, False, True]
 
 
 def test_plan_is_repeatable_sanitized_and_declares_exact_fk_order(cleanup_db):

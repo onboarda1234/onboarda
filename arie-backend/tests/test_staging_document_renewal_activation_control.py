@@ -469,6 +469,65 @@ def test_final_residue_proof_requires_zero_tags_and_zero_running_harness_tasks()
             running_task_definition_arns=[candidate["taskDefinitionArn"]],
             running_task_definitions=[candidate],
         )
+    with pytest.raises(control.ActivationControlError, match="incomplete"):
+        control.verify_recovery_residue_clear(
+            _source(flag_value="false"),
+            [],
+            running_task_definition_arns=[
+                _source(flag_value="false")["taskDefinitionArn"]
+            ],
+            running_task_definitions=[],
+        )
+    ordinary = _source(flag_value="false")
+    with pytest.raises(control.ActivationControlError, match="mismatched"):
+        control.verify_recovery_residue_clear(
+            ordinary,
+            [],
+            running_task_definition_arns=[ordinary["taskDefinitionArn"]],
+            running_task_definitions=[
+                {
+                    **ordinary,
+                    "taskDefinitionArn": ordinary["taskDefinitionArn"].replace(
+                        ":1002", ":1003"
+                    ),
+                }
+            ],
+        )
+    with pytest.raises(control.ActivationControlError, match="duplicate"):
+        control.verify_recovery_residue_clear(
+            ordinary,
+            [],
+            running_task_definition_arns=[ordinary["taskDefinitionArn"]],
+            running_task_definitions=[ordinary, dict(ordinary)],
+        )
+    clean = control.verify_recovery_residue_clear(
+        ordinary,
+        [],
+        running_task_definition_arns=[ordinary["taskDefinitionArn"]],
+        running_task_definitions=[ordinary],
+    )
+    assert clean["running_harness_tasks"] == 0
+
+    flag_on = _source(flag_value="true")
+    with pytest.raises(control.ActivationControlError, match="fully-OFF"):
+        control.verify_recovery_residue_clear(
+            ordinary,
+            [],
+            running_task_definition_arns=[flag_on["taskDefinitionArn"]],
+            running_task_definitions=[flag_on],
+        )
+
+    partial_harness = _source(flag_value="false")
+    partial_harness["containerDefinitions"][0]["environment"].append(
+        {"name": control.HARNESS_RUN_ID_ENV, "value": "gh-12345-1"}
+    )
+    with pytest.raises(control.ActivationControlError, match="running harness"):
+        control.verify_recovery_residue_clear(
+            ordinary,
+            [],
+            running_task_definition_arns=[partial_harness["taskDefinitionArn"]],
+            running_task_definitions=[partial_harness],
+        )
 
 
 def _fingerprint(
@@ -603,11 +662,12 @@ def test_fingerprint_reconciliation_requires_exact_audit_action_deltas():
     after_actions = dict(prior)
     for action, count in control.EXPECTED_VALIDATION_AUDIT_DELTA.items():
         after_actions[action] = after_actions.get(action, 0) + count
+    validation_count = sum(control.EXPECTED_VALIDATION_AUDIT_DELTA.values())
     after = _fingerprint(
         counts=expected_counts,
         actions=after_actions,
-        audit_count=9,
-        chained=9,
+        audit_count=2 + validation_count,
+        chained=2 + validation_count,
         unchained=0,
         active=True,
         legacy_rows=3,
@@ -617,8 +677,8 @@ def test_fingerprint_reconciliation_requires_exact_audit_action_deltas():
     final = _fingerprint(
         counts={name: 0 for name in expected_counts},
         actions=final_actions,
-        audit_count=10,
-        chained=10,
+        audit_count=3 + validation_count,
+        chained=3 + validation_count,
         unchained=0,
         active=False,
         legacy_rows=3,
@@ -638,8 +698,8 @@ def test_fingerprint_reconciliation_requires_exact_audit_action_deltas():
     after["fixture_audit_actions"][
         "monitoring.document_renewal.unexpected"
     ] = 1
-    after["relations"]["fixture_audit"]["row_count"] = 10
-    after["fixture_audit_chained_count"] = 10
+    after["relations"]["fixture_audit"]["row_count"] = 3 + validation_count
+    after["fixture_audit_chained_count"] = 3 + validation_count
     with pytest.raises(control.ActivationControlError):
         control.compare_fingerprints(
             before,
@@ -658,11 +718,12 @@ def test_recovery_reconciliation_allows_only_cleanup_and_empty_final_state():
         "renewal_notifications": 1,
         "harness_rate_limit": 1,
     }
+    validation_count = sum(control.EXPECTED_VALIDATION_AUDIT_DELTA.values())
     before = _fingerprint(
         counts=counts,
         actions=control.EXPECTED_VALIDATION_AUDIT_DELTA,
-        audit_count=7,
-        chained=7,
+        audit_count=validation_count,
+        chained=validation_count,
         unchained=0,
         active=False,
     )
@@ -671,8 +732,8 @@ def test_recovery_reconciliation_allows_only_cleanup_and_empty_final_state():
     final = _fingerprint(
         counts={name: 0 for name in counts},
         actions=final_actions,
-        audit_count=8,
-        chained=8,
+        audit_count=validation_count + 1,
+        chained=validation_count + 1,
         unchained=0,
         active=False,
     )

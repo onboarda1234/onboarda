@@ -203,9 +203,20 @@ jobs:
                       text=True,
                   )
               )
+              tasks = payload.get("tasks") or []
+              returned_task_arns = [str(row.get("taskArn") or "") for row in tasks]
+              if (
+                  payload.get("failures")
+                  or len(tasks) != len(task_arns)
+                  or len(set(returned_task_arns)) != len(returned_task_arns)
+                  or set(returned_task_arns) != set(task_arns)
+              ):
+                  raise SystemExit(
+                      "FAIL: ECS did not describe every listed running task"
+                  )
               task_definition_arns = [
                   str(row.get("taskDefinitionArn") or "")
-                  for row in payload.get("tasks") or []
+                  for row in tasks
               ]
               for arn in sorted(set(task_definition_arns)):
                   item = json.loads(
@@ -368,8 +379,11 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          ISSUED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-          EXPIRES_AT="$(date -u -d '+20 minutes' '+%Y-%m-%dT%H:%M:%SZ')"
+          ISSUED_AT_EPOCH="$(date -u '+%s')"
+          LEASE_SECONDS=1680
+          EXPIRES_AT_EPOCH="$((ISSUED_AT_EPOCH + LEASE_SECONDS))"
+          ISSUED_AT="$(date -u -d "@$ISSUED_AT_EPOCH" '+%Y-%m-%dT%H:%M:%SZ')"
+          EXPIRES_AT="$(date -u -d "@$EXPIRES_AT_EPOCH" '+%Y-%m-%dT%H:%M:%SZ')"
           MANIFEST_SHA="$(python3 -c 'from fixtures.document_renewal_staging import manifest_sha256; print(manifest_sha256())')"
           python3 scripts/qa/staging_document_renewal_activation.py render \
             --source "$RUNNER_TEMP/original-backend-task-definition.json" \
@@ -409,7 +423,8 @@ jobs:
             --expected-run-id "$HARNESS_RUN_ID" \
             --output "$HARNESS_EVIDENCE_DIR/registered-recovery-metadata.json"
           echo "task_definition=$TEMPORARY_ARN" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "{\"task_definition\":\"$TEMPORARY_ARN\",\"lease_seconds\":1200}" \
+          echo "expires_at=$EXPIRES_AT" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "{\"task_definition\":\"$TEMPORARY_ARN\",\"lease_seconds\":$LEASE_SECONDS}" \
             > "$HARNESS_EVIDENCE_DIR/temporary-task-definition.json"
 
       - name: Activate temporary backend lease only
@@ -521,8 +536,21 @@ jobs:
             --evidence-output "$HARNESS_EVIDENCE_DIR/after-fingerprint.json"
 
       - name: Open bounded read-only browser QA window
+        env:
+          HARNESS_EXPIRES_AT: ${{ steps.temporary_task_definition.outputs.expires_at }}
         run: |
           set -euo pipefail
+          REMAINING_SECONDS="$(python3 - "$HARNESS_EXPIRES_AT" <<'PY'
+          from datetime import datetime, timezone
+          import sys
+          expires = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+          print(int((expires - datetime.now(timezone.utc)).total_seconds()))
+          PY
+          )"
+          if [[ ! "$REMAINING_SECONDS" =~ ^[0-9]+$ ]] || [ "$REMAINING_SECONDS" -lt 240 ]; then
+            echo "FAIL: insufficient governed lease remains for browser QA" >&2
+            exit 2
+          fi
           {
             echo "## Document Renewal synthetic browser window"
             echo "- Fixture application: FX-DOC-RENEWAL-001"
@@ -816,9 +844,20 @@ jobs:
                       text=True,
                   )
               )
+              tasks = payload.get("tasks") or []
+              returned_task_arns = [str(row.get("taskArn") or "") for row in tasks]
+              if (
+                  payload.get("failures")
+                  or len(tasks) != len(task_arns)
+                  or len(set(returned_task_arns)) != len(returned_task_arns)
+                  or set(returned_task_arns) != set(task_arns)
+              ):
+                  raise SystemExit(
+                      "FAIL: ECS did not describe every listed running task"
+                  )
               task_definition_arns = [
                   str(row.get("taskDefinitionArn") or "")
-                  for row in payload.get("tasks") or []
+                  for row in tasks
               ]
               for arn in sorted(set(task_definition_arns)):
                   item = json.loads(

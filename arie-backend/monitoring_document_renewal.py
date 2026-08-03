@@ -78,6 +78,7 @@ MAX_LIST_OFFSET = 10_000
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 OFFICER_ROLES = frozenset({"co", "sco", "admin"})
 _EXPECTED_SCOPE_UNSET = object()
+_STAGING_HARNESS_MODE_ENV = "DOCUMENT_RENEWAL_STAGING_HARNESS"
 
 
 class RenewalError(RuntimeError):
@@ -115,6 +116,11 @@ def renewal_feature_enabled(feature_flags: Any = None) -> bool:
         from environment import flags as feature_flags
 
     enabled = bool(feature_flags.is_enabled(FEATURE_FLAG))
+    # Keep the protected ordinary runtime independent from the staging-only
+    # harness module. Only an explicitly configured marker may narrow the
+    # governed feature flag through the bounded activation lease.
+    if os.environ.get(_STAGING_HARNESS_MODE_ENV) in (None, ""):
+        return enabled
     # Custom flag objects are used by focused tests and operator tooling, so
     # enforce the same staging lease even when the environment singleton is
     # not the supplied object.
@@ -146,6 +152,8 @@ def _require_feature(
             "Document renewal automation is not enabled.",
             http_status=409,
         )
+    if os.environ.get(_STAGING_HARNESS_MODE_ENV) in (None, ""):
+        return
     from document_renewal_staging_activation import (
         StagingHarnessActivationError,
         require_fixture_write_scope,
@@ -173,6 +181,8 @@ def renewal_feature_enabled_for_alert(db: Any, alert_id: Any) -> bool:
 
     if not renewal_feature_enabled():
         return False
+    if os.environ.get(_STAGING_HARNESS_MODE_ENV) in (None, ""):
+        return True
     from document_renewal_staging_activation import (
         fixture_alert_matches,
         harness_mode_configured,
@@ -194,6 +204,8 @@ def renewal_feature_enabled_for_application(
 
     if not renewal_feature_enabled():
         return False
+    if os.environ.get(_STAGING_HARNESS_MODE_ENV) in (None, ""):
+        return True
     from document_renewal_staging_activation import (
         fixture_application_matches,
         harness_mode_configured,
@@ -214,6 +226,8 @@ def renewal_feature_enabled_for_request(db: Any, request_id: Any) -> bool:
 
     if not renewal_feature_enabled():
         return False
+    if os.environ.get(_STAGING_HARNESS_MODE_ENV) in (None, ""):
+        return True
     from document_renewal_staging_activation import (
         fixture_request_matches,
         harness_mode_configured,

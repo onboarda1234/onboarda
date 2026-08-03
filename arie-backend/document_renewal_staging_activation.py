@@ -306,28 +306,21 @@ def _fixture_spec() -> dict[str, Any]:
     return spec
 
 
-def fixture_client_actor_allowed(
+def _fixture_client_actor_context(
     token_user: Mapping[str, Any],
     client_row: Mapping[str, Any],
     *,
     method: Any,
     path: Any,
-) -> bool:
-    """Permit only the no-login fixture client during its exact active lease.
-
-    The permanent client deliberately remains inactive and has no usable
-    password.  This narrow bearer-token exception exists solely so the real
-    portal route can be exercised by the governed harness; ordinary inactive
-    clients and ordinary tokens remain denied.
-    """
-
+    require_password_hash: bool,
+) -> Optional[dict[str, str]]:
     try:
         state = activation_state()
         spec = _fixture_spec()
     except StagingHarnessActivationError:
-        return False
+        return None
     if not state.active or not state.run_id:
-        return False
+        return None
     token = _row_dict(token_user)
     row = _row_dict(client_row)
     exact_application = str(spec["application_id"])
@@ -343,7 +336,7 @@ def fixture_client_actor_allowed(
             f"{exact_application}/renewal-requests/{exact_request}/upload",
         ),
     }
-    return (
+    allowed = (
         (str(method or "").upper(), str(path or "")) in allowed_routes
         and
         str(token.get("sub") or "") == str(spec["customer_id"])
@@ -355,8 +348,78 @@ def fixture_client_actor_allowed(
         and str(row.get("id") or "") == str(spec["customer_id"])
         and str(row.get("email") or "") == str(spec["customer_email"])
         and str(row.get("status") or "") == "inactive"
-        and str(row.get("password_hash") or "") == "fixture-no-login"
+        and (
+            not require_password_hash
+            or str(row.get("password_hash") or "") == "fixture-no-login"
+        )
     )
+    if not allowed:
+        return None
+    return {
+        "fixture_key": str(spec["fixture_key"]),
+        "application_id": exact_application,
+        "customer_id": str(spec["customer_id"]),
+        "run_id": state.run_id,
+    }
+
+
+def fixture_client_actor_candidate_context(
+    token_user: Mapping[str, Any],
+    client_row: Mapping[str, Any],
+    *,
+    method: Any,
+    path: Any,
+) -> Optional[dict[str, str]]:
+    """Preflight the exact fixture identity before reading its credential marker."""
+
+    return _fixture_client_actor_context(
+        token_user,
+        client_row,
+        method=method,
+        path=path,
+        require_password_hash=False,
+    )
+
+
+def fixture_client_actor_context(
+    token_user: Mapping[str, Any],
+    client_row: Mapping[str, Any],
+    *,
+    method: Any,
+    path: Any,
+) -> Optional[dict[str, str]]:
+    """Return audit-safe context only for the exact no-login fixture client.
+
+    The permanent client deliberately remains inactive and has no usable
+    password. This narrow bearer-token exception exists solely so the real
+    portal route can be exercised by the governed harness; ordinary inactive
+    clients and ordinary tokens remain denied.
+    """
+
+    return _fixture_client_actor_context(
+        token_user,
+        client_row,
+        method=method,
+        path=path,
+        require_password_hash=True,
+    )
+
+
+def fixture_client_actor_allowed(
+    token_user: Mapping[str, Any],
+    client_row: Mapping[str, Any],
+    *,
+    method: Any,
+    path: Any,
+) -> bool:
+    """Return whether the exact governed fixture-client exception applies."""
+
+    return fixture_client_actor_context(
+        token_user,
+        client_row,
+        method=method,
+        path=path,
+    ) is not None
 
 
 def fixture_application_matches(
@@ -544,6 +607,9 @@ __all__ = [
     "StagingHarnessActivationError",
     "activation_state",
     "effective_renewal_flag",
+    "fixture_client_actor_allowed",
+    "fixture_client_actor_candidate_context",
+    "fixture_client_actor_context",
     "fixture_alert_matches",
     "fixture_application_matches",
     "fixture_request_matches",

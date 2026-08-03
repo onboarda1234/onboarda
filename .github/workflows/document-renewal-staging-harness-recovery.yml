@@ -173,7 +173,13 @@ jobs:
                   "aws", "ecs", "describe-tasks", "--cluster", "regmind-staging",
                   "--tasks", *arns, "--region", "af-south-1", "--output", "json",
               ], text=True)
-              definitions = [str(row.get("taskDefinitionArn") or "") for row in json.loads(raw).get("tasks") or []]
+              payload = json.loads(raw)
+              tasks = payload.get("tasks") or []
+              returned = [str(row.get("taskArn") or "") for row in tasks]
+              if (payload.get("failures") or len(tasks) != len(arns)
+                  or len(set(returned)) != len(returned) or set(returned) != set(arns)):
+                  raise SystemExit("FAIL: ECS did not describe every listed running task")
+              definitions = [str(row.get("taskDefinitionArn") or "") for row in tasks]
           json.dump({"task_definition_arns": definitions}, open(sys.argv[2], "w", encoding="utf-8"), sort_keys=True)
           PY
           # Bootstrap is intentionally raw/allowlisted: no moving-main repo
@@ -360,7 +366,12 @@ jobs:
           definitions = []
           if arns:
               payload = json.loads(subprocess.check_output(["aws","ecs","describe-tasks","--cluster","regmind-staging","--tasks",*arns,"--region","af-south-1","--output","json"], text=True))
-              definitions = [str(row.get("taskDefinitionArn") or "") for row in payload.get("tasks") or []]
+              tasks = payload.get("tasks") or []
+              returned = [str(row.get("taskArn") or "") for row in tasks]
+              if (payload.get("failures") or len(tasks) != len(arns)
+                  or len(set(returned)) != len(returned) or set(returned) != set(arns)):
+                  raise SystemExit("FAIL: ECS did not describe every listed running task")
+              definitions = [str(row.get("taskDefinitionArn") or "") for row in tasks]
           json.dump({"task_definition_arns": definitions}, open(sys.argv[2], "w", encoding="utf-8"), sort_keys=True)
           PY
           python3 scripts/qa/staging_document_renewal_activation.py select-recovery-context \
@@ -442,7 +453,12 @@ jobs:
           count = 0
           if arns:
               payload = json.loads(subprocess.check_output(["aws","ecs","describe-tasks","--cluster","regmind-staging","--tasks",*arns,"--region","af-south-1","--output","json"], text=True))
-              count = sum(str(row.get("taskDefinitionArn") or "") == sys.argv[2] for row in payload.get("tasks") or [])
+              tasks = payload.get("tasks") or []
+              returned = [str(row.get("taskArn") or "") for row in tasks]
+              if (payload.get("failures") or len(tasks) != len(arns)
+                  or len(set(returned)) != len(returned) or set(returned) != set(arns)):
+                  raise SystemExit("FAIL: ECS did not describe every listed running task")
+              count = sum(str(row.get("taskDefinitionArn") or "") == sys.argv[2] for row in tasks)
           print(count)
           PY
               )"
@@ -701,7 +717,12 @@ jobs:
           arns = json.load(open(sys.argv[1], encoding="utf-8")).get("taskArns") or []; task_arns = []; definitions = []
           if arns:
               payload = json.loads(subprocess.check_output(["aws","ecs","describe-tasks","--cluster","regmind-staging","--tasks",*arns,"--region","af-south-1","--output","json"], text=True))
-              task_arns = [str(row.get("taskDefinitionArn") or "") for row in payload.get("tasks") or []]
+              tasks = payload.get("tasks") or []
+              returned = [str(row.get("taskArn") or "") for row in tasks]
+              if (payload.get("failures") or len(tasks) != len(arns)
+                  or len(set(returned)) != len(returned) or set(returned) != set(arns)):
+                  raise SystemExit("FAIL: ECS did not describe every listed running task")
+              task_arns = [str(row.get("taskDefinitionArn") or "") for row in tasks]
               for task_definition_arn in sorted(set(task_arns)):
                   item = json.loads(subprocess.check_output(["aws","ecs","describe-task-definition","--task-definition",task_definition_arn,"--include","TAGS","--region","af-south-1","--output","json"], text=True))
                   definition = item.get("taskDefinition") or {}; definition["tags"] = item.get("tags") or []

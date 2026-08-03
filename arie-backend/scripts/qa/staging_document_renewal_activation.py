@@ -67,7 +67,17 @@ HARNESS_ENVIRONMENT_NAMES = frozenset(
         ORIGINAL_TASK_DEFINITION_ENV,
     }
 )
+HARNESS_TAG_NAMES = frozenset(
+    {
+        "RegMindHarness",
+        "HarnessRunId",
+        "HarnessOriginalTaskDefinition",
+        "HarnessExpiresAt",
+        "HarnessReleaseSha",
+    }
+)
 EXPECTED_VALIDATION_AUDIT_DELTA = {
+    "monitoring.document_renewal.fixture_client_auth": 4,
     "monitoring.document_renewal.artifact_reserved": 1,
     "monitoring.document_renewal.artifact_stored": 1,
     "monitoring.document_renewal.duplicate_upload": 1,
@@ -714,25 +724,48 @@ def verify_recovery_residue_clear(
             raise ActivationControlError("final tagged residue is not a harness lease")
     if harness_arns:
         raise ActivationControlError("tagged harness task-definition residue remains")
-    running = {
-        str(arn) for arn in running_task_definition_arns if str(arn) in harness_arns
-    }
+    running_arns: set[str] = set()
+    for supplied_arn in running_task_definition_arns:
+        arn = str(supplied_arn or "")
+        if not TASK_DEFINITION_RE.fullmatch(arn):
+            raise ActivationControlError("running task-definition ARN is invalid")
+        running_arns.add(arn)
+    described: dict[str, Mapping[str, Any]] = {}
     for definition in running_task_definitions or []:
         arn = str(definition.get("taskDefinitionArn") or "")
         if not TASK_DEFINITION_RE.fullmatch(arn):
             raise ActivationControlError("running task-definition evidence is invalid")
+        if arn in described:
+            raise ActivationControlError(
+                "running task-definition evidence contains a duplicate"
+            )
+        described[arn] = definition
+    if set(described) != running_arns:
+        raise ActivationControlError(
+            "running task-definition evidence is incomplete or mismatched"
+        )
+    running_harness: list[str] = []
+    for arn, definition in described.items():
         environment = _environment(_release_container(definition))
         tags = _task_tags(definition)
-        is_harness = HARNESS_MODE_ENV in environment or tags.get(
-            "RegMindHarness"
-        ) == HARNESS_TAG
-        if is_harness:
-            candidate = recovery_candidate(definition)
-            if candidate.get("action") == "none":
-                raise ActivationControlError("running harness evidence is malformed")
-            running.add(arn)
-    running = sorted(running)
-    if running:
+        if (
+            HARNESS_ENVIRONMENT_NAMES.intersection(environment)
+            or HARNESS_TAG_NAMES.intersection(tags)
+        ):
+            running_harness.append(arn)
+            continue
+        sha = str(environment.get("GIT_SHA") or "")
+        try:
+            inspect_task_definition(
+                definition,
+                expected_sha=sha,
+                expected_mode="off",
+            )
+        except ActivationControlError as exc:
+            raise ActivationControlError(
+                "running task definition is not a proven fully-OFF release"
+            ) from exc
+    if running_harness:
         raise ActivationControlError("running harness task residue remains")
     return {
         "schema_version": "document_renewal_staging_recovery_residue_v1",
@@ -1203,32 +1236,8 @@ def compare_recovery_fingerprints(
 ) -> dict[str, Any]:
     """Prove recovery removed only synthetic operational state."""
 
-    operational = (
-        "renewal_requests",
-        "renewal_events",
-        "renewal_uploads",
-        "renewal_upload_bindings",
-        "renewal_upload_cleanup",
-        "renewal_notifications",
-        "harness_rate_limit",
-    )
-    exact_baseline_counts = {
-        "fixture_client": 1,
-        "fixture_application": 1,
-        "fixture_person": 1,
-        "fixture_document": 1,
-        "fixture_monitoring_alert": 1,
-        "fixture_application_directors": 1,
-        "fixture_application_ubos": 0,
-        "fixture_application_intermediaries": 0,
-        "fixture_application_documents": 1,
-        "fixture_application_monitoring_alerts": 1,
-        "fixture_application_other_notifications": 0,
-        "fixture_agent_executions": 0,
-        "fixture_verification_jobs": 0,
-        "fixture_legacy_requirements": 0,
-        "other_harness_rate_limits": 0,
-    }
+    operational = RECOVERY_OPERATIONAL_RELATIONS
+    exact_baseline_counts = RECOVERY_BASELINE_COUNTS
 
     def relation_count(value: Mapping[str, Any], name: str) -> int:
         try:

@@ -652,6 +652,7 @@ def _relation_rows(
     fixture: Mapping[str, Any],
     *,
     run_id: str,
+    include_isolation: bool = True,
 ) -> dict[str, list[dict[str, Any]]]:
     core = _assert_fixture_identity(db, fixture)
     app_id = fixture["application_id"]
@@ -829,6 +830,13 @@ def _relation_rows(
             (app_id,),
             ).fetchall()
         ),
+    }
+    # Full non-fixture isolation is needed for the three externally compared
+    # snapshots, but not for cleanup planning or either in-transaction graph
+    # check. Avoid materializing unrelated tables while the fixture lock is
+    # held; the before/after/final snapshots retain exact isolation evidence.
+    if include_isolation:
+        relations.update({
         "nonfixture_monitoring_alerts": _rows(
             db.execute(
                 "SELECT * FROM monitoring_alerts "
@@ -838,20 +846,23 @@ def _relation_rows(
         ),
         "nonfixture_documents": _rows(
             db.execute(
-                "SELECT * FROM documents WHERE application_id <> ? ORDER BY id",
+                "SELECT * FROM documents "
+                "WHERE application_id IS NULL OR application_id <> ? ORDER BY id",
                 (app_id,),
             ).fetchall()
         ),
         "nonfixture_agent_executions": _rows(
             db.execute(
-                "SELECT * FROM agent_executions WHERE application_id <> ? ORDER BY id",
+                "SELECT * FROM agent_executions "
+                "WHERE application_id IS NULL OR application_id <> ? ORDER BY id",
                 (app_id,),
             ).fetchall()
         ),
         "nonfixture_verification_jobs": _rows(
             db.execute(
                 "SELECT * FROM verification_jobs "
-                "WHERE application_id <> ? AND document_id <> ? ORDER BY id",
+                "WHERE (application_id IS NULL OR application_id <> ?) "
+                "AND (document_id IS NULL OR document_id <> ?) ORDER BY id",
                 (app_id, fixture["document_id"]),
             ).fetchall()
         ),
@@ -859,7 +870,7 @@ def _relation_rows(
             db.execute(
             """
             SELECT * FROM monitoring_document_renewal_requests
-             WHERE application_id <> ? ORDER BY request_id
+             WHERE application_id IS NULL OR application_id <> ? ORDER BY request_id
             """,
             (app_id,),
             ).fetchall()
@@ -868,7 +879,7 @@ def _relation_rows(
             db.execute(
             """
             SELECT * FROM monitoring_document_renewal_uploads
-             WHERE application_id <> ? ORDER BY upload_id
+             WHERE application_id IS NULL OR application_id <> ? ORDER BY upload_id
             """,
             (app_id,),
             ).fetchall()
@@ -877,7 +888,7 @@ def _relation_rows(
             db.execute(
             """
             SELECT * FROM monitoring_document_renewal_upload_bindings
-             WHERE application_id <> ? ORDER BY upload_id
+             WHERE application_id IS NULL OR application_id <> ? ORDER BY upload_id
             """,
             (app_id,),
             ).fetchall()
@@ -886,7 +897,7 @@ def _relation_rows(
             db.execute(
             """
             SELECT * FROM monitoring_document_renewal_upload_cleanup
-             WHERE application_id <> ? ORDER BY cleanup_id
+             WHERE application_id IS NULL OR application_id <> ? ORDER BY cleanup_id
             """,
             (app_id,),
             ).fetchall()
@@ -917,12 +928,12 @@ def _relation_rows(
             """
             SELECT e.* FROM monitoring_document_renewal_events e
             JOIN monitoring_document_renewal_requests r ON r.request_id = e.request_id
-            WHERE r.application_id <> ? ORDER BY e.event_id
+            WHERE r.application_id IS NULL OR r.application_id <> ? ORDER BY e.event_id
             """,
             (app_id,),
             ).fetchall()
         ),
-    }
+        })
     return relations
 
 
@@ -1388,7 +1399,12 @@ def build_renewal_harness_cleanup_plan(
 
     spec = _normalize_fixture(fixture)
     normalized_run_id = _required_text(run_id, "run_id")
-    relations = _relation_rows(db, spec, run_id=normalized_run_id)
+    relations = _relation_rows(
+        db,
+        spec,
+        run_id=normalized_run_id,
+        include_isolation=False,
+    )
     graph = _validate_cleanup_graph(
         relations,
         spec,
@@ -1923,7 +1939,12 @@ def cleanup_renewal_harness_operational_state(
     flags = _assert_all_flags_off(feature_state)
     try:
         _begin_locked_cleanup(db, spec)
-        relations = _relation_rows(db, spec, run_id=normalized_run_id)
+        relations = _relation_rows(
+            db,
+            spec,
+            run_id=normalized_run_id,
+            include_isolation=False,
+        )
         graph = _validate_cleanup_graph(
             relations,
             spec,
@@ -2034,7 +2055,12 @@ def cleanup_renewal_harness_operational_state(
                 ids["rate_limit_keys"],
             )
 
-        after_relations = _relation_rows(db, spec, run_id=normalized_run_id)
+        after_relations = _relation_rows(
+            db,
+            spec,
+            run_id=normalized_run_id,
+            include_isolation=False,
+        )
         after_graph = _validate_cleanup_graph(
             after_relations,
             spec,
@@ -2241,10 +2267,11 @@ def _cli_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = _cli_parser().parse_args(argv)
-    from db import get_db
-
-    db = get_db()
+    db = None
     try:
+        from db import get_db
+
+        db = get_db()
         fixture = _load_cli_fixture(db)
         if args.command == "snapshot":
             result = capture_renewal_harness_fingerprint(
@@ -2268,21 +2295,40 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
         print(json.dumps(result, sort_keys=True, indent=2, default=str))
         return 0
-    except Exception as exc:
-        _rollback(db)
+    except RenewalHarnessCleanupError as exc:
+        if db is not None:
+            _rollback(db)
         print(
             json.dumps(
                 {
                     "contract_version": CONTRACT_VERSION,
                     "status": "failed",
+                    "error_code": "cleanup_contract_error",
                     "error": str(exc),
                 },
                 sort_keys=True,
             )
         )
         return 2
+    except Exception as exc:
+        if db is not None:
+            _rollback(db)
+        print(
+            json.dumps(
+                {
+                    "contract_version": CONTRACT_VERSION,
+                    "status": "failed",
+                    "error_code": "cleanup_internal_error",
+                    "error": "unexpected cleanup failure",
+                    "error_type": type(exc).__name__,
+                },
+                sort_keys=True,
+            )
+        )
+        return 2
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 if __name__ == "__main__":

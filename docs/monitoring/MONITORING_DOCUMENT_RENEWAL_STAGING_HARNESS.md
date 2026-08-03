@@ -90,6 +90,11 @@ The lease is valid only when all of the following agree:
 - every database write resolves to the exact fixture application, alert or
   deterministic request.
 
+The workflow issues both timestamps from one UTC epoch with a hard 28-minute
+(1,680-second) lease, below the 30-minute runtime maximum. Before the dedicated
+three-minute browser window opens, at least four minutes must remain or the
+workflow fails closed and restores the original backend.
+
 Malformed scope refuses startup. Lease expiry makes the evaluated feature OFF
 even if ECS restoration is delayed. The workflow shares the staging deployment
 concurrency lock, captures the exact original backend task definition and uses
@@ -115,7 +120,9 @@ lease only, a token carrying the reviewed harness purpose and exact run claim
 may authenticate that inactive client on exactly two routes: the fixture
 renewal-list `GET` and fixture renewal-upload `POST`. Every unrelated client
 route, wrong method, wrong run/purpose, expired lease or identity drift retains
-the ordinary inactive-client denial.
+the ordinary inactive-client denial. Each successful fixture-client route
+authorization appends a canonical hash-chained audit entry; failure to append
+that evidence denies the request.
 
 The validator performs bounded fixture requests only:
 
@@ -156,6 +163,13 @@ audit details are not emitted as release evidence. The after fingerprint may
 contain only the expected one-request/one-upload synthetic graph. Final
 reconciliation requires:
 
+The three explicit before/after/final snapshots intentionally read the full
+non-fixture relations to prove global isolation. Those scans never run while
+the cleanup advisory/row locks are held, remain subject to the staging database
+statement timeout, and fail the harness closed if exact evidence cannot be
+captured. Streaming/aggregate descriptors are a future operator-performance
+optimization; they are not used to weaken the full-isolation contract here.
+
 - permanent fixture roots byte-equivalent by canonical digest;
 - every manifest-defined root field remains exact and the fixture application
   still has exactly one current canonical document, one alert and one person,
@@ -167,7 +181,9 @@ reconciliation requires:
 - all four governed flags OFF;
 - the validation audit delta is exactly one each of `request_created`,
   `request_sent`, `artifact_reserved`, `artifact_stored`, `upload_received`,
-  `upload_bound` and `duplicate_upload`;
+  `upload_bound` and `duplicate_upload`, plus exactly four
+  `fixture_client_auth` entries for the two portal reads and two upload
+  attempts;
 - cleanup adds exactly one `fixture_cleanup` action and no other renewal audit
   action;
 - every new audit row is hash-chained, the canonical audit chain verifies,

@@ -3003,6 +3003,14 @@ def test_portal_upload_handler_calls_only_dedicated_renewal_record_service():
     ordinary_rate_limit = region.index("check_sensitive_rate_limit")
     database_open = region.index("db = get_db()")
     assert ordinary_flag_call < ordinary_rate_limit < database_open
+    harness_marker = region.index(
+        'os.environ.get("DOCUMENT_RENEWAL_STAGING_HARNESS")'
+    )
+    harness_import = region.index("import document_renewal_staging_activation")
+    assert harness_marker < harness_import < ordinary_flag_call
+    assert "Document renewal requests are temporarily unavailable." in region
+    assert "document_renewal_harness_initialization_failed=true" in region
+    assert region.count("document_renewal_harness_denied=true") == 2
     # The fixture path has its own second rate-limit call after exact request
     # scope, while the non-harness path retains the protected pre-DB order.
     assert region.count("check_sensitive_rate_limit") == 2

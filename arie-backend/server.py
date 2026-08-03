@@ -46086,30 +46086,65 @@ class PortalDocumentRenewalUploadHandler(BaseHandler):
             return
         if user.get("type") != "client":
             return self.error("Only clients can upload renewal documents.", 403)
-        try:
-            from document_renewal_staging_activation import (
-                activation_state as _renewal_harness_activation_state,
-                harness_mode_configured as _renewal_harness_mode_configured,
-            )
-
-            renewal_harness_mode = _renewal_harness_mode_configured()
-            renewal_harness_state = (
-                _renewal_harness_activation_state()
-                if renewal_harness_mode
-                else None
-            )
-            if renewal_harness_mode and not (
-                renewal_harness_state.active
-                and renewal_harness_state.run_id
-            ):
+        renewal_harness_mode = False
+        renewal_harness_state = None
+        # Keep the protected ordinary portal path independent from the
+        # staging-only module. A non-empty marker explicitly opts this process
+        # into the fail-closed harness configuration boundary.
+        if os.environ.get("DOCUMENT_RENEWAL_STAGING_HARNESS") not in (None, ""):
+            try:
+                import document_renewal_staging_activation as _renewal_harness
+            except Exception as exc:
+                logger.error(
+                    "document_renewal_harness_initialization_failed=true "
+                    "error_type=%s request_id=%s",
+                    type(exc).__name__,
+                    (_obs_get_request_id() or ""),
+                )
+                return self.error(
+                    "Document renewal requests are temporarily unavailable.",
+                    500,
+                )
+            try:
+                renewal_harness_mode = _renewal_harness.harness_mode_configured()
+                renewal_harness_state = _renewal_harness.activation_state()
+                if not (
+                    renewal_harness_mode
+                    and renewal_harness_state.active
+                    and renewal_harness_state.run_id
+                ):
+                    logger.warning(
+                        "document_renewal_harness_denied=true reason=%s "
+                        "request_id=%s",
+                        str(getattr(renewal_harness_state, "reason", "inactive"))[:64],
+                        (_obs_get_request_id() or ""),
+                    )
+                    return self.error(
+                        "Document renewal requests are not enabled.",
+                        409,
+                    )
+            except _renewal_harness.StagingHarnessActivationError as exc:
+                logger.warning(
+                    "document_renewal_harness_denied=true error_type=%s "
+                    "request_id=%s",
+                    type(exc).__name__,
+                    (_obs_get_request_id() or ""),
+                )
                 return self.error(
                     "Document renewal requests are not enabled.",
                     409,
                 )
-        except Exception:
-            # A malformed staging harness configuration must fail closed. The
-            # ordinary path is unaffected when the harness variable is absent.
-            return self.error("Document renewal requests are not enabled.", 409)
+            except Exception as exc:
+                logger.error(
+                    "document_renewal_harness_initialization_failed=true "
+                    "error_type=%s request_id=%s",
+                    type(exc).__name__,
+                    (_obs_get_request_id() or ""),
+                )
+                return self.error(
+                    "Document renewal requests are temporarily unavailable.",
+                    500,
+                )
         # Preserve the protected ordinary contract byte-for-behaviour: the
         # global OFF gate and rate-limit run before any database/application
         # lookup. Only the explicit staging harness defers them until exact

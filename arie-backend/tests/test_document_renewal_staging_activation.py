@@ -303,12 +303,18 @@ def test_base_handler_fixture_auth_exception_is_route_and_lease_scoped(monkeypat
         def fetchone(self):
             return self.row
 
+    queries = []
+
     class Db:
         def __init__(self, row):
             self.row = row
 
-        def execute(self, *_args, **_kwargs):
-            return Cursor(dict(self.row))
+        def execute(self, sql, *_args, **_kwargs):
+            queries.append(sql)
+            result = dict(self.row)
+            if "password_hash" not in sql:
+                result.pop("password_hash", None)
+            return Cursor(result)
 
         def close(self):
             return None
@@ -317,6 +323,7 @@ def test_base_handler_fixture_auth_exception_is_route_and_lease_scoped(monkeypat
     monkeypatch.setattr(base_handler, "get_db", lambda: Db(current_row))
     handler = object.__new__(base_handler.BaseHandler)
     handler._log_inactive_token_denial = lambda *_args, **_kwargs: None
+    handler._log_governed_fixture_client_grant = lambda *_args, **_kwargs: True
     list_path = (
         f"/api/portal/applications/{spec['application_id']}/renewal-requests"
     )
@@ -332,13 +339,17 @@ def test_base_handler_fixture_auth_exception_is_route_and_lease_scoped(monkeypat
         ("GET", f"/api/portal/applications/{spec['application_id']}"),
         ("POST", list_path),
     ):
+        queries.clear()
         handler.request = SimpleNamespace(method=method, path=path)
         assert handler._validate_current_actor(dict(claims)) is None
+        assert not any("password_hash" in query for query in queries)
 
     handler.request = SimpleNamespace(method="GET", path=list_path)
+    queries.clear()
     assert handler._validate_current_actor(
         {**claims, activation.HARNESS_CLIENT_PURPOSE_CLAIM: "wrong"}
     ) is None
+    assert not any("password_hash" in query for query in queries)
     assert handler._validate_current_actor(
         {**claims, activation.HARNESS_CLIENT_RUN_CLAIM: "gh-99999-1"}
     ) is None
@@ -347,6 +358,147 @@ def test_base_handler_fixture_auth_exception_is_route_and_lease_scoped(monkeypat
     current_row.update(client_row)
     monkeypatch.setattr(activation.os, "environ", _env(expires_delta=0))
     assert handler._validate_current_actor(dict(claims)) is None
+
+    # The protected ordinary path and every active-client request avoid the
+    # credential column entirely.
+    queries.clear()
+    monkeypatch.setattr(activation.os, "environ", {})
+    current_row.update(client_row)
+    current_row["status"] = "active"
+    assert handler._validate_current_actor(dict(claims)) is not None
+    assert not any("password_hash" in query for query in queries)
+    queries.clear()
+    current_row["status"] = "inactive"
+    assert handler._validate_current_actor(dict(claims)) is None
+    assert not any("password_hash" in query for query in queries)
+
+
+def test_fixture_client_auth_fails_closed_when_grant_audit_fails(monkeypatch):
+    import base_handler
+
+    monkeypatch.setattr(activation.os, "environ", _env())
+    monkeypatch.setattr(activation, "_utc_now", lambda value=None: NOW)
+    spec = fixture_spec()
+    claims = {
+        "sub": spec["customer_id"],
+        "type": "client",
+        "role": "client",
+        activation.HARNESS_CLIENT_PURPOSE_CLAIM: activation.HARNESS_CLIENT_PURPOSE,
+        activation.HARNESS_CLIENT_RUN_CLAIM: "gh-12345-1",
+    }
+    row = {
+        "id": spec["customer_id"],
+        "email": spec["customer_email"],
+        "company_name": "Document Renewal Fixture",
+        "status": "inactive",
+        "password_hash": "fixture-no-login",
+    }
+
+    class Cursor:
+        def __init__(self, value):
+            self.value = value
+
+        def fetchone(self):
+            return self.value
+
+    class Db:
+        def execute(self, sql, *_args):
+            value = dict(row)
+            if "password_hash" not in sql:
+                value.pop("password_hash", None)
+            return Cursor(value)
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(base_handler, "get_db", Db)
+    handler = object.__new__(base_handler.BaseHandler)
+    handler.request = SimpleNamespace(
+        method="GET",
+        path=(
+            f"/api/portal/applications/{spec['application_id']}"
+            "/renewal-requests"
+        ),
+    )
+    handler._log_inactive_token_denial = lambda *_args, **_kwargs: None
+    handler._log_governed_fixture_client_grant = lambda *_args, **_kwargs: False
+
+    assert handler._validate_current_actor(claims) is None
+
+
+def test_fixture_client_grant_audit_is_hash_chained_and_secret_free(monkeypatch):
+    import base_handler
+    import db as db_module
+
+    captured = {}
+
+    class AuditDb:
+        def close(self):
+            captured["closed"] = True
+
+    def append_audit_log(_db, **kwargs):
+        captured.update(kwargs)
+        return "a" * 64
+
+    monkeypatch.setattr(base_handler, "get_db", AuditDb)
+    monkeypatch.setattr(db_module, "append_audit_log", append_audit_log)
+    handler = object.__new__(base_handler.BaseHandler)
+    handler.request = SimpleNamespace(
+        method="GET",
+        path="/api/portal/applications/f1xedrnwapp00001/renewal-requests",
+    )
+    handler.get_client_ip = lambda: "127.0.0.1"
+    granted = handler._log_governed_fixture_client_grant(
+        {
+            "sub": "f1xedrnwcli00001",
+            "name": "Synthetic client",
+            "raw_token": "never-record-this-token",
+        },
+        {
+            "fixture_key": "document-renewal-expired-v1",
+            "application_id": "f1xedrnwapp00001",
+            "run_id": "gh-12345-1",
+            "password_hash": "never-record-this-hash",
+        },
+    )
+
+    assert granted is True
+    assert captured["action"] == "monitoring.document_renewal.fixture_client_auth"
+    assert captured["commit"] is True
+    assert captured["closed"] is True
+    evidence = json.dumps(captured, sort_keys=True)
+    assert "never-record-this-token" not in evidence
+    assert "never-record-this-hash" not in evidence
+
+
+def test_ordinary_renewal_flag_path_never_imports_staging_harness(monkeypatch):
+    import builtins
+    import monitoring_document_renewal as renewal
+
+    class Flags:
+        def __init__(self, enabled):
+            self.enabled = enabled
+
+        def is_enabled(self, _name):
+            return self.enabled
+
+    monkeypatch.delenv(activation.HARNESS_MODE_ENV, raising=False)
+    original_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "document_renewal_staging_activation":
+            raise ImportError("staging harness deliberately unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    assert renewal.renewal_feature_enabled(Flags(True)) is True
+    assert renewal.renewal_feature_enabled(Flags(False)) is False
+    monkeypatch.setattr(renewal, "renewal_feature_enabled", lambda *_args: True)
+    assert renewal.renewal_feature_enabled_for_alert(None, "ordinary-alert") is True
+    assert renewal.renewal_feature_enabled_for_application(
+        None, "ordinary-application"
+    ) is True
+    assert renewal.renewal_feature_enabled_for_request(None, "ordinary-request") is True
 
 
 @pytest.mark.parametrize(

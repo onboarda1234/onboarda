@@ -322,6 +322,45 @@ def test_main_workflow_proves_live_recovery_tags_before_activation():
     assert "--expected-run-id \"$HARNESS_RUN_ID\"" in probe_region
 
 
+def test_main_workflow_uses_one_bounded_lease_clock_and_browser_margin():
+    text = HARNESS_WORKFLOW.read_text(encoding="utf-8")
+    register = text.index("name: Register bounded temporary backend activation")
+    activate = text.index("name: Activate temporary backend lease only")
+    region = text[register:activate]
+    assert "LEASE_SECONDS=1680" in region
+    assert "ISSUED_AT_EPOCH=\"$(date -u '+%s')\"" in region
+    assert "EXPIRES_AT_EPOCH=\"$((ISSUED_AT_EPOCH + LEASE_SECONDS))\"" in region
+    assert '\\"lease_seconds\\":$LEASE_SECONDS' in region
+    assert "lease_seconds\":1200" not in region
+    assert "lease_seconds\":1800" not in region
+
+    browser = text.index("name: Open bounded read-only browser QA window")
+    restore = text.index("name: Restore exact original backend")
+    browser_region = text[browser:restore]
+    assert "HARNESS_EXPIRES_AT" in browser_region
+    assert '"$REMAINING_SECONDS" -lt 240' in browser_region
+    assert "insufficient governed lease remains" in browser_region
+
+
+def test_ordinary_scheduler_contract_remains_global_when_harness_is_absent():
+    source = (REPO_ROOT / "arie-backend" / "server.py").read_text(
+        encoding="utf-8"
+    )
+    start = source.index(
+        "# PR-MON-DOC-RENEWAL-REQUEST-1 request eligibility + reminder generation."
+    )
+    end = source.index("# PR-PRS-C2 memo-recovery sweep.", start)
+    region = source[start:end]
+    harness_branch = region.index("if harness_mode_configured():")
+    ordinary_branch = region.index(
+        "elif _monitoring_document_renewal.renewal_feature_enabled():"
+    )
+    scheduler = region.index("_document_renewal_reminder_tick")
+    assert harness_branch < ordinary_branch < scheduler
+    assert "global scheduler disabled by " in region
+    assert "fixture-scoped staging harness" in region
+
+
 def test_main_workflow_preserves_recovery_handle_until_cleanup_is_proven():
     text = HARNESS_WORKFLOW.read_text(encoding="utf-8")
     cleanup = text.index("name: Clean exact synthetic operational graph")
@@ -377,6 +416,20 @@ def test_main_workflow_proves_global_residue_absent_before_and_after_lease():
     assert "final-residue-proof.json" in final_body
     finalize_condition = text[finalize : text.index("        run: |", finalize)]
     assert "steps.final_residue.outcome == 'success'" in finalize_condition
+
+
+@pytest.mark.parametrize("path", (HARNESS_WORKFLOW, RECOVERY_WORKFLOW))
+def test_every_running_task_inventory_fails_on_incomplete_ecs_description(path):
+    text = path.read_text(encoding="utf-8")
+    describe_count = text.count("describe-tasks")
+    assert describe_count > 0
+    assert text.count('payload.get("failures")') == describe_count
+    assert (
+        text.count("ECS did not describe every listed running task")
+        == describe_count
+    )
+    assert text.count("len(set(returned") == describe_count
+    assert text.count("set(returned") == 2 * describe_count
 
 
 def test_recovery_workflow_is_expired_only_exact_and_never_updates_worker():
