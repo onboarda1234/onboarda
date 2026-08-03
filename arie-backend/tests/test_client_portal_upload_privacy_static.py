@@ -165,20 +165,105 @@ def test_upload_toasts_report_upload_outcome_only():
     assert "'Document verification still running after portal poll window'" in html
 
 
+BLOCKED_NOTICE = (
+    "Some uploaded documents are still being processed or require internal "
+    "review. You will be able to continue once the review is complete."
+)
+
+
 def test_submission_gate_copy_is_free_of_verification_vocabulary():
     html = _portal_html()
     messaging = _extract_js_function(html, "updateDocsReviewMessaging")
     review = _extract_js_function(html, "buildReviewScreen")
 
-    assert "still being processed" in messaging
-    assert "Submission Blocked — Outstanding Items" in messaging
-    assert "⏳ Stored — processing" in review
-    assert "⏳ ID + PoA stored — processing" in review
-
     # No client-visible string in either surface uses verification vocabulary.
     for name, body in (("updateDocsReviewMessaging", messaging), ("buildReviewScreen", review)):
         for literal in _string_literals(body):
             assert "verif" not in literal.lower(), f"{name}: {literal}"
+
+
+def test_internally_blocked_submission_shows_one_neutral_notice():
+    """A block caused by internal review is described neutrally, everywhere."""
+    html = _portal_html()
+
+    assert f"var PORTAL_INTERNAL_REVIEW_NOTICE = '{BLOCKED_NOTICE}';" in html
+
+    # The three client-facing surfaces that report a held submission all reuse
+    # that one constant rather than composing their own wording.
+    for function_name in (
+        "updateDocsReviewMessaging",
+        "buildReviewScreen",
+        "finalSubmitFromReview",
+    ):
+        body = _extract_js_function(html, function_name)
+        assert "PORTAL_INTERNAL_REVIEW_NOTICE" in body, function_name
+
+    # Wording that would imply the client omitted something is gone.
+    for phrase in (
+        "Outstanding Items",
+        "outstanding items",
+        "Submission Blocked",
+        "uploaded document(s) are still being processed",
+        "Only verified required documents",
+    ):
+        assert phrase not in html, phrase
+
+
+def test_blocked_state_never_identifies_the_held_document():
+    """Per-item review rows must look the same however verification landed."""
+    html = _portal_html()
+    review = _extract_js_function(html, "buildReviewScreen")
+
+    # Section A / C rows and the person rows key their label and their CSS class
+    # off upload state alone, so a held document is indistinguishable from a
+    # cleared one.
+    assert "var statusClass = isUploaded ? 'uploaded' : (doc.required ? 'missing' : 'optional');" in review
+    assert "var statusText = isUploaded ? 'Stored' : (doc.required ? '❌ Missing' : '➖ Optional');" in review
+    assert "var statusClass = isUploaded ? 'uploaded' : 'optional';" in review
+    assert "var statusText = isUploaded ? 'Stored' : '➖ Optional';" in review
+    assert "(isUp ? 'uploaded' : 'missing')" in review
+    assert "(isUp ? 'Stored' : '❌ Missing')" in review
+    assert "(personDocsStored ? 'uploaded' : 'missing')" in review
+    assert "(personDocsStored ? 'ID + PoA stored' : '❌ Documents Missing')" in review
+    assert "(intermediaryStored ? 'Corporate documents stored'" in review
+
+    # No row keys off a verification-derived flag any more.
+    for leak in (
+        "hasWarning ? 'warning'",
+        "isVerified ? 'uploaded'",
+        "personDocsReady ? 'uploaded'",
+        "intermediaryReady ?",
+    ):
+        assert leak not in review, leak
+
+    # The tile that counted held documents is not shown, and the persons tile
+    # counts stored documents rather than verified ones.
+    assert (
+        '<div class="review-stat" style="display:none;">'
+        '<div class="review-stat-num amber" id="review-warning-count">0</div>'
+    ) in html
+    assert "document.getElementById('review-persons-count').textContent = personsDocumentsStored;" in review
+
+
+def test_renewal_upload_copy_is_neutral_and_keeps_the_canonical_guarantee():
+    html = _portal_html()
+    upload = _extract_js_function(html, "uploadPortalDocumentRenewal")
+
+    assert (
+        "showToast('success', 'Upload Successful', 'Uploaded successfully. "
+        "Our compliance team will review this document. Your canonical "
+        "document has not been replaced.')"
+    ) in upload
+    assert (
+        "Uploaded successfully. Our compliance team will review this document. "
+        "Your canonical document has not been replaced."
+    ) in html
+
+    for phrase in ("awaiting verification", "Awaiting Verification", "Renewal Upload Bound"):
+        assert phrase not in html, phrase
+
+    # The canonical-document guarantee itself is untouched.
+    assert html.count("canonical document has not been replaced") == 2
 
 
 # ── Guards on what must NOT have changed ────────────────────────────────────

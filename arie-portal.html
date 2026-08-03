@@ -4140,7 +4140,11 @@
       <div class="review-summary-card" id="review-summary-card">
         <div class="review-stat"><div class="review-stat-num green" id="review-uploaded-count">0</div><div class="review-stat-label">Uploaded</div></div>
         <div class="review-stat"><div class="review-stat-num red" id="review-missing-count">0</div><div class="review-stat-label">Missing</div></div>
-        <div class="review-stat"><div class="review-stat-num amber" id="review-warning-count">0</div><div class="review-stat-label">Processing</div></div>
+        <!-- Hidden from the client: this tile counted uploaded documents that
+             are not treated as verified, which is an internal review outcome.
+             The element is retained so buildReviewScreen still writes the same
+             value and the gate arithmetic is untouched. -->
+        <div class="review-stat" style="display:none;"><div class="review-stat-num amber" id="review-warning-count">0</div><div class="review-stat-label">Processing</div></div>
         <div class="review-stat"><div class="review-stat-num blue" id="review-persons-count">0</div><div class="review-stat-label">Persons Complete</div></div>
       </div>
 
@@ -9094,6 +9098,13 @@ var KYC_PERSON_DOC_RULES = {
 var CLIENT_UPLOAD_RECEIPT_STATUS = '✓ Upload successful';
 var CLIENT_UPLOAD_RECEIPT_NOTE = 'Stored securely. Our team will review this document.';
 
+// Single neutral notice for every client-facing surface where the submission
+// gate is held by an internal document review outcome. It never names the
+// document, the state that held it, or anything the review found — those stay
+// in the RegMind back office. The gate arithmetic that decides when this is
+// shown is unchanged.
+var PORTAL_INTERNAL_REVIEW_NOTICE = 'Some uploaded documents are still being processed or require internal review. You will be able to continue once the review is complete.';
+
 function ensureVerificationList(targetEl) {
   if (!targetEl) return null;
   var list = targetEl.querySelector('.doc-verify-results-list');
@@ -11093,15 +11104,20 @@ function updateDocsReviewMessaging(summary) {
 
   var missingCount = Number(summary && summary.missingCount || 0);
   var warningCount = Number(summary && summary.warningCount || 0);
+  // Unchanged condition. Only the copy differs: a missing document is the
+  // client's to act on and is named as such, while a document held by internal
+  // review is described neutrally and never identified.
   if (missingCount > 0 || warningCount > 0) {
     var parts = [];
-    if (missingCount > 0) parts.push(missingCount + ' required item(s) are still missing');
-    if (warningCount > 0) parts.push(warningCount + ' uploaded document(s) are still being processed');
-    title.textContent = 'Submission Blocked — Outstanding Items';
-    subtitle.textContent = 'Required documents must be uploaded and processed before this application can be submitted.';
-    cardTitle.textContent = 'Outstanding Items';
-    cardBody.textContent = parts.join(' and ') + '. Resolve these items before submitting the application.';
-    cardFootnote.textContent = 'Uploaded documents are processed automatically. If an item stays outstanding, our team will contact you.';
+    if (missingCount > 0) parts.push(missingCount + ' required document(s) have not been uploaded yet.');
+    if (warningCount > 0) parts.push(PORTAL_INTERNAL_REVIEW_NOTICE);
+    title.textContent = missingCount > 0 ? 'Documents Required' : 'Documents Under Review';
+    subtitle.textContent = missingCount > 0
+      ? 'Please upload the remaining required documents to continue.'
+      : 'Your documents are being reviewed. You will be able to continue once the review is complete.';
+    cardTitle.textContent = missingCount > 0 ? 'Documents Required' : 'Review In Progress';
+    cardBody.textContent = parts.join(' ');
+    cardFootnote.textContent = 'If we need anything further, our team will contact you directly at the email address provided in your application.';
     return;
   }
 
@@ -11136,8 +11152,10 @@ function buildReviewScreen() {
     else if (doc.required) missingCount++;
     if (hasWarning && isUploaded) warningCount++;
 
-    var statusClass = isUploaded ? (hasWarning ? 'warning' : 'uploaded') : (doc.required ? 'missing' : 'optional');
-    var statusText = isUploaded ? (hasWarning ? '⏳ Stored — processing' : 'Stored') : (doc.required ? '❌ Missing' : '➖ Optional');
+    // hasWarning still drives the gate above; it must not drive the row, or the
+    // row would identify which document an internal review is holding.
+    var statusClass = isUploaded ? 'uploaded' : (doc.required ? 'missing' : 'optional');
+    var statusText = isUploaded ? 'Stored' : (doc.required ? '❌ Missing' : '➖ Optional');
 
     sectionA.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + portalDocumentConditionalNote(doc) + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
   });
@@ -11147,6 +11165,7 @@ function buildReviewScreen() {
   sectionB.innerHTML = '';
   var personCards = document.querySelectorAll('.kyc-person-card');
   var personsVerified = 0;
+  var personsDocumentsStored = 0;
   personCards.forEach(function(card) {
     var personId = card.id.replace('kyc-person-','');
     var nameEl = card.querySelector('.kyc-person-name');
@@ -11167,10 +11186,13 @@ function buildReviewScreen() {
         else missingCount++;
         if (isUp && !isVerified) warningCount++;
         if (isVerified) interVerified++;
-        intermediaryRows += '<div class="review-item" style="padding-left:28px;"><span class="review-item-name">↳ ' + escapeHtml(interDocNames[di]) + '</span><span class="review-status ' + (isUp ? (isVerified ? 'uploaded' : 'warning') : 'missing') + '">' + (isUp ? (isVerified ? 'Stored' : '⏳ Stored — processing') : '❌ Missing') + '</span></div>';
+        intermediaryRows += '<div class="review-item" style="padding-left:28px;"><span class="review-item-name">↳ ' + escapeHtml(interDocNames[di]) + '</span><span class="review-status ' + (isUp ? 'uploaded' : 'missing') + '">' + (isUp ? 'Stored' : '❌ Missing') + '</span></div>';
       });
-      var intermediaryReady = interVerified === interDocs.length;
-      sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>' + escapeHtml(personName) + '</strong> <em style="font-size:11px;color:var(--text3);">(Intermediary)</em></span><span class="review-status ' + (intermediaryReady ? 'uploaded' : interUploaded ? 'warning' : 'missing') + '">' + (intermediaryReady ? 'Corporate documents stored' : interUploaded ? '⚠️ Corporate documents incomplete' : '❌ Documents Missing') + '</span></div>' + intermediaryRows;
+      // Rows and the person summary reflect upload state only. interVerified
+      // still feeds personsVerified and the gate exactly as before.
+      var intermediaryStored = interUploaded === interDocs.length;
+      sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>' + escapeHtml(personName) + '</strong> <em style="font-size:11px;color:var(--text3);">(Intermediary)</em></span><span class="review-status ' + (intermediaryStored ? 'uploaded' : interUploaded ? 'warning' : 'missing') + '">' + (intermediaryStored ? 'Corporate documents stored' : interUploaded ? '⚠️ Corporate documents incomplete' : '❌ Documents Missing') + '</span></div>' + intermediaryRows;
+      if (intermediaryStored) personsDocumentsStored++;
       if (interVerified === interDocs.length) personsVerified++;
     } else {
       var passportState = kycDocumentVerificationState(personId, 'passport', personType);
@@ -11188,7 +11210,8 @@ function buildReviewScreen() {
       var personDocsReady = passportVerified && poaVerified;
       var personDocsStored = hasPassport && hasPoa;
       if (personDocsReady) personsVerified++;
-      sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>' + escapeHtml(personName) + '</strong></span><span class="review-status ' + (personDocsReady ? 'uploaded' : personDocsStored ? 'warning' : 'missing') + '">' + (personDocsReady ? 'ID + PoA stored' : personDocsStored ? '⏳ ID + PoA stored — processing' : '❌ Documents Missing') + '</span></div>';
+      if (personDocsStored) personsDocumentsStored++;
+      sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>' + escapeHtml(personName) + '</strong></span><span class="review-status ' + (personDocsStored ? 'uploaded' : 'missing') + '">' + (personDocsStored ? 'ID + PoA stored' : '❌ Documents Missing') + '</span></div>';
       var profileInput = document.getElementById('kyc-linkedin-' + personId);
       var professionalProfileValue = String((profileInput && profileInput.value) || '').trim();
       var savedProfessionalProfileValue = String((profileInput && profileInput.dataset && profileInput.dataset.lastSavedValue) || '').trim();
@@ -11232,18 +11255,13 @@ function buildReviewScreen() {
     if (!isPortalDocumentApplicable(doc)) return;
 
     var isUploaded = uploadedDocs.has(doc.id);
-    var hasWarning = false;
-    var item = document.getElementById(doc.id);
-    if (item && isUploaded) {
-      var optionalDocType = DOC_TYPE_MAP[doc.id] || doc.id;
-      hasWarning = !slotVerificationIsSuccessful(item, getDocumentSlotKey({ doc_type: optionalDocType }));
-    }
 
     if (isUploaded) uploadedCount++;
-    // Section C is fully optional — never increment missingCount
+    // Section C is fully optional — it never incremented missingCount or
+    // warningCount, so its verification lookup was display-only and is gone.
 
-    var statusClass = isUploaded ? (hasWarning ? 'warning' : 'uploaded') : 'optional';
-    var statusText = isUploaded ? (hasWarning ? '⏳ Stored — processing' : 'Stored') : '➖ Optional';
+    var statusClass = isUploaded ? 'uploaded' : 'optional';
+    var statusText = isUploaded ? 'Stored' : '➖ Optional';
 
     sectionC.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + portalDocumentConditionalNote(doc) + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
   });
@@ -11290,8 +11308,12 @@ function buildReviewScreen() {
   // Update summary stats
   document.getElementById('review-uploaded-count').textContent = uploadedCount;
   document.getElementById('review-missing-count').textContent = missingCount;
+  // warningCount is still written to its (client-hidden) tile so the gate
+  // arithmetic and any harness reading it are untouched; the persons tile now
+  // counts documents stored rather than documents verified, because a
+  // verification-derived count is itself an internal review outcome.
   document.getElementById('review-warning-count').textContent = warningCount;
-  document.getElementById('review-persons-count').textContent = personsVerified;
+  document.getElementById('review-persons-count').textContent = personsDocumentsStored;
   lastReviewSummaryState = {
     uploadedCount: uploadedCount,
     missingCount: missingCount,
@@ -11315,7 +11337,8 @@ function buildReviewScreen() {
     btn.style.opacity = canSubmit ? '1' : '0.55';
     btn.style.cursor = canSubmit ? 'pointer' : 'not-allowed';
     if (!canSubmit) {
-      btn.textContent = 'Complete Outstanding Items';
+      // Only a missing document is the client's to act on.
+      btn.textContent = missingCount > 0 ? 'Complete Required Documents' : 'Submission Not Yet Available';
     } else {
       btn.textContent = '🔒 Confirm & Submit Application';
     }
@@ -11324,12 +11347,17 @@ function buildReviewScreen() {
     if (!canSubmit) {
       var noteParts = [];
       if (missingCount > 0) noteParts.push(missingCount + ' required item(s) are still missing');
-      if (warningCount > 0) noteParts.push(warningCount + ' uploaded document(s) are still being processed');
       if (hydrationMismatchCount > 0) noteParts.push(hydrationMismatchCount + ' persisted document(s) could not be matched safely');
       if (partyHydrationMismatchCount > 0) noteParts.push(partyHydrationMismatchCount + ' authoritative party collection(s) are missing or empty');
       if (enhancedRequirementIntegrityMismatchCount > 0) noteParts.push(enhancedRequirementIntegrityMismatchCount + ' additional evidence association(s) could not be matched safely');
+      var noteHtml = noteParts.length
+        ? '<strong>Action needed:</strong> ' + escapeHtml(noteParts.join(' and ')) + '.'
+        : '';
+      if (warningCount > 0) {
+        noteHtml += (noteHtml ? ' ' : '') + escapeHtml(PORTAL_INTERNAL_REVIEW_NOTICE);
+      }
       reviewSubmitNote.style.display = 'block';
-      reviewSubmitNote.innerHTML = '<strong>Submission blocked:</strong> ' + escapeHtml(noteParts.join(' and ')) + '. All required items must be complete before submitting.';
+      reviewSubmitNote.innerHTML = noteHtml;
     } else {
       reviewSubmitNote.style.display = 'none';
       reviewSubmitNote.textContent = '';
@@ -11355,7 +11383,13 @@ async function finalSubmitFromReview() {
     return;
   }
   if (lastReviewSummaryState && (Number(lastReviewSummaryState.missingCount || 0) > 0 || Number(lastReviewSummaryState.warningCount || 0) > 0)) {
-    showToast('error', 'Outstanding Items', 'Please resolve the outstanding items listed above before submitting.');
+    // Same condition as before; only the message differs, and it names an
+    // action for the client only when the client actually has one.
+    if (Number(lastReviewSummaryState.missingCount || 0) > 0) {
+      showToast('error', 'Documents Required', 'Please upload the remaining required documents before submitting.');
+    } else {
+      showToast('info', 'Review In Progress', PORTAL_INTERNAL_REVIEW_NOTICE);
+    }
     return;
   }
   _draftSubmitting = true;
@@ -11786,7 +11820,7 @@ function portalDocumentRenewalCardHtml(request, applicationId, featureEnabled) {
   } else if (status === 'awaiting_upload') {
     uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--red-dim);color:var(--red);font-size:11px;font-weight:700;">Upload is unavailable until Compliance confirms the authoritative request binding.</div>';
   } else if (status === 'upload_received') {
-    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--green-dim);color:var(--green);font-size:11px;font-weight:700;"><strong>Awaiting Verification</strong><div style="margin-top:4px;font-weight:600;">Your upload is securely bound to this renewal request. Compliance has not verified or accepted it, and your canonical document has not been replaced.</div></div>';
+    uploadControl = '<div style="margin-top:10px;padding:9px 10px;border-radius:7px;background:var(--green-dim);color:var(--green);font-size:11px;font-weight:700;"><strong>Uploaded</strong><div style="margin-top:4px;font-weight:600;">Uploaded successfully. Our compliance team will review this document. Your canonical document has not been replaced.</div></div>';
   }
   return '<div class="doc-item portal-document-renewal-item" data-renewal-application-id="' + escapeHtml(String(applicationId || '')) + '" data-renewal-request-id="' + escapeHtml(requestId) + '">' +
     '<div class="doc-item-top">' +
@@ -11959,7 +11993,7 @@ async function uploadPortalDocumentRenewal(input) {
   try {
     await apiCall('POST', '/portal/applications/' + encodeURIComponent(applicationId) + '/renewal-requests/' + encodeURIComponent(requestId) + '/upload', formData, true);
     input.value = '';
-    showToast('success', 'Renewal Upload Bound', 'Uploaded and awaiting verification. Your canonical document has not been replaced.');
+    showToast('success', 'Upload Successful', 'Uploaded successfully. Our compliance team will review this document. Your canonical document has not been replaced.');
     await loadPortalDocumentRenewalRequests();
   } catch (err) {
     if (result) result.textContent = err.message || 'Upload failed.';

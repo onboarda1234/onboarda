@@ -40,5 +40,5 @@ def test_portal_upload_copy_does_not_claim_stored_and_verified():
     # while the machine-readable state the submission gate reads is unchanged.
     assert "data-verification-success" in src
     assert "function kycDocumentVerificationState" in src
-    assert "⏳ ID + PoA stored — processing" in src
-    assert "Submission Blocked — Outstanding Items" in src
+    assert "(personDocsStored ? 'ID + PoA stored' : '❌ Documents Missing')" in src
+    assert "var PORTAL_INTERNAL_REVIEW_NOTICE = " in src
