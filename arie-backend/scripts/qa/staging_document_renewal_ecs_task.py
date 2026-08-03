@@ -82,12 +82,64 @@ def _aws(arguments: Sequence[str]) -> dict[str, Any]:
     return payload
 
 
-def _aws_stdin(arguments: Sequence[str], payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Pass secret-bearing AWS input via stdin, never argv or a file."""
+def _run_task_cli_arguments(
+    *,
+    task_definition: str,
+    network_configuration: Mapping[str, Any],
+    started_by: str,
+) -> list[str]:
+    """Build the non-secret AWS CLI arguments for one exact ECS task.
+
+    AWS CLI v2 does not reliably accept ``--cli-input-json
+    file:///dev/stdin`` in the hosted operator environment.  The
+    operation-specific ``--overrides`` parameter does accept the same
+    secret-bearing container overrides on stdin.  Every other RunTask field
+    is non-secret and explicit here.
+    """
+
+    return [
+        "aws",
+        "ecs",
+        "run-task",
+        "--cluster",
+        EXPECTED_CLUSTER,
+        "--task-definition",
+        task_definition,
+        "--launch-type",
+        "FARGATE",
+        "--count",
+        "1",
+        "--network-configuration",
+        json.dumps(dict(network_configuration), separators=(",", ":")),
+        "--overrides",
+        "file:///dev/stdin",
+        "--started-by",
+        started_by,
+        "--client-token",
+        started_by,
+        "--region",
+        EXPECTED_REGION,
+        "--output",
+        "json",
+    ]
+
+
+def _aws_run_task(
+    *,
+    task_definition: str,
+    network_configuration: Mapping[str, Any],
+    overrides: Mapping[str, Any],
+    started_by: str,
+) -> dict[str, Any]:
+    """Run ECS with secret-bearing overrides on stdin, never argv or a file."""
 
     result = subprocess.run(
-        ["aws", *arguments, "--cli-input-json", "file:///dev/stdin", "--output", "json"],
-        input=json.dumps(dict(payload), separators=(",", ":")),
+        _run_task_cli_arguments(
+            task_definition=task_definition,
+            network_configuration=network_configuration,
+            started_by=started_by,
+        ),
+        input=json.dumps(dict(overrides), separators=(",", ":")),
         capture_output=True,
         text=True,
         check=False,
@@ -432,22 +484,11 @@ def run_one_off_task(
             }
         ]
     }
-    response = _aws_stdin(
-        [
-            "ecs",
-            "run-task",
-            "--region",
-            EXPECTED_REGION,
-        ],
-        {
-            "cluster": EXPECTED_CLUSTER,
-            "taskDefinition": task_definition,
-            "launchType": "FARGATE",
-            "count": 1,
-            "networkConfiguration": _network_configuration(),
-            "overrides": overrides,
-            "startedBy": started_by,
-        },
+    response = _aws_run_task(
+        task_definition=task_definition,
+        network_configuration=_network_configuration(),
+        overrides=overrides,
+        started_by=started_by,
     )
     if response.get("failures") or len(response.get("tasks") or []) != 1:
         raise EcsHarnessTaskError("ECS refused the one-off staging task")
