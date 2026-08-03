@@ -31,7 +31,7 @@ def test_application_review_default_rows_are_compact_and_not_audit_heavy():
 
     assert "document-review-identity" in default_row
     assert "document-review-status-actions" in default_row
-    assert "renderDocumentCompactSummary(issue, blocker, nextAction, relianceState)" in default_row
+    assert "renderDocumentExecutiveSummary(doc, issue, relianceState)" in default_row
     assert "renderDocumentDirectActions(app, doc, groupKey, relianceState, expectedSlot)" in default_row
     assert "documentReviewContextLine(app, doc, linkedRequirement, expectedSlot)" in default_row
     assert "document-review-fields" not in default_row

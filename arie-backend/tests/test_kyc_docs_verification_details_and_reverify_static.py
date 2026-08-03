@@ -77,8 +77,8 @@ def _verification_render_functions(html: str) -> str:
         _extract_function(html, name)
         for name in [
             "documentVerificationCheckResultBucket",
+            "documentVerificationCheckDisplayResult",
             "documentVerificationCheckMethodMeta",
-            "isPassedRoutineAgent1GateCheck",
             "renderDocumentVerificationCheckRow",
             "buildVerificationResultsHtml",
         ]
@@ -127,7 +127,7 @@ assert(rendered.indexOf('Detailed passed-check evidence is not available') < 0, 
     _run_node(script)
 
 
-def test_passed_agent1_system_gate_checks_are_hidden_without_mutating_results():
+def test_passed_agent1_system_gate_checks_are_compact_and_not_mutated():
     html = _backoffice_html()
     functions = _verification_render_functions(html)
     script = f"""
@@ -146,15 +146,16 @@ var results = {{
 }};
 var originalCheckCount = results.checks.length;
 var rendered = buildVerificationResultsHtml(results, {{}}, {{ uploadedBy: 'Officer', stateLabel: 'Verified' }});
-assert(rendered.indexOf('File Format') < 0, 'passed File Format / GATE-01 should be hidden');
-assert(rendered.indexOf('GATE-01') < 0, 'passed GATE-01 id should be hidden');
-assert(rendered.indexOf('File Size') < 0, 'passed File Size / GATE-02 should be hidden');
-assert(rendered.indexOf('GATE-02') < 0, 'passed GATE-02 id should be hidden');
-assert(rendered.indexOf('Duplicate Detection') < 0, 'passed Duplicate Detection / GATE-03 should be hidden');
-assert(rendered.indexOf('GATE-03') < 0, 'passed GATE-03 id should be hidden');
+assert(rendered.indexOf('File Format') >= 0, 'passed File Format / GATE-01 should remain available');
+assert(rendered.indexOf('GATE-01') >= 0, 'passed GATE-01 id should remain available in expandable detail');
+assert(rendered.indexOf('File Size') >= 0, 'passed File Size / GATE-02 should remain available');
+assert(rendered.indexOf('GATE-02') >= 0, 'passed GATE-02 id should remain available in expandable detail');
+assert(rendered.indexOf('Duplicate Detection') >= 0, 'passed Duplicate Detection / GATE-03 should remain available');
+assert(rendered.indexOf('GATE-03') >= 0, 'passed GATE-03 id should remain available in expandable detail');
 assert(rendered.indexOf('Document integrity') >= 0, 'non-gate passed check should remain visible');
 assert(rendered.indexOf('DOC-01') >= 0, 'non-gate check id should remain visible');
 assert(rendered.indexOf('3 system checks passed') < 0, 'system-check summary should not render');
+assert(rendered.indexOf('verification-check-row pass') >= 0, 'completed checks should use compact expandable rows');
 assert(results.checks.length === originalCheckCount, 'underlying checks array should remain present');
 assert(results.checks[0].label === 'File Format', 'underlying GATE-01 check should not be mutated');
 assert(results.checks[1].label === 'File Size', 'underlying GATE-02 check should not be mutated');
@@ -163,7 +164,7 @@ assert(results.checks[2].label === 'Duplicate Detection', 'underlying GATE-03 ch
     _run_node(script)
 
 
-def test_only_passed_agent1_system_gate_checks_leave_no_floating_legend_or_summary():
+def test_only_passed_agent1_system_gate_checks_remain_in_completed_checks():
     html = _backoffice_html()
     functions = _verification_render_functions(html)
     script = f"""
@@ -179,13 +180,13 @@ var rendered = buildVerificationResultsHtml({{
     {{ id: 'GATE-03', label: 'Duplicate Detection', result: 'pass', method: 'Rule-Based' }}
   ]
 }}, {{}}, {{ uploadedBy: 'Officer', stateLabel: 'Verified' }});
-assert(rendered.indexOf('File Format') < 0, 'passed GATE-01 should be hidden');
-assert(rendered.indexOf('File Size') < 0, 'passed GATE-02 should be hidden');
-assert(rendered.indexOf('Duplicate Detection') < 0, 'passed GATE-03 should be hidden');
-assert(rendered.indexOf('Completed checks') < 0, 'completed-checks section should be omitted when only hidden gates exist');
-assert(rendered.indexOf('check-type-legend') < 0, 'legend should not render when all classified checks are hidden');
-assert(rendered.indexOf('3 system checks passed') < 0, 'hidden checks should not be summarized');
-assert(rendered.indexOf('Detailed passed-check evidence is not available') < 0, 'hidden stored checks should not trigger missing-evidence fallback');
+assert(rendered.indexOf('File Format') >= 0, 'passed GATE-01 should remain available');
+assert(rendered.indexOf('File Size') >= 0, 'passed GATE-02 should remain available');
+assert(rendered.indexOf('Duplicate Detection') >= 0, 'passed GATE-03 should remain available');
+assert(rendered.indexOf('Completed checks') >= 0, 'completed-checks section should render');
+assert(rendered.indexOf('check-type-legend') >= 0, 'classification legend should remain');
+assert(rendered.indexOf('3 system checks passed') < 0, 'checks should be listed rather than summarized away');
+assert(rendered.indexOf('Detailed passed-check evidence is not available') < 0, 'stored checks should not trigger missing-evidence fallback');
 """
     _run_node(script)
 

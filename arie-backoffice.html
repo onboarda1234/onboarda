@@ -899,6 +899,17 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .document-review-issue-more-copy { font-size:12px; line-height:1.45; color:var(--text2); margin-top:4px; max-width:680px; }
 .document-review-issue-more-copy.issue { color:#92400e; }
 .document-review-issue-more-copy.system { color:#1d4ed8; }
+.document-executive-summary { margin-top:8px; padding:9px 10px; border:1px solid var(--border1); border-radius:9px; background:rgba(248,250,252,.72); }
+.document-executive-summary-title { font-size:10px; font-weight:850; color:var(--text3); text-transform:uppercase; letter-spacing:.06em; }
+.document-executive-summary-outcome { margin-top:4px; color:var(--text1); font-size:12px; font-weight:700; line-height:1.45; }
+.document-executive-findings { display:grid; gap:3px; margin:7px 0 0; padding-left:18px; color:var(--text2); font-size:11px; line-height:1.4; }
+.document-executive-narrative { margin-top:6px; }
+.document-executive-narrative > summary { cursor:pointer; width:max-content; list-style:none; color:var(--brand); font-size:11px; font-weight:750; }
+.document-executive-narrative > summary::-webkit-details-marker { display:none; }
+.document-executive-narrative-copy { margin-top:5px; max-width:760px; color:var(--text2); font-size:11px; line-height:1.5; }
+.document-recommended-action { margin-top:8px; border-left:3px solid #2563eb; border-radius:7px; background:rgba(37,99,235,.06); padding:7px 9px; }
+.document-recommended-action-label { color:#1d4ed8; font-size:9px; font-weight:850; letter-spacing:.06em; text-transform:uppercase; }
+.document-recommended-action-copy { margin-top:2px; color:var(--text1); font-size:12px; font-weight:700; line-height:1.4; }
 .document-review-tag-row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:6px; }
 .document-review-chip { display:inline-flex; align-items:center; gap:4px; border-radius:999px; padding:3px 8px; border:1px solid var(--border1); background:var(--surface2); font-size:11px; font-weight:750; color:var(--text2); }
 .document-review-chip.neutral { border-color:rgba(43,47,143,.16); background:rgba(43,47,143,.045); color:var(--text2); }
@@ -952,6 +963,23 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .verification-technical-title { font-size:11px; font-weight:800; color:var(--text1); text-transform:uppercase; letter-spacing:.05em; margin-bottom:8px; }
 .verification-audit-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:7px; margin:0 0 8px; }
 .verification-audit-fact { border:1px solid var(--border1); border-radius:8px; background:var(--surface2); padding:6px 8px; font-size:11px; color:var(--text2); overflow-wrap:anywhere; }
+.verification-check-section-title { margin:8px 0 5px; color:var(--text3); font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+.verification-check-row { border-bottom:1px solid var(--border2,#e5e7eb); }
+.verification-check-row > summary { display:grid; grid-template-columns:minmax(0,1fr) auto 12px; align-items:center; gap:10px; padding:7px 2px; cursor:pointer; list-style:none; }
+.verification-check-row > summary::-webkit-details-marker { display:none; }
+.verification-check-row > summary::after { content:''; width:6px; height:6px; justify-self:center; border:solid var(--text3); border-width:0 1.5px 1.5px 0; transform:rotate(-45deg); transform-origin:center; transition:transform .16s ease; }
+.verification-check-row[open] > summary::after { transform:rotate(45deg); }
+.verification-check-name { min-width:0; color:var(--text1); font-size:12px; font-weight:750; line-height:1.35; overflow-wrap:anywhere; }
+.verification-check-result { display:inline-flex; align-items:center; justify-content:center; gap:4px; min-width:82px; padding:3px 7px; border:1px solid transparent; border-radius:999px; font-size:10px; font-weight:850; white-space:nowrap; }
+.verification-check-result.pass { border-color:rgba(22,163,74,.22); background:rgba(22,163,74,.08); color:#166534; }
+.verification-check-result.warning { border-color:rgba(217,119,6,.25); background:rgba(217,119,6,.08); color:#92400e; }
+.verification-check-result.fail { border-color:rgba(220,38,38,.24); background:rgba(220,38,38,.08); color:#991b1b; }
+.verification-check-result.inconclusive { border-color:rgba(100,116,139,.24); background:rgba(100,116,139,.09); color:#475569; }
+.verification-check-result.skipped { border-color:rgba(100,116,139,.2); background:rgba(100,116,139,.06); color:#64748b; }
+.verification-check-detail { margin:0 0 7px; padding:7px 9px; border:1px solid var(--border1); border-radius:8px; background:var(--surface2); color:var(--text2); font-size:11px; line-height:1.45; }
+.verification-check-message { color:var(--text1); font-size:12px; line-height:1.45; }
+.verification-check-meta { display:flex; flex-wrap:wrap; gap:5px 12px; margin-top:5px; }
+.verification-check-meta-item { overflow-wrap:anywhere; }
 .document-status-strip { display:flex; flex-wrap:wrap; gap:7px; margin:0 0 12px; }
 .topbar-more-menu { position:relative; }
 .topbar-more-menu > summary { list-style:none; }
@@ -10578,6 +10606,121 @@ function renderDocumentCompactSummary(issue, blocker, nextAction, state) {
   '</div>';
 }
 
+function documentExecutiveSummarySentence(value, maxLength) {
+  var text = collapseDocumentReviewFindingText(value);
+  var limit = maxLength || 180;
+  if (!text) return '';
+  var sentenceMatch = text.match(/^.*?[.!?](?:\s|$)/);
+  var sentence = sentenceMatch ? sentenceMatch[0].trim() : text;
+  if (sentence.length <= limit) return sentence;
+  var boundary = sentence.lastIndexOf(' ', limit);
+  if (boundary < Math.floor(limit * .6)) boundary = limit;
+  return sentence.slice(0, boundary).replace(/[\s,;:-]+$/g, '').trim() + '…';
+}
+
+function documentExecutiveSummarySource(doc, issue, state) {
+  var issueText = normalizeDetailValue(issue);
+  if (issueText !== '—' && issueText !== 'None') return collapseDocumentReviewFindingText(issueText);
+  var results = (doc && doc.verification_results) || {};
+  var issueArrays = [results.red_flags, results.issues, results.warnings, results.flags];
+  for (var i = 0; i < issueArrays.length; i++) {
+    if (Array.isArray(issueArrays[i]) && issueArrays[i].length) {
+      var storedFinding = collapseDocumentReviewFindingText(issueArrays[i][0]);
+      if (storedFinding) return storedFinding;
+    }
+  }
+  var checks = Array.isArray(results.checks) ? results.checks : [];
+  for (var j = 0; j < checks.length; j++) {
+    var checkConclusion = firstMeaningfulDetailValue(
+      checks[j] && checks[j].message,
+      checks[j] && checks[j].details,
+      checks[j] && checks[j].reason,
+      checks[j] && checks[j].label,
+      checks[j] && checks[j].name
+    );
+    if (checkConclusion) return collapseDocumentReviewFindingText(checkConclusion);
+  }
+  var stateLabel = String((state && state.label) || '').toLowerCase();
+  if (stateLabel === 'manual accepted') return 'Accepted with reason.';
+  if (stateLabel === 'verified') return 'Verification completed.';
+  return 'Verification details are not available yet.';
+}
+
+function documentExecutiveSummaryFindings(doc, outcomeSentence) {
+  var results = (doc && doc.verification_results) || {};
+  var checks = Array.isArray(results.checks) ? results.checks : [];
+  var prioritizedChecks = checks.map(function(check, index) {
+    var bucket = documentVerificationCheckResultBucket(check || {});
+    var priority = bucket === 'fail' ? 0 : bucket === 'warn' ? 1 : bucket === 'unavailable' ? 2 : 3;
+    return { check: check || {}, index: index, priority: priority };
+  }).sort(function(left, right) {
+    return left.priority === right.priority ? left.index - right.index : left.priority - right.priority;
+  });
+  var findings = [];
+  var seen = {};
+  var outcomeKey = normalizeDocumentReviewFindingText(outcomeSentence);
+  function addFinding(value, fallbackLabel) {
+    var finding = documentExecutiveSummarySentence(value, 140);
+    var key = normalizeDocumentReviewFindingText(finding);
+    if (!finding || !key || key === outcomeKey || seen[key]) {
+      finding = documentExecutiveSummarySentence(fallbackLabel, 140);
+      key = normalizeDocumentReviewFindingText(finding);
+    }
+    if (!finding || !key || key === outcomeKey || seen[key]) return;
+    seen[key] = true;
+    findings.push(finding);
+  }
+  prioritizedChecks.forEach(function(entry) {
+    if (findings.length >= 5) return;
+    var check = entry.check;
+    var label = firstMeaningfulDetailValue(check.label, check.name);
+    var message = firstMeaningfulDetailValue(check.message, check.details, check.reason);
+    var resultLabel = documentVerificationCheckDisplayResult(check);
+    addFinding(message || label, label ? label + ' — ' + resultLabel : resultLabel);
+  });
+  [results.red_flags, results.issues, results.warnings, results.flags].forEach(function(values) {
+    if (!Array.isArray(values)) return;
+    values.forEach(function(value) {
+      if (findings.length < 5) addFinding(value, '');
+    });
+  });
+  return findings.slice(0, 5);
+}
+
+function documentPersistedRecommendedAction(doc) {
+  var results = (doc && doc.verification_results) || {};
+  var candidates = [
+    results.recommended_action,
+    results.recommendedAction,
+    results.next_action,
+    results.nextAction,
+    results.recommendation
+  ];
+  for (var i = 0; i < candidates.length; i++) {
+    if (typeof candidates[i] !== 'string') continue;
+    var action = collapseDocumentReviewFindingText(candidates[i]);
+    if (action) return action;
+  }
+  return '';
+}
+
+function renderDocumentExecutiveSummary(doc, issue, state) {
+  var fullNarrative = documentExecutiveSummarySource(doc, issue, state);
+  var outcomeSentence = documentExecutiveSummarySentence(fullNarrative, 180) || 'Verification details are not available yet.';
+  var findings = documentExecutiveSummaryFindings(doc, outcomeSentence);
+  var recommendation = documentPersistedRecommendedAction(doc);
+  var narrativeIsExpandedDetail = normalizeDocumentReviewFindingText(fullNarrative) !== normalizeDocumentReviewFindingText(outcomeSentence);
+  return '<div class="document-executive-summary">' +
+    '<div class="document-executive-summary-title">Executive Summary</div>' +
+    '<div class="document-executive-summary-outcome">' + escapeHtml(outcomeSentence) + '</div>' +
+    (findings.length ? '<ul class="document-executive-findings">' + findings.map(function(finding) {
+      return '<li>' + escapeHtml(finding) + '</li>';
+    }).join('') + '</ul>' : '') +
+    (narrativeIsExpandedDetail ? '<details class="document-executive-narrative"><summary>Show more</summary><div class="document-executive-narrative-copy">' + escapeHtml(fullNarrative) + '</div></details>' : '') +
+    (recommendation ? '<div class="document-recommended-action"><div class="document-recommended-action-label">Recommended action</div><div class="document-recommended-action-copy">' + escapeHtml(recommendation) + '</div></div>' : '') +
+  '</div>';
+}
+
 function documentCanShowReverifyAction(doc, state) {
   if (!doc || !documentHasUploadedFile(doc)) return false;
   var hasReverifyHandler = typeof verifyBackofficeDocument === 'function' ||
@@ -10718,6 +10861,15 @@ function documentVerificationCheckResultBucket(check) {
   return 'unavailable';
 }
 
+function documentVerificationCheckDisplayResult(check) {
+  var result = String(firstMeaningfulDetailValue(check && check.result, check && check.status) || 'not_run').toLowerCase();
+  if (['pass', 'passed', 'verified', 'success', 'clear'].indexOf(result) >= 0) return 'Pass';
+  if (['fail', 'failed', 'flagged', 'blocked', 'error'].indexOf(result) >= 0) return 'Fail';
+  if (['warn', 'warning', 'review', 'manual_review', 'manual review'].indexOf(result) >= 0) return 'Warning';
+  if (['skip', 'skipped'].indexOf(result) >= 0) return 'Skipped';
+  return 'Inconclusive';
+}
+
 function documentVerificationCheckMethodMeta(check) {
   var raw = String(firstMeaningfulDetailValue(
     check && check.classification,
@@ -10732,41 +10884,50 @@ function documentVerificationCheckMethodMeta(check) {
   return null;
 }
 
-function isPassedRoutineAgent1GateCheck(check) {
-  if (!check || documentVerificationCheckResultBucket(check) !== 'pass') return false;
-  var id = String(firstMeaningfulDetailValue(check.id, check.check_id, check.key) || '').trim().toUpperCase();
-  if (['GATE-01', 'GATE-02', 'GATE-03'].indexOf(id) >= 0) return true;
-  var label = String(firstMeaningfulDetailValue(check.label, check.name) || '').trim().toLowerCase();
-  return ['file format', 'file size', 'duplicate detection'].indexOf(label) >= 0;
-}
-
 function renderDocumentVerificationCheckRow(check, idx) {
   check = check || {};
-  var label = escapeHtml(firstMeaningfulDetailValue(check.label, check.name) || ('Check ' + (idx + 1)));
-  var result = String(firstMeaningfulDetailValue(check.result, check.status) || 'not_run').toLowerCase();
+  var label = firstMeaningfulDetailValue(check.label, check.name) || ('Check ' + (idx + 1));
   var bucket = documentVerificationCheckResultBucket(check);
-  var resultColor = bucket === 'pass' ? '#16a34a'
-    : bucket === 'fail' ? '#dc2626'
-      : bucket === 'warn' ? '#d97706'
-        : '#6b7280';
+  var displayResult = documentVerificationCheckDisplayResult(check);
+  var resultTone = displayResult.toLowerCase();
+  var resultIcon = displayResult === 'Pass' ? '✓'
+    : displayResult === 'Fail' ? '×'
+      : displayResult === 'Warning' ? '!'
+        : displayResult === 'Skipped' ? '—'
+          : '?';
   var methodMeta = documentVerificationCheckMethodMeta(check);
   var methodDot = methodMeta
     ? '<span class="verification-check-method-dot ' + methodMeta.key + '" title="' + escapeHtml(methodMeta.label) + '"></span>'
     : '';
   var message = firstMeaningfulDetailValue(check.message, check.details, check.reason);
   var meta = [];
-  if (methodMeta) meta.push('Method: ' + methodMeta.label);
-  if (check.confidence != null && Number.isFinite(Number(check.confidence))) meta.push('Confidence: ' + Math.round(Number(check.confidence) * 100) + '%');
-  if (check.ps_field) meta.push('Pre-screening field: ' + check.ps_field);
-  if (check.id || check.check_id || check.key) meta.push('Check ID: ' + firstMeaningfulDetailValue(check.id, check.check_id, check.key));
+  function addMeta(labelText, value, includeEmpty) {
+    if (!includeEmpty && (value === null || value === undefined || String(value).trim() === '')) return;
+    meta.push('<span class="verification-check-meta-item"><strong>' + escapeHtml(labelText) + ':</strong> ' + escapeHtml(normalizeDetailValue(value)) + '</span>');
+  }
+  addMeta('Method', methodMeta ? methodMeta.label : firstMeaningfulDetailValue(check.method, check.type), false);
+  if (check.confidence != null && Number.isFinite(Number(check.confidence))) addMeta('Confidence', Math.round(Number(check.confidence) * 100) + '%', false);
+  addMeta('Check ID', firstMeaningfulDetailValue(check.id, check.check_id, check.key), false);
+  addMeta('Source', check.source, false);
+  addMeta('Classification', check.classification, false);
+  addMeta('Pre-screening field', check.ps_field, false);
+  if (Object.prototype.hasOwnProperty.call(check, 'ps_value') || Object.prototype.hasOwnProperty.call(check, 'declared_value')) {
+    addMeta('Declared value', firstMeaningfulDetailValue(check.ps_value, check.declared_value), true);
+  }
+  if (Object.prototype.hasOwnProperty.call(check, 'extracted_value')) addMeta('Extracted value', check.extracted_value, true);
+  addMeta('Rule type', check.rule_type, false);
   return {
     bucket: bucket,
-    html: '<div style="display:flex;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border2,#e5e7eb);gap:8px;">' +
-      '<span style="display:inline-flex;align-items:center;justify-content:center;min-width:44px;padding:2px 6px;border-radius:999px;background:' + resultColor + '14;color:' + resultColor + ';font-size:10px;font-weight:800;text-transform:uppercase;">' + escapeHtml(result.replace(/_/g, ' ')) + '</span>' +
-      '<div style="min-width:0;flex:1;"><div class="verification-check-title">' + methodDot + '<span>' + label + '</span></div>' +
-      (message ? '<div style="font-size:12px;color:var(--text2);margin-top:2px;">' + escapeHtml(message) + '</div>' : '') +
-      (meta.length ? '<div style="font-size:11px;color:var(--text3);margin-top:3px;">' + escapeHtml(meta.join(' · ')) + '</div>' : '') +
-      '</div></div>'
+    html: '<details class="verification-check-row ' + resultTone + '">' +
+      '<summary>' +
+        '<div class="verification-check-name">' + methodDot + '<span>' + escapeHtml(label) + '</span></div>' +
+        '<span class="verification-check-result ' + resultTone + '"><span aria-hidden="true">' + resultIcon + '</span>' + escapeHtml(displayResult) + '</span>' +
+      '</summary>' +
+      '<div class="verification-check-detail">' +
+        (message ? '<div class="verification-check-message">' + escapeHtml(message) + '</div>' : '<div class="verification-check-message">No additional check message was stored.</div>') +
+        (meta.length ? '<div class="verification-check-meta">' + meta.join('') + '</div>' : '') +
+      '</div>' +
+    '</details>'
   };
 }
 
@@ -10816,7 +10977,6 @@ function buildVerificationResultsHtml(results, coverage, auditContext) {
   var visibleChecks = [];
   checks.forEach(function(check, idx) {
     if (!check || typeof check !== 'object') return;
-    if (isPassedRoutineAgent1GateCheck(check)) return;
     visibleChecks.push(check);
     var rendered = renderDocumentVerificationCheckRow(check, idx);
     if (rendered.bucket === 'pass') {
@@ -10840,14 +11000,14 @@ function buildVerificationResultsHtml(results, coverage, auditContext) {
     ['verified', 'passed', 'success', 'pass'].indexOf(overall) >= 0
   );
   var completedChecksHtml = passedCheckRows.length
-    ? '<div style="font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin:4px 0 6px;">Completed checks</div>' + passedCheckRows.join('')
+    ? '<div class="verification-check-section-title">Completed checks</div>' + passedCheckRows.join('')
     : (verifiedWithoutPassDetail
-      ? '<div style="font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin:4px 0 6px;">Completed checks</div><div style="font-size:12px;color:var(--text3);">Verification completed. No failed or warning checks were stored. Detailed passed-check evidence is not available for this document.</div>'
+      ? '<div class="verification-check-section-title">Completed checks</div><div style="font-size:12px;color:var(--text3);">Verification completed. No failed or warning checks were stored. Detailed passed-check evidence is not available for this document.</div>'
       : '');
-  var attentionChecksHtml = '<div style="font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin:8px 0 6px;">Checks requiring attention</div>' +
+  var attentionChecksHtml = '<div class="verification-check-section-title">Checks requiring attention</div>' +
     (attentionCheckRows.length ? attentionCheckRows.join('') : '<div style="font-size:12px;color:var(--text3);">No failed or warning checks were stored for this document.</div>');
   var unavailableChecksHtml = unavailableCheckRows.length
-    ? '<div style="font-size:10px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin:8px 0 6px;">Checks unavailable / not run</div>' + unavailableCheckRows.join('')
+    ? '<div class="verification-check-section-title">Checks unavailable / not run</div>' + unavailableCheckRows.join('')
     : '';
 
   return '<div class="verification-technical-details">' +
@@ -10919,7 +11079,6 @@ function renderUnifiedKycDocumentCard(app, doc, linkedRequirement, expectedSlot)
   var groupKey = documentReviewGroupKey(doc, policy, relianceState, expectedSlot, linkedRequirement);
   var rowClass = documentReviewRowClass(groupKey, relianceState);
   var fileName = documentFileName(doc);
-  var nextAction = documentShortNextAction(doc, policy, relianceState);
   var icon = documentReviewIconForType(doc, expectedSlot, linkedRequirement);
   var canonicalDocumentAttrs = doc && doc.id && doc.version != null && String(doc.version).trim()
     ? ' data-document-id="' + escapeHtml(String(doc.id)) + '" data-document-version="' + escapeHtml(String(doc.version)) + '" tabindex="-1"'
@@ -10939,7 +11098,7 @@ function renderUnifiedKycDocumentCard(app, doc, linkedRequirement, expectedSlot)
         renderDocumentDirectActions(app, doc, groupKey, relianceState, expectedSlot) +
       '</div>' +
     '</div>' +
-    renderDocumentCompactSummary(issue, blocker, nextAction, relianceState) +
+    renderDocumentExecutiveSummary(doc, issue, relianceState) +
     renderDocumentAuditDetails(app, doc, linkedRequirement, expectedSlot, policy, relianceState, issue, blocker, expectedTypeLabel) +
   '</div>';
 }

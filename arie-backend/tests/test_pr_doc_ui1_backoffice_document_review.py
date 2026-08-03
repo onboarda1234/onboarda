@@ -170,7 +170,7 @@ def test_default_row_is_action_first_and_details_hold_audit_fields():
     details = _function_region(html, "renderDocumentAuditDetails", "documentReviewContextLine")
     technical = _function_region(html, "buildVerificationResultsHtml", "renderDocumentAuditDetails")
 
-    for visible in ["renderDocumentCompactSummary", "document-review-status-actions", "documentReviewContextLine", "renderDocumentPrimaryAction"]:
+    for visible in ["renderDocumentExecutiveSummary", "document-review-status-actions", "documentReviewContextLine", "renderDocumentPrimaryAction"]:
         assert visible in default_row or visible in _function_region(html, "renderDocumentDirectActions", "renderDocumentAuditDetails")
 
     for hidden_by_default in ["Policy ID/version", "Agent run ID", "Evidence hash", "Verification timestamp", "Uploaded by", "Lifecycle context", "Verification details", "Expected from portal slot"]:
