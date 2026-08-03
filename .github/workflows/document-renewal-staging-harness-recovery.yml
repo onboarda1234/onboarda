@@ -7,8 +7,6 @@ on:
   workflow_run:
     workflows: [document-renewal-staging-harness]
     types: [completed]
-  schedule:
-    - cron: "17,47 * * * *"
   workflow_dispatch:
     inputs:
       recovery_run_id:
