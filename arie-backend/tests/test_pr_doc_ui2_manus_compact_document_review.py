@@ -235,7 +235,10 @@ def test_portal_upload_ui_contract_is_not_redesigned():
 
     assert "data-reliance-state" in portal
     assert "document_reliance_state" in portal
-    assert "Upload received - verification pending." in portal
+    # The client portal deliberately renders an upload receipt instead of the
+    # verification state (see test_client_portal_upload_privacy_static.py); the
+    # underlying document record and its reliance state are unchanged.
+    assert "var CLIENT_UPLOAD_RECEIPT_STATUS = '✓ Upload successful';" in portal
 
 
 def test_top_action_bar_keeps_primary_actions_visible_and_moves_secondary_into_more_menu():

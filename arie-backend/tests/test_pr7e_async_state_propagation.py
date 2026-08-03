@@ -123,7 +123,12 @@ def test_portal_terminal_rendering_remains_truthful_for_non_verified_states():
     assert "card.setAttribute('data-verification-state', documentRecord.verification_state || documentRecord.verification_status || 'pending');" in src
     assert "state === 'verified' || state === 'flagged' || state === 'failed'" in src
     assert "Stored and verified" not in src
-    assert "var icon = stateMeta.verification_success === true ? '✅ '" in src
+    # The client-facing verification summary was removed: the portal now renders
+    # an upload receipt only. Truthfulness is therefore structural — no
+    # verification claim of any tone can be rendered for the client — while the
+    # machine-readable state above still drives the unchanged submission gate.
+    assert "function getVerificationSummary" not in src
+    assert "CLIENT_UPLOAD_RECEIPT_STATUS" in src
 
 
 def test_backoffice_detail_preserves_verification_fields_from_backend_documents():
