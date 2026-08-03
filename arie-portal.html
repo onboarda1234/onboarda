@@ -6881,9 +6881,15 @@ function renderClientUploadError(targetEl, err) {
   targetEl.appendChild(box);
 }
 
+// Single source of truth for "say nothing here": apiCall has already told the
+// client and returned them to sign-in. Every failure surface asks this, so the
+// toast, the slot state and any inline status line stay consistent.
+function clientUploadFailureIsReportedElsewhere(err) {
+  return String((err && err.message) || '') === 'Session expired';
+}
+
 function showClientUploadFailure(err, targetEl) {
-  // apiCall has already told the client and returned them to sign-in.
-  if (String((err && err.message) || '') === 'Session expired') {
+  if (clientUploadFailureIsReportedElsewhere(err)) {
     clearClientUploadError(targetEl);
     return;
   }
@@ -12061,7 +12067,9 @@ async function uploadPortalDocumentRenewal(input) {
     showToast('success', 'Upload Successful', 'Uploaded successfully. Our compliance team will review this document. Your canonical document has not been replaced.');
     await loadPortalDocumentRenewalRequests();
   } catch (err) {
-    if (result) result.textContent = clientUploadErrorMessage(err);
+    if (result) {
+      result.textContent = clientUploadFailureIsReportedElsewhere(err) ? '' : clientUploadErrorMessage(err);
+    }
     showClientUploadFailure(err);
   } finally {
     delete portalDocumentRenewalBusy[busyKey];

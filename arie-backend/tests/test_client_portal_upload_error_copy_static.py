@@ -96,7 +96,33 @@ def test_classifier_reads_backend_text_but_never_displays_it():
     # The reporter shows a fixed title plus the mapped body, and stays quiet
     # when apiCall has already handled an expired session.
     assert "showToast('error', 'Upload Failed', clientUploadErrorMessage(err))" in reporter
-    assert "=== 'Session expired'" in reporter
+    assert "clientUploadFailureIsReportedElsewhere(err)" in reporter
+
+
+def test_every_failure_surface_shares_one_suppression_rule():
+    """Toast, slot state and inline status must agree on staying silent."""
+    html = _portal_html()
+
+    predicate = _extract_js_function(html, "clientUploadFailureIsReportedElsewhere")
+    assert "=== 'Session expired'" in predicate
+
+    # The one place with a second, inline surface derives it from the same
+    # predicate rather than repeating the check.
+    renewal = _extract_js_function(html, "uploadPortalDocumentRenewal")
+    assert (
+        "result.textContent = clientUploadFailureIsReportedElsewhere(err) "
+        "? '' : clientUploadErrorMessage(err);"
+    ) in renewal
+
+    # No surface re-implements the comparison. Raising the error is fine —
+    # handleKYCUpload's own 401 branch throws it — but only the predicate
+    # decides what suppression means.
+    for function_name in UPLOAD_FAILURE_FUNCTIONS:
+        body = _extract_js_function(html, function_name)
+        assert "=== 'Session expired'" not in body, function_name
+        assert "!== 'Session expired'" not in body, function_name
+
+    assert html.count("=== 'Session expired'") == 1
 
 
 def test_failed_upload_leaves_the_slot_ready_for_another_file():
