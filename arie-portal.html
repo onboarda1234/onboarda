@@ -6469,7 +6469,7 @@ async function uploadPeriodicReviewDocumentRequest(requirementId, inputId, butto
       await loadPortalEnhancedRequirements();
     }
   } catch (err) {
-    showToast('error', 'Upload Failed', err.message || 'Could not upload this document.');
+    showClientUploadFailure(err);
   } finally {
     delete portalEnhancedRequirementBusy[busyKey];
     if (button) {
@@ -6827,6 +6827,74 @@ function showToast(type, title, msg) {
   const t = document.getElementById('toast');
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+// ─── Client-facing upload failure copy ───────────────────────────────────────
+// An upload failure is reported to the client as one of three fixed messages.
+// Backend error text is used only to classify the failure — it is never
+// rendered — so raw server strings, validation internals and stack traces stay
+// out of the client surface. Display only: the upload request, the workflow,
+// polling, the submission gate and the verification pipeline are untouched.
+var CLIENT_UPLOAD_ERROR_COPY = {
+  too_large: 'File exceeds the maximum allowed size. Please upload a smaller file.',
+  unsupported_type: 'This file type is not supported. Please upload one of the supported file formats.',
+  generic: 'We couldn’t upload your document. Please try again.'
+};
+
+function classifyClientUploadError(err) {
+  var raw = String((err && err.message) || '');
+  if (/exceeds\s+\d+\s*MB limit|exceeds maximum of|too large|entity too large/i.test(raw)) {
+    return 'too_large';
+  }
+  if (/not allowed|unsupported file|does not match claimed file type|magic bytes/i.test(raw)) {
+    return 'unsupported_type';
+  }
+  return 'generic';
+}
+
+function clientUploadErrorMessage(err) {
+  return CLIENT_UPLOAD_ERROR_COPY[classifyClientUploadError(err)] || CLIENT_UPLOAD_ERROR_COPY.generic;
+}
+
+// The toast auto-dismisses after 4s. On its own that leaves a rejected upload
+// indistinguishable from one never attempted — the slot reverts to "Click to
+// upload" and the client can reasonably believe the document was accepted. So
+// a failure also leaves a persistent state on the slot itself, which stays
+// until the next attempt. Presentation only: the slot is not marked uploaded,
+// this element is not .doc-verify-results, and no gate reads it.
+function clearClientUploadError(targetEl) {
+  if (!targetEl || !targetEl.querySelectorAll) return;
+  targetEl.querySelectorAll('.doc-upload-error').forEach(function(node) { node.remove(); });
+}
+
+function renderClientUploadError(targetEl, err) {
+  if (!targetEl || !targetEl.appendChild) return;
+  clearClientUploadError(targetEl);
+  var box = document.createElement('div');
+  box.className = 'doc-upload-error';
+  box.setAttribute('role', 'alert');
+  box.style.cssText = 'margin-top:10px;padding:9px 10px;border-radius:7px;' +
+    'background:var(--red-dim,#fff5f5);border:1px solid var(--red);color:var(--red);font-size:11px;';
+  box.innerHTML = '<strong>&#10060; Upload Failed</strong>' +
+    '<div style="margin-top:4px;font-weight:600;">' + escapeHtml(clientUploadErrorMessage(err)) + '</div>' +
+    '<div style="margin-top:4px;font-weight:600;">Select a file to try again.</div>';
+  targetEl.appendChild(box);
+}
+
+// Single source of truth for "say nothing here": apiCall has already told the
+// client and returned them to sign-in. Every failure surface asks this, so the
+// toast, the slot state and any inline status line stay consistent.
+function clientUploadFailureIsReportedElsewhere(err) {
+  return String((err && err.message) || '') === 'Session expired';
+}
+
+function showClientUploadFailure(err, targetEl) {
+  if (clientUploadFailureIsReportedElsewhere(err)) {
+    clearClientUploadError(targetEl);
+    return;
+  }
+  showToast('error', 'Upload Failed', clientUploadErrorMessage(err));
+  renderClientUploadError(targetEl, err);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -11491,6 +11559,7 @@ function clearUploadedDocument(docId) {
     var verificationList = item.querySelector('.doc-verify-results-list');
     if (verificationList) verificationList.remove();
   }
+  clearClientUploadError(item);
   if (fileInput) fileInput.value = '';
   uploadedDocs.delete(docId);
   updateProgress();
@@ -11533,6 +11602,7 @@ function handleUpload(docId, input) {
 
   // Build file names
   const names = Array.from(files).map(f => f.name).join(', ');
+  clearClientUploadError(item);
   label.textContent = '⏳ Uploading ' + names;
 
   // Upload to API if authenticated
@@ -11611,10 +11681,11 @@ function handleUpload(docId, input) {
       });
     }).catch(function(err) {
       console.error('API upload failed for', docId, err);
+      // Slot is reset so the client can immediately upload another file.
       label.textContent = 'Click to upload';
       item.classList.remove('uploaded');
       input.value = '';
-      showToast('error', 'Upload Failed', err.message || 'Could not upload this document. Please try again.');
+      showClientUploadFailure(err, item);
     });
     return;
   }
@@ -11996,8 +12067,10 @@ async function uploadPortalDocumentRenewal(input) {
     showToast('success', 'Upload Successful', 'Uploaded successfully. Our compliance team will review this document. Your canonical document has not been replaced.');
     await loadPortalDocumentRenewalRequests();
   } catch (err) {
-    if (result) result.textContent = err.message || 'Upload failed.';
-    showToast('error', 'Upload Failed', err.message || 'Could not upload this renewal document.');
+    if (result) {
+      result.textContent = clientUploadFailureIsReportedElsewhere(err) ? '' : clientUploadErrorMessage(err);
+    }
+    showClientUploadFailure(err);
   } finally {
     delete portalDocumentRenewalBusy[busyKey];
     input.disabled = false;
@@ -12258,7 +12331,7 @@ async function uploadPortalEnhancedRequirement(requirementId, input, button) {
     input.value = '';
     await loadPortalEnhancedRequirements();
   } catch (err) {
-    showToast('error', 'Upload Failed', err.message || 'Could not upload this document.');
+    showClientUploadFailure(err);
   } finally {
     delete portalEnhancedRequirementBusy[busyKey];
     if (button) {
@@ -12408,7 +12481,7 @@ async function uploadRMIItem(itemId, docType, input) {
       } catch(e) {}
     }
   } catch (err) {
-    showToast('error', 'Upload Failed', err.message || 'Could not upload this document.');
+    showClientUploadFailure(err);
   } finally {
     input.value = '';
   }
@@ -14490,6 +14563,7 @@ function handleKYCUpload(personId, docType, input, personType) {
     if (input) input.value = '';
   }
 
+  clearClientUploadError(area ? area.parentElement : null);
   if (lbl) lbl.textContent = '⏳ Uploading ' + fileName;
   if (area) { area.style.borderColor = 'var(--amber)'; area.style.color = 'var(--amber)'; }
 
@@ -14559,13 +14633,9 @@ function handleKYCUpload(personId, docType, input, personType) {
       });
     }).catch(function(err) {
       console.warn('KYC doc upload error:', err);
+      // Slot is reset so the client can immediately upload another file.
       resetUploadUI();
-      var msg = err.message || '';
-      if (msg === 'Session expired') {
-        // Already handled above
-      } else {
-        showToast('error', 'Upload Failed', msg || 'Could not store this document. Please try again.');
-      }
+      showClientUploadFailure(err, area ? area.parentElement : null);
     });
   } else {
     resetUploadUI();
