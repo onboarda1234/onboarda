@@ -453,10 +453,20 @@ class TestNewCheckDefinitions:
         ids = [c["id"] for c in checks]
         assert "DOC-07" in ids, "DOC-07 (Jurisdiction Match) missing from cert_inc"
 
-    def test_memarts_has_share_capital_match(self):
+    def test_bankref_pep_retired_check_absent(self):
+        """DOC-68 (Account Standing) was retired per policy decision — must not return."""
+        checks = get_checks_for_doc_type("bankref_pep", "person")
+        ids = [c["id"] for c in checks]
+        assert "DOC-68" not in ids, "DOC-68 (Account Standing) is retired"
+        for required in ("DOC-65", "DOC-66", "DOC-67"):
+            assert required in ids, f"bankref_pep missing {required}"
+
+    def test_memarts_retired_checks_absent(self):
+        """DOC-13 and DOC-MA-01 were retired per policy decision — must not return."""
         checks = get_checks_for_doc_type("memarts", "entity")
         ids = [c["id"] for c in checks]
-        assert "DOC-13" in ids, "DOC-13 (Authorised Share Capital Match) missing from memarts"
+        assert "DOC-13" not in ids, "DOC-13 (Authorised Share Capital Match) is retired"
+        assert "DOC-MA-01" not in ids, "DOC-MA-01 (Business Objects / Activities) is retired"
 
 
 class TestFieldAlignmentToMatrix:
@@ -490,7 +500,7 @@ class TestFieldAlignmentToMatrix:
 
 
 class TestNewRuleChecks:
-    """Test rule check implementations for DOC-06A, DOC-07, DOC-13."""
+    """Test rule check implementations for DOC-06A and DOC-07 (DOC-13 retired)."""
 
     def test_incorporation_date_match_pass(self):
         extracted = {"incorporation_date": "2020-06-15"}
@@ -524,21 +534,12 @@ class TestNewRuleChecks:
         assert len(jur_checks) == 1
         assert jur_checks[0]["result"] == CheckStatus.FAIL
 
-    def test_share_capital_match_pass(self):
-        extracted = {"authorised_share_capital": "100000"}
-        ps = {"authorised_share_capital": "100000"}
-        results = run_rule_checks("memarts", "entity", extracted, ps, "LOW")
-        cap_checks = [r for r in results if r.get("id") == "DOC-13"]
-        assert len(cap_checks) == 1
-        assert cap_checks[0]["result"] == CheckStatus.PASS
-
-    def test_share_capital_match_fail(self):
+    def test_share_capital_check_retired(self):
+        """DOC-13 was retired per policy decision — a capital mismatch must not be flagged."""
         extracted = {"authorised_share_capital": "500000"}
         ps = {"authorised_share_capital": "100000"}
         results = run_rule_checks("memarts", "entity", extracted, ps, "LOW")
-        cap_checks = [r for r in results if r.get("id") == "DOC-13"]
-        assert len(cap_checks) == 1
-        assert cap_checks[0]["result"] == CheckStatus.FAIL
+        assert [r for r in results if r.get("id") == "DOC-13"] == []
 
 
 class TestPersonContextVerification:
@@ -717,13 +718,15 @@ class TestClaudeClientCheckDefinitionAlignment:
         for stale in ("DOC-48", "DOC-62", "DOC-63"):
             assert stale not in ids, f"passport must not have stale ID {stale}"
 
-    def test_memarts_has_doc_ma01(self):
-        """memarts must have DOC-MA-01 (Business Objects) not legacy DOC-13."""
+    def test_memarts_check_ids(self):
+        """memarts retains DOC-08/DOC-09; DOC-MA-01 and DOC-13 are retired."""
         from claude_client import ClaudeClient
         defs = ClaudeClient._get_check_definitions()
         ids = {c["id"] for c in defs.get("memarts", [])}
-        assert "DOC-MA-01" in ids, "memarts missing DOC-MA-01 (Business Objects)"
-        assert "DOC-13" in ids, "memarts missing DOC-13 (Authorised Share Capital)"
+        for required in ("DOC-08", "DOC-09"):
+            assert required in ids, f"memarts missing {required}"
+        for retired in ("DOC-MA-01", "DOC-13"):
+            assert retired not in ids, f"memarts must not have retired ID {retired}"
         assert "DOC-16" not in ids, "memarts must not have stale ID DOC-16"
 
     def test_reg_sh_uses_doc15a_doc15b(self):
