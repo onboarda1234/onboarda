@@ -606,6 +606,12 @@ defects found while verifying other work; neither is fixed here.
 | R3-OPS-001 | MED | Sibling alarm-provisioning scripts still create alarms that page nobody: `provision_screening_queue_p95_alarm.py --apply` accepts an empty action, and `provision_pr6_observability.py --apply` **auto-creates a brand-new SNS topic with zero subscribers** — alarms then carry a non-empty `AlarmActions` and look wired while paging no one, which is precisely the failure mode P9-10's guard exists to kill. Also: the P9-10 guard checks ARN *presence*, not deliverability | ⬜ pending — extend the `apply_refusal()` pattern to both siblings; consider an SNS subscription pre-check under `--apply` |
 | R3-APP-001 | LOW | Nulling `prescreening_data` on the approval path yields `400 "Approval blocked: Internal validation error: 'NoneType' object has no attribute 'get'"` — an unhandled `AttributeError` leaking an internal trace into an operator-facing message | ⬜ pending — **frozen Application Review decision path; needs founder approval before any change.** Cosmetic/robustness only; the approval is correctly blocked |
 
+Operational note (2026-07-17): the controlled staging reset removed 944
+founder-confirmed synthetic applications and aligned Manufacturing to 2 and D3
+to 40/35/25. The canonical dataset remains unseeded because its PostgreSQL
+dry-run exposed a type mismatch; RSMP remains OFF. See the
+[staging reset closure record](pilot/STAGING_RESET_CLOSURE_2026-07-17.md).
+
 ---
 
 ## Optional / Post-Production Modernization (NOT required for pilot or first production cut; excluded from roll-up)
