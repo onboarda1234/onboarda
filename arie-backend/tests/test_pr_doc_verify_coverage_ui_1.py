@@ -44,7 +44,7 @@ def test_default_document_row_stays_compact_and_avoids_repeating_audit_payloads(
     default_row = card.split("renderDocumentAuditDetails", 1)[0]
 
     for expected in [
-        "renderDocumentCompactSummary(issue, blocker, nextAction, relianceState)",
+        "renderDocumentExecutiveSummary(doc, issue, relianceState)",
         "renderDocumentDirectActions(app, doc, groupKey, relianceState, expectedSlot)",
         "documentReviewContextLine(app, doc, linkedRequirement, expectedSlot)",
         "File: ",
@@ -122,7 +122,7 @@ def test_audit_details_use_collapsed_technical_drawer_without_repeated_coverage_
     assert "Lifecycle context" not in technical
     assert "Policy ID/version" not in technical
     assert "Document type" not in technical
-    assert "Check ID:" in check_row
+    assert "addMeta('Check ID'" in check_row
     assert "Warnings:" not in technical
     assert "Issues:" not in technical
     assert "Material findings" not in technical
