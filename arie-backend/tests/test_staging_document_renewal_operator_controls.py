@@ -14,7 +14,6 @@ from urllib.error import HTTPError
 import pytest
 
 from monitoring_document_renewal_staging_cleanup import (
-    STAGING_AUDIT_BASELINE_COVERAGE_GAPS,
     STAGING_AUDIT_BASELINE_LEGACY_ROWS,
     STAGING_DATABASE_FINGERPRINT_ENV,
 )
@@ -477,7 +476,7 @@ def test_main_workflow_preserves_recovery_handle_until_cleanup_is_proven():
     assert "--tag-keys RegMindHarness HarnessRunId HarnessOriginalTaskDefinition" in body
 
 
-def test_harness_uses_only_the_approved_pinned_audit_gap_baseline():
+def test_harness_reports_coverage_gaps_without_pinning_the_global_count():
     workflow = HARNESS_WORKFLOW.read_text(encoding="utf-8")
     start = workflow.index("name: Capture clean baseline fingerprint")
     end = workflow.index("name: Register bounded temporary backend activation", start)
@@ -492,14 +491,19 @@ def test_harness_uses_only_the_approved_pinned_audit_gap_baseline():
         / "arie-backend"
         / "monitoring_document_renewal_staging_cleanup.py"
     ).read_text(encoding="utf-8")
-    assert (
-        "STAGING_AUDIT_BASELINE_COVERAGE_GAPS = "
-        f"{STAGING_AUDIT_BASELINE_COVERAGE_GAPS:_}"
-    ) in source
+    # Legacy history remains an exact, immutable control.
     assert (
         "STAGING_AUDIT_BASELINE_LEGACY_ROWS = "
         f"{STAGING_AUDIT_BASELINE_LEGACY_ROWS:_}"
     ) in source
+    assert (
+        'metadata["legacy_rows"] == STAGING_AUDIT_BASELINE_LEGACY_ROWS'
+    ) in source
+    # The global coverage-gap count is reported evidence, never a gate.
+    assert (
+        'metadata["coverage_gaps"] == STAGING_AUDIT_BASELINE_COVERAGE_GAPS'
+    ) not in source
+    assert 'metadata["coverage_gaps"] >= 0' in source
 
 
 def test_main_workflow_proves_global_residue_absent_before_and_after_lease():

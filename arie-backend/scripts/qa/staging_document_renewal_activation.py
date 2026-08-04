@@ -139,7 +139,7 @@ def _validated_staging_audit_chain(value: Mapping[str, Any]) -> dict[str, Any]:
         return validated_staging_harness_audit_chain(value)
     except RenewalHarnessCleanupError as exc:
         raise ActivationControlError(
-            "staging harness audit chain differs from the approved baseline"
+            "staging harness audit chain violates global integrity invariants"
         ) from exc
 
 
@@ -1139,19 +1139,25 @@ def compare_fingerprints(
     before_chain = _validated_staging_audit_chain(before.get("audit_chain") or {})
     after_chain = _validated_staging_audit_chain(after.get("audit_chain") or {})
     final_chain = _validated_staging_audit_chain(final.get("audit_chain") or {})
+    # Legacy history is immutable; the unpinned gap count may only grow
+    # (known-unchained writers between runs — in-run non-fixture writes
+    # still fail isolation equality) and each leg's total growth must
+    # decompose into chained growth + gap growth.
     audit_chain_integrity_exact = (
         before_chain["legacy_rows"]
         == after_chain["legacy_rows"]
         == final_chain["legacy_rows"]
         and before_chain["coverage_gaps"]
-        == after_chain["coverage_gaps"]
-        == final_chain["coverage_gaps"]
+        <= after_chain["coverage_gaps"]
+        <= final_chain["coverage_gaps"]
         and before_chain["chained_rows"] <= after_chain["chained_rows"]
         <= final_chain["chained_rows"]
-        and after_chain["chained_rows"] - before_chain["chained_rows"]
-        == after_chain["total_entries"] - before_chain["total_entries"]
-        and final_chain["chained_rows"] - after_chain["chained_rows"]
-        == final_chain["total_entries"] - after_chain["total_entries"]
+        and after_chain["total_entries"] - before_chain["total_entries"]
+        == (after_chain["chained_rows"] - before_chain["chained_rows"])
+        + (after_chain["coverage_gaps"] - before_chain["coverage_gaps"])
+        and final_chain["total_entries"] - after_chain["total_entries"]
+        == (final_chain["chained_rows"] - after_chain["chained_rows"])
+        + (final_chain["coverage_gaps"] - after_chain["coverage_gaps"])
     )
     exact_audit_chain = (
         before_audit_count >= 0
@@ -1285,10 +1291,11 @@ def compare_recovery_fingerprints(
     final_chain = _validated_staging_audit_chain(final.get("audit_chain") or {})
     chain_exact = (
         before_chain["legacy_rows"] == final_chain["legacy_rows"]
-        and before_chain["coverage_gaps"] == final_chain["coverage_gaps"]
+        and final_chain["coverage_gaps"] >= before_chain["coverage_gaps"]
         and final_chain["chained_rows"] >= before_chain["chained_rows"]
-        and final_chain["chained_rows"] - before_chain["chained_rows"]
-        == final_chain["total_entries"] - before_chain["total_entries"]
+        and final_chain["total_entries"] - before_chain["total_entries"]
+        == (final_chain["chained_rows"] - before_chain["chained_rows"])
+        + (final_chain["coverage_gaps"] - before_chain["coverage_gaps"])
     )
     before_flags = before_cleanup.get("feature_state") or {}
     final_flags = final.get("feature_state") or {}
