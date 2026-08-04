@@ -129,6 +129,28 @@ class ActivationControlError(RuntimeError):
     """Temporary ECS activation evidence cannot be proven safe."""
 
 
+def _validated_staging_audit_chain(value: Mapping[str, Any]) -> dict[str, Any]:
+    from monitoring_document_renewal_staging_cleanup import (
+        RenewalHarnessCleanupError,
+        validated_staging_harness_audit_chain,
+    )
+
+    try:
+        return validated_staging_harness_audit_chain(value)
+    except RenewalHarnessCleanupError as exc:
+        raise ActivationControlError(
+            "staging harness audit chain differs from the approved baseline"
+        ) from exc
+
+
+def _fixture_audit_chain_is_exact(value: Mapping[str, Any]) -> bool:
+    from monitoring_document_renewal_staging_cleanup import (
+        staging_harness_fixture_audit_chain_is_exact,
+    )
+
+    return staging_harness_fixture_audit_chain_is_exact(value)
+
+
 def _load_json(path: str) -> dict[str, Any]:
     try:
         value = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -798,7 +820,12 @@ def verify_clean_recovery_fingerprint(
     from fixtures.document_renewal_staging import fixture_spec
 
     flags = fingerprint.get("feature_state") or {}
-    chain = fingerprint.get("audit_chain") or {}
+    try:
+        chain = _validated_staging_audit_chain(
+            fingerprint.get("audit_chain") or {}
+        )
+    except ActivationControlError:
+        chain = None
     fixture = fingerprint.get("fixture") or {}
     spec = fixture_spec()
     fixture_keys = (
@@ -836,18 +863,8 @@ def verify_clean_recovery_fingerprint(
             and not any(bool(value) for value in flags.values())
             and fingerprint.get("all_monitoring_flags_off") is True
         ),
-        "audit_chain_intact": (
-            isinstance(chain, Mapping)
-            and chain.get("verified") is True
-            and chain.get("coverage_complete") is True
-            and int(chain.get("coverage_gaps", -1)) == 0
-            and int(chain.get("broken_link_count", -1)) == 0
-            and int(chain.get("entries_checked", -1))
-            == int(chain.get("chained_rows", -2))
-            and int(chain.get("chained_rows", -1))
-            + int(chain.get("legacy_rows", -1))
-            == int(chain.get("total_entries", -3))
-        ),
+        "fixture_audit_chain_exact": _fixture_audit_chain_is_exact(fingerprint),
+        "audit_chain_intact": chain is not None,
     }
     if not all(checks.values()):
         raise ActivationControlError("recovery final fingerprint is not clean")
@@ -1119,42 +1136,18 @@ def compare_fingerprints(
     final_audit_count = audit_count(final)
     validation_audit_delta = audit_delta(before, after)
     cleanup_audit_delta = audit_delta(after, final)
-    def chain_metadata(value: Mapping[str, Any]) -> dict[str, Any]:
-        raw = value.get("audit_chain") or {}
-        if not isinstance(raw, Mapping):
-            raise ActivationControlError("audit-chain metadata is invalid")
-        try:
-            result = {
-                "verified": raw.get("verified") is True,
-                "coverage_complete": raw.get("coverage_complete") is True,
-                "entries_checked": int(raw.get("entries_checked", -1)),
-                "chained_rows": int(raw.get("chained_rows", -1)),
-                "legacy_rows": int(raw.get("legacy_rows", -1)),
-                "coverage_gaps": int(raw.get("coverage_gaps", -1)),
-                "broken_link_count": int(raw.get("broken_link_count", -1)),
-                "total_entries": int(raw.get("total_entries", -1)),
-            }
-        except (TypeError, ValueError) as exc:
-            raise ActivationControlError("audit-chain metadata is invalid") from exc
-        return result
-
-    before_chain = chain_metadata(before)
-    after_chain = chain_metadata(after)
-    final_chain = chain_metadata(final)
+    before_chain = _validated_staging_audit_chain(before.get("audit_chain") or {})
+    after_chain = _validated_staging_audit_chain(after.get("audit_chain") or {})
+    final_chain = _validated_staging_audit_chain(final.get("audit_chain") or {})
     audit_chain_integrity_exact = (
-        all(
-            value["verified"]
-            and value["coverage_complete"]
-            and value["coverage_gaps"] == 0
-            and value["broken_link_count"] == 0
-            and value["entries_checked"] == value["chained_rows"]
-            and value["chained_rows"] + value["legacy_rows"]
-            == value["total_entries"]
-            for value in (before_chain, after_chain, final_chain)
-        )
-        and before_chain["legacy_rows"]
+        before_chain["legacy_rows"]
         == after_chain["legacy_rows"]
         == final_chain["legacy_rows"]
+        and before_chain["coverage_gaps"]
+        == after_chain["coverage_gaps"]
+        == final_chain["coverage_gaps"]
+        and before_chain["chained_rows"] <= after_chain["chained_rows"]
+        <= final_chain["chained_rows"]
         and after_chain["chained_rows"] - before_chain["chained_rows"]
         == after_chain["total_entries"] - before_chain["total_entries"]
         and final_chain["chained_rows"] - after_chain["chained_rows"]
@@ -1164,7 +1157,10 @@ def compare_fingerprints(
         before_audit_count >= 0
         and after_audit_count >= before_audit_count
         and final_audit_count >= after_audit_count
-        and before_unchained == after_unchained == final_unchained
+        and before_unchained == after_unchained == final_unchained == 0
+        and before_chained == before_audit_count
+        and after_chained == after_audit_count
+        and final_chained == final_audit_count
         and after_chained - before_chained
         == after_audit_count - before_audit_count
         and final_chained - after_chained
@@ -1198,6 +1194,10 @@ def compare_fingerprints(
         == EXPECTED_VALIDATION_AUDIT_DELTA,
         "cleanup_audit_action_exact": cleanup_audit_delta
         == EXPECTED_CLEANUP_AUDIT_DELTA,
+        "fixture_audit_chain_exact": all(
+            _fixture_audit_chain_is_exact(value)
+            for value in (before, after, final)
+        ),
         "audit_chain_growth_exact": exact_audit_chain,
         "global_audit_chain_integrity_exact": audit_chain_integrity_exact,
         "baseline_restored": bool(baseline.get("baseline_restored")),
@@ -1279,40 +1279,14 @@ def compare_recovery_fingerprints(
         else EXPECTED_CLEANUP_AUDIT_DELTA
     )
 
-    def chain(value: Mapping[str, Any]) -> dict[str, Any]:
-        raw = value.get("audit_chain") or {}
-        if not isinstance(raw, Mapping):
-            raise ActivationControlError("recovery audit-chain metadata is invalid")
-        try:
-            return {
-                "verified": raw.get("verified") is True,
-                "coverage_complete": raw.get("coverage_complete") is True,
-                "entries_checked": int(raw.get("entries_checked", -1)),
-                "chained_rows": int(raw.get("chained_rows", -1)),
-                "legacy_rows": int(raw.get("legacy_rows", -1)),
-                "coverage_gaps": int(raw.get("coverage_gaps", -1)),
-                "broken_link_count": int(raw.get("broken_link_count", -1)),
-                "total_entries": int(raw.get("total_entries", -1)),
-            }
-        except (TypeError, ValueError) as exc:
-            raise ActivationControlError(
-                "recovery audit-chain metadata is invalid"
-            ) from exc
-
-    before_chain = chain(before_cleanup)
-    final_chain = chain(final)
+    before_chain = _validated_staging_audit_chain(
+        before_cleanup.get("audit_chain") or {}
+    )
+    final_chain = _validated_staging_audit_chain(final.get("audit_chain") or {})
     chain_exact = (
-        all(
-            value["verified"]
-            and value["coverage_complete"]
-            and value["coverage_gaps"] == 0
-            and value["broken_link_count"] == 0
-            and value["entries_checked"] == value["chained_rows"]
-            and value["chained_rows"] + value["legacy_rows"]
-            == value["total_entries"]
-            for value in (before_chain, final_chain)
-        )
-        and before_chain["legacy_rows"] == final_chain["legacy_rows"]
+        before_chain["legacy_rows"] == final_chain["legacy_rows"]
+        and before_chain["coverage_gaps"] == final_chain["coverage_gaps"]
+        and final_chain["chained_rows"] >= before_chain["chained_rows"]
         and final_chain["chained_rows"] - before_chain["chained_rows"]
         == final_chain["total_entries"] - before_chain["total_entries"]
     )
@@ -1372,6 +1346,8 @@ def compare_recovery_fingerprints(
             and not any(bool(value) for value in final_flags.values())
         ),
         "cleanup_audit_delta_exact": action_delta == expected_action_delta,
+        "fixture_audit_chain_exact": _fixture_audit_chain_is_exact(before_cleanup)
+        and _fixture_audit_chain_is_exact(final),
         "audit_chain_integrity_exact": chain_exact,
     }
     if not all(comparisons.values()):

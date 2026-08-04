@@ -292,6 +292,11 @@ jobs:
             --evidence-output "$HARNESS_EVIDENCE_DIR/before-fingerprint.json"
           python3 - "$HARNESS_EVIDENCE_DIR/before-fingerprint.json" <<'PY'
           import json, re, sys
+          from monitoring_document_renewal_staging_cleanup import (
+              RenewalHarnessCleanupError,
+              staging_harness_fixture_audit_chain_is_exact,
+              validated_staging_harness_audit_chain,
+          )
           evidence = json.load(open(sys.argv[1], encoding="utf-8"))
           relations = evidence.get("relations") or {}
           operational = (
@@ -327,35 +332,15 @@ jobs:
               "scheduler_fingerprint",
               "audit_evidence_fingerprint",
           )
-          audit_actions = evidence.get("fixture_audit_actions")
-          audit_relation_count = int(
-              (relations.get("fixture_audit") or {}).get("row_count", -1)
-          )
-          audit_chained = int(evidence.get("fixture_audit_chained_count", -1))
-          audit_unchained = int(evidence.get("fixture_audit_unchained_count", -1))
           chain = evidence.get("audit_chain") or {}
+          try:
+              validated_staging_harness_audit_chain(chain)
+              audit_chain_valid = True
+          except RenewalHarnessCleanupError:
+              audit_chain_valid = False
           audit_metadata_valid = (
-              isinstance(audit_actions, dict)
-              and all(
-                  isinstance(action, str)
-                  and action.startswith("monitoring.document_renewal.")
-                  and isinstance(count, int)
-                  and not isinstance(count, bool)
-                  and count > 0
-                  for action, count in audit_actions.items()
-              )
-              and sum(audit_actions.values()) == audit_relation_count
-              and audit_chained == audit_relation_count
-              and audit_unchained == 0
-              and chain.get("verified") is True
-              and chain.get("coverage_complete") is True
-              and int(chain.get("coverage_gaps", -1)) == 0
-              and int(chain.get("broken_link_count", -1)) == 0
-              and int(chain.get("entries_checked", -1))
-                  == int(chain.get("chained_rows", -2))
-              and int(chain.get("chained_rows", -1))
-                  + int(chain.get("legacy_rows", -1))
-                  == int(chain.get("total_entries", -2))
+              staging_harness_fixture_audit_chain_is_exact(evidence)
+              and audit_chain_valid
           )
           if (
               evidence.get("contract_version")
