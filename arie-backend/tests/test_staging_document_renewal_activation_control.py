@@ -6,6 +6,7 @@ import json
 import pytest
 
 from fixtures.document_renewal_staging import fixture_spec, manifest_sha256
+import monitoring_document_renewal_staging_cleanup as staging_cleanup
 from scripts.qa import staging_document_renewal_activation as control
 
 
@@ -538,7 +539,12 @@ def _fingerprint(
     chained,
     unchained,
     active,
-    legacy_rows=0,
+    legacy_rows=staging_cleanup.STAGING_AUDIT_BASELINE_LEGACY_ROWS,
+    coverage_gaps=staging_cleanup.STAGING_AUDIT_BASELINE_COVERAGE_GAPS,
+    verified=True,
+    broken_link_count=0,
+    total_adjustment=0,
+    coverage_complete=None,
 ):
     flags = {
         control.RENEWAL_FLAG: bool(active),
@@ -571,6 +577,11 @@ def _fingerprint(
         "sha256": "b" * 64,
     }
     spec = fixture_spec()
+    global_chained = (
+        staging_cleanup.STAGING_AUDIT_BASELINE_CHAINED_ROWS + audit_count
+    )
+    if coverage_complete is None:
+        coverage_complete = coverage_gaps == 0
     return {
         "run_id": "gh-12345-1",
         "fixture": {
@@ -602,14 +613,19 @@ def _fingerprint(
         "fixture_audit_chained_count": chained,
         "fixture_audit_unchained_count": unchained,
         "audit_chain": {
-            "verified": True,
-            "entries_checked": audit_count,
-            "chained_rows": audit_count,
+            "verified": verified,
+            "entries_checked": global_chained,
+            "chained_rows": global_chained,
             "legacy_rows": legacy_rows,
-            "coverage_gaps": 0,
-            "coverage_complete": True,
-            "broken_link_count": 0,
-            "total_entries": audit_count + legacy_rows,
+            "coverage_gaps": coverage_gaps,
+            "coverage_complete": coverage_complete,
+            "broken_link_count": broken_link_count,
+            "total_entries": (
+                global_chained
+                + legacy_rows
+                + coverage_gaps
+                + total_adjustment
+            ),
         },
         "feature_state": flags,
         "all_monitoring_flags_off": not active,
@@ -639,6 +655,65 @@ def test_clean_recovery_fingerprint_rejects_any_governed_residue():
         control.verify_clean_recovery_fingerprint(dirty)
 
 
+def test_clean_recovery_fingerprint_rejects_unchained_fixture_audit():
+    fixture_gap = _fingerprint(
+        counts={name: 0 for name in control.RECOVERY_OPERATIONAL_RELATIONS},
+        actions={},
+        audit_count=0,
+        chained=0,
+        unchained=1,
+        active=False,
+    )
+    with pytest.raises(control.ActivationControlError, match="not clean"):
+        control.verify_clean_recovery_fingerprint(fixture_gap)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "total_delta"),
+    (
+        ("verified", False, 0),
+        ("broken_link_count", 1, 0),
+        ("coverage_complete", True, 0),
+        ("coverage_complete", None, 0),
+        (
+            "coverage_gaps",
+            staging_cleanup.STAGING_AUDIT_BASELINE_COVERAGE_GAPS + 1,
+            1,
+        ),
+        (
+            "legacy_rows",
+            staging_cleanup.STAGING_AUDIT_BASELINE_LEGACY_ROWS + 1,
+            1,
+        ),
+        (
+            "entries_checked",
+            staging_cleanup.STAGING_AUDIT_BASELINE_CHAINED_ROWS + 1,
+            0,
+        ),
+        (
+            "total_entries",
+            staging_cleanup.STAGING_AUDIT_BASELINE_TOTAL_ENTRIES + 1,
+            0,
+        ),
+    ),
+)
+def test_clean_recovery_fingerprint_rejects_audit_baseline_drift(
+    field, value, total_delta
+):
+    clean = _fingerprint(
+        counts={name: 0 for name in control.RECOVERY_OPERATIONAL_RELATIONS},
+        actions={},
+        audit_count=0,
+        chained=0,
+        unchained=0,
+        active=False,
+    )
+    clean["audit_chain"][field] = value
+    clean["audit_chain"]["total_entries"] += total_delta
+    with pytest.raises(control.ActivationControlError, match="not clean"):
+        control.verify_clean_recovery_fingerprint(clean)
+
+
 def test_fingerprint_reconciliation_requires_exact_audit_action_deltas():
     expected_counts = {
         "renewal_requests": 1,
@@ -657,7 +732,6 @@ def test_fingerprint_reconciliation_requires_exact_audit_action_deltas():
         chained=2,
         unchained=0,
         active=False,
-        legacy_rows=3,
     )
     after_actions = dict(prior)
     for action, count in control.EXPECTED_VALIDATION_AUDIT_DELTA.items():
@@ -670,7 +744,6 @@ def test_fingerprint_reconciliation_requires_exact_audit_action_deltas():
         chained=2 + validation_count,
         unchained=0,
         active=True,
-        legacy_rows=3,
     )
     final_actions = dict(after_actions)
     final_actions["monitoring.document_renewal.fixture_cleanup"] += 1
@@ -681,7 +754,6 @@ def test_fingerprint_reconciliation_requires_exact_audit_action_deltas():
         chained=3 + validation_count,
         unchained=0,
         active=False,
-        legacy_rows=3,
     )
     result = control.compare_fingerprints(
         before,
@@ -693,6 +765,40 @@ def test_fingerprint_reconciliation_requires_exact_audit_action_deltas():
     )
     assert result["cleanup_audit_delta"] == control.EXPECTED_CLEANUP_AUDIT_DELTA
     assert result["comparisons"]["audit_chain_growth_exact"] is True
+
+    inconsistent_before = json.loads(json.dumps(before))
+    inconsistent_after = json.loads(json.dumps(after))
+    inconsistent_final = json.loads(json.dumps(final))
+    for value in (inconsistent_before, inconsistent_after, inconsistent_final):
+        value["fixture_audit_actions"][
+            "monitoring.document_renewal.unaccounted"
+        ] = 1
+    with pytest.raises(control.ActivationControlError):
+        control.compare_fingerprints(
+            inconsistent_before,
+            inconsistent_after,
+            {"cleanup": {"final_fingerprint": inconsistent_final}},
+        )
+
+    for field in ("legacy_rows", "coverage_gaps"):
+        drifted = json.loads(json.dumps(after))
+        drifted["audit_chain"][field] += 1
+        drifted["audit_chain"]["total_entries"] += 1
+        with pytest.raises(control.ActivationControlError):
+            control.compare_fingerprints(
+                before,
+                drifted,
+                {"cleanup": {"final_fingerprint": final}},
+            )
+
+    unchained = json.loads(json.dumps(after))
+    unchained["fixture_audit_unchained_count"] = 1
+    with pytest.raises(control.ActivationControlError):
+        control.compare_fingerprints(
+            before,
+            unchained,
+            {"cleanup": {"final_fingerprint": final}},
+        )
 
     after["fixture_audit_actions"] = dict(after_actions)
     after["fixture_audit_actions"][
@@ -744,6 +850,23 @@ def test_recovery_reconciliation_allows_only_cleanup_and_empty_final_state():
     )
     assert result["ok"] is True
     assert result["comparisons"]["final_operational_state_empty"] is True
+    drifted = json.loads(json.dumps(final))
+    drifted["audit_chain"]["coverage_gaps"] += 1
+    drifted["audit_chain"]["total_entries"] += 1
+    with pytest.raises(control.ActivationControlError):
+        control.compare_recovery_fingerprints(
+            before,
+            drifted,
+            {"cleanup": {"idempotent": False}},
+        )
+    unchained = json.loads(json.dumps(final))
+    unchained["fixture_audit_unchained_count"] = 1
+    with pytest.raises(control.ActivationControlError):
+        control.compare_recovery_fingerprints(
+            before,
+            unchained,
+            {"cleanup": {"idempotent": False}},
+        )
     final["relations"]["fixture_agent_executions"]["row_count"] = 1
     with pytest.raises(control.ActivationControlError, match="do not reconcile"):
         control.compare_recovery_fingerprints(
@@ -751,6 +874,24 @@ def test_recovery_reconciliation_allows_only_cleanup_and_empty_final_state():
             final,
             {"cleanup": {"idempotent": False}},
         )
+
+
+def test_idempotent_recovery_accepts_the_unchanged_pinned_baseline():
+    clean = _fingerprint(
+        counts={name: 0 for name in control.RECOVERY_OPERATIONAL_RELATIONS},
+        actions={},
+        audit_count=0,
+        chained=0,
+        unchained=0,
+        active=False,
+    )
+    result = control.compare_recovery_fingerprints(
+        clean,
+        json.loads(json.dumps(clean)),
+        {"cleanup": {"idempotent": True}},
+    )
+    assert result["ok"] is True
+    assert result["cleanup_audit_delta"] == {}
 
 
 def test_context_is_main_only_and_requires_exact_confirmation():

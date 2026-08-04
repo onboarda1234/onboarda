@@ -37,6 +37,30 @@ FLAGS_OFF = {name: False for name in MONITORING_FEATURE_FLAGS}
 STAMP = "2026-08-03T08:00:00+00:00"
 
 
+def _apply_pinned_audit_baseline(fingerprint):
+    fixture_audit_count = int(
+        fingerprint["relations"]["fixture_audit"]["row_count"]
+    )
+    chained_rows = (
+        cleanup_module.STAGING_AUDIT_BASELINE_CHAINED_ROWS
+        + fixture_audit_count
+    )
+    fingerprint["audit_chain"] = {
+        "verified": True,
+        "entries_checked": chained_rows,
+        "chained_rows": chained_rows,
+        "legacy_rows": cleanup_module.STAGING_AUDIT_BASELINE_LEGACY_ROWS,
+        "coverage_gaps": cleanup_module.STAGING_AUDIT_BASELINE_COVERAGE_GAPS,
+        "coverage_complete": False,
+        "broken_link_count": 0,
+        "total_entries": (
+            chained_rows
+            + cleanup_module.STAGING_AUDIT_BASELINE_LEGACY_ROWS
+            + cleanup_module.STAGING_AUDIT_BASELINE_COVERAGE_GAPS
+        ),
+    }
+
+
 def _postgres_dsn():
     return os.environ.get("TEST_POSTGRES_DSN") or os.environ.get(
         "DATABASE_URL_TEST"
@@ -601,6 +625,7 @@ def test_cleanup_restores_operational_baseline_and_preserves_audit(cleanup_db):
     before = capture_renewal_harness_fingerprint(
         db, fixture, run_id="fixture-run-1", feature_state=FLAGS_OFF
     )
+    _apply_pinned_audit_baseline(before)
     candidate = _seed_operational_graph(db, fixture, tmp_path)
     transient = capture_renewal_harness_fingerprint(
         db, fixture, run_id="fixture-run-1", feature_state=FLAGS_OFF
@@ -612,6 +637,7 @@ def test_cleanup_restores_operational_baseline_and_preserves_audit(cleanup_db):
 
     result = _cleanup(db, fixture, plan)
     final = result["final_fingerprint"]
+    _apply_pinned_audit_baseline(final)
     comparison = compare_renewal_harness_baseline(before, final)
     assert comparison == {
         "core_restored": True,
@@ -622,6 +648,26 @@ def test_cleanup_restores_operational_baseline_and_preserves_audit(cleanup_db):
         "audit_evidence_appended": True,
         "baseline_restored": True,
     }
+    drifted = json.loads(json.dumps(final))
+    drifted["audit_chain"]["coverage_gaps"] += 1
+    drifted["audit_chain"]["total_entries"] += 1
+    assert compare_renewal_harness_baseline(before, drifted)[
+        "baseline_restored"
+    ] is False
+    unchained = json.loads(json.dumps(final))
+    unchained["fixture_audit_unchained_count"] = 1
+    assert compare_renewal_harness_baseline(before, unchained)[
+        "baseline_restored"
+    ] is False
+    inconsistent_before = json.loads(json.dumps(before))
+    inconsistent_final = json.loads(json.dumps(final))
+    for value in (inconsistent_before, inconsistent_final):
+        value["fixture_audit_actions"][
+            "monitoring.document_renewal.unaccounted"
+        ] = 1
+    assert compare_renewal_harness_baseline(
+        inconsistent_before, inconsistent_final
+    )["baseline_restored"] is False
     assert not candidate.exists()
     assert result["audit_preserved"] is True
     assert result["artifact_cleanup"][0]["outcome"] == "deleted"

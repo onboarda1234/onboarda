@@ -63,6 +63,10 @@ CLEANUP_CONFIRMATION = "CLEAN-DOCUMENT-RENEWAL-STAGING-FIXTURE"
 STAGING_DATABASE_FINGERPRINT_ENV = (
     "DOCUMENT_RENEWAL_HARNESS_STAGING_DATABASE_FINGERPRINT"
 )
+STAGING_AUDIT_BASELINE_TOTAL_ENTRIES = 171_809
+STAGING_AUDIT_BASELINE_LEGACY_ROWS = 127_478
+STAGING_AUDIT_BASELINE_CHAINED_ROWS = 23
+STAGING_AUDIT_BASELINE_COVERAGE_GAPS = 44_308
 HARNESS_ADVISORY_LOCK_KEY = 8_674_309_941
 STAGING_ARTIFACT_BUCKET = "regmind-documents-staging"
 STAGING_ARTIFACT_REGION = "af-south-1"
@@ -127,6 +131,83 @@ _BOOLEAN_COLUMNS = frozenset(
 
 class RenewalHarnessCleanupError(RuntimeError):
     """Fail-closed staging harness reconciliation error."""
+
+
+def validated_staging_harness_audit_chain(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate the founder-approved staging audit-gap baseline."""
+
+    if not isinstance(value, Mapping):
+        raise RenewalHarnessCleanupError(
+            "staging harness audit-chain metadata is invalid"
+        )
+    try:
+        metadata = {
+            "verified": value.get("verified") is True,
+            "coverage_complete": value.get("coverage_complete"),
+            "entries_checked": int(value.get("entries_checked", -1)),
+            "chained_rows": int(value.get("chained_rows", -1)),
+            "legacy_rows": int(value.get("legacy_rows", -1)),
+            "coverage_gaps": int(value.get("coverage_gaps", -1)),
+            "broken_link_count": int(value.get("broken_link_count", -1)),
+            "total_entries": int(value.get("total_entries", -1)),
+        }
+    except (TypeError, ValueError) as exc:
+        raise RenewalHarnessCleanupError(
+            "staging harness audit-chain metadata is invalid"
+        ) from exc
+    if not (
+        metadata["verified"]
+        and metadata["coverage_complete"] is False
+        and metadata["broken_link_count"] == 0
+        and metadata["legacy_rows"] == STAGING_AUDIT_BASELINE_LEGACY_ROWS
+        and metadata["coverage_gaps"] == STAGING_AUDIT_BASELINE_COVERAGE_GAPS
+        and metadata["chained_rows"] >= STAGING_AUDIT_BASELINE_CHAINED_ROWS
+        and metadata["total_entries"] >= STAGING_AUDIT_BASELINE_TOTAL_ENTRIES
+        and metadata["entries_checked"] == metadata["chained_rows"]
+        and metadata["chained_rows"]
+        + metadata["legacy_rows"]
+        + metadata["coverage_gaps"]
+        == metadata["total_entries"]
+    ):
+        raise RenewalHarnessCleanupError(
+            "staging harness audit chain differs from the approved baseline"
+        )
+    return metadata
+
+
+def staging_harness_fixture_audit_chain_is_exact(
+    value: Mapping[str, Any],
+) -> bool:
+    """Require every fixture audit row to be classified and hash-chained."""
+
+    relations = value.get("relations") or {}
+    actions = value.get("fixture_audit_actions")
+    if not isinstance(relations, Mapping) or not isinstance(actions, Mapping):
+        return False
+    try:
+        audit_count = int(
+            ((relations.get("fixture_audit") or {}).get("row_count", -1))
+        )
+        chained = int(value.get("fixture_audit_chained_count", -1))
+        unchained = int(value.get("fixture_audit_unchained_count", -1))
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return (
+        audit_count >= 0
+        and all(
+            isinstance(action, str)
+            and action.startswith("monitoring.document_renewal.")
+            and isinstance(count, int)
+            and not isinstance(count, bool)
+            and count > 0
+            for action, count in actions.items()
+        )
+        and sum(actions.values()) == audit_count
+        and chained == audit_count
+        and unchained == 0
+    )
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -2163,28 +2244,35 @@ def compare_renewal_harness_baseline(
         )
         exact_chained_growth = (
             final_chained - before_chained == final_audit_count - before_audit_count
-            and final_unchained == before_unchained
+            and before_chained == before_audit_count
+            and final_chained == final_audit_count
+            and before_unchained == final_unchained == 0
         )
         exact_cleanup_evidence = final_cleanup == before_cleanup + 1
-        before_chain = before.get("audit_chain") or {}
-        final_chain = final.get("audit_chain") or {}
-        audit_chain_preserved = (
-            before_chain.get("verified") is True
-            and final_chain.get("verified") is True
-            and before_chain.get("coverage_complete") is True
-            and final_chain.get("coverage_complete") is True
-            and int(before_chain.get("broken_link_count") or 0) == 0
-            and int(final_chain.get("broken_link_count") or 0) == 0
-            and int(before_chain.get("coverage_gaps") or 0) == 0
-            and int(final_chain.get("coverage_gaps") or 0) == 0
-            and int(final_chain.get("legacy_rows") or 0)
-            == int(before_chain.get("legacy_rows") or 0)
+        before_chain = validated_staging_harness_audit_chain(
+            before.get("audit_chain") or {}
         )
-    except (TypeError, ValueError):
+        final_chain = validated_staging_harness_audit_chain(
+            final.get("audit_chain") or {}
+        )
+        audit_chain_preserved = (
+            final_chain["legacy_rows"] == before_chain["legacy_rows"]
+            and final_chain["coverage_gaps"] == before_chain["coverage_gaps"]
+            and final_chain["chained_rows"] >= before_chain["chained_rows"]
+            and final_chain["chained_rows"] - before_chain["chained_rows"]
+            == final_chain["total_entries"] - before_chain["total_entries"]
+            == final_audit_count - before_audit_count
+        )
+        fixture_audit_chain_exact = (
+            staging_harness_fixture_audit_chain_is_exact(before)
+            and staging_harness_fixture_audit_chain_is_exact(final)
+        )
+    except (RenewalHarnessCleanupError, TypeError, ValueError):
         audit_count_increased = False
         exact_chained_growth = False
         exact_cleanup_evidence = False
         audit_chain_preserved = False
+        fixture_audit_chain_exact = False
     comparisons = {
         "core_restored": before.get("core_fingerprint") == final.get("core_fingerprint"),
         "operational_restored": before.get("operational_fingerprint")
@@ -2198,6 +2286,7 @@ def compare_renewal_harness_baseline(
         and exact_chained_growth
         and exact_cleanup_evidence
         and audit_chain_preserved
+        and fixture_audit_chain_exact
         and before.get("audit_evidence_fingerprint")
         != final.get("audit_evidence_fingerprint"),
     }

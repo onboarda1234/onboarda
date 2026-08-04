@@ -14,6 +14,8 @@ from urllib.error import HTTPError
 import pytest
 
 from monitoring_document_renewal_staging_cleanup import (
+    STAGING_AUDIT_BASELINE_COVERAGE_GAPS,
+    STAGING_AUDIT_BASELINE_LEGACY_ROWS,
     STAGING_DATABASE_FINGERPRINT_ENV,
 )
 from scripts.qa import staging_document_renewal_activation as activation
@@ -473,6 +475,31 @@ def test_main_workflow_preserves_recovery_handle_until_cleanup_is_proven():
     assert "aws ecs untag-resource" in body
     assert body.index("deregister-task-definition") < body.index("untag-resource")
     assert "--tag-keys RegMindHarness HarnessRunId HarnessOriginalTaskDefinition" in body
+
+
+def test_harness_uses_only_the_approved_pinned_audit_gap_baseline():
+    workflow = HARNESS_WORKFLOW.read_text(encoding="utf-8")
+    start = workflow.index("name: Capture clean baseline fingerprint")
+    end = workflow.index("name: Register bounded temporary backend activation", start)
+    baseline = workflow[start:end]
+    assert "validated_staging_harness_audit_chain" in baseline
+    assert "staging_harness_fixture_audit_chain_is_exact" in baseline
+    assert 'chain.get("coverage_complete") is True' not in baseline
+    assert 'chain.get("coverage_gaps", -1)) == 0' not in baseline
+
+    source = (
+        REPO_ROOT
+        / "arie-backend"
+        / "monitoring_document_renewal_staging_cleanup.py"
+    ).read_text(encoding="utf-8")
+    assert (
+        "STAGING_AUDIT_BASELINE_COVERAGE_GAPS = "
+        f"{STAGING_AUDIT_BASELINE_COVERAGE_GAPS:_}"
+    ) in source
+    assert (
+        "STAGING_AUDIT_BASELINE_LEGACY_ROWS = "
+        f"{STAGING_AUDIT_BASELINE_LEGACY_ROWS:_}"
+    ) in source
 
 
 def test_main_workflow_proves_global_residue_absent_before_and_after_lease():
