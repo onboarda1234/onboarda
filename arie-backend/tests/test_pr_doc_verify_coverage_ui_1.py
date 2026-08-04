@@ -122,7 +122,10 @@ def test_audit_details_use_collapsed_technical_drawer_without_repeated_coverage_
     assert "Lifecycle context" not in technical
     assert "Policy ID/version" not in technical
     assert "Document type" not in technical
-    assert "addMeta('Check ID'" in check_row
+    assert "addMeta('Check ID'" not in check_row
+    assert "verification-check-meta" not in check_row
+    assert '<div class="verification-check-row ' in check_row
+    assert '<details class="verification-check-row ' not in check_row
     assert "Warnings:" not in technical
     assert "Issues:" not in technical
     assert "Material findings" not in technical
