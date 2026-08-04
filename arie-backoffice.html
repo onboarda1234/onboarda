@@ -17012,7 +17012,7 @@ function screeningSubjectWorkspaceBody(config) {
   body += screeningReviewHonestyBanner(row, config.screeningSummary);
   body += screeningTriageStrip(row);
   body += screeningWorkspaceStatusStrip(config.statusFacts);
-  body += renderAgent3ScreeningInterpretationPanel(app, config.subjectName);
+  body += renderAgent3ScreeningInterpretationPanel(app, config.subjectName, config.subjectPersonKey || '', row);
   // Per-hit path: the SOLE review surface for any triaged subject. It activates
   // on the server-computed triage block alone — NOT on evidence items being
   // loaded — because evidence hydrates lazily (deferred until the row is opened)
@@ -17151,6 +17151,7 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
     screeningSummary: screeningSummary,
     subjectType: 'entity',
     subjectName: app.company,
+    subjectPersonKey: '',
     statusFacts: [
       ['Registry status', company.found === true ? 'Registry record found' : (company.found === false ? 'Registry record not found' : 'Registry lookup not performed')],
       ['Materiality', companyHits.sanctions_hits > 0 ? 'High sensitivity - sanctions/watchlist' : (companyHits.adverse_media_hits > 0 ? 'Elevated sensitivity - adverse media' : (companyHits.matched ? 'Review context' : 'Clear'))],
@@ -17332,6 +17333,7 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
     screeningSummary: screeningSummary,
     subjectType: person.subject_type,
     subjectName: person.name,
+    subjectPersonKey: person.person_key || '',
     statusFacts: [
       ['Declared PEP', personDeclaredPep ? 'Yes' : 'No'],
       ['Nationality / jurisdiction', person.nat || 'Not recorded'],
@@ -17554,22 +17556,43 @@ function agent3ScreeningResultTerminal(output) {
   }) && values.some(function(value) { return String(value || '').trim() !== ''; });
 }
 
-function agent3NarrativeEntriesForSubject(narrative, subjectName) {
+function agent3NarrativeEntriesForSubject(narrative, subjectName, subjectPersonKey) {
   // Server-computed narrative entries (grouped Phase-F shape, or legacy
-  // priority_hits), optionally scoped to one subject for the selected-subject
-  // workspace. Scoping is a display filter only — when no entry references
-  // the subject the full app-wide list is returned so nothing is hidden.
+  // priority_hits), scoped to one subject for the selected-subject workspace.
+  //
+  // Scoping is STRICT. It previously fell back to the full app-wide list when
+  // no entry referenced the subject — "so nothing is hidden" — but the only
+  // caller is the per-subject card, so that fallback never surfaced hidden
+  // data: it MISATTRIBUTED other subjects' findings to the subject on screen.
+  // A zero-hit director's card showed three other directors' PEP, watchlist
+  // and adverse-media matches under her own name and "Clear" badge. Because
+  // screening is the business of matching a subject against other people's
+  // names, "the PEP match thomas roberts — exact name match" on Belinda
+  // WRIGLEY's card reads as HER matching a PEP called Thomas Roberts.
+  // Misattribution to a named individual is worse than omission.
+  //
+  // Join order: person_key FIRST, display name only as legacy fallback. The
+  // stored entry's subject_name can be the PROVIDER profile name ("thomas
+  // roberts") while the card is keyed by the party name ("Miles Thomas
+  // ROBERTS") — the normalizer's own contract says "downstream joins must use
+  // person_key when present, never the display name". When both sides carry a
+  // key, the key is authoritative in BOTH directions: a key match attributes
+  // the entry even when the names diverge, and a key mismatch rejects it even
+  // when the names collide (two directors sharing a name).
   if (!narrative || typeof narrative !== 'object') return [];
   var hits = Array.isArray(narrative.priority_hits) ? narrative.priority_hits : [];
   var entries = Array.isArray(narrative.entries) && narrative.entries.length ? narrative.entries : hits;
-  if (!subjectName) return entries;
-  var scoped = entries.filter(function(entry) {
-    return entry && screeningSubjectNamesMatch(entry.subject_name, subjectName);
+  if (!subjectName && !subjectPersonKey) return entries;
+  var wantKey = String(subjectPersonKey || '').trim();
+  return entries.filter(function(entry) {
+    if (!entry) return false;
+    var entryKey = String(entry.person_key || '').trim();
+    if (wantKey && entryKey) return entryKey === wantKey;
+    return !!subjectName && screeningSubjectNamesMatch(entry.subject_name, subjectName);
   });
-  return scoped.length ? scoped : entries;
 }
 
-function agent3TriageNarrativeHtml(narrative, subjectName) {
+function agent3TriageNarrativeHtml(narrative, subjectName, subjectPersonKey) {
   // Approved per-hit mock: ONE flowing advisory paragraph ("Start with the
   // sanctions + PEP match X (triage 92, STRONG) — …; review it first. The
   // remaining 99 are near-identical adverse-media hits …") composed ONLY from
@@ -17580,7 +17603,7 @@ function agent3TriageNarrativeHtml(narrative, subjectName) {
   // subjectName is set the paragraph is scoped to that subject's entries;
   // unscoped rendering prefixes each sentence with its subject name instead.
   if (!narrative || typeof narrative !== 'object') return '';
-  var entries = agent3NarrativeEntriesForSubject(narrative, subjectName);
+  var entries = agent3NarrativeEntriesForSubject(narrative, subjectName, subjectPersonKey);
   var categoryWords = function(categories) {
     var words = [];
     (Array.isArray(categories) ? categories : []).forEach(function(category) {
@@ -17645,12 +17668,16 @@ function agent3TriageNarrativeHtml(narrative, subjectName) {
       sentences.push(escapeHtml(String(narrative.no_risk_exposure)));
     }
   }
-  if (!sentences.length && narrative.headline) sentences.push(escapeHtml(String(narrative.headline)));
+  // headline is an APP-WIDE summary. In scoped mode it would substitute another
+  // subject's findings for the one on screen, so it is only a fallback for the
+  // unscoped view. Scoped-with-no-entries returns '' and the caller states that
+  // plainly for this subject.
+  if (!sentences.length && narrative.headline && !subjectName) sentences.push(escapeHtml(String(narrative.headline)));
   if (!sentences.length) return '';
   return '<div data-agent3-triage-narrative="true" style="font-size:13.5px;color:var(--text1);line-height:1.65;">' + sentences.join(' ') + '</div>';
 }
 
-function renderAgent3ScreeningInterpretationPanel(app, subjectName) {
+function renderAgent3ScreeningInterpretationPanel(app, subjectName, subjectPersonKey, subjectRow) {
   // Approved per-hit mock (founder-signed): Agent 3 is ONE compact advisory
   // callout — a purple header line ("AGENT 3 — SCREENING INTERPRETATION ·
   // scoped to <subject>"), a single where-to-start paragraph, and an advisory
@@ -17665,10 +17692,17 @@ function renderAgent3ScreeningInterpretationPanel(app, subjectName) {
   var disabled = AGENT3_SCREENING_INTERPRETATION_BUSY || !(app && (app.id || app.ref)) ? ' disabled' : '';
   var generatedAt = output && output.generated_at ? String(output.generated_at).replace('T', ' ').slice(0, 19) : '';
   var narrative = output && output.triage_narrative && typeof output.triage_narrative === 'object' ? output.triage_narrative : null;
-  var scoped = !!(narrative && subjectName && agent3NarrativeEntriesForSubject(narrative, '').some(function(entry) {
-    return entry && screeningSubjectNamesMatch(entry.subject_name, subjectName);
-  }));
-  var caption = 'Advisory — decisions are made by officers.' + (generatedAt ? ' · Generated: ' + generatedAt : '');
+  // Scope is declared by the CARD, not by whether the subject happens to have
+  // findings — and not by whether a triage narrative exists at all. Both prior
+  // gates suppressed the "scoped to X" label and let application-level text
+  // render on the subject card in exactly the cases the label was needed.
+  var scoped = !!subjectName;
+  var scopedEntries = (scoped && narrative) ? agent3NarrativeEntriesForSubject(narrative, subjectName, subjectPersonKey) : [];
+  var allEntries = narrative ? agent3NarrativeEntriesForSubject(narrative, '', '') : [];
+  // The stored interpretation and its regeneration are APPLICATION-level; say
+  // so, so an officer on a subject card never mistakes "Refresh" for a
+  // subject-specific analysis.
+  var caption = 'Advisory — decisions are made by officers. · Interpretation covers all subjects on this application.' + (generatedAt ? ' · Generated: ' + generatedAt : '');
 
   var html = '';
   html += '<div class="card" id="agent3-screening-interpretation-panel" style="margin-bottom:16px;border-left:4px solid #7c3aed;background:rgba(124,58,237,0.035);">';
@@ -17693,9 +17727,13 @@ function renderAgent3ScreeningInterpretationPanel(app, subjectName) {
 
   if (!hasProviderHits) {
     if (agent3ScreeningResultTerminal(output)) {
-      // Terminal clean: one honest line — never a green all-clear box.
-      html += '<div style="font-size:13.5px;color:var(--text1);line-height:1.6;margin-top:8px;">' + escapeHtml(agent3DisplayRecommendation(output.recommended_disposition) || 'No reportable provider hit recorded') + '.</div>';
+      // Terminal clean: one honest line — never a green all-clear box. The
+      // recommendation is application-level, so it is labelled as such, and
+      // the caption (with the generated-at date) renders here too — the calm
+      // case is exactly where the officer most needs the date.
+      html += '<div style="font-size:13.5px;color:var(--text1);line-height:1.6;margin-top:8px;">' + escapeHtml(agent3DisplayRecommendation(output.recommended_disposition) || 'No reportable provider hit recorded') + ' <span style="color:var(--text3);">(whole application)</span>.</div>';
       html += '<div style="font-size:11.5px;color:var(--text3);font-style:italic;margin-top:6px;">Advisory only · officer decision still required · absence of hits is not proof of no compliance risk.</div>';
+      html += '<div style="font-size:11.5px;color:var(--text3);margin-top:6px;">' + escapeHtml(caption) + '</div>';
     } else {
       html += '<div style="margin-top:8px;padding:10px 12px;border:1px solid #fde68a;border-radius:8px;background:#fffbeb;color:#92400e;font-size:12.5px;line-height:1.55;"><b>Screening is not a terminal clean result.</b> Zero reportable hit rows, but the stored screening is incomplete or a review signal remains present' + (output.pending_degraded_reason ? ' (' + escapeHtml(String(output.pending_degraded_reason)) + ')' : '') + '. Officer decision required.</div>';
       html += '<div style="font-size:11.5px;color:var(--text3);margin-top:6px;">' + escapeHtml(caption) + '</div>';
@@ -17704,7 +17742,38 @@ function renderAgent3ScreeningInterpretationPanel(app, subjectName) {
     return html;
   }
 
-  var paragraph = narrative ? agent3TriageNarrativeHtml(narrative, scoped ? subjectName : '') : '';
+  // Never blank the subject name here: passing '' switches the composer into
+  // app-wide mode and renders every other subject's findings on this card.
+  var paragraph = narrative ? agent3TriageNarrativeHtml(narrative, subjectName, subjectPersonKey) : '';
+  if (!paragraph && scoped && narrative && !scopedEntries.length) {
+    // The subject has no attributed narrative entries. Two honest states —
+    // and output.summary is APPLICATION-level, so it must never be the
+    // fallback here (that reintroduces the cross-subject leak this closes).
+    var subjectHitCount = subjectRow ? Number(subjectRow.total_hits || subjectRow.hit_count || 0) : 0;
+    if (allEntries.length && subjectHitCount > 0) {
+      // Legacy interpretation without person_key whose display name diverges
+      // from the party name: findings exist for THIS subject but cannot be
+      // attributed by name. Saying "No findings" here would be false — the
+      // ranked hit cards directly below contradict it. Fail safe: say what is
+      // actually known and route to regeneration (which stamps person_key).
+      paragraph = '<div data-agent3-unattributed-findings="true" style="font-size:13.5px;color:var(--text2);line-height:1.65;">'
+        + escapeHtml('Agent 3 findings on this application could not be attributed to ' + subjectName + ' by name in the stored interpretation. Review the ranked hits below; refreshing the interpretation will re-attribute them.')
+        + '</div>';
+    } else {
+      paragraph = '<div data-agent3-no-subject-findings="true" style="font-size:13.5px;color:var(--text2);line-height:1.65;">'
+        + escapeHtml('No Agent 3 findings for ' + subjectName + ' in this interpretation. Findings recorded for other subjects on this application are shown on their own cards.')
+        + '</div>';
+    }
+  }
+  if (!paragraph && scoped && !narrative) {
+    // Pre-rts interpretation (no triage narrative): the stored summary is the
+    // only content, and it is APPLICATION-level. Render it labelled as such —
+    // never bare under a subject's name and Clear badge.
+    paragraph = '<div data-agent3-application-level-summary="true" style="font-size:13.5px;color:var(--text1);line-height:1.65;">'
+      + '<span style="font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--text3);">Application-level summary — all subjects</span><br>'
+      + escapeHtml(output.summary || 'Not available')
+      + '</div>';
+  }
   if (!paragraph) paragraph = '<div style="font-size:13.5px;color:var(--text1);line-height:1.65;">' + escapeHtml(output.summary || 'Not available') + '</div>';
   html += '<div style="margin-top:8px;">' + paragraph + '</div>';
   html += '<div style="font-size:11.5px;color:var(--text3);margin-top:8px;">' + escapeHtml(caption) + '</div>';
