@@ -27695,7 +27695,7 @@ def _agent3_collect_hits(screening_report, app):
         screening_report.get("error_message"),
     ))
 
-    def add_hit(subject_type, subject_name, hit, source_hint=""):
+    def add_hit(subject_type, subject_name, hit, source_hint="", person_key=""):
         categories = _agent3_categories(hit, source_hint)
         matched_name = ""
         list_name = ""
@@ -27758,6 +27758,9 @@ def _agent3_collect_hits(screening_report, app):
         hits.append({
             "subject_type": subject_type,
             "subject_name": subject_name or "Unknown subject",
+            # Stable join key for per-subject scoping ('' when the record
+            # predates person_key persistence — display-name fallback then).
+            "person_key": str(person_key or "").strip(),
             "matched_name": _agent3_text(matched_name, "Stored hit"),
             "categories": categories or ["other"],
             "match_score": match_score,
@@ -27806,6 +27809,16 @@ def _agent3_collect_hits(screening_report, app):
                 or subject.get("person_name")
                 or "Unknown subject"
             )
+            # The display name above can be the PROVIDER profile name (the
+            # normalizer says so explicitly: "Downstream joins must use
+            # person_key when present, never the display name"). Carry the
+            # stable person_key so the per-subject card can attribute these
+            # hits even when the display name diverges from the party name.
+            subject_person_key = str(
+                subject.get("person_key")
+                or subject.get("subject_person_key")
+                or ""
+            ).strip()
             screening = (
                 subject.get("screening")
                 or subject.get("screening_result")
@@ -27813,7 +27826,8 @@ def _agent3_collect_hits(screening_report, app):
                 or subject
             )
             for hit in _agent3_provider_results(screening, collection_key):
-                add_hit(subject_type, subject_name, hit, collection_key)
+                add_hit(subject_type, subject_name, hit, collection_key,
+                        person_key=subject_person_key)
 
     for key, source_hint in (
         ("sanctions_results", "sanctions"),
@@ -28032,6 +28046,13 @@ def _agent3_triage_narrative(hits):
     for score, hit in listed:
         priority_hits.append({
             "subject_name": _agent3_text(hit.get("subject_name"), "Unknown subject"),
+            # Stable per-subject join key. The display name can be the provider
+            # profile name ("thomas roberts") while the card is keyed by the
+            # party name ("Miles Thomas ROBERTS") — the client must scope by
+            # person_key first and fall back to the name only when the key is
+            # absent (legacy records).
+            "person_key": str(hit.get("person_key") or "").strip(),
+            "subject_type": str(hit.get("subject_type") or "").strip(),
             "matched_name": _agent3_text(hit.get("matched_name"), "Stored hit"),
             "score": score,
             "band": _agent3_triage_band(score),
@@ -28107,6 +28128,8 @@ def _agent3_triage_narrative(hits):
             entries.append({
                 "kind": "hit",
                 "subject_name": subject_name,
+                "person_key": str(head.get("person_key") or "").strip(),
+                "subject_type": str(head.get("subject_type") or "").strip(),
                 "matched_name": matched_name,
                 "score": score,
                 "band": band,
@@ -28129,6 +28152,10 @@ def _agent3_triage_narrative(hits):
             entries.append({
                 "kind": "group",
                 "subject_name": subject_name,
+                # Attribution follows the displayed subject_name (the head
+                # member) — consistent with how the group is already labelled.
+                "person_key": str(head.get("person_key") or "").strip(),
+                "subject_type": str(head.get("subject_type") or "").strip(),
                 "matched_name": group["matched_name_key"],
                 "score": score,
                 "band": band,

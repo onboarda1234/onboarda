@@ -437,7 +437,7 @@ class TestBackofficeTriageNarrativeStatic:
         # Scoping is strict: the subject name is passed through verbatim —
         # blanking it switched the composer to app-wide mode and rendered
         # every other subject's findings on this card.
-        assert "agent3TriageNarrativeHtml(narrative, subjectName)" in panel
+        assert "agent3TriageNarrativeHtml(narrative, subjectName, subjectPersonKey)" in panel
         assert "scoped ? subjectName : ''" not in panel
         # Per-subject empty state pre-empts the app-level summary fallback,
         # which would reintroduce the cross-subject leak.
@@ -578,9 +578,14 @@ class TestTriageNarrativeGrouping:
         narrative = server._agent3_triage_narrative(self._mixed_hits())
         # Data preserved: priority_hits keeps the pre-grouping per-hit shape.
         assert len(narrative["priority_hits"]) == 5
+        # person_key/subject_type joined the shape when per-subject scoping
+        # went key-first (the display name can be the provider profile name, so
+        # the client joins on the stable person_key — the normalizer's own
+        # contract). Everything else is the pre-grouping per-hit shape.
         assert all(
             set(hit.keys()) == {
-                "subject_name", "matched_name", "score", "band",
+                "subject_name", "person_key", "subject_type",
+                "matched_name", "score", "band",
                 "categories", "reasons", "surfaced_by_pass",
             }
             for hit in narrative["priority_hits"]
