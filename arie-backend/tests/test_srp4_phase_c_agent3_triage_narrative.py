@@ -434,7 +434,15 @@ class TestBackofficeTriageNarrativeStatic:
         # Render-if-present: older stored interpretations lack triage_narrative
         # (the compact panel then falls back to the stored summary paragraph).
         assert "output.triage_narrative && typeof output.triage_narrative === 'object'" in panel
-        assert "agent3TriageNarrativeHtml(narrative, scoped ? subjectName : '')" in panel
+        # Scoping is strict: the subject name is passed through verbatim —
+        # blanking it switched the composer to app-wide mode and rendered
+        # every other subject's findings on this card.
+        assert "agent3TriageNarrativeHtml(narrative, subjectName)" in panel
+        assert "scoped ? subjectName : ''" not in panel
+        # Per-subject empty state pre-empts the app-level summary fallback,
+        # which would reintroduce the cross-subject leak.
+        assert "data-agent3-no-subject-findings" in panel
+        assert "No Agent 3 findings for " in panel
         assert "escapeHtml(output.summary || 'Not available')" in panel
         # The advisory label survives.
         assert "Advisory — decisions are made by officers." in panel

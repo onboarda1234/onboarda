@@ -17599,17 +17599,25 @@ function agent3ScreeningResultTerminal(output) {
 
 function agent3NarrativeEntriesForSubject(narrative, subjectName) {
   // Server-computed narrative entries (grouped Phase-F shape, or legacy
-  // priority_hits), optionally scoped to one subject for the selected-subject
-  // workspace. Scoping is a display filter only — when no entry references
-  // the subject the full app-wide list is returned so nothing is hidden.
+  // priority_hits), scoped to one subject for the selected-subject workspace.
+  //
+  // Scoping is STRICT. It previously fell back to the full app-wide list when
+  // no entry referenced the subject — "so nothing is hidden" — but the only
+  // caller is the per-subject card, so that fallback never surfaced hidden
+  // data: it MISATTRIBUTED other subjects' findings to the subject on screen.
+  // A zero-hit director's card showed three other directors' PEP, watchlist
+  // and adverse-media matches under her own name and "Clear" badge. Because
+  // screening is the business of matching a subject against other people's
+  // names, "the PEP match thomas roberts — exact name match" on Belinda
+  // WRIGLEY's card reads as HER matching a PEP called Thomas Roberts.
+  // Misattribution to a named individual is worse than omission.
   if (!narrative || typeof narrative !== 'object') return [];
   var hits = Array.isArray(narrative.priority_hits) ? narrative.priority_hits : [];
   var entries = Array.isArray(narrative.entries) && narrative.entries.length ? narrative.entries : hits;
   if (!subjectName) return entries;
-  var scoped = entries.filter(function(entry) {
+  return entries.filter(function(entry) {
     return entry && screeningSubjectNamesMatch(entry.subject_name, subjectName);
   });
-  return scoped.length ? scoped : entries;
 }
 
 function agent3TriageNarrativeHtml(narrative, subjectName) {
@@ -17688,7 +17696,11 @@ function agent3TriageNarrativeHtml(narrative, subjectName) {
       sentences.push(escapeHtml(String(narrative.no_risk_exposure)));
     }
   }
-  if (!sentences.length && narrative.headline) sentences.push(escapeHtml(String(narrative.headline)));
+  // headline is an APP-WIDE summary. In scoped mode it would substitute another
+  // subject's findings for the one on screen, so it is only a fallback for the
+  // unscoped view. Scoped-with-no-entries returns '' and the caller states that
+  // plainly for this subject.
+  if (!sentences.length && narrative.headline && !subjectName) sentences.push(escapeHtml(String(narrative.headline)));
   if (!sentences.length) return '';
   return '<div data-agent3-triage-narrative="true" style="font-size:13.5px;color:var(--text1);line-height:1.65;">' + sentences.join(' ') + '</div>';
 }
@@ -17708,9 +17720,13 @@ function renderAgent3ScreeningInterpretationPanel(app, subjectName) {
   var disabled = AGENT3_SCREENING_INTERPRETATION_BUSY || !(app && (app.id || app.ref)) ? ' disabled' : '';
   var generatedAt = output && output.generated_at ? String(output.generated_at).replace('T', ' ').slice(0, 19) : '';
   var narrative = output && output.triage_narrative && typeof output.triage_narrative === 'object' ? output.triage_narrative : null;
-  var scoped = !!(narrative && subjectName && agent3NarrativeEntriesForSubject(narrative, '').some(function(entry) {
-    return entry && screeningSubjectNamesMatch(entry.subject_name, subjectName);
-  }));
+  // Scope is declared by the CARD, not by whether the subject happens to have
+  // findings. Previously this was false when the subject had no entries, which
+  // both suppressed the "scoped to X" label and switched the paragraph to
+  // app-wide mode — so the one signal that would have told the officer these
+  // findings belong to other people disappeared exactly when it was needed.
+  var scoped = !!(narrative && subjectName);
+  var scopedEntries = scoped ? agent3NarrativeEntriesForSubject(narrative, subjectName) : [];
   var caption = 'Advisory — decisions are made by officers.' + (generatedAt ? ' · Generated: ' + generatedAt : '');
 
   var html = '';
@@ -17747,7 +17763,17 @@ function renderAgent3ScreeningInterpretationPanel(app, subjectName) {
     return html;
   }
 
-  var paragraph = narrative ? agent3TriageNarrativeHtml(narrative, scoped ? subjectName : '') : '';
+  // Never blank the subject name here: passing '' switches the composer into
+  // app-wide mode and renders every other subject's findings on this card.
+  var paragraph = narrative ? agent3TriageNarrativeHtml(narrative, subjectName) : '';
+  if (!paragraph && scoped && !scopedEntries.length) {
+    // Honest per-subject empty state. output.summary is an APPLICATION-level
+    // summary, so using it as the fallback here would reintroduce exactly the
+    // cross-subject leak this scoping closes.
+    paragraph = '<div data-agent3-no-subject-findings="true" style="font-size:13.5px;color:var(--text2);line-height:1.65;">'
+      + escapeHtml('No Agent 3 findings for ' + subjectName + ' in this interpretation. Findings recorded for other subjects on this application are shown on their own cards.')
+      + '</div>';
+  }
   if (!paragraph) paragraph = '<div style="font-size:13.5px;color:var(--text1);line-height:1.65;">' + escapeHtml(output.summary || 'Not available') + '</div>';
   html += '<div style="margin-top:8px;">' + paragraph + '</div>';
   html += '<div style="font-size:11.5px;color:var(--text3);margin-top:8px;">' + escapeHtml(caption) + '</div>';
