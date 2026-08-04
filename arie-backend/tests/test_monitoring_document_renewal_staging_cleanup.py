@@ -648,10 +648,26 @@ def test_cleanup_restores_operational_baseline_and_preserves_audit(cleanup_db):
         "audit_evidence_appended": True,
         "baseline_restored": True,
     }
-    drifted = json.loads(json.dumps(final))
-    drifted["audit_chain"]["coverage_gaps"] += 1
-    drifted["audit_chain"]["total_entries"] += 1
-    assert compare_renewal_harness_baseline(before, drifted)[
+    # External (non-fixture) coverage-gap growth during the run is tolerated:
+    # staging's known-unchained writers keep appending while the harness runs.
+    external_growth = json.loads(json.dumps(final))
+    external_growth["audit_chain"]["coverage_gaps"] += 1
+    external_growth["audit_chain"]["total_entries"] += 1
+    assert compare_renewal_harness_baseline(before, external_growth)[
+        "baseline_restored"
+    ] is True
+    # A gap count that DECREASES means historical rows vanished — fail closed.
+    gap_regression = json.loads(json.dumps(final))
+    gap_regression["audit_chain"]["coverage_gaps"] -= 1
+    gap_regression["audit_chain"]["total_entries"] -= 1
+    assert compare_renewal_harness_baseline(before, gap_regression)[
+        "baseline_restored"
+    ] is False
+    # Legacy history is immutable — any legacy drift fails closed.
+    legacy_drift = json.loads(json.dumps(final))
+    legacy_drift["audit_chain"]["legacy_rows"] += 1
+    legacy_drift["audit_chain"]["total_entries"] += 1
+    assert compare_renewal_harness_baseline(before, legacy_drift)[
         "baseline_restored"
     ] is False
     unchained = json.loads(json.dumps(final))

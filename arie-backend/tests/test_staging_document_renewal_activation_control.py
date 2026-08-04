@@ -676,11 +676,6 @@ def test_clean_recovery_fingerprint_rejects_unchained_fixture_audit():
         ("coverage_complete", True, 0),
         ("coverage_complete", None, 0),
         (
-            "coverage_gaps",
-            staging_cleanup.STAGING_AUDIT_BASELINE_COVERAGE_GAPS + 1,
-            1,
-        ),
-        (
             "legacy_rows",
             staging_cleanup.STAGING_AUDIT_BASELINE_LEGACY_ROWS + 1,
             1,
@@ -712,6 +707,21 @@ def test_clean_recovery_fingerprint_rejects_audit_baseline_drift(
     clean["audit_chain"]["total_entries"] += total_delta
     with pytest.raises(control.ActivationControlError, match="not clean"):
         control.verify_clean_recovery_fingerprint(clean)
+
+
+def test_clean_recovery_fingerprint_accepts_external_coverage_gap_growth():
+    # The global coverage-gap count is reported evidence, not a gate:
+    # staging's known-unchained writers grow it with unrelated activity.
+    clean = _fingerprint(
+        counts={name: 0 for name in control.RECOVERY_OPERATIONAL_RELATIONS},
+        actions={},
+        audit_count=0,
+        chained=0,
+        unchained=0,
+        active=False,
+        coverage_gaps=staging_cleanup.STAGING_AUDIT_BASELINE_COVERAGE_GAPS + 181,
+    )
+    control.verify_clean_recovery_fingerprint(clean)
 
 
 def test_fingerprint_reconciliation_requires_exact_audit_action_deltas():
@@ -780,16 +790,42 @@ def test_fingerprint_reconciliation_requires_exact_audit_action_deltas():
             {"cleanup": {"final_fingerprint": inconsistent_final}},
         )
 
-    for field in ("legacy_rows", "coverage_gaps"):
-        drifted = json.loads(json.dumps(after))
-        drifted["audit_chain"][field] += 1
-        drifted["audit_chain"]["total_entries"] += 1
-        with pytest.raises(control.ActivationControlError):
-            control.compare_fingerprints(
-                before,
-                drifted,
-                {"cleanup": {"final_fingerprint": final}},
-            )
+    legacy_drift = json.loads(json.dumps(after))
+    legacy_drift["audit_chain"]["legacy_rows"] += 1
+    legacy_drift["audit_chain"]["total_entries"] += 1
+    with pytest.raises(control.ActivationControlError):
+        control.compare_fingerprints(
+            before,
+            legacy_drift,
+            {"cleanup": {"final_fingerprint": final}},
+        )
+
+    # External coverage-gap growth across the run reconciles cleanly when it
+    # persists into the final fingerprint.
+    gap_growth_after = json.loads(json.dumps(after))
+    gap_growth_after["audit_chain"]["coverage_gaps"] += 1
+    gap_growth_after["audit_chain"]["total_entries"] += 1
+    gap_growth_final = json.loads(json.dumps(final))
+    gap_growth_final["audit_chain"]["coverage_gaps"] += 1
+    gap_growth_final["audit_chain"]["total_entries"] += 1
+    grown = control.compare_fingerprints(
+        before,
+        gap_growth_after,
+        {"cleanup": {"final_fingerprint": gap_growth_final}},
+    )
+    assert grown["ok"] is True
+    assert grown["comparisons"]["global_audit_chain_integrity_exact"] is True
+
+    # A shrinking gap count means historical rows vanished — fail closed.
+    gap_regression = json.loads(json.dumps(after))
+    gap_regression["audit_chain"]["coverage_gaps"] -= 1
+    gap_regression["audit_chain"]["total_entries"] -= 1
+    with pytest.raises(control.ActivationControlError):
+        control.compare_fingerprints(
+            before,
+            gap_regression,
+            {"cleanup": {"final_fingerprint": final}},
+        )
 
     unchained = json.loads(json.dumps(after))
     unchained["fixture_audit_unchained_count"] = 1
@@ -850,13 +886,22 @@ def test_recovery_reconciliation_allows_only_cleanup_and_empty_final_state():
     )
     assert result["ok"] is True
     assert result["comparisons"]["final_operational_state_empty"] is True
-    drifted = json.loads(json.dumps(final))
-    drifted["audit_chain"]["coverage_gaps"] += 1
-    drifted["audit_chain"]["total_entries"] += 1
+    external_growth = json.loads(json.dumps(final))
+    external_growth["audit_chain"]["coverage_gaps"] += 1
+    external_growth["audit_chain"]["total_entries"] += 1
+    grown = control.compare_recovery_fingerprints(
+        before,
+        external_growth,
+        {"cleanup": {"idempotent": False}},
+    )
+    assert grown["ok"] is True
+    gap_regression = json.loads(json.dumps(final))
+    gap_regression["audit_chain"]["coverage_gaps"] -= 1
+    gap_regression["audit_chain"]["total_entries"] -= 1
     with pytest.raises(control.ActivationControlError):
         control.compare_recovery_fingerprints(
             before,
-            drifted,
+            gap_regression,
             {"cleanup": {"idempotent": False}},
         )
     unchained = json.loads(json.dumps(final))
