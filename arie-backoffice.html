@@ -744,6 +744,32 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .modal-body { padding:22px; }
 .modal-footer { padding:14px 22px; border-top:1px solid var(--border1); display:flex; justify-content:flex-end; gap:10px; }
 
+/* Compliance Memorandum readiness — presentation only. */
+.memo-readiness-modal { width:560px; border:1px solid rgba(43,47,143,0.12); overflow:hidden; }
+.memo-readiness-modal .modal-header { align-items:flex-start; padding:22px 24px 17px; }
+.memo-readiness-modal .modal-body { padding:22px 24px 24px; }
+.memo-readiness-modal .modal-footer { padding:16px 24px; background:var(--surface2); }
+.memo-readiness-heading { display:flex; align-items:flex-start; gap:13px; padding-right:16px; }
+.memo-readiness-icon { width:36px; height:36px; border-radius:10px; background:rgba(43,47,143,0.08); color:var(--brand); display:flex; align-items:center; justify-content:center; flex:0 0 auto; }
+.memo-readiness-icon svg { width:18px; height:18px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.memo-readiness-heading h3 { margin:1px 0 0; font-size:17px; line-height:1.35; color:var(--text1); }
+.memo-readiness-copy { color:var(--text2); font-size:13px; line-height:1.65; }
+.memo-readiness-copy p + p { margin-top:8px; }
+.memo-readiness-outstanding { margin-top:20px; padding:15px 16px; border:1px solid var(--border1); border-radius:10px; background:var(--surface2); }
+.memo-readiness-outstanding h4 { margin:0 0 10px; color:var(--text1); font-size:12px; font-weight:800; letter-spacing:0.02em; }
+.memo-readiness-list { list-style:none; display:grid; gap:9px; margin:0; padding:0; }
+.memo-readiness-list li { position:relative; padding-left:17px; color:var(--text2); font-size:13px; line-height:1.45; }
+.memo-readiness-list li::before { content:''; position:absolute; left:1px; top:0.58em; width:6px; height:6px; border-radius:50%; background:var(--brand); }
+.memo-readiness-next { margin-top:18px; padding-top:16px; border-top:1px solid var(--border1); color:var(--text2); font-size:13px; line-height:1.55; }
+.memo-readiness-next strong { display:block; margin-bottom:3px; color:var(--text1); font-size:11px; letter-spacing:0.05em; text-transform:uppercase; }
+@media (max-width:560px) {
+  .memo-readiness-modal .modal-header,
+  .memo-readiness-modal .modal-body,
+  .memo-readiness-modal .modal-footer { padding-left:18px; padding-right:18px; }
+  .memo-readiness-modal .modal-footer { flex-direction:column-reverse; }
+  .memo-readiness-modal .modal-footer .btn { width:100%; justify-content:center; }
+}
+
 /* ── Forms ── */
 .form-group { margin-bottom:14px; }
 .form-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; color:var(--text2); display:block; margin-bottom:4px; }
@@ -3371,6 +3397,39 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
 </div><!-- /content -->
 </div><!-- /main -->
+
+<!-- ═══════════════ COMPLIANCE MEMORANDUM READINESS MODAL ═══════════════ -->
+<div class="modal-overlay" id="modal-compliance-memo-readiness" role="dialog" aria-modal="true" aria-labelledby="memo-readiness-title" aria-describedby="memo-readiness-description">
+  <div class="modal memo-readiness-modal" role="document">
+    <div class="modal-header">
+      <div class="memo-readiness-heading">
+        <span class="memo-readiness-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><line x1="12" y1="11" x2="12" y2="16"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+        </span>
+        <h3 id="memo-readiness-title">Compliance Memorandum Cannot Be Generated</h3>
+      </div>
+      <button class="modal-close" type="button" aria-label="Close readiness notice" onclick="closeComplianceMemoReadinessModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="memo-readiness-copy" id="memo-readiness-description">
+        <p>The Compliance Memorandum can only be generated once all mandatory review requirements have been completed.</p>
+        <p>The application is not yet ready for memorandum generation.</p>
+      </div>
+      <section class="memo-readiness-outstanding" aria-labelledby="memo-readiness-outstanding-title">
+        <h4 id="memo-readiness-outstanding-title">Outstanding items</h4>
+        <ul class="memo-readiness-list" id="memo-readiness-outstanding-list"></ul>
+      </section>
+      <div class="memo-readiness-next">
+        <strong>Next step</strong>
+        Complete the outstanding review items before generating the Compliance Memorandum.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" type="button" onclick="closeComplianceMemoReadinessModal()">Cancel</button>
+      <button class="btn btn-primary" type="button" id="memo-readiness-view-checklist" onclick="viewComplianceMemoReadinessChecklist()">View Readiness Checklist</button>
+    </div>
+  </div>
+</div>
 
 <!-- ═══════════════ ADD USER MODAL ═══════════════ -->
 <div class="modal-overlay" id="modal-add-user">
@@ -36499,6 +36558,111 @@ async function downloadMemoPDF() {
   }
 }
 
+var COMPLIANCE_MEMO_READINESS_RETURN_FOCUS = null;
+
+function complianceMemoReadinessPayload(error) {
+  var payload = error && error.payload;
+  return payload && typeof payload === 'object' ? payload : {};
+}
+
+function isComplianceMemoReadinessError(error) {
+  var payload = complianceMemoReadinessPayload(error);
+  var gate = payload.document_evidence_gate;
+  return Number(error && error.status) === 409 && (
+    payload.memo_reliance_status === 'blocked' ||
+    !!(gate && gate.passed === false) ||
+    Array.isArray(payload.document_blockers)
+  );
+}
+
+function complianceMemoReadinessItems(error) {
+  var payload = complianceMemoReadinessPayload(error);
+  var gate = payload.document_evidence_gate && typeof payload.document_evidence_gate === 'object'
+    ? payload.document_evidence_gate
+    : {};
+  var blockers = Array.isArray(payload.document_blockers)
+    ? payload.document_blockers
+    : (Array.isArray(gate.blockers) ? gate.blockers : []);
+  var missingDocuments = {};
+  var reviewDocuments = {};
+  var uncategorizedCount = 0;
+
+  blockers.forEach(function(blocker, index) {
+    blocker = blocker && typeof blocker === 'object' ? blocker : {};
+    var code = String(blocker.code || '').toLowerCase();
+    var key = String(blocker.document_id || blocker.slot_key || blocker.doc_type || ('item-' + index));
+    if (code === 'missing_required_document') {
+      missingDocuments[key] = true;
+    } else if (blocker.document_id || blocker.slot_key || blocker.doc_type) {
+      reviewDocuments[key] = true;
+    } else {
+      uncategorizedCount += 1;
+    }
+  });
+
+  var items = [];
+  var reviewCount = Object.keys(reviewDocuments).length;
+  var missingCount = Object.keys(missingDocuments).length;
+  if (reviewCount) items.push(reviewCount === 1 ? '1 document requires review' : reviewCount + ' documents require review');
+  if (missingCount) items.push(missingCount === 1 ? '1 mandatory document remains outstanding' : missingCount + ' mandatory documents remain outstanding');
+
+  var enhanced = payload.enhanced_review && typeof payload.enhanced_review === 'object'
+    ? payload.enhanced_review
+    : (payload.enhanced_review_summary && typeof payload.enhanced_review_summary === 'object' ? payload.enhanced_review_summary : {});
+  var enhancedOutstanding = Number(enhanced.mandatory_outstanding_count || enhanced.blocking_outstanding_count || 0);
+  if (payload.enhanced_review_incomplete === true || enhancedOutstanding > 0) items.push('Enhanced Review is incomplete');
+
+  var additionalCount = Number(payload.additional_mandatory_review_count || payload.additional_mandatory_items_count || 0) + uncategorizedCount;
+  if (additionalCount) {
+    items.push(additionalCount === 1 ? '1 additional mandatory review item remains' : additionalCount + ' additional mandatory review items remain');
+  }
+
+  if (!items.length) {
+    var blockerCount = Number(gate.blocker_count || 0);
+    items.push(blockerCount > 1 ? blockerCount + ' mandatory review items remain outstanding' : 'Mandatory review requirements remain outstanding');
+  }
+  return items;
+}
+
+function showComplianceMemoReadinessModal(error) {
+  var modal = document.getElementById('modal-compliance-memo-readiness');
+  var list = document.getElementById('memo-readiness-outstanding-list');
+  if (!modal || !list) return;
+  COMPLIANCE_MEMO_READINESS_RETURN_FOCUS = document.activeElement;
+  list.innerHTML = '';
+  complianceMemoReadinessItems(error).forEach(function(item) {
+    var row = document.createElement('li');
+    row.textContent = item;
+    list.appendChild(row);
+  });
+  modal.classList.add('open');
+  var primary = document.getElementById('memo-readiness-view-checklist');
+  if (primary) {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(function() { primary.focus(); });
+    else primary.focus();
+  }
+}
+
+function closeComplianceMemoReadinessModal(options) {
+  options = options || {};
+  closeModal('modal-compliance-memo-readiness');
+  if (options.restoreFocus !== false && COMPLIANCE_MEMO_READINESS_RETURN_FOCUS && typeof COMPLIANCE_MEMO_READINESS_RETURN_FOCUS.focus === 'function') {
+    COMPLIANCE_MEMO_READINESS_RETURN_FOCUS.focus();
+  }
+  COMPLIANCE_MEMO_READINESS_RETURN_FOCUS = null;
+}
+
+function viewComplianceMemoReadinessChecklist() {
+  closeComplianceMemoReadinessModal({ restoreFocus: false });
+  focusCaseCommandCentre();
+  var target = document.getElementById('detail-case-command-centre');
+  if (target && typeof target.focus === 'function') {
+    target.setAttribute('tabindex', '-1');
+    try { target.focus({ preventScroll: true }); }
+    catch (_error) { target.focus(); }
+  }
+}
+
 async function generateComplianceMemo() {
   var app = window._currentDetailApp;
   if (!app) { alert('No application selected.'); return; }
@@ -36513,7 +36677,11 @@ async function generateComplianceMemo() {
     showToast('Memo generated. Loading the canonical PDF preview…');
     await refreshCurrentAppDetailPreservingTab();
   } catch (error) {
-    showToast(error.message || 'Memo generation failed.', 'error');
+    if (isComplianceMemoReadinessError(error)) {
+      showComplianceMemoReadinessModal(error);
+    } else {
+      showToast('The Compliance Memorandum could not be generated at this time. Please try again.', 'warn');
+    }
   } finally {
     buttons.forEach(function(button) { button.textContent = button.dataset.label || 'Generate Memo'; button.disabled = false; });
   }
