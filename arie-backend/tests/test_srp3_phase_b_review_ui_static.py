@@ -447,8 +447,10 @@ def test_phase_f_narrative_helper_renders_grouped_entries():
     """The narrative helper renders the server-grouped entries when present
     (homogeneous masses collapse to one sentence), falling back to
     priority_hits for older stored narratives. Counts are never recomputed
-    client-side, and the scoped view filters by subject without hiding
-    entries when nothing matches."""
+    client-side, and the scoped view filters STRICTLY by subject — a subject
+    with no findings gets an honest empty state, never another subject's
+    findings (the old "nothing hidden" fallback misattributed other directors'
+    PEP/watchlist matches to a zero-hit subject's card)."""
     html = _html()
     scope = _function_region(
         html, "agent3NarrativeEntriesForSubject", "agent3TriageNarrativeHtml"
@@ -456,7 +458,9 @@ def test_phase_f_narrative_helper_renders_grouped_entries():
     assert "narrative.entries" in scope
     assert "narrative.priority_hits" in scope
     assert "screeningSubjectNamesMatch(entry.subject_name, subjectName)" in scope
-    assert "scoped.length ? scoped : entries" in scope
+    assert "scoped.length ? scoped : entries" not in scope, \
+        "app-wide fallback misattributes other subjects' findings"
+    assert "return entries.filter(function(entry) {" in scope
     helper = _function_region(
         html, "agent3TriageNarrativeHtml", "renderAgent3ScreeningInterpretationPanel"
     )
