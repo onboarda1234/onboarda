@@ -97,12 +97,13 @@ def _verification_check_functions(html: str) -> str:
             "documentVerificationCheckDisplayResult",
             "documentVerificationCheckMethodMeta",
             "renderDocumentVerificationCheckRow",
+            "documentVerificationCheckHiddenWhenPassing",
             "buildVerificationResultsHtml",
         ]
     )
 
 
-def test_executive_summary_is_concise_deterministic_escaped_and_non_mutating():
+def test_summary_is_one_line_deterministic_escaped_and_non_mutating_without_operational_expansion():
     html = _backoffice_html()
     functions = _executive_summary_functions(html)
     script = f"""
@@ -119,16 +120,19 @@ var doc = {{ verification_results: {{
 }} }};
 var before = JSON.stringify(doc);
 var rendered = renderDocumentExecutiveSummary(doc, narrative, {{ label: 'Failed' }});
-assert(rendered.indexOf('Executive Summary') >= 0, 'executive summary heading should render');
+assert(rendered.indexOf('Executive Summary') < 0, 'executive summary heading should not render');
 assert(rendered.indexOf('document-executive-summary-outcome">Document is blank.</div>') >= 0, 'only the first concise conclusion should be prominent');
-assert(rendered.indexOf('No visible text detected.') >= 0, 'structured finding should render');
-assert(rendered.indexOf('No constitutional clauses identified.') >= 0, 'second structured finding should render');
-assert(rendered.indexOf('Completeness could not be verified.') >= 0, 'inconclusive finding should render');
-assert(rendered.indexOf('document-executive-narrative') >= 0, 'full narrative should remain expandable');
-assert(rendered.indexOf('&lt;script&gt;alert(1)&lt;/script&gt;') >= 0, 'full narrative should be escaped');
+assert(rendered.indexOf('No visible text detected.') < 0, 'structured findings should remain in technical audit details');
+assert(rendered.indexOf('No constitutional clauses identified.') < 0, 'summary should not render additional findings');
+assert(rendered.indexOf('Completeness could not be verified.') < 0, 'summary should remain one line');
+assert(rendered.indexOf('<ul') < 0 && rendered.indexOf('<li') < 0, 'summary should not render bullets');
+assert(rendered.indexOf('<details') < 0 && rendered.indexOf('<summary') < 0, 'summary should not render an accordion');
+assert(rendered.indexOf('Show more') < 0, 'summary should not render Show more');
+assert(rendered.indexOf('document-executive-narrative') < 0, 'full narrative should not render on the operational card');
+assert(rendered.indexOf('&lt;script&gt;alert(1)&lt;/script&gt;') < 0, 'hidden full narrative should not leak into rendered markup');
 assert(rendered.indexOf('<script>alert(1)</script>') < 0, 'raw narrative HTML must not render');
-assert(rendered.indexOf('Recommended action') >= 0, 'persisted recommendation should render');
-assert(rendered.indexOf('&lt;img src=x onerror=alert(1)&gt;') >= 0, 'persisted recommendation should be escaped');
+assert(rendered.indexOf('Recommended action') < 0, 'summary should contain only the persisted conclusion');
+assert(rendered.indexOf('&lt;img src=x onerror=alert(1)&gt;') < 0, 'hidden recommendation should not leak into rendered markup');
 assert(rendered.indexOf('<img src=x onerror=alert(1)>') < 0, 'recommendation HTML must not render');
 assert(JSON.stringify(doc) === before, 'presentation rendering must not mutate verification outcomes');
 """
@@ -149,12 +153,13 @@ var rendered = renderDocumentExecutiveSummary(
 assert(rendered.indexOf('Existing persisted conclusion without structured findings.') >= 0, 'existing conclusion should be the fallback');
 assert(rendered.indexOf('document-executive-findings') < 0, 'findings list should be omitted when none are safely available');
 assert(rendered.indexOf('Recommended action') < 0, 'recommendation block should be omitted when no explicit value is stored');
+assert(rendered.indexOf('Show more') < 0, 'fallback summary should not render Show more');
 assert(documentPersistedRecommendedAction({{ verification_results: {{}} }}) === '', 'missing recommendation must not be inferred from status');
 """
     _run_node(script)
 
 
-def test_completed_attention_and_unavailable_checks_use_compact_expandable_rows_with_full_detail():
+def test_check_rows_show_dot_name_result_and_reason_without_accordion_or_metadata():
     html = _backoffice_html()
     functions = _verification_check_functions(html)
     script = f"""
@@ -165,6 +170,7 @@ var results = {{
   overall: 'flagged',
   checks: [
     {{ id: 'GATE-01', label: 'File Format', result: 'pass', classification: 'rule', source: 'rule', message: 'PDF accepted.' }},
+    {{ id: 'DOC-10', label: 'Document Integrity', result: 'pass', classification: 'hybrid', source: 'rule', message: 'Document integrity checks passed.' }},
     {{ id: 'DOC-11', label: 'Entity Name Match', result: 'warn', classification: 'hybrid', source: 'ai', confidence: 0.81, ps_field: 'entity_name', ps_value: 'Meridian Ltd', extracted_value: 'Meridian Limited', message: 'Name requires officer review.' }},
     {{ id: 'DOC-12', label: 'Minimum Page Count', result: 'fail', classification: 'rule', source: 'rule', message: 'Minimum page count not met.' }},
     {{ id: 'DOC-13', label: 'Objects Clause', result: 'inconclusive', classification: 'ai', source: 'ai', message: 'Clause could not be assessed.' }},
@@ -173,37 +179,39 @@ var results = {{
 }};
 var before = JSON.stringify(results);
 var rendered = buildVerificationResultsHtml(results, {{}}, {{ uploadedBy: 'Officer', stateLabel: 'Failed' }});
-['File Format', 'Entity Name Match', 'Minimum Page Count', 'Objects Clause', 'Seal Check'].forEach(function(label) {{
+assert(rendered.indexOf('File Format') < 0, 'passed File Format should be hidden from the officer UI');
+['Document Integrity', 'Entity Name Match', 'Minimum Page Count', 'Objects Clause', 'Seal Check'].forEach(function(label) {{
   assert(rendered.indexOf(label) >= 0, 'every stored check should remain available: ' + label);
 }});
 ['Pass', 'Warning', 'Fail', 'Inconclusive', 'Skipped'].forEach(function(result) {{
   assert(rendered.indexOf(result) >= 0, 'canonical result label should render: ' + result);
 }});
-assert((rendered.match(/<details class="verification-check-row/g) || []).length === 5, 'each check should be a compact expandable row');
-assert(rendered.indexOf('<details class="verification-check-row pass" open') < 0, 'check detail should be collapsed by default');
-assert(rendered.indexOf('Name requires officer review.') >= 0, 'message should remain in expandable detail');
-assert(rendered.indexOf('Confidence') >= 0, 'confidence should remain available');
-assert(rendered.indexOf('Check ID') >= 0, 'check ID should remain available');
-assert(rendered.indexOf('Source') >= 0, 'source should remain available');
-assert(rendered.indexOf('Classification') >= 0, 'classification should remain available');
-assert(rendered.indexOf('Declared value') >= 0, 'declared value should remain available');
-assert(rendered.indexOf('Extracted value') >= 0, 'extracted value should remain available');
+assert((rendered.match(/<div class="verification-check-row /g) || []).length === 5, 'each visible check should render as a static row');
+assert((rendered.match(/verification-check-method-dot/g) || []).length === 5, 'every visible check should show its methodology dot');
+assert(rendered.indexOf('<details class="verification-check-row') < 0, 'check rows should not be accordions');
+assert(rendered.indexOf('Name requires officer review.') >= 0, 'message should render immediately');
+assert(rendered.indexOf('Document integrity checks passed.') >= 0, 'passed substantive check reason should render immediately');
+assert(rendered.indexOf('verification-check-meta') < 0, 'per-check metadata container should not render');
+['Method', 'Confidence', 'Check ID', 'Classification', 'Pre-screening field', 'Declared value', 'Extracted value'].forEach(function(label) {{
+  assert(rendered.indexOf(label) < 0, 'technical metadata should be absent: ' + label);
+}});
+assert(rendered.indexOf('<strong>Source:</strong>') < 0, 'source metadata should be absent');
+assert(rendered.indexOf('Checks unavailable / not run') < 0, 'unavailable checks should stay in the attention group');
 assert(JSON.stringify(results) === before, 'check rendering must not mutate verification outcomes');
 """
     _run_node(script)
 
 
-def test_compact_check_rows_show_a_native_disclosure_affordance():
+def test_check_rows_have_no_disclosure_affordance():
     html = _backoffice_html()
     check_row = _extract_function(html, "renderDocumentVerificationCheckRow")
 
-    assert 'grid-template-columns:minmax(0,1fr) auto 12px' in html
-    assert ".verification-check-row > summary::after" in html
-    assert "transform:rotate(-45deg)" in html
-    assert ".verification-check-row[open] > summary::after" in html
-    assert "transform:rotate(45deg)" in html
-    assert '<details class="verification-check-row ' in check_row
-    assert "<summary>" in check_row
+    assert 'grid-template-columns:minmax(0,1fr) auto' in html
+    assert ".verification-check-row > summary" not in html
+    assert ".verification-check-row[open]" not in html
+    assert '<div class="verification-check-row ' in check_row
+    assert "<details" not in check_row
+    assert "<summary>" not in check_row
     assert "onclick=" not in check_row
 
 

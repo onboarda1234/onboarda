@@ -80,6 +80,7 @@ def _verification_render_functions(html: str) -> str:
             "documentVerificationCheckDisplayResult",
             "documentVerificationCheckMethodMeta",
             "renderDocumentVerificationCheckRow",
+            "documentVerificationCheckHiddenWhenPassing",
             "buildVerificationResultsHtml",
         ]
     )
@@ -92,6 +93,44 @@ def test_expected_checks_missing_is_not_rendered_in_technical_audit_details():
     assert "Expected checks missing" not in technical
     assert "pushAuditFact('Expected checks missing'" not in technical
     assert "missingExpectedChecks.join" not in technical
+
+
+def test_verified_badge_uses_authoritative_document_state_and_other_status_labels_are_unchanged():
+    html = _backoffice_html()
+    functions = "\n\n".join(
+        _extract_function(html, name)
+        for name in [
+            "relianceBadgeClass",
+            "documentReadyDisplayState",
+            "documentRelianceDisplayState",
+            "renderRelianceBadge",
+        ]
+    )
+    script = f"""
+{_js_prelude()}
+{functions}
+var authoritative = documentRelianceDisplayState({{
+  verification_state: 'verified',
+  verification_results: {{ overall: 'flagged', checks: [{{ result: 'fail' }}] }}
+}}, null);
+assert(authoritative.label === 'Verified', 'authoritative verified state should remain controlling');
+assert(renderRelianceBadge(authoritative).indexOf('✓ Verified') >= 0, 'authoritative verified state should render a checkmarked badge');
+assert(renderRelianceBadge(authoritative).indexOf('reliance-badge verified') >= 0, 'verified badge should retain its green tone');
+
+var visibleRowsCannotVerify = documentRelianceDisplayState({{
+  verification_state: 'pending',
+  verification_results: {{ overall: 'verified', checks: [{{ result: 'pass' }}] }}
+}}, {{}});
+assert(visibleRowsCannotVerify.label === 'Pending verification', 'results and visible rows must not derive verified status');
+assert(renderRelianceBadge(visibleRowsCannotVerify).indexOf('✓') < 0, 'non-authoritative state must not receive a verified checkmark');
+
+['Failed', 'Review required', 'Processing', 'Pending', 'Flagged'].forEach(function(label) {{
+  var rendered = renderRelianceBadge({{ label: label, tone: label }});
+  assert(rendered.indexOf('>' + label + '</span>') >= 0, 'existing status label should remain unchanged: ' + label);
+  assert(rendered.indexOf('✓') < 0, 'only Verified should receive the checkmark: ' + label);
+}});
+"""
+    _run_node(script)
 
 
 def test_verified_document_with_stored_passed_checks_shows_completed_checks_and_method_dots():
@@ -127,7 +166,7 @@ assert(rendered.indexOf('Detailed passed-check evidence is not available') < 0, 
     _run_node(script)
 
 
-def test_passed_agent1_system_gate_checks_are_compact_and_not_mutated():
+def test_passed_file_format_and_size_are_hidden_while_other_passes_remain_and_data_is_not_mutated():
     html = _backoffice_html()
     functions = _verification_render_functions(html)
     script = f"""
@@ -146,16 +185,16 @@ var results = {{
 }};
 var originalCheckCount = results.checks.length;
 var rendered = buildVerificationResultsHtml(results, {{}}, {{ uploadedBy: 'Officer', stateLabel: 'Verified' }});
-assert(rendered.indexOf('File Format') >= 0, 'passed File Format / GATE-01 should remain available');
-assert(rendered.indexOf('GATE-01') >= 0, 'passed GATE-01 id should remain available in expandable detail');
-assert(rendered.indexOf('File Size') >= 0, 'passed File Size / GATE-02 should remain available');
-assert(rendered.indexOf('GATE-02') >= 0, 'passed GATE-02 id should remain available in expandable detail');
+assert(rendered.indexOf('File Format') < 0, 'passed File Format / GATE-01 should be hidden');
+assert(rendered.indexOf('File Size') < 0, 'passed File Size / GATE-02 should be hidden');
 assert(rendered.indexOf('Duplicate Detection') >= 0, 'passed Duplicate Detection / GATE-03 should remain available');
-assert(rendered.indexOf('GATE-03') >= 0, 'passed GATE-03 id should remain available in expandable detail');
+assert(rendered.indexOf('No duplicate found.') >= 0, 'passed Duplicate Detection reason should render immediately');
 assert(rendered.indexOf('Document integrity') >= 0, 'non-gate passed check should remain visible');
-assert(rendered.indexOf('DOC-01') >= 0, 'non-gate check id should remain visible');
+assert(rendered.indexOf('Integrity checks passed.') >= 0, 'non-gate passed reason should render immediately');
 assert(rendered.indexOf('3 system checks passed') < 0, 'system-check summary should not render');
-assert(rendered.indexOf('verification-check-row pass') >= 0, 'completed checks should use compact expandable rows');
+assert(rendered.indexOf('verification-check-row pass') >= 0, 'completed checks should use compact static rows');
+assert(rendered.indexOf('<details class="verification-check-row') < 0, 'completed checks should not be expandable');
+assert(rendered.indexOf('Check ID') < 0, 'check IDs should not render in the officer UI');
 assert(results.checks.length === originalCheckCount, 'underlying checks array should remain present');
 assert(results.checks[0].label === 'File Format', 'underlying GATE-01 check should not be mutated');
 assert(results.checks[1].label === 'File Size', 'underlying GATE-02 check should not be mutated');
@@ -180,8 +219,8 @@ var rendered = buildVerificationResultsHtml({{
     {{ id: 'GATE-03', label: 'Duplicate Detection', result: 'pass', method: 'Rule-Based' }}
   ]
 }}, {{}}, {{ uploadedBy: 'Officer', stateLabel: 'Verified' }});
-assert(rendered.indexOf('File Format') >= 0, 'passed GATE-01 should remain available');
-assert(rendered.indexOf('File Size') >= 0, 'passed GATE-02 should remain available');
+assert(rendered.indexOf('File Format') < 0, 'passed GATE-01 should be hidden');
+assert(rendered.indexOf('File Size') < 0, 'passed GATE-02 should be hidden');
 assert(rendered.indexOf('Duplicate Detection') >= 0, 'passed GATE-03 should remain available');
 assert(rendered.indexOf('Completed checks') >= 0, 'completed-checks section should render');
 assert(rendered.indexOf('check-type-legend') >= 0, 'classification legend should remain');
@@ -238,7 +277,7 @@ assert(rendered.indexOf('Format requires officer review.') >= 0, 'warning GATE-0
 assert(rendered.indexOf('Size check unavailable.') >= 0, 'skipped GATE-02 should render');
 assert(rendered.indexOf('Duplicate check not complete.') >= 0, 'pending GATE-03 should render');
 assert(rendered.indexOf('Checks requiring attention') >= 0, 'warning gate should stay in attention section');
-assert(rendered.indexOf('Checks unavailable / not run') >= 0, 'unavailable gates should stay in unavailable section');
+assert(rendered.indexOf('Checks unavailable / not run') < 0, 'unavailable gates should remain in the single attention section');
 """
     _run_node(script)
 
