@@ -13,6 +13,7 @@ from urllib.error import HTTPError
 
 import pytest
 
+from branding import BRAND
 from monitoring_document_renewal_staging_cleanup import (
     STAGING_AUDIT_BASELINE_LEGACY_ROWS,
     STAGING_DATABASE_FINGERPRINT_ENV,
@@ -343,6 +344,326 @@ def test_harness_tokens_use_governed_fixture_claim_and_existing_smoke_officer():
     assert client_payload[HARNESS_CLIENT_RUN_CLAIM] == RUN_ID
     assert officer_payload["sub"] == QA_SMOKE_USER_ID
     assert http_validation.QA_SMOKE_OFFICER_ID == QA_SMOKE_USER_ID
+
+
+def _real_route_validation_responses():
+    spec = http_validation.fixture_spec()
+    upload_id = "0123456789abcdef0123456789abcdef"
+    upload_timestamp = "2026-08-05T03:33:49+00:00"
+    public_binding = {
+        "upload_id": upload_id,
+        "renewal_request_id": spec["request_id"],
+        "application_id": spec["application_id"],
+        "document_type": spec["document_type"],
+        "upload_timestamp": upload_timestamp,
+        "binding_status": "bound",
+        "contract_version": http_validation.UPLOAD_BINDING_CONTRACT_VERSION,
+    }
+    authoritative_binding = {
+        **public_binding,
+        "customer_id": spec["customer_id"],
+        "person_id": spec["person_id"],
+        "person_type": spec["person_type"],
+        "original_document_id": spec["document_id"],
+        "original_document_version": spec["document_version"],
+        "uploaded_document_id": (
+            f"{http_validation.UPLOADED_DOCUMENT_ID_PREFIX}{upload_id}"
+        ),
+        "uploaded_by": spec["customer_id"],
+    }
+    feature_states = {
+        name: {
+            "enabled": name == activation.RENEWAL_FLAG,
+            "state": "ON" if name == activation.RENEWAL_FLAG else "OFF",
+        }
+        for name in (activation.RENEWAL_FLAG, *activation.OTHER_MONITORING_FLAGS)
+    }
+    return [
+        (
+            200,
+            {"git_sha": SHA, "image_tag": SHA, "environment": "staging"},
+            {},
+        ),
+        (
+            200,
+            {
+                "monitoring_feature_flags": {
+                    "read_only": True,
+                    "activation_controls": False,
+                    "features": feature_states,
+                }
+            },
+            {},
+        ),
+        (
+            200,
+            {
+                "feature_enabled": True,
+                "renewal_requests": [
+                    {
+                        "request_id": spec["request_id"],
+                        "request_status": "awaiting_upload",
+                        "upload_allowed": True,
+                    }
+                ],
+            },
+            {},
+        ),
+        (
+            201,
+            {
+                "status": "upload_received",
+                "binding": dict(public_binding),
+                "request": {
+                    "request_id": spec["request_id"],
+                    "request_status": "upload_received",
+                    "upload_binding": dict(public_binding),
+                    "uploads": [
+                        {
+                            "upload_id": upload_id,
+                            "renewal_request_id": spec["request_id"],
+                            "application_id": spec["application_id"],
+                            "original_filename": "synthetic-renewal-passport.pdf",
+                            "file_size": 143,
+                            "mime_type": "application/pdf",
+                            "uploaded_at": upload_timestamp,
+                            "upload_timestamp": upload_timestamp,
+                        }
+                    ],
+                },
+            },
+            {"x-request-id": "upload-request"},
+        ),
+        (
+            409,
+            {"error_code": "upload_already_received"},
+            {"x-request-id": "duplicate-request"},
+        ),
+        (
+            200,
+            {
+                "renewal_requests": [
+                    {
+                        "request_id": spec["request_id"],
+                        "request_status": "upload_received",
+                        "upload_binding": dict(public_binding),
+                    }
+                ]
+            },
+            {},
+        ),
+        (
+            200,
+            {
+                "alerts": [
+                    {
+                        "id": 618,
+                        "application_id": spec["application_id"],
+                        "alert_type": spec["alert_type"],
+                    }
+                ]
+            },
+            {},
+        ),
+        (
+            200,
+            {
+                "id": 618,
+                "status": "open",
+                "renewal_feature_enabled": True,
+                "renewal_request": {
+                    "request_id": spec["request_id"],
+                    "request_status": "upload_received",
+                    "binding_current": True,
+                    "upload_binding": authoritative_binding,
+                },
+            },
+            {},
+        ),
+    ]
+
+
+def test_http_validator_binding_version_matches_product_contract():
+    from monitoring_document_renewal import UPLOAD_BINDING_CONTRACT_VERSION
+
+    assert (
+        http_validation.UPLOAD_BINDING_CONTRACT_VERSION
+        == UPLOAD_BINDING_CONTRACT_VERSION
+    )
+
+
+def _run_real_route_validation(monkeypatch, responses):
+    pending = iter(responses)
+    observed = []
+
+    def fake_request(base_url, method, path, token, **kwargs):
+        observed.append((base_url, method, path, bool(token), kwargs))
+        return next(pending)
+
+    monkeypatch.setattr(http_validation, "_request", fake_request)
+    result = http_validation.validate_real_routes(
+        base_url=f"https://staging.{BRAND['system_id']}.co",
+        expected_sha=SHA,
+        run_id=RUN_ID,
+        secret_json=json.dumps({"JWT_SECRET": "s" * 64}),
+    )
+    assert len(observed) == len(responses)
+    return result
+
+
+def test_real_route_validator_accepts_redacted_portal_binding_and_proves_lineage(
+    monkeypatch,
+):
+    result = _run_real_route_validation(
+        monkeypatch,
+        _real_route_validation_responses(),
+    )
+    assert result["binding_status"] == "bound"
+    assert result["binding_lineage_verified"] is True
+    assert result["portal_binding_redaction_verified"] is True
+    assert result["monitoring_alert_status"] == "open"
+
+
+def test_real_route_validator_rejects_protected_portal_binding_leak(monkeypatch):
+    responses = _real_route_validation_responses()
+    upload_response = responses[3][1]
+    for binding in (
+        upload_response["binding"],
+        upload_response["request"]["upload_binding"],
+    ):
+        binding["customer_id"] = http_validation.fixture_spec()["customer_id"]
+    with pytest.raises(
+        http_validation.HttpValidationError,
+        match="protected binding linkage",
+    ):
+        _run_real_route_validation(monkeypatch, responses)
+
+
+def test_real_route_validator_rejects_protected_nested_upload_leak(monkeypatch):
+    responses = _real_route_validation_responses()
+    responses[3][1]["request"]["uploads"][0]["document_id"] = (
+        http_validation.fixture_spec()["document_id"]
+    )
+    with pytest.raises(
+        http_validation.HttpValidationError,
+        match="protected binding linkage",
+    ):
+        _run_real_route_validation(monkeypatch, responses)
+
+
+def test_real_route_validator_rejects_protected_followup_portal_leak(monkeypatch):
+    responses = _real_route_validation_responses()
+    responses[5][1]["renewal_requests"][0]["customer_id"] = (
+        http_validation.fixture_spec()["customer_id"]
+    )
+    with pytest.raises(
+        http_validation.HttpValidationError,
+        match="follow-up exposed protected binding linkage",
+    ):
+        _run_real_route_validation(monkeypatch, responses)
+
+
+def test_real_route_validator_rejects_stale_nested_request_status(monkeypatch):
+    responses = _real_route_validation_responses()
+    responses[3][1]["request"]["request_status"] = "awaiting_upload"
+    with pytest.raises(
+        http_validation.HttpValidationError,
+        match="did not accept the exact request",
+    ):
+        _run_real_route_validation(monkeypatch, responses)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    (
+        ("upload_id", ""),
+        ("renewal_request_id", "wrong-request"),
+        ("application_id", "wrong-application"),
+        ("document_type", "wrong-document-type"),
+        ("upload_timestamp", "not-an-iso-timestamp"),
+        ("binding_status", "verified"),
+        ("contract_version", "monitoring_document_renewal_upload_binding_v0"),
+    ),
+)
+def test_real_route_validator_rejects_invalid_public_binding(
+    monkeypatch,
+    field,
+    invalid,
+):
+    responses = _real_route_validation_responses()
+    upload_response = responses[3][1]
+    upload_response["binding"][field] = invalid
+    upload_response["request"]["upload_binding"][field] = invalid
+    with pytest.raises(
+        http_validation.HttpValidationError,
+        match="invalid public binding",
+    ):
+        _run_real_route_validation(monkeypatch, responses)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    (
+        ("upload_id", "wrong-upload"),
+        ("renewal_request_id", "wrong-request"),
+        ("application_id", "wrong-application"),
+        ("customer_id", "wrong-customer"),
+        ("person_id", "wrong-person"),
+        ("person_type", "wrong-person-type"),
+        ("original_document_id", "wrong-document"),
+        ("original_document_version", 999),
+        ("uploaded_document_id", "renewal-candidate:wrong-upload"),
+        ("document_type", "wrong-document-type"),
+        ("upload_timestamp", "2026-08-05T03:33:50+00:00"),
+        ("uploaded_by", "wrong-uploader"),
+        ("binding_status", "verified"),
+        ("contract_version", "monitoring_document_renewal_upload_binding_v0"),
+    ),
+)
+def test_real_route_validator_rejects_cross_wired_authoritative_binding(
+    monkeypatch,
+    field,
+    invalid,
+):
+    responses = _real_route_validation_responses()
+    responses[7][1]["renewal_request"]["upload_binding"][field] = invalid
+    with pytest.raises(
+        http_validation.HttpValidationError,
+        match="invalid authoritative upload binding",
+    ):
+        _run_real_route_validation(monkeypatch, responses)
+
+
+def test_real_route_validator_rejects_boolean_document_version(monkeypatch):
+    responses = _real_route_validation_responses()
+    responses[7][1]["renewal_request"]["upload_binding"][
+        "original_document_version"
+    ] = True
+    with pytest.raises(
+        http_validation.HttpValidationError,
+        match="invalid authoritative upload binding",
+    ):
+        _run_real_route_validation(monkeypatch, responses)
+
+
+def test_real_route_validator_rejects_boolean_upload_size(monkeypatch):
+    responses = _real_route_validation_responses()
+    responses[3][1]["request"]["uploads"][0]["file_size"] = True
+    with pytest.raises(
+        http_validation.HttpValidationError,
+        match="invalid public upload metadata",
+    ):
+        _run_real_route_validation(monkeypatch, responses)
+
+
+def test_real_route_validator_rejects_conflicting_public_aliases(monkeypatch):
+    responses = _real_route_validation_responses()
+    responses[3][1]["request"]["upload_binding"]["document_type"] = "id_card"
+    with pytest.raises(
+        http_validation.HttpValidationError,
+        match="conflicting bindings",
+    ):
+        _run_real_route_validation(monkeypatch, responses)
 
 
 def test_temporary_iam_policy_is_exact_and_removal_refuses_drift(monkeypatch):
