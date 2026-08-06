@@ -1416,9 +1416,10 @@ def test_pr6c_backoffice_enhanced_requirements_are_typed_and_enriched(enhanced_a
 
     # Retired per policy decision — superseded by automated ComplyAdvantage
     # adverse-media screening and the risk-based periodic review cadence. They
-    # must no longer be generated for new applications. Internal-control typing
-    # itself is still covered by jurisdiction_risk_assessment and by
-    # test_pr6c_requirement_presentation_type_classification.
+    # must no longer be generated for new applications. End-to-end coverage of
+    # internal-control display typing now lives in
+    # test_jurisdiction_rows_follow_v5_section_mapping_and_inactive_defaults,
+    # which asserts requirement_display_type on the surviving Section F rule.
     assert "pep_adverse_media_assessment" not in by_key
     assert "pep_enhanced_monitoring_flag" not in by_key
 
@@ -1791,6 +1792,17 @@ def test_jurisdiction_rows_follow_v5_section_mapping_and_inactive_defaults(enhan
     assert assessment["audience"] == "backoffice"
     assert assessment["section"] == "F"
     assert assessment["portal_section"] == ""
+    # Since the two PEP internal controls were retired this is the only rule
+    # left that populates Section F, so it now carries the coverage of
+    # internal-control classification against a really persisted row rather
+    # than a hand-built dict.
+    from enhanced_requirements import classify_requirement_presentation_type
+
+    assert classify_requirement_presentation_type(assessment) == "internal_control"
+    # It is also a hard approval gate and must stay one — deliberately retained
+    # when the two advisory PEP controls were retired.
+    assert assessment["blocking_approval"], "jurisdiction_risk_assessment must stay approval-blocking"
+    assert assessment["mandatory"], "jurisdiction_risk_assessment must stay mandatory"
 
     assert "jurisdiction_sof_evidence" not in rows
 

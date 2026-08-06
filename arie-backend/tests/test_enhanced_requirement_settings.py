@@ -190,6 +190,8 @@ def test_approved_taxonomy_rule_defaults_are_seeded(enhanced_req_api_server):
             'company_bank_reference',
             'company_sof_evidence',
             'pep_declaration_details',
+            'pep_adverse_media_assessment',
+            'pep_enhanced_monitoring_flag',
             'aml_cft_policy',
             'trust_nominee_foundation_documents',
             'jurisdiction_sof_evidence',
@@ -214,10 +216,15 @@ def test_approved_taxonomy_rule_defaults_are_seeded(enhanced_req_api_server):
     assert by_key["pep_declaration_details"]["audience"] == "client"
     assert by_key["pep_declaration_details"]["requirement_type"] == "declaration"
     # pep_adverse_media_assessment / pep_enhanced_monitoring_flag are retired —
-    # superseded by automated screening and risk-based review cadence. They must
-    # not seed as active rules on a fresh database.
-    assert "pep_adverse_media_assessment" not in by_key
-    assert "pep_enhanced_monitoring_flag" not in by_key
+    # superseded by automated screening and the risk-based review cadence. Both
+    # keys stay in the query above deliberately: querying for them and asserting
+    # absence is a real check, whereas excluding them from the query would make
+    # the assertion vacuously true even if the rules were still seeded active.
+    for retired_key in ("pep_adverse_media_assessment", "pep_enhanced_monitoring_flag"):
+        row = by_key.get(retired_key)
+        assert row is None or row["active"] == 0, (
+            f"{retired_key} is retired and must not be present as an active rule"
+        )
     assert by_key["aml_cft_policy"]["blocking_approval"] == 0
     assert by_key["aml_cft_policy"]["mandatory"] == 0
     assert by_key["trust_nominee_foundation_documents"]["active"] == 1

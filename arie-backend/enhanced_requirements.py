@@ -215,9 +215,12 @@ TARGET_ENHANCED_REQUIREMENT_SECTIONS = {
     "company_bank_reference": "C",
     "company_sof_evidence": "C",
     "pep_declaration_details": "E",
-    # pep_adverse_media_assessment / pep_enhanced_monitoring_flag REMOVED per
-    # policy decision — superseded by automated screening and risk-based review.
-    # Section F is retained for jurisdiction_risk_assessment (a blocking gate).
+    # pep_adverse_media_assessment / pep_enhanced_monitoring_flag entries removed
+    # per policy decision — superseded by automated screening and risk-based
+    # review. Note this edit is presentational only: both keys are
+    # audience='backoffice', so the fallback in serialize_* still resolves any
+    # retained historical row to section "F", which is the intended behaviour.
+    # Section F itself is kept for jurisdiction_risk_assessment (a blocking gate).
     "aml_cft_policy": "C",
     "trust_nominee_foundation_documents": "C",
     "jurisdiction_sof_evidence": "C",

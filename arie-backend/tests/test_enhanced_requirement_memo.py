@@ -277,6 +277,32 @@ def test_enhanced_review_memo_includes_backoffice_only_v5_internal_controls(memo
     memo_enhanced_db.commit()
     _generate(memo_enhanced_db, app_id)
 
+    # Behaviour change (2026-08-04): a declared-PEP application no longer
+    # generates any back-office control of its own. pep_adverse_media_assessment
+    # and pep_enhanced_monitoring_flag were retired as superseded by automated
+    # ComplyAdvantage screening and the risk-based periodic review cadence, so
+    # the memo legitimately reports zero back-office/internal items here.
+    baseline = build_enhanced_review_memo_summary(memo_enhanced_db, app_id)
+    assert baseline["backoffice_only_count"] == 0
+
+    # The memo must still count and render back-office-only items when one is
+    # present, so insert one directly rather than depending on whichever policy
+    # rule happens to carry the back-office audience.
+    memo_enhanced_db.execute(
+        """
+        INSERT INTO application_enhanced_requirements
+            (application_id, trigger_key, trigger_label, requirement_key,
+             requirement_label, requirement_description, audience,
+             requirement_type, subject_scope, blocking_approval, mandatory,
+             waivable, status, active)
+        VALUES (?, 'pep', 'PEP', 'test_backoffice_control', 'Back-office control',
+                'Back-office control used for memo coverage.', 'backoffice',
+                'review_task', 'application', 0, 0, 0, 'generated', 1)
+        """,
+        (app_id,),
+    )
+    memo_enhanced_db.commit()
+
     summary = build_enhanced_review_memo_summary(memo_enhanced_db, app_id)
     assert summary["backoffice_only_count"] > 0
     assert not summary["senior_review_items"]

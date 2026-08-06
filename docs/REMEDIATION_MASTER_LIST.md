@@ -651,14 +651,14 @@ marker.
 
 ---
 
-Section F itself is **functioning as designed** and should not be removed: it
-tracks `internal_control` requirement types (adverse-media assessment,
-enhanced-monitoring flag, senior review) that expect no document upload and are
-non-blocking. Backed by `_internal_control_summary()` in
-`enhanced_requirements.py`, deliberately excluded from document/blocking
-queries (`enhanced_requirements.py:4175`), with a working status/notes save
-path and a resolve button that routes to the relevant tab
-(monitoring → lifecycle, senior/supervisor → supervisor, else overview).
+Section F itself is **functioning as designed** and is retained: it tracks
+`internal_control` requirement types that expect no document upload. Following
+the 2026-08-04 retirement below its only remaining occupant is
+`jurisdiction_risk_assessment`, so Section F now renders on high-risk-jurisdiction
+cases rather than on every PEP case. Backed by `_internal_control_summary()` in
+`enhanced_requirements.py`, deliberately excluded from portal-visible
+requirement queries, with a working status/notes save path and a resolve button
+that routes to the relevant tab.
 
 ---
 
