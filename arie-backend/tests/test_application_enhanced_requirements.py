@@ -212,6 +212,41 @@ def _requirement_id_by_key(db, app_id, requirement_key):
     return row["id"]
 
 
+def _insert_backoffice_requirement(db, app_id, requirement_key="test_backoffice_control"):
+    """Insert a back-office-audience requirement for audience-gating tests.
+
+    Deliberately not tied to a seeded policy rule. These tests assert that
+    client and portal actions are refused for back-office-only requirements,
+    which is a property of the `audience` column rather than of whichever
+    policy rule happens to carry that audience at a given time.
+    """
+    db.execute(
+        """
+        INSERT INTO application_enhanced_requirements
+            (application_id, trigger_key, trigger_label, requirement_key,
+             requirement_label, requirement_description, audience,
+             requirement_type, subject_scope, blocking_approval, mandatory,
+             waivable, status, active)
+        VALUES (?, 'pep', 'PEP', ?, 'Back-office control',
+                'Back-office control used for audience-gating tests.',
+                'backoffice', 'review_task', 'application', 0, 0, 0,
+                'generated', 1)
+        """,
+        (app_id, requirement_key),
+    )
+    db.commit()
+    row = db.execute(
+        """
+        SELECT id FROM application_enhanced_requirements
+        WHERE application_id=? AND requirement_key=?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (app_id, requirement_key),
+    ).fetchone()
+    assert row is not None
+    return row["id"]
+
+
 def _requirement_id_by_key_prefix(db, app_id, requirement_key_prefix):
     row = db.execute(
         """
@@ -1379,17 +1414,13 @@ def test_pr6c_backoffice_enhanced_requirements_are_typed_and_enriched(enhanced_a
     assert "Deputy Minister" in rendered
     assert "United Arab Emirates" in rendered
 
-    adverse_media = by_key["pep_adverse_media_assessment"]
-    assert adverse_media["requirement_display_type"] == "internal_control"
-    assert adverse_media["accepts_document_upload"] is False
-    assert adverse_media["audience"] == "backoffice"
-    assert adverse_media["section"] == "F"
-
-    monitoring = by_key["pep_enhanced_monitoring_flag"]
-    assert monitoring["requirement_display_type"] == "internal_control"
-    assert monitoring["accepts_document_upload"] is False
-    assert monitoring["audience"] == "backoffice"
-    assert monitoring["section"] == "F"
+    # Retired per policy decision — superseded by automated ComplyAdvantage
+    # adverse-media screening and the risk-based periodic review cadence. They
+    # must no longer be generated for new applications. Internal-control typing
+    # itself is still covered by jurisdiction_risk_assessment and by
+    # test_pr6c_requirement_presentation_type_classification.
+    assert "pep_adverse_media_assessment" not in by_key
+    assert "pep_enhanced_monitoring_flag" not in by_key
 
     bank_reference_rows = [
         item for item in body["requirements"]
@@ -1411,7 +1442,12 @@ def test_pr6c_backoffice_enhanced_requirements_are_typed_and_enriched(enhanced_a
     type_counts = body["enhanced_review_summary"]["type_counts"]
     assert type_counts["evidence"] > 0
     assert type_counts["portal_disclosure"] >= 1
-    assert type_counts["internal_control"] >= 2
+    # A PEP application no longer generates any internal control: both PEP
+    # internal controls were retired as superseded by automated screening and
+    # the risk-based review cadence. The remaining internal control
+    # (jurisdiction_risk_assessment) is triggered by high-risk jurisdiction,
+    # which this fixture does not set.
+    assert type_counts["internal_control"] == 0
 
 
 def test_pr6g_pep_sow_evidence_is_person_specific_for_directors_and_ubos(enhanced_app_api_server):
@@ -1703,14 +1739,15 @@ def test_v5_removed_edd_keys_do_not_generate_for_new_applications(enhanced_app_d
         "regulated_financial_services_pack",
         "cross_border_pack",
         "high_risk_product_pack",
+        # Retired 2026-08-04 — superseded by automated screening / risk-based review
+        "pep_adverse_media_assessment",
+        "pep_enhanced_monitoring_flag",
     }
     assert not removed.intersection(keys)
     assert {
         "company_bank_reference",
         "company_sof_evidence",
         "pep_declaration_details",
-        "pep_adverse_media_assessment",
-        "pep_enhanced_monitoring_flag",
         "aml_cft_policy",
         "trust_nominee_foundation_documents",
         "jurisdiction_exposure_rationale",
@@ -2848,7 +2885,7 @@ def test_request_from_client_rejects_ineligible_requirements(enhanced_app_api_se
     )
     conn.commit()
     _generate(conn, pep_app_id)
-    backoffice_req = _requirement_id_by_key(conn, pep_app_id, "pep_adverse_media_assessment")
+    backoffice_req = _insert_backoffice_requirement(conn, pep_app_id)
     conn.close()
 
     for req_id in (accepted_req, waived_req, cancelled_req, uploaded_req):
@@ -2914,7 +2951,7 @@ def test_portal_enhanced_requirements_are_client_safe_and_owned(enhanced_app_api
     accepted_req = source_wealth_reqs[1]
     waived_req = bankref_reqs[1]
     pep_requested_req = _requirement_id_by_key(conn, app_id, "pep_declaration_details")
-    backoffice_req = _requirement_id_by_key(conn, app_id, "pep_adverse_media_assessment")
+    backoffice_req = _insert_backoffice_requirement(conn, app_id)
     conn.execute(
         """
         UPDATE application_enhanced_requirements
@@ -3463,7 +3500,7 @@ def test_portal_fulfilment_rejects_unauthorized_ineligible_and_wrong_type(enhanc
     )
     conn.commit()
     _generate(conn, pep_app_id)
-    backoffice_req = _requirement_id_by_key(conn, pep_app_id, "pep_adverse_media_assessment")
+    backoffice_req = _insert_backoffice_requirement(conn, pep_app_id)
     conn.execute(
         "UPDATE application_enhanced_requirements SET status='requested', requested_at=datetime('now'), requested_by='co001' WHERE id=?",
         (backoffice_req,),

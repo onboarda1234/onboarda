@@ -627,7 +627,29 @@ re-litigate them. Excluded from the 2026-07-26 roll-up (not recomputed).
 |----|:---:|---------|--------|
 | R928-001 | LOW | Stale `ai_checks` rows on staging: the config surface reports **89** active checks while the merged seed produces **85**. `sync_ai_checks_from_seed()` (`db.py`) upserts but never deletes, so rows for doc types dropped from `verification_matrix.py` in an earlier refactor persist indefinitely. Harmless today — live doc types are overwritten on every boot — but the count is misleading and the drift only grows | ⬜ pending — decide whether the sync should prune doc types absent from the seed, or whether the surface should count only seeded rows. Needs care: pruning must not orphan historical `documents.verification_results` |
 | R928-002 | LOW | Dead `AGENT1_DOCUMENT_POLICIES` array in `arie-backoffice.html` (~lines 33588–33669): assigned with `agent1Policy(...)` entries, then **unconditionally reassigned in full** at 33740 by the `PR-DOC-POLICY-CANONICAL-1` canonical block, with no read of the variable in between. ~80 lines that cannot reach the DOM under any code path. Still carries retired check labels (`'account standing'` at 33606 and 33613, `'business objects / activities match'`), which surface in DOM scans and read as live config | ⬜ pending — delete the superseded array. Verify no read exists between the two assignments before removing; the canonical block at 33740 is the live fallback and must stay |
-| R928-003 | LOW | Section F (Internal Controls) renders each control block **twice** per requirement. `renderUnifiedInternalControls()` calls `enhancedRequirementInternalControlHtml(req)` directly, and then `renderApplicationEnhancedRequirementActions(req)` calls it again as `typedContentHtml` inside its `<details>` panel — both the editable and read-only branches. Operators see the same "Internal control / summary / resolve button" card duplicated above and inside the Expand panel. Cosmetic only; status updates and the resolve button work correctly | ⬜ pending — drop one of the two call sites. The outer call is the better one to keep (visible without expanding); removing `typedContentHtml` for `internal_control` also affects the `portal_disclosure` path, so scope the change to the internal-control branch only |
+| R928-003 | LOW | Section F (Internal Controls) renders each control block **twice** per requirement. `renderUnifiedInternalControls()` calls `enhancedRequirementInternalControlHtml(req)` directly, and then `renderApplicationEnhancedRequirementActions(req)` calls it again as `typedContentHtml` inside its `<details>` panel — both the editable and read-only branches. Operators see the same "Internal control / summary / resolve button" card duplicated above and inside the Expand panel. Cosmetic only; status updates and the resolve button work correctly | ✅ fixed — `renderApplicationEnhancedRequirementActions` takes an opt-in `suppressTypedContent` option; only Section F passes it, so the evidence and portal-disclosure call sites are unchanged. Static guard added in `test_enhanced_requirement_settings.py` |
+
+### Section F internal controls — retirement of the two PEP controls (2026-08-04)
+
+Founder decision after confirming the automated controls are live
+(`SCREENING_PROVIDER=complyadvantage`). Two of the three Section F controls are
+superseded and retired; the third is deliberately **kept**.
+
+| Requirement | Decision | Rationale |
+|---|---|---|
+| `pep_adverse_media_assessment` | ⛔ retired | Adverse media is screened per party by ComplyAdvantage (directors + UBOs), with per-party status surfaced in the Directors & UBOs report |
+| `pep_enhanced_monitoring_flag` | ⛔ retired | Superseded by the risk-based periodic review cadence (`RISK_FREQUENCY_MONTHS`: LOW 36 / MEDIUM 24 / HIGH 12 / VERY_HIGH 6, with a 12-month floor for EDD lanes) |
+| `jurisdiction_risk_assessment` | ✅ **kept** | Unlike the other two this is `blocking_approval: True` / `mandatory: True` — a hard approval gate on high-risk-jurisdiction cases. Country risk feeding the risk *score* is not a substitute for the officer sign-off *gate*. Retiring it would be a compliance-posture change and was explicitly declined |
+
+Because `jurisdiction_risk_assessment` survives, **Section F remains** and
+Verification History stays as Section G. Retirement uses the established
+`REMOVED_ACTIVE_ENHANCED_REQUIREMENT_KEYS` mechanism, so persisted rules
+deactivate on startup with an `enhanced_requirement_rules.taxonomy_reconciled`
+audit entry, while historical generated requirements are retained for audit and
+render the "Disabled source rule; historical requirement retained for audit"
+marker.
+
+---
 
 Section F itself is **functioning as designed** and should not be removed: it
 tracks `internal_control` requirement types (adverse-media assessment,

@@ -13730,7 +13730,11 @@ function renderEnhancedReviewOperationalSummary(summary, requirements) {
   '</div>';
 }
 
-function renderApplicationEnhancedRequirementActions(req) {
+function renderApplicationEnhancedRequirementActions(req, options) {
+  // suppressTypedContent: the caller already rendered the typed summary block
+  // (internal-control / portal-disclosure card) above this panel, so repeating
+  // it inside the Expand panel would show the same card twice.
+  var suppressTypedContent = !!(options && options.suppressTypedContent);
   var displayType = enhancedRequirementPresentationType(req);
   var linkedLabel = displayType === 'evidence' ? enhancedRequirementLinkedDocumentLabel(req) : '';
   var linkedDoc = enhancedRequirementLinkedDocument(req);
@@ -13746,7 +13750,7 @@ function renderApplicationEnhancedRequirementActions(req) {
     return '<details style="min-width:220px;">' +
       '<summary style="cursor:pointer;font-size:11px;font-weight:700;color:var(--brand);list-style-position:inside;">Expand</summary>' +
       '<div style="margin-top:8px;font-size:11px;color:var(--text3);">Read-only</div>' +
-      '<div style="margin-top:6px;">' + (displayType === 'portal_disclosure' ? enhancedRequirementPortalDisclosureHtml(req) : displayType === 'internal_control' ? enhancedRequirementInternalControlHtml(req) : '<div style="font-size:11px;color:var(--text3);">' + escapeHtml(linkedLabel) + '</div>') + '</div>' +
+      '<div style="margin-top:6px;">' + (suppressTypedContent ? '' : displayType === 'portal_disclosure' ? enhancedRequirementPortalDisclosureHtml(req) : displayType === 'internal_control' ? enhancedRequirementInternalControlHtml(req) : '<div style="font-size:11px;color:var(--text3);">' + escapeHtml(linkedLabel) + '</div>') + '</div>' +
       workflowAcceptHtml +
       (req.review_notes ? '<div style="font-size:11px;color:var(--text2);margin-top:6px;white-space:normal;max-width:260px;">' + escapeHtml(req.review_notes) + '</div>' : '') +
       renderEnhancedRequirementDetails(req) +
@@ -13772,11 +13776,13 @@ function renderApplicationEnhancedRequirementActions(req) {
       '<input type="file" id="er-upload-' + escapeHtml(controlId) + '" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style="display:none;" onchange="handleApplicationEnhancedRequirementUpload(\'' + escapeHtml(String(req.id)) + '\', this)" />' +
       '<button class="btn btn-outline btn-sm" onclick="selectApplicationEnhancedRequirementUpload(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">' + escapeHtml(uploadLabel) + '</button>';
   }
-  var typedContentHtml = displayType === 'portal_disclosure'
-    ? enhancedRequirementPortalDisclosureHtml(req)
-    : displayType === 'internal_control'
-      ? enhancedRequirementInternalControlHtml(req)
-      : '';
+  var typedContentHtml = suppressTypedContent
+    ? ''
+    : displayType === 'portal_disclosure'
+      ? enhancedRequirementPortalDisclosureHtml(req)
+      : displayType === 'internal_control'
+        ? enhancedRequirementInternalControlHtml(req)
+        : '';
   var verificationHtml = displayType === 'evidence' && req.linked_document_id
     ? '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px;">' +
         enhancedRequirementVerificationBadge(req) +
@@ -13959,7 +13965,7 @@ function renderUnifiedInternalControls(requirements) {
         '</div>' +
       '</div>' +
       '<div style="margin-top:10px;">' + enhancedRequirementInternalControlHtml(req) + '</div>' +
-      '<div style="margin-top:10px;">' + renderApplicationEnhancedRequirementActions(req) + '</div>' +
+      '<div style="margin-top:10px;">' + renderApplicationEnhancedRequirementActions(req, { suppressTypedContent: true }) + '</div>' +
     '</div>';
   }).join('');
   container.innerHTML = kycTaxonomyGroupShell(
