@@ -215,11 +215,16 @@ def test_approved_taxonomy_rule_defaults_are_seeded(enhanced_req_api_server):
     assert by_key["pep_declaration_details"]["requirement_label"] == "Additional declaration details"
     assert by_key["pep_declaration_details"]["audience"] == "client"
     assert by_key["pep_declaration_details"]["requirement_type"] == "declaration"
-    assert by_key["pep_adverse_media_assessment"]["audience"] == "backoffice"
-    assert by_key["pep_adverse_media_assessment"]["mandatory"] == 0
-    assert by_key["pep_adverse_media_assessment"]["blocking_approval"] == 0
-    assert by_key["pep_enhanced_monitoring_flag"]["audience"] == "backoffice"
-    assert by_key["pep_enhanced_monitoring_flag"]["requirement_type"] == "internal_control"
+    # pep_adverse_media_assessment / pep_enhanced_monitoring_flag are retired —
+    # superseded by automated screening and the risk-based review cadence. Both
+    # keys stay in the query above deliberately: querying for them and asserting
+    # absence is a real check, whereas excluding them from the query would make
+    # the assertion vacuously true even if the rules were still seeded active.
+    for retired_key in ("pep_adverse_media_assessment", "pep_enhanced_monitoring_flag"):
+        row = by_key.get(retired_key)
+        assert row is None or row["active"] == 0, (
+            f"{retired_key} is retired and must not be present as an active rule"
+        )
     assert by_key["aml_cft_policy"]["blocking_approval"] == 0
     assert by_key["aml_cft_policy"]["mandatory"] == 0
     assert by_key["trust_nominee_foundation_documents"]["active"] == 1
@@ -244,7 +249,8 @@ def test_list_endpoint_returns_seeded_rules_and_read_roles(enhanced_req_api_serv
     body = admin_resp.json()
     keys = {(r["trigger_key"], r["requirement_key"]) for r in body["rules"]}
     assert ("high_or_very_high_risk", "company_bank_reference") in keys
-    assert ("pep", "pep_adverse_media_assessment") in keys
+    assert ("pep", "pep_declaration_details") in keys
+    assert ("pep", "pep_adverse_media_assessment") not in keys
     assert "high_or_very_high_risk" in body["grouped"]
     company_bank = next(r for r in body["rules"] if r["requirement_key"] == "company_bank_reference")
     assert company_bank["section"] == "C"
@@ -578,7 +584,7 @@ def test_invalid_enum_and_duplicate_keys_are_rejected(enhanced_req_api_server):
 
     duplicate = _new_rule_payload()
     duplicate["trigger_key"] = "pep"
-    duplicate["requirement_key"] = "pep_adverse_media_assessment"
+    duplicate["requirement_key"] = "pep_declaration_details"
     dup_resp = requests.post(
         f"{enhanced_req_api_server}/api/settings/enhanced-requirements",
         json=duplicate,
@@ -794,7 +800,7 @@ def test_pr6a_kyc_enhanced_review_panels_and_collapsed_requirement_controls():
     assert "<th>Actions</th>" not in render_block
     assert "renderUnifiedEnhancedRequirementTaxonomy(requirements);" in render_block
 
-    actions_block = html.split("function renderApplicationEnhancedRequirementActions(req) {", 1)[1]
+    actions_block = html.split("function renderApplicationEnhancedRequirementActions(req, options) {", 1)[1]
     actions_block = actions_block.split("function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {", 1)[0]
     assert "<details" in actions_block
     assert "Expand" in actions_block
@@ -901,12 +907,26 @@ def test_pr6c_backoffice_renders_typed_enhanced_requirement_workflows():
     assert "Portal disclosures: " in html
     assert "Internal controls: " in html
 
-    actions_block = html.split("function renderApplicationEnhancedRequirementActions(req) {", 1)[1]
+    actions_block = html.split("function renderApplicationEnhancedRequirementActions(req, options) {", 1)[1]
     actions_block = actions_block.split("function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {", 1)[0]
     assert "documentSelectHtml = displayType === 'evidence'" in actions_block
     assert "enhancedRequirementUploadEligible(req)" in actions_block
     assert "Mark reviewed" in actions_block
     assert "Mark completed" in actions_block
+
+    # Section F previously rendered the internal-control card twice: once
+    # directly, and again as typedContentHtml inside this actions panel. The
+    # panel must honour suppressTypedContent so the caller can opt out.
+    assert "var suppressTypedContent = !!(options && options.suppressTypedContent);" in actions_block
+    assert "var typedContentHtml = suppressTypedContent" in actions_block
+
+    controls_block = html.split("function renderUnifiedInternalControls(requirements) {", 1)[1]
+    controls_block = controls_block.split("\nfunction ", 1)[0]
+    assert "enhancedRequirementInternalControlHtml(req)" in controls_block
+    assert (
+        "renderApplicationEnhancedRequirementActions(req, { suppressTypedContent: true })"
+        in controls_block
+    ), "Section F must suppress the duplicate internal-control card in the Expand panel"
 
     render_block = html.split("function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {", 1)[1]
     render_block = render_block.split("async function loadApplicationEnhancedRequirements(app, generationResult) {", 1)[0]

@@ -614,6 +614,112 @@ dry-run exposed a type mismatch; RSMP remains OFF. See the
 
 ---
 
+## Release-found items (PR #928 verification-check retirement, 2026-08-04)
+
+Found while verifying and validating the DOC-MA-01 / DOC-13 / DOC-68
+retirement ([#928](https://github.com/onboarda1234/onboarda/pull/928), merged
+`b1e1596`, deployed to staging). None was caused by that change and none
+blocked the release — all three are pre-existing. Left untouched deliberately
+to keep the release scoped; recorded here so the next audit does not
+re-litigate them. Excluded from the 2026-07-26 roll-up (not recomputed).
+
+| ID | Sev | Finding | Status |
+|----|:---:|---------|--------|
+| R928-001 | LOW | Stale `ai_checks` rows on staging: the config surface reports **89** active checks while the merged seed produces **85**. `sync_ai_checks_from_seed()` (`db.py`) upserts but never deletes, so rows for doc types dropped from `verification_matrix.py` in an earlier refactor persist indefinitely. Harmless today — live doc types are overwritten on every boot — but the count is misleading and the drift only grows | ⬜ pending — decide whether the sync should prune doc types absent from the seed, or whether the surface should count only seeded rows. Needs care: pruning must not orphan historical `documents.verification_results` |
+| R928-002 | LOW | Dead `AGENT1_DOCUMENT_POLICIES` array in `arie-backoffice.html` (~lines 33588–33669): assigned with `agent1Policy(...)` entries, then **unconditionally reassigned in full** at 33740 by the `PR-DOC-POLICY-CANONICAL-1` canonical block, with no read of the variable in between. ~80 lines that cannot reach the DOM under any code path. Still carries retired check labels (`'account standing'` at 33606 and 33613, `'business objects / activities match'`), which surface in DOM scans and read as live config | ⬜ pending — delete the superseded array. Verify no read exists between the two assignments before removing; the canonical block at 33740 is the live fallback and must stay |
+| R928-003 | LOW | Section F (Internal Controls) renders each control block **twice** per requirement. `renderUnifiedInternalControls()` calls `enhancedRequirementInternalControlHtml(req)` directly, and then `renderApplicationEnhancedRequirementActions(req)` calls it again as `typedContentHtml` inside its `<details>` panel — both the editable and read-only branches. Operators see the same "Internal control / summary / resolve button" card duplicated above and inside the Expand panel. Cosmetic only; status updates and the resolve button work correctly | ✅ fixed — `renderApplicationEnhancedRequirementActions` takes an opt-in `suppressTypedContent` option; only Section F passes it, so the evidence and portal-disclosure call sites are unchanged. Static guard added in `test_enhanced_requirement_settings.py` |
+
+### Section F internal controls — retirement of the two PEP controls (2026-08-04)
+
+Founder decision after confirming the automated controls are live
+(`SCREENING_PROVIDER=complyadvantage`). Two of the three Section F controls are
+superseded and retired; the third is deliberately **kept**.
+
+| Requirement | Decision | Rationale |
+|---|---|---|
+| `pep_adverse_media_assessment` | ⛔ retired | Adverse media is screened per party by ComplyAdvantage (directors + UBOs), with per-party status surfaced in the Directors & UBOs report |
+| `pep_enhanced_monitoring_flag` | ⛔ retired | Superseded by the risk-based periodic review cadence (`RISK_FREQUENCY_MONTHS`: LOW 36 / MEDIUM 24 / HIGH 12 / VERY_HIGH 6, with a 12-month floor for EDD lanes) |
+| `jurisdiction_risk_assessment` | ✅ **kept** | Unlike the other two this is `blocking_approval: True` / `mandatory: True` — a hard approval gate on high-risk-jurisdiction cases. Country risk feeding the risk *score* is not a substitute for the officer sign-off *gate*. Retiring it would be a compliance-posture change and was explicitly declined |
+
+Because `jurisdiction_risk_assessment` survives, **Section F remains** and
+Verification History stays as Section G. Retirement uses the established
+`REMOVED_ACTIVE_ENHANCED_REQUIREMENT_KEYS` mechanism, so persisted rules
+deactivate on startup with an `enhanced_requirement_rules.taxonomy_reconciled`
+audit entry, while historical generated requirements are retained for audit and
+render the "Disabled source rule; historical requirement retained for audit"
+marker.
+
+#### ⚠️ Accepted risk — declared-but-unmatched PEPs lose enhanced monitoring (founder sign-off 2026-08-04)
+
+`pep_enhanced_monitoring_flag` was retired on the basis that enhanced monitoring
+is already driven by the risk-based periodic review cadence. That holds for
+**provider-matched** PEPs but **not** for **client-declared, screening-unmatched**
+PEPs. The two code paths key off different signals:
+
+| Path | Reads |
+|---|---|
+| Retired rule — `_declared_pep_present()` (`enhanced_requirements.py`) | SQL against `directors.is_pep` / `ubos.is_pep` / `pep_declaration` |
+| Replacement — `has_pep_signal()` (`periodic_review_policy.py`) | Text scan of six **application-level** fields; never reads the party tables |
+
+Verified end-to-end, not inferred:
+
+* The portal submits `directors` and `ubos` as **siblings of** `prescreening_data`, not inside it. Extracting the submitted `prescreening_data` object confirms `PEP-ish keys: NONE`, `contains 'directors': False`, `contains 'ubos': False`.
+* Of the six fields `has_pep_signal()` scans, only `prescreening_data` and `decision_notes` exist as `applications` columns; `risk_escalations`, `elevation_reason_text`, `screening_summary` and `form_data` are not application columns, so those lookups are dead.
+* Behaviour test: PEP flagged only on the director record → **24-month cadence, no enhanced monitoring**. PEP wording reaching the application fields (as happens when screening matches, because the screening report is stored inside `prescreening_data`) → 12-month floor, `enhanced_monitoring_floor:pep_exposure`.
+
+**Exposed population:** MEDIUM-risk (or lower) relationships with a
+client-declared PEP director or UBO whose screening returns no match. These now
+sit on the standard cadence with no enhanced-monitoring flag and no Section F
+control. No approval gate is affected — both retired rules were
+`blocking_approval=0, mandatory=0`.
+
+Accepted knowingly to keep this release scoped. The remediation is scoped as
+**R929-001** below and should be closed before production onboarding of real
+PEP relationships.
+
+### R929-001 — make enhanced-monitoring PEP detection read the party tables (scoped, not implemented)
+
+| Field | Value |
+|---|---|
+| Severity | MED — compliance coverage gap, no approval-gate impact |
+| Trigger | Accepted risk recorded above |
+| Goal | `has_pep_signal()` must detect a declared PEP with the same fidelity as `_declared_pep_present()`, so the 12-month enhanced-monitoring floor fires for client-declared PEPs regardless of screening outcome |
+
+**Constraint that shapes the design:** `periodic_review_policy.py` is currently
+pure — `has_pep_signal(app)`, `enhanced_monitoring_reasons(...)` and
+`policy_snapshot_for_application(app, *, anchor_date)` all operate on a plain
+dict with no database handle. Threading a `db` argument through would change
+every caller and couple the policy module to persistence. The likely-correct
+shape is instead to **enrich the app dict upstream** with a resolved
+`declared_pep` boolean (computed once, where a `db` is already in hand) and have
+`has_pep_signal()` honour it, keeping the policy module pure and unit-testable.
+
+**Work items:**
+
+1. Add a shared declared-PEP resolver so `enhanced_requirements._declared_pep_present()` and the monitoring path cannot drift again. Watch for a circular import between `enhanced_requirements` and `periodic_review_policy`.
+2. Enrich the application dict with the resolved flag at every site that builds a policy snapshot — `periodic_review_engine`, `monitoring_automation.run_due_monitoring_reviews`, and the baseline write in `periodic_review_engine` (`periodic_review_baseline_*` columns).
+3. Decide the **backfill** question explicitly: already-approved relationships carry a persisted `periodic_review_baseline_cadence_months` and a computed `periodic_review_next_review_due`. Fixing detection does not retro-correct them. Either recompute baselines for affected applications or record why not.
+4. Prune or fix the four dead field lookups in `has_pep_signal()` — they read as coverage and provide none.
+5. Fix the narrower bug found while scoping: `prescreening_data = {"pep_declaration": "Yes"}` does **not** trigger detection, because `pep_declaration` recurses into `_contains_pep_exposure` and a bare `"Yes"` string fails `_pep_text_positive`. A declaration key with a positive flag value should count.
+6. Tests: a regression test asserting a PEP on the party tables alone yields a 12-month cadence; the two-path parity test (`_declared_pep_present` vs `has_pep_signal` agree on the same application); and the `pep_declaration: "Yes"` case from item 5.
+7. Re-verify on staging that applications with `directors.is_pep='Yes'` carry `pep_exposure` in their periodic review `enhanced_monitoring_reasons`.
+
+**Out of scope:** reinstating `pep_enhanced_monitoring_flag`. The fix targets the
+automated control, not the retired manual task.
+
+---
+
+Section F itself is **functioning as designed** and is retained: it tracks
+`internal_control` requirement types that expect no document upload. Following
+the 2026-08-04 retirement below its only remaining occupant is
+`jurisdiction_risk_assessment`, so Section F now renders on high-risk-jurisdiction
+cases rather than on every PEP case. Backed by `_internal_control_summary()` in
+`enhanced_requirements.py`, deliberately excluded from portal-visible
+requirement queries, with a working status/notes save path and a resolve button
+that routes to the relevant tab.
+
+---
+
 ## Optional / Post-Production Modernization (NOT required for pilot or first production cut; excluded from roll-up)
 
 > Elective architecture/scale/enterprise upgrades for after production launch.

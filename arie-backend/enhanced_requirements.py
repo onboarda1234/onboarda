@@ -215,8 +215,12 @@ TARGET_ENHANCED_REQUIREMENT_SECTIONS = {
     "company_bank_reference": "C",
     "company_sof_evidence": "C",
     "pep_declaration_details": "E",
-    "pep_adverse_media_assessment": "F",
-    "pep_enhanced_monitoring_flag": "F",
+    # pep_adverse_media_assessment / pep_enhanced_monitoring_flag entries removed
+    # per policy decision — superseded by automated screening and risk-based
+    # review. Note this edit is presentational only: both keys are
+    # audience='backoffice', so the fallback in serialize_* still resolves any
+    # retained historical row to section "F", which is the intended behaviour.
+    # Section F itself is kept for jurisdiction_risk_assessment (a blocking gate).
     "aml_cft_policy": "C",
     "trust_nominee_foundation_documents": "C",
     "jurisdiction_sof_evidence": "C",
@@ -239,6 +243,12 @@ REMOVED_ACTIVE_ENHANCED_REQUIREMENT_KEYS = {
     "pep_linked_sof_evidence",
     "mandatory_senior_review",
     "ongoing_monitoring_flag",
+    # Retired 2026-08-04: superseded by automated controls. Adverse media is
+    # screened per party by ComplyAdvantage; enhanced monitoring is driven by
+    # the risk-based periodic review cadence. Historical generated requirements
+    # are retained for audit and surface the disabled-source-rule marker.
+    "pep_adverse_media_assessment",
+    "pep_enhanced_monitoring_flag",
     "licence_or_registration_evidence",
     "transaction_flow_explanation",
     "jurisdictions_served",
@@ -801,38 +811,13 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "client_safe_label": "Additional declaration details",
         "client_safe_description": "Please provide the requested declaration details so our team can complete the review.",
     },
-    {
-        "trigger_key": "pep",
-        "trigger_label": "PEP / adverse media context",
-        "trigger_category": "screening",
-        "requirement_key": "pep_adverse_media_assessment",
-        "requirement_label": "Adverse media assessment",
-        "requirement_description": "Back-office adverse media assessment for the relevant person.",
-        "audience": "backoffice",
-        "requirement_type": "review_task",
-        "subject_scope": "screening_subject",
-        "blocking_approval": False,
-        "mandatory": False,
-        "waivable": False,
-        "waiver_roles": [],
-        "sort_order": 20,
-    },
-    {
-        "trigger_key": "pep",
-        "trigger_label": "PEP monitoring",
-        "trigger_category": "screening",
-        "requirement_key": "pep_enhanced_monitoring_flag",
-        "requirement_label": "Enhanced monitoring flag",
-        "requirement_description": "Back-office monitoring flag for the relevant person or relationship.",
-        "audience": "backoffice",
-        "requirement_type": "internal_control",
-        "subject_scope": "application",
-        "blocking_approval": False,
-        "mandatory": False,
-        "waivable": False,
-        "waiver_roles": [],
-        "sort_order": 30,
-    },
+    # NOTE: pep_adverse_media_assessment and pep_enhanced_monitoring_flag REMOVED
+    # per policy decision — superseded by automated controls. Adverse media is
+    # screened per party by ComplyAdvantage (status surfaced in the Directors &
+    # UBOs report); enhanced monitoring is driven by the risk-based periodic
+    # review cadence (periodic_review_policy.RISK_FREQUENCY_MONTHS). Retired via
+    # REMOVED_ACTIVE_ENHANCED_REQUIREMENT_KEYS so persisted rules deactivate on
+    # startup while historical generated requirements are retained for audit.
     {
         "trigger_key": "crypto_vasp",
         "trigger_label": "Crypto / VASP",
@@ -2067,38 +2052,11 @@ def _apply_approved_enhanced_requirement_taxonomy_updates(db, actor="system", ac
                 "client_safe_description": "Please provide the requested declaration details so our team can complete the review.",
             },
         ),
-        (
-            "pep",
-            "pep_adverse_media_assessment",
-            {
-                "active": 1,
-                "requirement_label": "Adverse media assessment",
-                "requirement_description": "Back-office adverse media assessment for the relevant person.",
-                "blocking_approval": 0,
-                "mandatory": 0,
-                "waivable": 0,
-                "waiver_roles": "[]",
-                "subject_scope": "screening_subject",
-                "audience": "backoffice",
-                "requirement_type": "review_task",
-            },
-        ),
-        (
-            "pep",
-            "pep_enhanced_monitoring_flag",
-            {
-                "active": 1,
-                "requirement_label": "Enhanced monitoring flag",
-                "requirement_description": "Back-office monitoring flag for the relevant person or relationship.",
-                "blocking_approval": 0,
-                "mandatory": 0,
-                "waivable": 0,
-                "waiver_roles": "[]",
-                "subject_scope": "application",
-                "audience": "backoffice",
-                "requirement_type": "internal_control",
-            },
-        ),
+        # NOTE: pep_adverse_media_assessment and pep_enhanced_monitoring_flag
+        # reconciliation entries REMOVED per policy decision. Both keys are now
+        # listed in REMOVED_ACTIVE_ENHANCED_REQUIREMENT_KEYS, which deactivates
+        # any persisted rule below; leaving an active=1 update here would fight
+        # that retirement on every startup.
         ("crypto_vasp", "aml_cft_policy", {
             "active": 1,
             "requirement_label": "AML/CFT policy document",
