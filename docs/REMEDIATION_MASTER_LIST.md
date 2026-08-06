@@ -614,6 +614,32 @@ dry-run exposed a type mismatch; RSMP remains OFF. See the
 
 ---
 
+## Release-found items (PR #928 verification-check retirement, 2026-08-04)
+
+Found while verifying and validating the DOC-MA-01 / DOC-13 / DOC-68
+retirement ([#928](https://github.com/onboarda1234/onboarda/pull/928), merged
+`b1e1596`, deployed to staging). None was caused by that change and none
+blocked the release — all three are pre-existing. Left untouched deliberately
+to keep the release scoped; recorded here so the next audit does not
+re-litigate them. Excluded from the 2026-07-26 roll-up (not recomputed).
+
+| ID | Sev | Finding | Status |
+|----|:---:|---------|--------|
+| R928-001 | LOW | Stale `ai_checks` rows on staging: the config surface reports **89** active checks while the merged seed produces **85**. `sync_ai_checks_from_seed()` (`db.py`) upserts but never deletes, so rows for doc types dropped from `verification_matrix.py` in an earlier refactor persist indefinitely. Harmless today — live doc types are overwritten on every boot — but the count is misleading and the drift only grows | ⬜ pending — decide whether the sync should prune doc types absent from the seed, or whether the surface should count only seeded rows. Needs care: pruning must not orphan historical `documents.verification_results` |
+| R928-002 | LOW | Dead `AGENT1_DOCUMENT_POLICIES` array in `arie-backoffice.html` (~lines 33588–33669): assigned with `agent1Policy(...)` entries, then **unconditionally reassigned in full** at 33740 by the `PR-DOC-POLICY-CANONICAL-1` canonical block, with no read of the variable in between. ~80 lines that cannot reach the DOM under any code path. Still carries retired check labels (`'account standing'` at 33606 and 33613, `'business objects / activities match'`), which surface in DOM scans and read as live config | ⬜ pending — delete the superseded array. Verify no read exists between the two assignments before removing; the canonical block at 33740 is the live fallback and must stay |
+| R928-003 | LOW | Section F (Internal Controls) renders each control block **twice** per requirement. `renderUnifiedInternalControls()` calls `enhancedRequirementInternalControlHtml(req)` directly, and then `renderApplicationEnhancedRequirementActions(req)` calls it again as `typedContentHtml` inside its `<details>` panel — both the editable and read-only branches. Operators see the same "Internal control / summary / resolve button" card duplicated above and inside the Expand panel. Cosmetic only; status updates and the resolve button work correctly | ⬜ pending — drop one of the two call sites. The outer call is the better one to keep (visible without expanding); removing `typedContentHtml` for `internal_control` also affects the `portal_disclosure` path, so scope the change to the internal-control branch only |
+
+Section F itself is **functioning as designed** and should not be removed: it
+tracks `internal_control` requirement types (adverse-media assessment,
+enhanced-monitoring flag, senior review) that expect no document upload and are
+non-blocking. Backed by `_internal_control_summary()` in
+`enhanced_requirements.py`, deliberately excluded from document/blocking
+queries (`enhanced_requirements.py:4175`), with a working status/notes save
+path and a resolve button that routes to the relevant tab
+(monitoring → lifecycle, senior/supervisor → supervisor, else overview).
+
+---
+
 ## Optional / Post-Production Modernization (NOT required for pilot or first production cut; excluded from roll-up)
 
 > Elective architecture/scale/enterprise upgrades for after production launch.
