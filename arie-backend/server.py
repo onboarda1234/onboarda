@@ -13584,7 +13584,19 @@ class DocumentVerifyHandler(BaseHandler):
                 })
                 all_passed = False
 
-        status = STATE_VERIFIED if all_passed else STATE_FLAGGED
+        # C0: a document whose checks were ALL skipped (licence gate short-circuit,
+        # retired document type) has verified nothing and must not persist as
+        # "verified". Map it to the established "skipped" state instead. Guarded on
+        # a non-empty check list so the P0-5 no-pass-without-evidence path
+        # (empty checks → flagged) is unchanged.
+        _all_checks_skipped = bool(checks) and all(
+            str((c or {}).get("result") or "").lower() in ("skip", "skipped")
+            for c in checks
+        )
+        if _all_checks_skipped:
+            status = STATE_SKIPPED
+        else:
+            status = STATE_VERIFIED if all_passed else STATE_FLAGGED
 
         # Finding 9: Propagate ai_source so mock/degraded results are explicit
         ai_source = "live"
@@ -13661,9 +13673,12 @@ class DocumentVerifyHandler(BaseHandler):
 
         # EX-05/PR5: Log final document verification with before/after state.
         _doc_after = _document_verification_transition_state(doc, status, checks_count=len(checks))
+        # C0: a skipped outcome verified nothing, so it carries no verified_at
+        # timestamp (parity with the agent-disabled skip path above).
+        _verified_at_sql = "NULL" if status == STATE_SKIPPED else "datetime('now')"
         db.execute(
             "UPDATE documents SET verification_status=?, verification_results=?, "
-            "verified_at=datetime('now'), expiry_date=?, valid_until=? WHERE id=?",
+            f"verified_at={_verified_at_sql}, expiry_date=?, valid_until=? WHERE id=?",
             (
                 status,
                 results,

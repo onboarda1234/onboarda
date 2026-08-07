@@ -974,6 +974,7 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .reliance-badge.pending { background:var(--blue-bg); color:var(--blue); border-color:rgba(37,99,235,.22); }
 .reliance-badge.system-issue { background:var(--blue-bg); color:var(--blue); border-color:rgba(37,99,235,.22); }
 .reliance-badge.stale { background:rgba(100,116,139,.12); color:#475569; border-color:rgba(100,116,139,.25); }
+.reliance-badge.skipped { background:rgba(100,116,139,.12); color:#475569; border-color:rgba(100,116,139,.25); }
 .reliance-badge.manual-accepted { background:rgba(43,47,143,.08); color:var(--brand); border-color:rgba(43,47,143,.24); }
 .verification-technical-details { margin-top:8px; border:1px solid var(--border1); border-radius:10px; background:var(--surface); overflow:hidden; }
 .verification-technical-details summary { cursor:pointer; padding:9px 10px; font-size:11px; font-weight:800; color:var(--brand); list-style-position:inside; }
@@ -10224,6 +10225,17 @@ function documentRelianceDisplayState(doc, policy) {
   if (reviewStatus === 'info_requested') return { label: 'Request replacement', tone: 'request-info' };
   var readyState = documentReadyDisplayState(doc);
   if (readyState) return readyState;
+  // C0: a clean "no checks apply" outcome (licence gate short-circuit, retired
+  // doc type) is Not applicable — never Verified, never Failed. Guarded on the
+  // backend marker or an all-skip persisted check list so the operational
+  // Agent-1-disabled skip (checks: []) keeps its existing treatment below.
+  var allChecksSkipped = checks.length > 0 && checks.every(function(check) {
+    var result = String((check && (check.result || check.status)) || '').toLowerCase();
+    return result === 'skip' || result === 'skipped';
+  });
+  if ((verificationState === 'skipped' || overall === 'skipped') && (results.not_applicable === true || allChecksSkipped)) {
+    return { label: 'Not applicable', tone: 'skipped' };
+  }
   if (verificationState === 'expired' || relianceState === 'expired' || (doc && (doc.is_expired === true || doc.expired === true))) return { label: 'Expired', tone: 'failed' };
   if (relianceState === 'stale' || verificationState === 'stale' || (doc && doc.is_current === false)) return { label: 'Stale', tone: 'stale' };
   if (['failed', 'flagged', 'skipped', 'blocked'].indexOf(relianceState) >= 0 || ['failed', 'flagged', 'skipped'].indexOf(verificationState) >= 0 || ['failed', 'flagged'].indexOf(overall) >= 0 || redFlags.length > 0 || hasFailedCheck) return { label: 'Failed', tone: 'failed' };
@@ -10243,6 +10255,7 @@ function documentRequiredAction(doc, policy, state) {
   var label = (state && state.label) || 'Review required';
   var blockers = Array.isArray(doc && doc.document_reliance_blockers) ? doc.document_reliance_blockers : [];
   if (label === 'System issue') return 'Re-verify or escalate the file-access issue before relying on this document.';
+  if (label === 'Not applicable') return 'No verification checks apply to this document (e.g. the client declared it not applicable at pre-screening). It is not verified evidence and cannot support reliance; no officer action required unless case context changes.';
   if (label === 'Verified') return 'No officer action required unless case context changes or the document becomes stale.';
   if (label === 'Manual accepted') return 'Manual acceptance is recorded; retain rationale and audit evidence for decision review.';
   if (!policy) return 'Document type required before this evidence can support approval.';
@@ -10522,6 +10535,12 @@ function buildDocumentVerificationCoverage(doc, policy) {
   } else if (systemWarning === 'file_not_accessible') {
     runState = 'system_issue';
     summaryText = 'Verification incomplete — file could not be accessed.';
+  } else if (actualCheckCount > 0 && counts.skipped === actualCheckCount) {
+    // C0: every persisted check was skipped — a clean "no checks apply"
+    // outcome. Expected-check coverage does not apply, so this must not
+    // report as incomplete (or as complete).
+    runState = 'not_applicable';
+    summaryText = 'Verification not applicable — all checks were skipped for this document (e.g. declared not applicable at pre-screening).';
   } else if (!actualCheckCount) {
     var verificationState = String((doc && (doc.verification_state || doc.verification_status)) || '').toLowerCase();
     runState = ['pending', 'in_progress', 'running'].indexOf(verificationState) >= 0 ? 'pending' : 'not_run';
@@ -10550,25 +10569,29 @@ function renderVerificationCoverageChip(label, value, tone) {
 
 function renderVerificationCoverageSummary(doc, policy) {
   var coverage = buildDocumentVerificationCoverage(doc, policy);
+  // C0: for a not-applicable document the expected policy checks were never
+  // meant to run, so they are not "missing"/"not run" — reporting them as
+  // such would read as an incomplete verification.
+  var notApplicable = coverage.runState === 'not_applicable';
   var chips = [
     renderVerificationCoverageChip('Checks passed', coverage.counts.pass, 'pass'),
     renderVerificationCoverageChip('Checks failed', coverage.counts.fail, 'fail'),
     renderVerificationCoverageChip('Warnings', coverage.counts.warn, 'warn'),
     renderVerificationCoverageChip('Skipped', coverage.counts.skipped, 'pending'),
-    renderVerificationCoverageChip('Not run', coverage.missingExpectedChecks.length || coverage.counts.not_run, 'pending'),
+    renderVerificationCoverageChip('Not run', notApplicable ? 0 : (coverage.missingExpectedChecks.length || coverage.counts.not_run), 'pending'),
     renderVerificationCoverageChip('System-blocked', coverage.systemBlocked ? 'Yes' : 'No', coverage.systemBlocked ? 'system' : 'none')
   ];
   var noteBits = [
     'Expected checks: ' + coverage.expectedChecks.length,
     'Persisted checks: ' + coverage.actualCheckCount
   ];
-  if (coverage.missingExpectedChecks.length) {
+  if (coverage.missingExpectedChecks.length && !notApplicable) {
     noteBits.push('Missing expected checks: ' + coverage.missingExpectedChecks.join(', '));
   }
   return '<div class="verification-coverage-panel">' +
     '<div class="verification-coverage-header">' +
       '<div><div class="verification-coverage-title">Verification coverage</div><div class="verification-coverage-copy">' + escapeHtml(coverage.summaryText) + '</div></div>' +
-      renderRelianceBadge({ label: coverage.runState === 'completed' ? 'Complete' : (coverage.runState === 'pending' ? 'Pending' : coverage.runState === 'system_issue' ? 'System issue' : coverage.runState === 'manual' ? 'Manual review only' : 'Incomplete'), tone: coverage.runState === 'completed' ? 'verified' : coverage.runState === 'pending' ? 'pending' : coverage.runState === 'system_issue' ? 'system-issue' : coverage.runState === 'manual' ? 'manual-accepted' : 'review-required' }) +
+      renderRelianceBadge({ label: coverage.runState === 'completed' ? 'Complete' : (coverage.runState === 'pending' ? 'Pending' : coverage.runState === 'system_issue' ? 'System issue' : coverage.runState === 'manual' ? 'Manual review only' : coverage.runState === 'not_applicable' ? 'Not applicable' : 'Incomplete'), tone: coverage.runState === 'completed' ? 'verified' : coverage.runState === 'pending' ? 'pending' : coverage.runState === 'system_issue' ? 'system-issue' : coverage.runState === 'manual' ? 'manual-accepted' : coverage.runState === 'not_applicable' ? 'skipped' : 'review-required' }) +
     '</div>' +
     '<div class="verification-coverage-chips">' + chips.join('') + '</div>' +
     '<div class="verification-coverage-note">' + escapeHtml(noteBits.join(' · ')) + '</div>' +

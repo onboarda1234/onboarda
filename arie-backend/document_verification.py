@@ -1336,10 +1336,19 @@ def _aggregate(all_results: List[dict], confidence: float = None) -> dict:
         for r in inconclusive_results
     ]
 
+    skip_results = [r for r in all_results if r.get("result") == CheckStatus.SKIP]
+    all_skipped = len(skip_results) == len(all_results)
+
     if fail_results:
         overall = "flagged"
     elif warn_results or inconclusive_results:
         overall = "flagged"
+    elif all_skipped:
+        # C0: every check was skipped (e.g. licence gate — client declared no
+        # licence, or a retired document type). Nothing was verified, so the
+        # document must not present as "verified" / reliance-ready. "skipped"
+        # is the established document-level state (see verification_state.py).
+        overall = "skipped"
     else:
         overall = "verified"
 
@@ -1347,7 +1356,7 @@ def _aggregate(all_results: List[dict], confidence: float = None) -> dict:
         n = len([r for r in all_results if r.get("result") != CheckStatus.SKIP])
         confidence = len(pass_results) / n if n else 0.0
 
-    return {
+    result = {
         "checks": all_results,
         "overall": overall,
         "confidence": round(confidence, 3),
@@ -1355,6 +1364,13 @@ def _aggregate(all_results: List[dict], confidence: float = None) -> dict:
         "warnings": warnings,
         "engine_version": "layered_v1",
     }
+    if all_skipped:
+        # Marker for renderers: this is a clean "no checks apply" outcome,
+        # distinct from an operational skip (e.g. Agent 1 disabled, which
+        # stores checks: [] and system_warning instead).
+        result["not_applicable"] = True
+        result["skipped_reason"] = skip_results[0].get("message", "") if skip_results else ""
+    return result
 
 
 # ── Main entry point ───────────────────────────────────────────────
@@ -1730,4 +1746,8 @@ def to_legacy_result(layered_result: dict) -> dict:
         "retryable": layered_result.get("retryable", False),
         "extracted_fields": layered_result.get("extracted_fields", {}),
         "execution_timing_ms": layered_result.get("execution_timing_ms", {}),
+        # C0: preserved so renderers can distinguish a clean "no checks apply"
+        # outcome from an operational skip.
+        "not_applicable": layered_result.get("not_applicable", False),
+        "skipped_reason": layered_result.get("skipped_reason", ""),
     }
