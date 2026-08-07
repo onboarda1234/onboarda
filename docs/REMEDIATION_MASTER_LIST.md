@@ -778,6 +778,28 @@ failures, e.g. a setup-phase guard step that annotates the run, so a red board
 means "tests failed" and nothing else; (b) record in the release runbook that a
 stuck queued run must be recovered with `workflow_dispatch`, not `rerun_*`.
 
+### R930-001 — residual "skipped" state copy for not-applicable documents (accepted at C0, LOW)
+
+C0 (Section A audit P0) made all-skip documents persist as `skipped` and render
+"Not applicable" on the Application Review documents surface. Two independent
+reviews accepted, and this row records, the residual copy inconsistencies of
+reusing the shared `skipped` state rather than minting a new one:
+
+- The generic `verification_state` label ("Verification skipped - manual review
+  required") still appears for these documents in the BO document history log,
+  the enhanced-requirement verification badge, periodic-review labels, and the
+  client portal document list — mildly wrong for a document that requires
+  nothing. The Application Review card, coverage panel, blocks field, panel
+  counts and memo were reconciled in C0 itself.
+- Intended fail-closed deltas, recorded as accepted behaviour: accepting a
+  skipped doc requires admin/SCO + reason; change-management evidence with
+  status skipped stays blocked pending governed acceptance; periodic-review
+  linked docs are not auto-ready.
+
+⬜ pending — either a `not_applicable`-aware label override where
+`verification_state_payload` consumers have the results JSON in hand, or a
+dedicated state; needs the portal truth-language guards re-run either way.
+
 ---
 
 Section F itself is **functioning as designed** and is retained: it tracks

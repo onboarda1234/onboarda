@@ -475,7 +475,11 @@ def mark_verification_job_succeeded(
     transition_document: bool = True,
 ) -> Dict[str, Any]:
     status = normalize_verification_state(verification_status)
-    if status not in ("verified", "flagged", "failed"):
+    # C0: "skipped" is a legitimate terminal outcome (all checks skipped — e.g.
+    # licence gate short-circuit). Keep this allow-list aligned with the
+    # worker's TERMINAL_DOCUMENT_STATES; rejecting it here made the worker's
+    # failure path overwrite an already-correct document row as "failed".
+    if status not in ("verified", "flagged", "failed", "skipped"):
         raise ValueError(f"Invalid terminal verification status: {verification_status}")
     db.execute(
         """

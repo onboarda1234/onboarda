@@ -4203,6 +4203,7 @@ def init_db():
         sync_ai_checks_from_seed,
         normalize_legacy_doc_types,
         repair_document_current_versions,
+        repair_all_skip_verified_documents,
     )
     logger.info("startup: entering db_init_db (schema + pool)")
     db_init_db()
@@ -4221,6 +4222,12 @@ def init_db():
         repair_document_current_versions(db)
         db.commit()
         logger.info("startup: completed repair_document_current_versions")
+        # C0 backfill: pre-fix rows persisted as 'verified' with an all-skip
+        # check list stop presenting as verified evidence.
+        logger.info("startup: entering repair_all_skip_verified_documents")
+        repair_all_skip_verified_documents(db)
+        db.commit()
+        logger.info("startup: completed repair_all_skip_verified_documents")
         # Upsert canonical ai_checks on every startup so stale rows on
         # existing databases (staging/prod) are always brought up to date.
         logger.info("startup: entering sync_ai_checks_from_seed")
@@ -13584,7 +13591,19 @@ class DocumentVerifyHandler(BaseHandler):
                 })
                 all_passed = False
 
-        status = STATE_VERIFIED if all_passed else STATE_FLAGGED
+        # C0: a document whose checks were ALL skipped (licence gate short-circuit,
+        # retired document type) has verified nothing and must not persist as
+        # "verified". Map it to the established "skipped" state instead. Guarded on
+        # a non-empty check list so the P0-5 no-pass-without-evidence path
+        # (empty checks → flagged) is unchanged.
+        _all_checks_skipped = bool(checks) and all(
+            str((c or {}).get("result") or "").lower() in ("skip", "skipped")
+            for c in checks
+        )
+        if _all_checks_skipped:
+            status = STATE_SKIPPED
+        else:
+            status = STATE_VERIFIED if all_passed else STATE_FLAGGED
 
         # Finding 9: Propagate ai_source so mock/degraded results are explicit
         ai_source = "live"
@@ -13620,13 +13639,18 @@ class DocumentVerifyHandler(BaseHandler):
             )
             layered_results = {"checks": checks, "overall": status}
         checks = _normalize_verification_checks_payload(checks)
+        # C0: a skipped outcome verified nothing, so its results carry a
+        # skipped_at timestamp and no verified_at (parity with the
+        # agent-disabled skip payload above).
+        _completed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         layered_results.update({
             "overall": status,
             "checks": checks,
             "ai_source": ai_source,
             "file_source": file_source,
             "system_warning": system_warning,
-            "verified_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "verified_at": None if status == STATE_SKIPPED else _completed_at,
+            "skipped_at": _completed_at if status == STATE_SKIPPED else None,
             "sanctions_screening": sanctions_result,
             "doc_category": doc_category,
             "subject_id": doc.get("person_id") or (app.get("id") if app else ""),
@@ -13661,9 +13685,12 @@ class DocumentVerifyHandler(BaseHandler):
 
         # EX-05/PR5: Log final document verification with before/after state.
         _doc_after = _document_verification_transition_state(doc, status, checks_count=len(checks))
+        # C0: a skipped outcome verified nothing, so it carries no verified_at
+        # timestamp (parity with the agent-disabled skip path above).
+        _verified_at_sql = "NULL" if status == STATE_SKIPPED else "datetime('now')"
         db.execute(
             "UPDATE documents SET verification_status=?, verification_results=?, "
-            "verified_at=datetime('now'), expiry_date=?, valid_until=? WHERE id=?",
+            f"verified_at={_verified_at_sql}, expiry_date=?, valid_until=? WHERE id=?",
             (
                 status,
                 results,
