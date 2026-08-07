@@ -71,6 +71,7 @@ def _reverify_rendering_functions() -> str:
     return "\n\n".join(
         _extract_function(html, name)
         for name in [
+            "documentChecksAllSkipped",
             "documentReadyDisplayState",
             "documentHasUploadedFile",
             "documentCanShowReverifyAction",

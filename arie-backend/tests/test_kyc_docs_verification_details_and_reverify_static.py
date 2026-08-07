@@ -101,6 +101,7 @@ def test_verified_badge_uses_authoritative_document_state_and_other_status_label
         _extract_function(html, name)
         for name in [
             "relianceBadgeClass",
+            "documentChecksAllSkipped",
             "documentReadyDisplayState",
             "documentRelianceDisplayState",
             "renderRelianceBadge",
@@ -338,6 +339,7 @@ def test_reverify_visibility_uses_existing_handler_for_eligible_uploaded_documen
     functions = "\n\n".join(
         _extract_function(html, name)
         for name in [
+            "documentChecksAllSkipped",
             "documentReadyDisplayState",
             "documentHasUploadedFile",
             "documentCanShowReverifyAction",
