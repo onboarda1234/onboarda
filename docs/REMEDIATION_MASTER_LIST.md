@@ -720,6 +720,45 @@ that routes to the relevant tab.
 
 ---
 
+## Review-found items (screening-stream PRs #896 / #901 / #932, recorded 2026-08-04)
+
+Raised by the two-reviewer gates on the screening-stream fixes
+([#896](https://github.com/onboarda1234/onboarda/pull/896) triage-count
+reconciliation + fixture text-pattern bound + seeder guard ·
+[#901](https://github.com/onboarda1234/onboarda/pull/901) zero-hit card ·
+[#932](https://github.com/onboarda1234/onboarda/pull/932) Agent 3 per-subject
+scoping — all merged + staging-deployed). Each was deliberately deferred to
+keep its PR scoped; none blocks pilot; none re-litigates the shipped fixes.
+Excluded from the 2026-07-26 roll-up (not recomputed).
+
+| ID | Sev | Finding | Status |
+|----|:---:|---------|--------|
+| R896-001 | LOW | Queue status cell: an absent/empty `screening_mode` renders no provenance chip, so the row reads as a clean live "Clear" — while `screeningModeBadge` itself treats empty mode as "⚠ Unverified — Blocks Approval". Display-layer only; server approval gates enforce | ⬜ pending — drop the `mode &&` short-circuit; add an absent-mode fixture (none exists) |
+| R896-002 | LOW | `_load_monitoring_evidence_batch` swallows DB errors (`except Exception: return {}`) with no metrics flag — an evidence-load outage is indistinguishable from a genuinely empty evidence set. Canonical states still fail closed | ⬜ pending — add an `evidence_load_failed` metrics signal + guard test for the swallowed branch |
+| R896-003 | LOW | Screening-queue handler leaks its DB connection when the builder raises (`db.close()` not in `try/finally`) | ⬜ pending |
+| R896-004 | LOW | Resolver contract gap: a bare `terminal: True` with **no provenance token** resolves to canonical "clear" without proven live provenance. Unreachable from the queue builder (always injects provider mode); pinned by `test_bare_terminal_without_provenance_is_a_known_resolver_gap` so drift is caught by a test, not an officer | ⬜ pending — close at resolver level before production sign-off |
+| R896-005 | LOW | Over-cap subjects: the server triage block is computed over the capped evidence slice while the review page may swap cards to the uncapped set (`SCREENING_HIT_ITEMS_FULL`) — tile/header counts can diverge from rendered cards on a >200-evidence application. Noted in code beside the header logic | ⬜ pending — recompute triage from the swapped items, or return a recomputed triage block from the hit-disposition endpoint |
+| R896-006 | MED | QA seeder can write to the **pilot** DB with one unconfirmed CLI run (`staging` is the pilot stack; allow-list correctly admits it). Accepted-residual recorded in `seed_screening_qa_fixtures.py`; the stronger `ALLOW_FIXTURE_SEED=1` + `--confirm` pattern already exists in `fixtures/cli.py` and changes the operator runbook contract, so it was tracked rather than done silently | ⬜ pending — adopt the fixtures/cli.py gate for the staging branch + runbook update |
+| R896-007 | LOW | Client-side "Test / Smoke" badge (`TEST_SMOKE_TEXT_PATTERNS`, `arie-backoffice.html`) still regex-matches company names **unbounded** by the vintage cutoff — a real post-cutoff applicant named e.g. "Smoke House Trading" renders with a red Test/Smoke badge. Badging only; no row hiding | ⬜ pending — gate the badge on the same cutoff or a server-supplied flag |
+| R896-008 | LOW | `screening_queue_module_card.md` residual line is stale: it records the pre-cutoff false-exclusion residual as "pending founder disposition"; founder confirmed 2026-07-28 that staging holds no real clients, so the residual is nil and the heuristic arm + cutoff become deletable | ⬜ pending — one-line doc correction |
+| R901-001 | LOW | Server still ships `evidence_status`/`evidence_quality_label = "unavailable"` for zero-hit subjects (`_screening_evidence_quality` returns it from `if not items`, conflating "clean, nothing to link" with "could not fetch"). #901 fixed display only; the client override is reason-gated so a real gap is never softened, and no approval gate reads the label | ⬜ pending — fix at source (one branch corrects every consumer); feeds `_memo_screening_current_mismatch`, so it needs its own pass |
+| R901-002 | LOW | `screeningNoProviderHitsNote` (the #874 note) fires on a looser predicate than `screeningQueueIsTerminalNoHits` (status family only — no hit-count / cap / items guard), so two non-equivalent tests assert "no matches" on the same card | ⬜ pending — re-key the note on the shared detector |
+| R932-001 | MED | Agent 3 interpretation staleness is invisible: `_agent3_latest_screening_interpretation` returns the newest completed run unconditionally and nothing compares `generated_at` to the subject's `screened_at` — after a re-screen adds hits, a card can still show a stale "No Agent 3 findings for X" (guarded only by "in this interpretation" wording + the caption date) | ⬜ pending — stamp the screening-report hash at generation; render a "predates latest screening — refresh" hint |
+| R932-002 | LOW | A subject card with a **blank** name falls into app-wide narrative mode (per-sentence name prefixes, no scope label) instead of an error state — reachable only for a draft/malformed party record | ⬜ pending — treat a blank card name as an error state |
+| R932-003 | LOW | Entity-card attribution (pre-existing): legacy flat report pools (`sanctions_results`/`pep_results`/…) are collected with `subject_name` = company name, so individual-person rows in those pools scope onto the entity card under "scoped to ‹Company›" | ⬜ pending — server-side attribution for legacy flat pools |
+
+Operator actions and founder-parked deferrals from the same stream (no
+register row existed; recorded here so they are not lost between sessions):
+
+| ID | Sev | Item | Status |
+|----|:---:|------|--------|
+| SQ-OPS-001 | — | `COMPLYADVANTAGE_CONSOLE_PROFILE_URL_TEMPLATE` secret unset — the #857 CA-console deep-link for sourceless watchlist hits stays hidden until an operator sets it (Secrets Manager / env) | ⬜ operator action |
+| SQ-OPS-002 | — | `deploy-staging.yml` fragility: the verification-worker `services-stable` wait (10 min) FAILS the deploy hard on a slow rollout (observed 10m36s flake, 2026-07-25) while the app-service wait only warns — inconsistent failure semantics for the same condition | ⬜ pending — align the two waits or extend the worker window |
+| SRP-DEF-001 | — | Queue↔detail freshness divergence: queue "stale" is a forced QA state while the detail panel derives freshness from age — same subject can read differently on the two surfaces | ⏸ parked on founder design decision (which signal is canonical) |
+| SRP-DEF-002 | — | Adverse-media categorized view (Phase 2 UI + PDF regroup): paused on founder instruction ("don't change the UI for the time being"); Phase 1 backend taxonomy passthrough held as a saved patch. The 2026-08 buyer-style compliance feedback ("how risky are these findings") is best served by resuming this via provider-native `match_category`/`risk_indicator`, not an invented risk tier | ⏸ paused — resume on founder direction |
+
+---
+
 ## Optional / Post-Production Modernization (NOT required for pilot or first production cut; excluded from roll-up)
 
 > Elective architecture/scale/enterprise upgrades for after production launch.
