@@ -707,6 +707,77 @@ shape is instead to **enrich the app dict upstream** with a resolved
 **Out of scope:** reinstating `pep_enhanced_monitoring_flag`. The fix targets the
 automated control, not the retired manual task.
 
+### R929-002 — `container-security.yml` required check cannot complete on a same-repo PR branch
+
+| Field | Value |
+|---|---|
+| Severity | MED — a required security check that structurally cannot pass |
+| Found | PR #937 release, 2026-08-06 |
+
+`.github/workflows/container-security.yml` triggers on **both** `pull_request`
+and `push`. A push to a same-repo PR branch fires both events, producing two
+competing runs of `exact-sha-container-scan` for the same commit. The workflow's
+`concurrency` group is
+`container-security-${{ github.event.pull_request.number || github.ref }}` with
+`cancel-in-progress: true`, so the two runs resolve to *different* group keys and
+both compete for runners; under the runner contention this repo already
+documents, each sits queued and is then cancelled.
+
+Observed on PR #937: the check was cancelled on three consecutive attempts, each
+after ~15 minutes queued, and never produced a verdict. The workflow's own
+comment states the 30-minute timeout exists so *"a stalled scan cannot leave a
+PR's required check pending"*, i.e. it is treated as required — so the failure
+mode is a required security gate that can never go green on a same-repo branch.
+PR #937 was merged with this check red; the image was still scanned, because
+`deploy-staging.yml` independently runs `Gate exact image vulnerability findings`
+and `Gate exact image OS and Python findings` against the exact pushed digest
+(both passed). The scan also completed successfully on `main` post-merge in 1m 4s
+(Container Security run #213), which corroborates that only the PR-branch path
+is affected.
+
+⬜ pending — drop the `push:` trigger (the `pull_request` event already covers
+PR branches), or key the concurrency group so the two events cannot collide.
+Verify afterwards that a same-repo PR branch produces exactly one run of this
+check.
+
+### R929-003 — CI failure signal is ambiguous, and stuck runs cannot be cleared by re-running
+
+| Field | Value |
+|---|---|
+| Severity | LOW-MED — operational; cost several hours on the #937 release |
+| Found | PR #937 release, 2026-08-06/07 |
+
+Two related operability problems, both observed repeatedly on one release:
+
+**(a) Infrastructure failure and genuine regression are indistinguishable at the
+PR level.** A GitHub action-download outage (`Failed to resolve action download
+info. Error: Service Unavailable`), runner starvation, and a real test failure
+all surface identically as a red `protected-module-regression`. Telling them
+apart requires opening the job log and checking whether the failure timestamp
+precedes checkout. On a compliance platform where a red protected-module check
+is meant to be a hard stop, that ambiguity erodes the signal — the risk is
+habituation to red boards.
+
+**(b) Re-running a stuck queued run does not recover it; a fresh dispatch does.**
+When a job fails to acquire a runner (`runner_id: 0`, empty runner name, ~15 min
+queued, then cancelled), `rerun_workflow_run` and `rerun_failed_jobs` re-enter
+the same stuck slot and fail the same way. On #937 four re-runs achieved nothing
+over several hours; a single `workflow_dispatch` on `deploy-staging.yml` started
+immediately and completed successfully. The stuck run additionally could not be
+cancelled — the API returns `409 Cannot cancel a workflow re-run that has not yet
+queued` — so it cannot be cleaned up either.
+
+Note the deploy pipeline behaved *correctly* throughout: `deploy` is gated
+`needs: ci`, so when `docker-validate` was cancelled without acquiring a runner,
+the deploy was skipped rather than shipping an unverified build. Fail-closed is
+the right posture; the defect is the signal quality and the recovery path, not
+the gating.
+
+⬜ pending — (a) surface pre-checkout/infra failures distinctly from test
+failures, e.g. a setup-phase guard step that annotates the run, so a red board
+means "tests failed" and nothing else; (b) record in the release runbook that a
+stuck queued run must be recovered with `workflow_dispatch`, not `rerun_*`.
+
 ---
 
 Section F itself is **functioning as designed** and is retained: it tracks
