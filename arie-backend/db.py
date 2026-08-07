@@ -7674,6 +7674,78 @@ def repair_document_current_versions(db: DBConnection):
     _ensure_document_current_slot_unique_index(db)
 
 
+def repair_all_skip_verified_documents(db: DBConnection) -> int:
+    """C0 backfill: documents persisted as 'verified' whose stored checks were
+    ALL skipped verified nothing (licence gate short-circuit, retired doc
+    types) — the pre-C0 aggregation mislabelled them. Re-mark them 'skipped'
+    with verified_at NULL so they stop presenting as verified evidence.
+
+    The stored verification_results JSON is deliberately left verbatim: it is
+    the audit record of what the engine produced at the time. Renderers key
+    "Not applicable" off the persisted all-skip check list, so no JSON rewrite
+    is needed. Idempotent (repaired rows no longer match the WHERE clause);
+    per-row parse failures are skipped rather than aborting startup.
+    """
+    try:
+        rows = db.execute(
+            "SELECT id, verification_results FROM documents "
+            "WHERE verification_status='verified' "
+            "AND verification_results LIKE '%skip%'"
+        ).fetchall()
+    except Exception as e:
+        logger.warning("C0 all-skip repair scan failed: %s", e)
+        return 0
+
+    repaired = []
+    for row in rows:
+        try:
+            results = json.loads(row["verification_results"] or "{}")
+        except Exception:
+            continue
+        if not isinstance(results, dict):
+            continue
+        checks = results.get("checks")
+        if not isinstance(checks, list) or not checks:
+            continue
+
+        def _check_result(check):
+            if not isinstance(check, dict):
+                return ""
+            return str(check.get("result") or check.get("status") or "").strip().lower()
+
+        if all(_check_result(c) in ("skip", "skipped") for c in checks):
+            repaired.append(row["id"])
+
+    for doc_id in repaired:
+        db.execute(
+            "UPDATE documents SET verification_status='skipped', verified_at=NULL WHERE id=?",
+            (doc_id,),
+        )
+
+    if repaired:
+        detail = json.dumps({
+            "event": "documents.all_skip_verified_repair",
+            "count": len(repaired),
+            "document_ids": repaired,
+            "reason": "verification_status='verified' with an all-skip check list "
+                      "predates the C0 fix; re-marked 'skipped' (not applicable).",
+        }, sort_keys=True, default=str)
+        try:
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) "
+                "VALUES (?,?,?,?,?,?,?)",
+                ("system", "system", "system", "documents.all_skip_verified_repair",
+                 "Documents", detail, ""),
+            )
+        except Exception as e:
+            logger.warning("C0 all-skip repair audit insert failed: %s", e)
+        logger.info(
+            "C0 repair: re-marked %d all-skip 'verified' document(s) as 'skipped'",
+            len(repaired),
+        )
+    return len(repaired)
+
+
 _PR20_BLOCKED_BACKFILL_MARKER = "pr20_backfill_compliance_memos_blocked"
 
 

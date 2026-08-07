@@ -1570,9 +1570,48 @@ def build_compliance_memo(app, directors, ubos, documents):
             _screening_completion_phrase + " — live terminal screening required before approval reliance"
         )
     adverse_media_context = _screening_adverse_media_context(screening_report, prescreening_data)
-    has_documents = len(documents) > 0
-    verified_docs = [d for d in documents if d.get("verification_status") == "verified"]
-    pending_docs = [d for d in documents if d.get("verification_status") != "verified"]
+
+    def _is_not_applicable_document(doc):
+        """C0: a document whose checks were ALL skipped (licence gate
+        short-circuit, retired doc type) is not verified evidence AND not an
+        outstanding document — it is excluded from the memo's documentation
+        calculus entirely. Keyed on the persisted evidence (marker or all-skip
+        check list) so historical rows count too. An operational skip
+        (Agent 1 disabled — checks: []) stays in pending_docs: that document
+        still requires manual review."""
+        if str(doc.get("verification_status") or "").lower() not in ("skipped", "verified"):
+            return False
+        results = doc.get("verification_results")
+        if isinstance(results, str):
+            try:
+                results = json.loads(results or "{}")
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return False
+        if not isinstance(results, dict):
+            return False
+        if results.get("not_applicable") is True:
+            return True
+        checks = results.get("checks")
+        if not isinstance(checks, list) or not checks:
+            return False
+        return all(
+            str((c or {}).get("result") or (c or {}).get("status") or "").strip().lower()
+            in ("skip", "skipped")
+            for c in checks
+            if isinstance(c, dict) or c is None
+        )
+
+    applicable_documents = [d for d in documents if not _is_not_applicable_document(d)]
+    submitted_document_count = len(documents)
+    # From here on the memo's documentation calculus (verified/pending counts,
+    # confidence, completeness, narrative and coverage strings) operates on
+    # applicable documents only — a not-applicable document is neither verified
+    # evidence nor an outstanding item. The raw upload count is preserved above
+    # for metadata.document_count.
+    documents = applicable_documents
+    has_documents = len(applicable_documents) > 0
+    verified_docs = [d for d in applicable_documents if d.get("verification_status") == "verified"]
+    pending_docs = [d for d in applicable_documents if d.get("verification_status") != "verified"]
     documentation_complete = has_documents and not pending_docs
     now_ts = datetime.now().isoformat()
     country = app["country"] or "Information not provided"
@@ -2552,7 +2591,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             "supervisor_status": "pending",
             "ai_source": "deterministic" if not is_demo() else "demo",
             "approval_recommendation": decision,
-            "document_count": len(documents),
+            "document_count": submitted_document_count,
             "verified_document_count": len(verified_docs),
             "pending_document_count": len(pending_docs),
             "documentation_complete": documentation_complete,

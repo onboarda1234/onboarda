@@ -9938,13 +9938,14 @@ function buildKycDocumentPanelSummary(app, summary) {
     var coverage = buildDocumentVerificationCoverage(doc, policy);
     var label = String((state && state.label) || '').toLowerCase();
     if (label === 'verified' || label === 'manual accepted') counts.passed += 1;
+    else if (label === 'not applicable') { /* C0: counted via Skipped below — neither warned nor attention */ }
     else if (label === 'pending verification') counts.pending += 1;
     else if (label === 'system issue') counts.systemBlocked += 1;
     else if (label === 'failed' || label === 'expired' || label === 'stale' || label === 'rejected') counts.failed += 1;
     else counts.warned += 1;
     if (coverage.runState === 'not_run') counts.notRun += 1;
     if (coverage.counts.skipped > 0) counts.skipped += 1;
-    if (label !== 'verified' && label !== 'manual accepted') counts.officerAttention += 1;
+    if (label !== 'verified' && label !== 'manual accepted' && label !== 'not applicable') counts.officerAttention += 1;
   });
   var parts = [
     'Required ' + summary.requiredCount,
@@ -10188,16 +10189,36 @@ function relianceBadgeClass(label) {
   return normalized || 'review-required';
 }
 
+function documentChecksAllSkipped(doc) {
+  // C0: true when the persisted evidence shows nothing was verified — either
+  // the backend not_applicable marker, or a non-empty check list whose every
+  // entry is skip/skipped. Keyed on evidence (not the status column) so
+  // pre-backfill historical rows stored as "verified" are covered too. An
+  // operational skip (Agent 1 disabled) stores checks: [] and never matches.
+  var results = (doc && doc.verification_results) || {};
+  if (results && results.not_applicable === true) return true;
+  var checks = Array.isArray(results.checks) ? results.checks : [];
+  if (!checks.length) return false;
+  return checks.every(function(check) {
+    var result = String((check && (check.result || check.status)) || '').toLowerCase();
+    return result === 'skip' || result === 'skipped';
+  });
+}
+
 function documentReadyDisplayState(doc) {
   if (!doc) return null;
   var reviewStatus = String(doc.review_status || '').toLowerCase();
   var relianceState = String(doc.document_reliance_state || '').toLowerCase();
   var relianceStatus = String(doc.document_reliance_status || '').toLowerCase();
   var verificationState = String(doc.verification_state || doc.verification_status || '').toLowerCase();
+  // C0: a status of "verified" earned by an all-skip check list is the exact
+  // misrepresentation this fix removes — never surface it as Verified, even
+  // for historical rows the startup backfill has not reached.
+  var allSkipped = documentChecksAllSkipped(doc);
   if (relianceState === 'manual_accepted') return { label: 'Manual accepted', tone: 'manual-accepted' };
-  if (relianceState === 'verified' || verificationState === 'verified' || doc.verification_success === true) return { label: 'Verified', tone: 'verified' };
+  if (relianceState === 'verified' || ((verificationState === 'verified' || doc.verification_success === true) && !allSkipped)) return { label: 'Verified', tone: 'verified' };
   if (['accepted', 'approved'].indexOf(reviewStatus) >= 0) return { label: 'Manual accepted', tone: 'manual-accepted' };
-  if (['ready', 'verified'].indexOf(relianceStatus) >= 0) return { label: 'Verified', tone: 'verified' };
+  if (['ready', 'verified'].indexOf(relianceStatus) >= 0 && !allSkipped) return { label: 'Verified', tone: 'verified' };
   return null;
 }
 
@@ -10226,14 +10247,11 @@ function documentRelianceDisplayState(doc, policy) {
   var readyState = documentReadyDisplayState(doc);
   if (readyState) return readyState;
   // C0: a clean "no checks apply" outcome (licence gate short-circuit, retired
-  // doc type) is Not applicable — never Verified, never Failed. Guarded on the
-  // backend marker or an all-skip persisted check list so the operational
+  // doc type) is Not applicable — never Verified, never Failed. Keyed on the
+  // persisted evidence (backend marker or non-empty all-skip check list), so
+  // historical rows still stored as "verified" are covered; the operational
   // Agent-1-disabled skip (checks: []) keeps its existing treatment below.
-  var allChecksSkipped = checks.length > 0 && checks.every(function(check) {
-    var result = String((check && (check.result || check.status)) || '').toLowerCase();
-    return result === 'skip' || result === 'skipped';
-  });
-  if ((verificationState === 'skipped' || overall === 'skipped') && (results.not_applicable === true || allChecksSkipped)) {
+  if (documentChecksAllSkipped(doc)) {
     return { label: 'Not applicable', tone: 'skipped' };
   }
   if (verificationState === 'expired' || relianceState === 'expired' || (doc && (doc.is_expired === true || doc.expired === true))) return { label: 'Expired', tone: 'failed' };
@@ -10350,6 +10368,9 @@ function documentBlocksDisplay(doc, policy, state, expectedSlot) {
   if (!doc && expectedSlot) return 'Approval';
   var label = (state && state.label) || '';
   if (label === 'Verified' || label === 'Manual accepted') return 'None';
+  // C0: a not-applicable document blocks nothing — showing the policy's gate
+  // text here would contradict the badge and the required-action copy.
+  if (label === 'Not applicable') return 'None';
   var gate = String((policy && policy.gateBehavior) || '').toLowerCase();
   if (gate.indexOf('change completion') >= 0) return 'Change completion';
   if (gate.indexOf('edd closure') >= 0) return 'EDD closure';
@@ -10521,7 +10542,16 @@ function buildDocumentVerificationCoverage(doc, policy) {
   var runState = 'completed';
   var summaryText = 'Verification complete — persisted checks cover the expected policy checks.';
   var readyState = documentReadyDisplayState(doc);
-  if (!policy && readyState) {
+  if (documentChecksAllSkipped(doc)) {
+    // C0: every persisted check was skipped — a clean "no checks apply"
+    // outcome. Expected-policy coverage does not apply, so this must not
+    // report as incomplete (or complete, or manual-review-only). Strictly
+    // keyed on raw skip results / the backend marker — bucketed counts also
+    // fold pending and warn-with-skip-wording into "skipped" and must not
+    // trigger this state.
+    runState = 'not_applicable';
+    summaryText = 'Verification not applicable — all checks were skipped for this document (e.g. declared not applicable at pre-screening).';
+  } else if (!policy && readyState) {
     runState = readyState.label === 'Manual accepted' ? 'manual' : 'completed';
     summaryText = readyState.label === 'Manual accepted'
       ? 'Manual acceptance is recorded; automated policy coverage is not required for this accepted document.'
@@ -10535,12 +10565,6 @@ function buildDocumentVerificationCoverage(doc, policy) {
   } else if (systemWarning === 'file_not_accessible') {
     runState = 'system_issue';
     summaryText = 'Verification incomplete — file could not be accessed.';
-  } else if (actualCheckCount > 0 && counts.skipped === actualCheckCount) {
-    // C0: every persisted check was skipped — a clean "no checks apply"
-    // outcome. Expected-check coverage does not apply, so this must not
-    // report as incomplete (or as complete).
-    runState = 'not_applicable';
-    summaryText = 'Verification not applicable — all checks were skipped for this document (e.g. declared not applicable at pre-screening).';
   } else if (!actualCheckCount) {
     var verificationState = String((doc && (doc.verification_state || doc.verification_status)) || '').toLowerCase();
     runState = ['pending', 'in_progress', 'running'].indexOf(verificationState) >= 0 ? 'pending' : 'not_run';

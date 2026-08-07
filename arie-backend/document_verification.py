@@ -1336,7 +1336,13 @@ def _aggregate(all_results: List[dict], confidence: float = None) -> dict:
         for r in inconclusive_results
     ]
 
-    skip_results = [r for r in all_results if r.get("result") == CheckStatus.SKIP]
+    # Case-insensitive and alias-tolerant ("skip"/"skipped") so this predicate
+    # can never disagree with the server-side persistence mapping, even for
+    # result strings that arrived from an external producer.
+    skip_results = [
+        r for r in all_results
+        if str(r.get("result") or "").strip().lower() in ("skip", "skipped")
+    ]
     all_skipped = len(skip_results) == len(all_results)
 
     if fail_results:

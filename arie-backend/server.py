@@ -4203,6 +4203,7 @@ def init_db():
         sync_ai_checks_from_seed,
         normalize_legacy_doc_types,
         repair_document_current_versions,
+        repair_all_skip_verified_documents,
     )
     logger.info("startup: entering db_init_db (schema + pool)")
     db_init_db()
@@ -4221,6 +4222,12 @@ def init_db():
         repair_document_current_versions(db)
         db.commit()
         logger.info("startup: completed repair_document_current_versions")
+        # C0 backfill: pre-fix rows persisted as 'verified' with an all-skip
+        # check list stop presenting as verified evidence.
+        logger.info("startup: entering repair_all_skip_verified_documents")
+        repair_all_skip_verified_documents(db)
+        db.commit()
+        logger.info("startup: completed repair_all_skip_verified_documents")
         # Upsert canonical ai_checks on every startup so stale rows on
         # existing databases (staging/prod) are always brought up to date.
         logger.info("startup: entering sync_ai_checks_from_seed")
@@ -13632,13 +13639,18 @@ class DocumentVerifyHandler(BaseHandler):
             )
             layered_results = {"checks": checks, "overall": status}
         checks = _normalize_verification_checks_payload(checks)
+        # C0: a skipped outcome verified nothing, so its results carry a
+        # skipped_at timestamp and no verified_at (parity with the
+        # agent-disabled skip payload above).
+        _completed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         layered_results.update({
             "overall": status,
             "checks": checks,
             "ai_source": ai_source,
             "file_source": file_source,
             "system_warning": system_warning,
-            "verified_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "verified_at": None if status == STATE_SKIPPED else _completed_at,
+            "skipped_at": _completed_at if status == STATE_SKIPPED else None,
             "sanctions_screening": sanctions_result,
             "doc_category": doc_category,
             "subject_id": doc.get("person_id") or (app.get("id") if app else ""),
