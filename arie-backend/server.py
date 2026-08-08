@@ -19190,7 +19190,7 @@ def _directors_ubos_report_cte():
                     ELSE g.ownership_pct
                 END AS ownership_pct,
                 CASE WHEN g.is_ubo = 1 AND g.ownership_pct IS NULL THEN 1 ELSE 0 END AS ownership_missing,
-                CASE WHEN g.is_ubo = 1 AND COALESCE(g.ownership_pct, 0) > 25 THEN 1 ELSE 0 END AS ownership_above_25,
+                CASE WHEN g.is_ubo = 1 AND COALESCE(g.ownership_pct, 0) > 20 THEN 1 ELSE 0 END AS ownership_above_20,
                 CASE WHEN g.is_ubo = 1 AND COALESCE(g.ownership_pct, 0) > 50 THEN 1 ELSE 0 END AS ownership_above_50,
                 CASE WHEN g.is_ubo = 1 AND COALESCE(g.ownership_pct, 0) > 75 THEN 1 ELSE 0 END AS ownership_above_75,
                 CASE
@@ -19601,8 +19601,8 @@ def _directors_ubos_enrich_record(raw_row):
         record["risk_indicator"] = "UBO ownership above 75%"
     elif record.get("ownership_above_50"):
         record["risk_indicator"] = "UBO ownership above 50%"
-    elif record.get("ownership_above_25"):
-        record["risk_indicator"] = "UBO ownership above 25%"
+    elif record.get("ownership_above_20"):
+        record["risk_indicator"] = "UBO ownership above 20%"
     elif record.get("failed_document_verification"):
         record["risk_indicator"] = "Failed document verification"
     elif record.get("missing_documents"):
@@ -19634,7 +19634,7 @@ def _directors_ubos_enrich_record(raw_row):
         record.pop(internal_key, None)
     for bool_key in (
         "dob_missing", "missing_nationality", "ownership_missing",
-        "ownership_above_25", "ownership_above_50", "ownership_above_75",
+        "ownership_above_20", "ownership_above_50", "ownership_above_75",
         "missing_documents", "expired_documents", "failed_document_verification",
         "pending_document_verification", "missing_pep_declaration",
         "stale_screening", "unresolved_screening_hit", "missing_screening_status",
@@ -19689,7 +19689,7 @@ class DirectorsUBOsReportHandler(BaseHandler):
                     SUM(CASE WHEN adverse_media_status IN ('match','review') THEN 1 ELSE 0 END) AS adverse_media_count,
                     SUM(CASE WHEN missing_nationality = 1 THEN 1 ELSE 0 END) AS missing_nationality_count,
                     SUM(CASE WHEN dob_missing = 1 THEN 1 ELSE 0 END) AS missing_dob_count,
-                    SUM(CASE WHEN ownership_above_25 = 1 THEN 1 ELSE 0 END) AS ownership_above_25_count,
+                    SUM(CASE WHEN ownership_above_20 = 1 THEN 1 ELSE 0 END) AS ownership_above_20_count,
                     SUM(CASE WHEN ownership_above_50 = 1 THEN 1 ELSE 0 END) AS ownership_above_50_count,
                     SUM(CASE WHEN ownership_above_75 = 1 THEN 1 ELSE 0 END) AS ownership_above_75_count,
                     SUM(CASE WHEN screening_status = 'pending' THEN 1 ELSE 0 END) AS pending_screening_count,

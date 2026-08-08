@@ -5,7 +5,7 @@ Unit tests for rule-based executor logic.
 Tests cover:
   Agent 4:
     - Direct ownership calculation
-    - UBO threshold qualification (≥25%)
+    - UBO threshold qualification (≥ UBO_THRESHOLD_PCT, FSC 20%)
     - Ownership completeness tiers
     - Circular ownership detection
     - Nominee/trust/holding keyword detection
@@ -392,7 +392,7 @@ class TestAgent4Executor:
         )
         result = execute_corporate_structure_ubo(app_id, {"db_path": db_path})
         assert result["qualified_ubo_count"] == 1  # only 60% qualifies, 10% doesn't
-        assert result["ubo_threshold_pct"] == 25.0
+        assert result["ubo_threshold_pct"] == 20.0
         qualified = [u for u in result["ubos_identified"] if u["qualifies_as_ubo"]]
         assert len(qualified) == 1
         assert qualified[0]["name"] == "Major Owner"

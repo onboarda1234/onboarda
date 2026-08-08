@@ -7866,7 +7866,7 @@ function renderDirectorsUboSummaryCards(summary) {
     ['Adverse media', summary.adverse_media_count],
     ['Missing nationality', summary.missing_nationality_count],
     ['Missing DOB', summary.missing_dob_count],
-    ['UBOs > 25%', summary.ownership_above_25_count],
+    ['UBOs > 20%', summary.ownership_above_20_count],
     ['UBOs > 50%', summary.ownership_above_50_count],
     ['UBOs > 75%', summary.ownership_above_75_count],
     ['Pending screening', summary.pending_screening_count],
@@ -7920,7 +7920,7 @@ function renderDirectorsUboFlags(row) {
   add(row.pending_document_verification, 'Pending verification');
   if (row.ownership_above_75) add(true, 'Ownership >75%', 'danger');
   else if (row.ownership_above_50) add(true, 'Ownership >50%');
-  else if (row.ownership_above_25) add(true, 'Ownership >25%');
+  else if (row.ownership_above_20) add(true, 'Ownership >20%');
   return flags.length ? '<div class="rpt-du-flag-list">' + flags.join('') + '</div>' : '-';
 }
 
@@ -33594,7 +33594,7 @@ var ENTITY_DOC_CHECKS = [
     { label:'Shareholder Name Match', rule:'Shareholder names must match those declared in pre-screening', type:'name' },
     { label:'Shareholding Percentages Match', rule:'Shareholding percentages must match those declared in pre-screening', type:'content' },
     { label:'Total Shares Sum to 100%', rule:'Total shareholdings must sum to 100%', type:'content' },
-    { label:'UBO Identification (\u226525%)', rule:'Any shareholder holding \u2265 25% must be identified as a declared UBO', type:'content' },
+    { label:'UBO Identification (\u226520%)', rule:'Any shareholder holding \u2265 20% must be identified as a declared UBO', type:'content' },
     { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'reg_dir', name:'Register of Directors', checks:[
@@ -34112,7 +34112,7 @@ var AI_AGENTS = [
     checks:['Sanctions hit retrieval (rule)', 'PEP hit retrieval (rule)', 'Adverse media hit retrieval (rule)', 'Exact identity disambiguation (rule)', 'Near-match identity disambiguation (hybrid)', 'False-positive reduction (hybrid)', 'Severity ranking of confirmed hits (hybrid)', 'Adverse media relevance assessment (ai)', 'Adverse media materiality / seriousness (ai)', 'Consolidated screening narrative (ai)', 'Recommended screening disposition (hybrid)'] },
   { id:4, name:'Corporate Structure & UBO Mapping Agent', icon:'🏗️', stage:'Onboarding', enabled:true,
     description:'Rule-based ownership mapping with indirect path tracking, circular ownership detection, nominee/trust/holding detection, and complexity scoring. All checks are deterministic — no AI calls.',
-    checks:['Direct ownership calculation (rule)', 'Indirect ownership via intermediaries (rule)', 'UBO threshold qualification ≥25% (rule)', 'Total ownership completeness (rule)', 'Circular ownership detection (rule)', 'Nominee arrangement detection (rule)', 'Trust/foundation structure detection (rule)', 'Holding company/SPV detection (rule)', 'Opaque jurisdiction flagging (rule)', 'Shell company indicator aggregation (rule)', 'Complexity scoring (rule)', 'Ownership arithmetic validation (rule)', 'Escalation logic (rule)'] },
+    checks:['Direct ownership calculation (rule)', 'Indirect ownership via intermediaries (rule)', 'UBO threshold qualification ≥20% (rule)', 'Total ownership completeness (rule)', 'Circular ownership detection (rule)', 'Nominee arrangement detection (rule)', 'Trust/foundation structure detection (rule)', 'Holding company/SPV detection (rule)', 'Opaque jurisdiction flagging (rule)', 'Shell company indicator aggregation (rule)', 'Complexity scoring (rule)', 'Ownership arithmetic validation (rule)', 'Escalation logic (rule)'] },
   { id:5, name:'Compliance Memo & Risk Recommendation Agent', icon:'📝', stage:'Onboarding', enabled:true,
     description:'Unified compliance memo agent. Bridges to authoritative memo path enforcing Rules 4A-4E, computing 7 risk dimensions, and generating an 11-section memo. Classification-tagged output (rule/hybrid/ai). Includes risk-model divergence cross-check.',
     checks:['Document completeness score (rule)', 'Jurisdiction risk score (rule)', 'Industry/sector risk score (rule)', 'Product/service risk score (rule)', 'Channel/delivery risk score (rule)', 'Ownership complexity ingestion (rule)', 'Screening severity ingestion (rule)', 'Weighted total risk score (rule)', 'Risk tier bucket (rule)', 'Mandatory escalation triggers (rule)', 'Business description vs sector alignment (hybrid)', 'Transaction profile vs business scale (hybrid)', 'Recommendation narrative (hybrid)', 'Revenue model plausibility (ai)', 'Business model plausibility (ai)', 'Compliance memo drafting (ai)'] },

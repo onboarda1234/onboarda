@@ -7052,7 +7052,7 @@ function runRealtimeUBOMappingAnalysis(inputEl) {
     // Check if there are corporate shareholders (detect via pattern or flag)
     let analysis = '';
 
-    if (pctValue > 25) {
+    if (pctValue > 20) {
       analysis = '⚠️ High ownership stake detected - ensure UBO details are complete';
     } else if (pctValue > 0) {
       analysis = '✓ Ownership recorded';
@@ -8958,7 +8958,7 @@ var DOC_RULES = {
       { id: 'name-match', label: 'Shareholder Name Match', rule: 'Shareholder names must match those declared during initial review', type: 'name' },
       { id: 'percentages', label: 'Shareholding Percentages Match', rule: 'Shareholding percentages must match those declared during initial review', type: 'content' },
       { id: 'total-shares', label: 'Total Shares Sum to 100%', rule: 'Total shareholdings must sum to 100%', type: 'content' },
-      { id: 'ubo-id', label: 'UBO Identification (\u226525%)', rule: 'Any shareholder holding \u2265 25% must be identified as a declared UBO', type: 'content' },
+      { id: 'ubo-id', label: 'UBO Identification (\u226520%)', rule: 'Any shareholder holding \u2265 20% must be identified as a declared UBO', type: 'content' },
       { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },

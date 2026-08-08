@@ -44,11 +44,12 @@ def test_exactly_one_assignment_in_backend_python():
     )
 
 
-def test_current_value_is_the_fatf_25_until_pr_e():
-    # C10/PR-E tripwire: changing the threshold is a regulatory decision
-    # (founder + MLRO). PR-E flips this assertion deliberately.
+def test_current_value_is_the_fsc_20_approved_2026_08_08():
+    # C10/PR-E tripwire: 20% per the FSC rule, founder + MLRO approved
+    # 2026-08-08 (stricter than the FATF R24/R25 25% figure). Any further
+    # change is a regulatory decision and flips this assertion deliberately.
     from verification_matrix import UBO_THRESHOLD_PCT
-    assert UBO_THRESHOLD_PCT == 25.0
+    assert UBO_THRESHOLD_PCT == 20.0
 
 
 def test_python_surfaces_share_the_constant():
@@ -102,6 +103,12 @@ def test_backoffice_mirrors_match_the_constant():
     ]
     missing = [m for m in mirrors if m not in html]
     assert missing == [], f"back-office UBO threshold mirrors out of sync: {missing}"
+    # PR-E absence guard: no stale copy of the outgoing 25% mirrors survives.
+    for stale in ("UBO Identification (\\u226525%)",
+                  "UBO threshold qualification ≥25% (rule)",
+                  "'UBOs > 25%'", "'Ownership >25%'",
+                  "ownership_above_25"):
+        assert stale not in html, f"stale 25%-era mirror still present: {stale}"
 
 
 def test_portal_mirror_matches_the_constant():
@@ -109,6 +116,9 @@ def test_portal_mirror_matches_the_constant():
     html = (ROOT / "arie-portal.html").read_text(encoding="utf-8")
     assert f"label: 'UBO Identification (\\u2265{pct}%)'" in html
     assert f"rule: 'Any shareholder holding \\u2265 {pct}% must be identified as a declared UBO'" in html
+    # PR-E absence guard (portal side): no stale 25%-era mirror survives.
+    for stale in ("UBO Identification (\\u226525%)", "if (pctValue > 25)"):
+        assert stale not in html, f"stale 25%-era portal mirror still present: {stale}"
 
 
 def test_supervisor_borderline_band_derives_from_the_constant():
@@ -125,12 +135,9 @@ def test_portal_ubo_hint_and_data_collection_copy_mirrors():
     html = (ROOT / "arie-portal.html").read_text(encoding="utf-8")
     # Soft advisory JS hint in the realtime UBO mapping panel.
     assert f"if (pctValue > {pct})" in html
-    # KNOWN DIVERGENCE, pinned deliberately: the applicant-facing UBO
-    # data-collection copy says "\u2265 20% ownership" while the engine
-    # threshold is 25% — conservative in direction (collects more), and
-    # already at the C10/PR-E FSC target. PR-E resolves the divergence by
-    # moving the engine to 20; this pin makes the pair visible until then.
-    assert html.count("\u2265 20% ownership") >= 1
+    # PR-E closed the historical divergence: the applicant-facing UBO
+    # data-collection copy and the engine threshold now agree at 20%.
+    assert html.count(f"\u2265 {pct}% ownership") >= 1
 
 
 def test_server_indicator_ladder_bottom_rung_matches_the_constant():
@@ -139,5 +146,50 @@ def test_server_indicator_ladder_bottom_rung_matches_the_constant():
     # This pin makes PR-E confront the bottom rung explicitly.
     pct = _pct_str()
     src = (BACKEND / "server.py").read_text(encoding="utf-8")
-    assert f"COALESCE(g.ownership_pct, 0) > {pct} THEN 1 ELSE 0 END AS ownership_above_25" in src
+    assert f"COALESCE(g.ownership_pct, 0) > {pct} THEN 1 ELSE 0 END AS ownership_above_20" in src
     assert f'"UBO ownership above {pct}%"' in src
+
+
+# ── Behavioural pins at the new boundary (review follow-up) ────────
+
+def test_doc15b_fails_undeclared_shareholder_in_new_band():
+    # A 22% shareholder was NOT a UBO under the old 25% rule; under the
+    # FSC 20% rule an undeclared 22% holder must FAIL DOC-15B.
+    from document_verification import run_rule_checks
+    from verification_matrix import CheckStatus
+
+    extracted = {"shareholders": [
+        {"name": "Band Holder", "percentage": 22.0},
+        {"name": "Main Holder", "percentage": 78.0},
+    ]}
+    ps = {"ubos": [{"full_name": "Main Holder"}],
+          "registered_entity_name": "Band Test Ltd"}
+    results = run_rule_checks("reg_sh", "entity", extracted, ps, "LOW")
+    doc15b = next(r for r in results if r.get("id") == "DOC-15B")
+    assert doc15b["result"] == CheckStatus.FAIL
+    assert "Band Holder" in doc15b["message"]
+
+
+def test_doc15b_exactly_at_threshold_must_be_declared():
+    # The discriminating >= pin (review-strengthened): an UNDECLARED
+    # exactly-20.0 holder FAILS under >= but would pass under a strict >
+    # regression. The declared-holder PASS leg rides along.
+    from document_verification import run_rule_checks
+    from verification_matrix import CheckStatus
+
+    extracted = {"shareholders": [
+        {"name": "Edge Holder", "percentage": 20.0},
+        {"name": "Main Holder", "percentage": 80.0},
+    ]}
+    undeclared = {"ubos": [{"full_name": "Main Holder"}],
+                  "registered_entity_name": "Edge Test Ltd"}
+    results = run_rule_checks("reg_sh", "entity", extracted, undeclared, "LOW")
+    doc15b = next(r for r in results if r.get("id") == "DOC-15B")
+    assert doc15b["result"] == CheckStatus.FAIL
+    assert "Edge Holder" in doc15b["message"]
+
+    declared = {"ubos": [{"full_name": "Edge Holder"}, {"full_name": "Main Holder"}],
+                "registered_entity_name": "Edge Test Ltd"}
+    results = run_rule_checks("reg_sh", "entity", extracted, declared, "LOW")
+    doc15b = next(r for r in results if r.get("id") == "DOC-15B")
+    assert doc15b["result"] == CheckStatus.PASS
