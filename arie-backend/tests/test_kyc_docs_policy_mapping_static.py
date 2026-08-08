@@ -63,8 +63,8 @@ var window = {{ AGENT1_DOCUMENT_POLICIES: AGENT1_DOCUMENT_POLICIES }};
 var KYC_VERIFICATION_POLICY_MISSING_MESSAGE = 'Verification policy missing. Admin setup is required before automated verification can run. Manual review is required before relying on this document.';
 var KYC_DOCUMENT_SLOT_LABELS = {{
   cert_inc: 'Certificate of Incorporation',
-  memarts: 'Memorandum & Articles',
-  reg_sh: 'Register of Shareholders',
+  memarts: 'Memorandum of Association',
+  reg_sh: 'Shareholder Register',
   reg_dir: 'Register of Directors',
   poa: 'Proof of Registered Address',
   passport: 'Passport / Government ID',

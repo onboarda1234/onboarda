@@ -68,7 +68,7 @@ class TestQueueListLiteParity(_PRDBase):
                 "VALUES (?, ?, ?, ?, ?, ?, 'document', 1, 'requested', 1)",
                 (self._app_id, rid,
                  f"periodic_review_{rid}_shareholders_changed", "Shareholders changed",
-                 "updated_register_of_shareholders", "Updated Register of Shareholders"),
+                 "updated_register_of_shareholders", "Updated Shareholder Register"),
             )
             self._conn.commit()
             return True

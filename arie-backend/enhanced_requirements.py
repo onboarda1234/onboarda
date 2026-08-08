@@ -767,7 +767,7 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "trigger_label": "HIGH / VERY_HIGH risk",
         "trigger_category": "risk",
         "requirement_key": "company_bank_reference",
-        "requirement_label": "Company bank reference letter",
+        "requirement_label": "Company Bank Reference Letter",
         "requirement_description": "Company bank reference letter for the proposed relationship.",
         "audience": "client",
         "requirement_type": "document",
@@ -776,7 +776,7 @@ DEFAULT_ENHANCED_REQUIREMENT_RULES = [
         "mandatory": True,
         "sort_order": 10,
         "applies_when": {"existing_bank_account": True},
-        "client_safe_label": "Company bank reference letter",
+        "client_safe_label": "Company Bank Reference Letter",
         "client_safe_description": "Please upload the requested company bank reference letter.",
     },
     {
@@ -1359,7 +1359,7 @@ def _section_b_person_document_rule(kind, subject, idx, *, reason):
     subject_name = subject.get("name") or "Named person"
     if kind == "bankref":
         key = f"bankref_{subject_type}_{suffix}"
-        label = f"Bank Reference Letter - {subject_name}"
+        label = f"Personal Bank Reference Letter - {subject_name}"
         description = "Bank reference letter for the named person."
         safe_description = "Please upload the requested bank reference letter for the named person."
         sort_offset = 10
@@ -2007,12 +2007,12 @@ def _apply_approved_enhanced_requirement_taxonomy_updates(db, actor="system", ac
             "high_or_very_high_risk",
             "company_bank_reference",
             {
-                "requirement_label": "Company bank reference letter",
+                "requirement_label": "Company Bank Reference Letter",
                 "requirement_description": "Company bank reference letter for the proposed relationship.",
                 "blocking_approval": 0,
                 "mandatory": 1,
                 "active": 1,
-                "client_safe_label": "Company bank reference letter",
+                "client_safe_label": "Company Bank Reference Letter",
                 "client_safe_description": "Please upload the requested company bank reference letter.",
                 "subject_scope": "company",
                 "audience": "client",

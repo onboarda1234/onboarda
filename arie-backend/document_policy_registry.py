@@ -162,7 +162,7 @@ POLICY_DEFINITIONS = [
     },
     {
         "key": "reg_sh",
-        "label": "Register of Shareholders",
+        "label": "Shareholder Register",
         "category": "entity",
         "policy_id": "DOC-ENTITY-REGSH-v1",
         "aliases": ["shareholder_register", "register_of_shareholders", "register_of_members"],
@@ -213,7 +213,7 @@ POLICY_DEFINITIONS = [
     },
     {
         "key": "fin_stmt",
-        "label": "Financial statements / management accounts",
+        "label": "Financial Statements / Management Accounts",
         "category": "entity",
         "policy_id": "DOC-ENTITY-FINANCIALS-v1",
         "aliases": ["financial_statements", "management_accounts"],
@@ -223,7 +223,7 @@ POLICY_DEFINITIONS = [
     },
     {
         "key": "licence",
-        "label": "Regulatory licence",
+        "label": "Regulatory Licence",
         "category": "entity",
         "policy_id": "DOC-ENTITY-LICENCE-v1",
         "aliases": ["business_licence", "regulatory_license", "license"],
@@ -310,7 +310,7 @@ POLICY_DEFINITIONS = [
     },
     {
         "key": "bankref",
-        "label": "Bank reference",
+        "label": "Company Bank Reference Letter",
         "category": "evidence",
         "policy_id": "DOC-EVIDENCE-BANK-REFERENCE-v1",
         "aliases": ["bank_reference", "pep_bank_reference", "edd_bank_reference"],

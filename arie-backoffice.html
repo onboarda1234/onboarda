@@ -1828,16 +1828,16 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
               <option value="passport">Passport / Government ID</option>
               <option value="national_id">National ID / Government ID</option>
               <option value="cert_inc">Certificate of Incorporation</option>
-              <option value="memarts">Memorandum &amp; Articles</option>
+              <option value="memarts">Memorandum of Association</option>
               <option value="cert_reg">Regulatory Certificate</option>
-              <option value="reg_sh">Register of Shareholders</option>
+              <option value="reg_sh">Shareholder Register</option>
               <option value="reg_dir">Register of Directors</option>
-              <option value="fin_stmt">Financial Statements</option>
+              <option value="fin_stmt">Financial Statements / Management Accounts</option>
               <option value="board_res">Board Resolution</option>
               <option value="structure_chart">Structure Chart</option>
               <option value="poa">Proof of Address</option>
               <option value="bankref">Bank Reference Letter</option>
-              <option value="licence">Regulatory Licence(s)</option>
+              <option value="licence">Regulatory Licence</option>
               <option value="source_wealth">Source of Wealth</option>
               <option value="source_funds">Source of Funds</option>
               <option value="supporting_document">Other Supporting Document</option>
@@ -6555,7 +6555,7 @@ function generateAppDocs(app) {
     var dName = d.name || 'Unknown';
     var pDocs = [{type:'Passport / ID', status:'uploaded'}, {type:'Proof of Address', status:'uploaded'}];
     if (d.pep === 'Yes') {
-      pDocs.push({type:'Bank Reference Letter', status:'uploaded'});
+      pDocs.push({type:'Personal Bank Reference Letter', status:'uploaded'});
       pDocs.push({type:'Source of Wealth Declaration', status:'uploaded'});
     }
     var seed = 0; for (var i=0;i<dName.length;i++) seed = ((seed<<5)-seed)+dName.charCodeAt(i);
@@ -6567,7 +6567,7 @@ function generateAppDocs(app) {
     if (personDocs.some(function(p){ return p.name === uName; })) return;
     var uDocs = [{type:'Passport / ID', status:'uploaded'}, {type:'Proof of Address', status:'uploaded'}];
     if (u.pep === 'Yes') {
-      uDocs.push({type:'Bank Reference Letter', status:'uploaded'});
+      uDocs.push({type:'Personal Bank Reference Letter', status:'uploaded'});
       uDocs.push({type:'Source of Wealth Declaration', status:'uploaded'});
     }
     var seed = 0; for (var i=0;i<uName.length;i++) seed = ((seed<<5)-seed)+uName.charCodeAt(i);
@@ -6576,10 +6576,10 @@ function generateAppDocs(app) {
   });
   (app.intermediaries || []).forEach(function(inter) {
     var interName = inter.name || 'Unknown';
-    var iDocs = [{type:'Certificate of Incorporation', status:'uploaded'}, {type:'Register of Directors', status:'uploaded'}, {type:'Register of Shareholders', status:'uploaded'}];
+    var iDocs = [{type:'Certificate of Incorporation', status:'uploaded'}, {type:'Register of Directors', status:'uploaded'}, {type:'Shareholder Register', status:'uploaded'}];
     var seed = 0; for (var i=0;i<interName.length;i++) seed = ((seed<<5)-seed)+interName.charCodeAt(i);
     if (Math.abs(seed) % 2 === 0) iDocs.push({type:'Certificate of Good Standing', status:'uploaded'});
-    if (Math.abs(seed) % 3 === 0) iDocs.push({type:'Financial Statements', status:'uploaded'});
+    if (Math.abs(seed) % 3 === 0) iDocs.push({type:'Financial Statements / Management Accounts', status:'uploaded'});
     personDocs.push({ name: interName, role: 'Intermediary (' + (inter.jurisdiction || 'N/A') + ')', pep: 'N/A', docs: iDocs });
   });
   app.personDocs = personDocs;
@@ -10039,9 +10039,9 @@ function renderDocumentVerificationHistory(app) {
 
 var KYC_DOCUMENT_SLOT_LABELS = {
   cert_inc: 'Certificate of Incorporation',
-  memarts: 'Memorandum & Articles',
+  memarts: 'Memorandum of Association',
   cert_reg: 'Regulatory Certificate',
-  reg_sh: 'Register of Shareholders',
+  reg_sh: 'Shareholder Register',
   reg_dir: 'Register of Directors',
   fin_stmt: 'Financial Statements / Management Accounts',
   board_res: 'Board Resolution',
@@ -10049,7 +10049,7 @@ var KYC_DOCUMENT_SLOT_LABELS = {
   poa: 'Proof of Address',
   passport: 'Passport / Government ID',
   bankref: 'Bank Reference Letter',
-  licence: 'Regulatory Licence(s)',
+  licence: 'Regulatory Licence',
   source_wealth: 'Source of Wealth Evidence',
   source_funds: 'Source of Funds Evidence',
   bank_statements: 'Bank Statements',
@@ -11251,8 +11251,8 @@ function buildExpectedKycDocumentSlots(app) {
   }
   var expected = [
     { doc_type: 'cert_inc', label: 'Certificate of Incorporation', taxonomy_section: 'entity' },
-    { doc_type: 'memarts', label: 'Memorandum & Articles', taxonomy_section: 'entity' },
-    { doc_type: 'reg_sh', label: 'Register of Shareholders', taxonomy_section: 'entity' },
+    { doc_type: 'memarts', label: 'Memorandum of Association', taxonomy_section: 'entity' },
+    { doc_type: 'reg_sh', label: 'Shareholder Register', taxonomy_section: 'entity' },
     { doc_type: 'reg_dir', label: 'Register of Directors', taxonomy_section: 'entity' },
     { doc_type: 'fin_stmt', label: 'Financial Statements / Management Accounts', taxonomy_section: 'entity' },
     { doc_type: 'poa', label: 'Proof of Registered Address', person_id: null, taxonomy_section: 'entity' },
@@ -11263,7 +11263,7 @@ function buildExpectedKycDocumentSlots(app) {
     // C2/C2b: the licence slot exists only when the client declared a
     // licence at pre-screening — unconditional it would render a
     // permanently-empty Section A tile on every non-licensed file.
-    expected.push({ doc_type: 'licence', label: KYC_DOCUMENT_SLOT_LABELS.licence || 'Regulatory Licence(s)',
+    expected.push({ doc_type: 'licence', label: KYC_DOCUMENT_SLOT_LABELS.licence || 'Regulatory Licence',
                     person_id: null, taxonomy_section: 'entity', optional: true });
   }
   (app.directors || []).forEach(function(person) {
@@ -11271,7 +11271,7 @@ function buildExpectedKycDocumentSlots(app) {
     expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'director', owner: owner, taxonomy_section: 'person' });
     expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'director', owner: owner, taxonomy_section: 'person' });
     if (highOrVeryHigh || partyIsPep(person)) {
-      expected.push({ doc_type: 'bankref', label: 'Bank Reference Letter', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'director', owner: owner, taxonomy_section: 'person' });
+      expected.push({ doc_type: 'bankref', label: 'Personal Bank Reference Letter', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'director', owner: owner, taxonomy_section: 'person' });
       expected.push({ doc_type: 'source_wealth', label: 'Source of Wealth evidence', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'director', owner: owner, taxonomy_section: 'person' });
     }
   });
@@ -11280,7 +11280,7 @@ function buildExpectedKycDocumentSlots(app) {
     expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
     expected.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
     if (highOrVeryHigh || partyIsPep(person)) {
-      expected.push({ doc_type: 'bankref', label: 'Bank Reference Letter', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
+      expected.push({ doc_type: 'bankref', label: 'Personal Bank Reference Letter', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
       expected.push({ doc_type: 'source_wealth', label: 'Source of Wealth evidence', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'ubo', owner: owner, taxonomy_section: 'person' });
     }
   });
@@ -23570,11 +23570,11 @@ var LIFECYCLE_EVIDENCE_ITEM_TYPES = [
 
 var LIFECYCLE_UPLOAD_DOC_TYPES = [
   { value: 'cert_inc', label: 'Certificate of Incorporation' },
-  { value: 'memarts', label: 'Memorandum & Articles' },
+  { value: 'memarts', label: 'Memorandum of Association' },
   { value: 'cert_reg', label: 'Regulatory Certificate' },
-  { value: 'reg_sh', label: 'Register of Shareholders' },
+  { value: 'reg_sh', label: 'Shareholder Register' },
   { value: 'reg_dir', label: 'Register of Directors' },
-  { value: 'fin_stmt', label: 'Financial Statements' },
+  { value: 'fin_stmt', label: 'Financial Statements / Management Accounts' },
   { value: 'board_res', label: 'Board Resolution' },
   { value: 'structure_chart', label: 'Structure Chart' },
   { value: 'poa', label: 'Proof of Address' },
@@ -31282,10 +31282,10 @@ var pendingDecision = '';
 
 var RMI_DOC_OPTIONS = [
   { doc_type: 'cert_inc', label: 'Certificate of Incorporation' },
-  { doc_type: 'memarts', label: 'Memorandum and Articles' },
-  { doc_type: 'reg_sh', label: 'Register of Shareholders' },
+  { doc_type: 'memarts', label: 'Memorandum of Association' },
+  { doc_type: 'reg_sh', label: 'Shareholder Register' },
   { doc_type: 'reg_dir', label: 'Register of Directors' },
-  { doc_type: 'fin_stmt', label: 'Financial Statements' },
+  { doc_type: 'fin_stmt', label: 'Financial Statements / Management Accounts' },
   { doc_type: 'poa', label: 'Proof of Registered Address' },
   { doc_type: 'board_res', label: 'Board Resolution' },
   { doc_type: 'structure_chart', label: 'Ownership Structure Chart' },
@@ -31293,7 +31293,7 @@ var RMI_DOC_OPTIONS = [
   { doc_type: 'source_funds', label: 'Source of Funds Evidence' },
   { doc_type: 'bank_statements', label: 'Bank Statements' },
   { doc_type: 'aml_policy', label: 'AML/CFT Policy' },
-  { doc_type: 'licence', label: 'Regulatory Licence or Certificate' },
+  { doc_type: 'licence', label: 'Regulatory Licence' },
   { doc_type: 'contracts', label: 'Sample Contracts or Agreements' }
 ];
 
@@ -33621,13 +33621,13 @@ var ENTITY_DOC_CHECKS = [
     { label:'Legibility', rule:'Diagram must be clear and readable', type:'quality' },
     { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
-  { docId:'bankref', name:'Bank Reference Letter (Entity)', checks:[
+  { docId:'bankref', name:'Company Bank Reference Letter', checks:[
     { label:'Bank Letterhead', rule:'Must be on official bank letterhead', type:'quality' },
     { label:'Document Date', rule:'Must be dated within the last 3 months', type:'age' },
     { label:'Entity Name Match', rule:'Entity name must match application', type:'name' },
     { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
-  { docId:'licence', name:'Licence / Regulatory Approval', checks:[
+  { docId:'licence', name:'Regulatory Licence', checks:[
     { label:'Licence Applicability Gate', rule:'Applies only when a regulatory licence was declared at pre-screening; if the client declared no licence, all licence checks are skipped', type:'presence' },
     { label:'Entity Name Match', rule:'Entity name must match', type:'name' },
     { label:'Licence Validity', rule:'Licence must be current and not expired', type:'expiry' },
@@ -33657,7 +33657,7 @@ var PERSON_DOC_CHECKS = [
     { label:'Employment History \u2014 Presence', rule:'CV must include employment history section', type:'content' },
     { label:'Employment History \u2014 Relevance', rule:'Employment background must be relevant to the declared role and business activity', type:'ai' }
   ]},
-  { docId:'bankref', name:'Bank Reference Letter (PEP)', checks:[
+  { docId:'bankref', name:'Personal Bank Reference Letter', checks:[
     { label:'Document Date', rule:'Must be dated within the last 3 months', type:'age' },
     { label:'Name Match', rule:'Account holder name must match the declared person', type:'name' },
     { label:'Bank Identification', rule:'Must be on official bank letterhead with bank name clearly identifiable', type:'content' },
@@ -33705,7 +33705,7 @@ var EDD_DOC_CHECKS = [
     { label:'Name Match', rule:'Account holder name must match the application or requested party', type:'name', classification:'rule' },
     { label:'Completeness', rule:'Statements must include all pages for the requested period', type:'quality', classification:'rule' }
   ]},
-  { docId:'bankref', name:'Bank Reference Letter', checks:[
+  { docId:'bankref', name:'Company Bank Reference Letter', checks:[
     { label:'Bank Letterhead', rule:'Must be on official bank letterhead', type:'quality' },
     { label:'Document Date', rule:'Must be dated within the last 3 months', type:'age' },
     { label:'Name Match', rule:'Entity or person name must match the requested evidence subject', type:'name' },
@@ -33759,15 +33759,15 @@ function agent1Policy(stage, policyId, family, docTypes, whenRequired, materialC
 
 var AGENT1_DOCUMENT_POLICIES = [
   agent1Policy('entity','DOC-ENTITY-COI-v1','Certificate of Incorporation',['cert_inc','certificate_of_incorporation'],'Required for legal entity onboarding and refreshed registry evidence.',AGENT1_ENTITY_MATERIAL_CHECKS,'Blocks KYC submission, memo generation, and approval if failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
-  agent1Policy('entity','DOC-ENTITY-LICENCE-v1','Business registration / licence',['licence','business_registration','business_licence','cert_reg'],'Required where the entity declares regulated or licensed business activity.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['licence validity', 'licence scope match']),'Blocks reliance if failed/pending/stale when required by business activity.','Senior manual acceptance allowed with reason.','No'),
-  agent1Policy('entity','DOC-ENTITY-MEMARTS-v1','Memorandum & Articles',['memarts','memorandum_and_articles','articles_of_association'],'Required for corporate constitutional review.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['business objects / activities match', 'page completeness']),'Blocks KYC submission, memo generation, and approval if failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('entity','DOC-ENTITY-LICENCE-v1','Regulatory Licence',['licence','business_registration','business_licence','cert_reg'],'Required where the entity declares regulated or licensed business activity.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['licence validity', 'licence scope match']),'Blocks reliance if failed/pending/stale when required by business activity.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('entity','DOC-ENTITY-MEMARTS-v1','Memorandum of Association',['memarts','memorandum_and_articles','articles_of_association'],'Required for corporate constitutional review.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['business objects / activities match', 'page completeness']),'Blocks KYC submission, memo generation, and approval if failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
   agent1Policy('entity','DOC-ENTITY-REGDIR-v1','Register of Directors',['reg_dir','register_of_directors','director_register'],'Required for directors/officers evidence.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['director extraction', 'director list consistency']),'Blocks KYC submission, memo generation, and approval if failed/pending/stale.','Senior manual acceptance allowed with reason.','Yes, when director list changes'),
-  agent1Policy('entity','DOC-ENTITY-REGSH-v1','Register of Shareholders',['reg_sh','register_of_shareholders','shareholder_register'],'Required for ownership and UBO evidence.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['shareholder extraction', 'ownership percentage validation', 'UBO threshold detection']),'Blocks KYC submission, memo generation, and approval if failed/pending/stale.','Senior manual acceptance allowed with reason.','Yes, when shareholder/UBO data changes'),
+  agent1Policy('entity','DOC-ENTITY-REGSH-v1','Shareholder Register',['reg_sh','register_of_shareholders','shareholder_register'],'Required for ownership and UBO evidence.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['shareholder extraction', 'ownership percentage validation', 'UBO threshold detection']),'Blocks KYC submission, memo generation, and approval if failed/pending/stale.','Senior manual acceptance allowed with reason.','Yes, when shareholder/UBO data changes'),
   agent1Policy('entity','DOC-ENTITY-UBO-DECL-v1','UBO declaration',['ubo_declaration','beneficial_owner_declaration'],'Required where beneficial ownership cannot be proven from registers alone.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['declared UBO match', 'natural-person trace']),'Blocks reliance if failed/pending/stale when required.','Senior manual acceptance allowed with reason.','Yes, when UBO data changes'),
   agent1Policy('entity','DOC-ENTITY-OWNERSHIP-CHART-v1','Ownership chart',['structure_chart','ownership_chart','company_structure_chart'],'Required for multi-layer, complex, or enhanced ownership review.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['ownership chain trace', 'natural-person endpoint', 'intermediary consistency']),'Blocks reliance if failed/pending/stale when required.','Senior manual acceptance allowed with reason.','Yes, when ownership changes'),
   agent1Policy('entity','DOC-ENTITY-BOARD-RES-v1','Board resolution / authorised signatory resolution',['board_res','board_resolution','signatory_resolution'],'Required to verify authority to act/open account/sign documents.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['signatory match', 'scope of authority', 'resolution date']),'Blocks reliance if failed/pending/stale when required.','Senior manual acceptance allowed with reason.','No'),
   agent1Policy('entity','DOC-ENTITY-REGISTERED-ADDRESS-v1','Proof of registered address',['poa','proof_of_registered_address','registered_address_proof'],'Required for registered office/address verification.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['address match', 'document date within policy window']),'Blocks KYC submission, memo generation, and approval if failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
-  agent1Policy('entity','DOC-ENTITY-FINANCIALS-v1','Financial statements',['fin_stmt','financial_statements','management_accounts'],'Required where financial/business scale evidence is needed.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['financial period', 'turnover consistency', 'going-concern issue check']),'Blocks reliance if required and failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('entity','DOC-ENTITY-FINANCIALS-v1','Financial Statements / Management Accounts',['fin_stmt','financial_statements','management_accounts'],'Required where financial/business scale evidence is needed.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['financial period', 'turnover consistency', 'going-concern issue check']),'Blocks reliance if required and failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
   agent1Policy('entity','DOC-ENTITY-AML-POLICY-v1','AML/compliance policy where required',['aml_policy','compliance_policy'],'Required for regulated/high-risk businesses or intermediary reliance.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['policy ownership', 'policy scope', 'policy currency']),'Blocks reliance if required and failed/pending/stale.','Senior manual acceptance allowed with reason.','No'),
   agent1Policy('entity','DOC-ENTITY-CONTRACTS-INVOICES-v1','Contracts / invoices where used as business activity evidence',['contracts','invoices','business_activity_evidence'],'Required when contracts/invoices support stated activity, revenue, or counterparties.',AGENT1_ENTITY_MATERIAL_CHECKS.concat(['counterparty relevance', 'activity consistency', 'date/freshness']),'Blocks automated reliance if failed/pending/stale when used in memo or approval reasoning.','Senior manual acceptance allowed with reason.','No'),
 
@@ -33775,14 +33775,14 @@ var AGENT1_DOCUMENT_POLICIES = [
   agent1Policy('person','DOC-PERSON-NATIONAL-ID-v1','National ID',['national_id','national_identity_card'],'Required where national ID is accepted as identity evidence.',AGENT1_PERSON_MATERIAL_CHECKS,'Blocks reliance if failed/pending/stale when used as identity evidence.','Senior manual acceptance allowed with reason.','Yes, if nationality/DOB/name changes'),
   agent1Policy('person','DOC-PERSON-ADDRESS-v1','Proof of address',['poa_person','personal_poa','proof_of_address'],'Required for residential address verification.',AGENT1_PERSON_MATERIAL_CHECKS.concat(['address match', 'document date within policy window']),'Blocks reliance if failed/pending/stale when required.','Senior manual acceptance allowed with reason.','No'),
   agent1Policy('person','DOC-PERSON-CV-v1','CV',['cv','curriculum_vitae'],'Required for high-risk, PEP, or expertise/background review.',AGENT1_PERSON_MATERIAL_CHECKS.concat(['employment history presence', 'role/business relevance']),'Blocks EDD/person review reliance if failed/pending/stale when required.','Senior manual acceptance allowed with reason.','No'),
-  agent1Policy('person','DOC-PERSON-BANKREF-v1','Bank reference',['bankref','bank_reference'],'Required for PEP/high-risk person or relationship evidence where policy requires.',AGENT1_PERSON_MATERIAL_CHECKS.concat(['bank letterhead', 'account standing', 'date/freshness']),'Blocks EDD/person review reliance if failed/pending/stale when required.','Senior manual acceptance allowed with reason.','No'),
+  agent1Policy('person','DOC-PERSON-BANKREF-v1','Personal Bank Reference Letter',['bankref','bank_reference'],'Required for PEP/high-risk person or relationship evidence where policy requires.',AGENT1_PERSON_MATERIAL_CHECKS.concat(['bank letterhead', 'account standing', 'date/freshness']),'Blocks EDD/person review reliance if failed/pending/stale when required.','Senior manual acceptance allowed with reason.','No'),
   agent1Policy('person','DOC-PERSON-SIGNATORY-v1','Signatory authority',['signatory_authority','authorised_signatory'],'Required for authorised signatory identity and authority evidence.',AGENT1_PERSON_MATERIAL_CHECKS.concat(['authority source match', 'resolution consistency']),'Blocks reliance if failed/pending/stale when used as signatory evidence.','Senior manual acceptance allowed with reason.','No'),
   agent1Policy('person','DOC-PERSON-PEP-SUPPORT-v1','PEP declaration support',['pep_declaration','pep_support'],'Required for declared or detected PEP exposure support.',AGENT1_PERSON_MATERIAL_CHECKS.concat(['PEP role consistency', 'source of wealth support', 'public function details']),'Blocks EDD closure and approval reliance if failed/pending/stale.','Senior management acceptance required.','No'),
 
   agent1Policy('edd','DOC-EDD-SOW-v1','Source of Wealth',['sow','source_wealth','source_of_wealth'],'Required for PEP, high-risk, material UBO, or enhanced due diligence triggers.',AGENT1_EDD_MATERIAL_CHECKS,'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
   agent1Policy('edd','DOC-EDD-SOF-v1','Source of Funds',['sof','source_funds','source_of_funds'],'Required where transaction or onboarding funding source must be evidenced.',AGENT1_EDD_MATERIAL_CHECKS,'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
   agent1Policy('edd','DOC-EDD-BANK-STATEMENTS-v1','Bank statements',['bank_statements','bank_statement'],'Required for SOW/SOF corroboration or high-risk financial review.',AGENT1_EDD_MATERIAL_CHECKS.concat(['account holder match', 'transaction pattern plausibility']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
-  agent1Policy('edd','DOC-EDD-BANK-REFERENCE-v1','Bank reference',['edd_bank_reference','pep_bank_reference','bankref'],'Required for PEP/high-risk enhanced evidence where bank standing is requested.',AGENT1_EDD_MATERIAL_CHECKS.concat(['bank letterhead', 'account standing', 'date/freshness']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
+  agent1Policy('edd','DOC-EDD-BANK-REFERENCE-v1','Company Bank Reference Letter',['edd_bank_reference','pep_bank_reference','bankref'],'Required for PEP/high-risk enhanced evidence where bank standing is requested.',AGENT1_EDD_MATERIAL_CHECKS.concat(['bank letterhead', 'account standing', 'date/freshness']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
   agent1Policy('edd','DOC-EDD-TAX-RETURN-v1','Tax return',['tax_return'],'Required where tax evidence supports SOW/SOF.',AGENT1_EDD_MATERIAL_CHECKS.concat(['tax year match', 'declared income consistency']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
   agent1Policy('edd','DOC-EDD-PAYSLIP-v1','Payslip / employment income proof',['payslip','employment_income_proof'],'Required where employment income supports SOW/SOF.',AGENT1_EDD_MATERIAL_CHECKS.concat(['employer match', 'income period']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
   agent1Policy('edd','DOC-EDD-DIVIDEND-v1','Dividend / investment income proof',['dividend_income','investment_income_proof'],'Required where investment or dividend income supports SOW/SOF.',AGENT1_EDD_MATERIAL_CHECKS.concat(['issuer/investment match', 'value/date consistency']),'Blocks EDD closure if failed/pending/stale.','Senior approval required.','No'),
@@ -33914,13 +33914,13 @@ AGENT1_DOCUMENT_POLICIES = [
   canonicalAgent1Policy('entity','DOC-ENTITY-REGISTRATION-v1','Certificate of Registration / Business registration',['cert_reg','business_registration'],'Manual review only',false,['issuer/authority review','entity name match','registration number/date review'],'Manual review only; not presented as runtime verified.',['Onboarding / KYC','Address change'],[]),
   canonicalAgent1Policy('entity','DOC-ENTITY-MEMARTS-v1','Memorandum of Association',['memarts','memorandum_and_articles','articles_of_association'],'Active',true,['entity name match','completeness','certification'],'Blocks KYC submission, memo generation, and approval when required and failed/pending/stale.',['Onboarding / KYC'],[]),
   canonicalAgent1Policy('entity','DOC-ENTITY-REGDIR-v1','Register of Directors',['reg_dir','register_of_directors'],'Active',true,['director extraction','director list consistency','completeness','certification'],'Blocks onboarding approval, director change completion, and periodic review completion when required.',['Onboarding / KYC','Director change','Periodic review'],['new/changed director re-screening required']),
-  canonicalAgent1Policy('entity','DOC-ENTITY-REGSH-v1','Register of Shareholders',['reg_sh','register_of_shareholders','register_of_members'],'Active',true,['shareholder extraction','ownership percentage validation','UBO threshold detection','total ownership validation','certification'],'Blocks onboarding approval, UBO/ownership change completion, and periodic review completion when required.',['Onboarding / KYC','UBO change','Ownership percentage change','Periodic review'],['risk recalculation if material','re-screening if material']),
+  canonicalAgent1Policy('entity','DOC-ENTITY-REGSH-v1','Shareholder Register',['reg_sh','register_of_shareholders','register_of_members'],'Active',true,['shareholder extraction','ownership percentage validation','UBO threshold detection','total ownership validation','certification'],'Blocks onboarding approval, UBO/ownership change completion, and periodic review completion when required.',['Onboarding / KYC','UBO change','Ownership percentage change','Periodic review'],['risk recalculation if material','re-screening if material']),
   canonicalAgent1Policy('entity','DOC-ENTITY-UBO-DECL-v1','UBO Declaration',['ubo_declaration'],'Manual review only',false,['declared UBO match','ownership percentage review','natural-person trace'],'Manual review only unless mapped to verified shareholder register/ownership chart evidence.',['Onboarding / KYC','UBO change'],['new/changed UBO re-screening required']),
   canonicalAgent1Policy('entity','DOC-ENTITY-OWNERSHIP-CHART-v1','Ownership chart / structure chart',['structure_chart','ownership_chart'],'Active',true,['UBO chain','ownership match','legibility','certification'],'Blocks ownership reliance when required and failed/pending/stale.',['Onboarding / KYC','Ownership percentage change'],['risk recalculation if material']),
   canonicalAgent1Policy('entity','DOC-ENTITY-BOARD-RES-v1','Board resolution / authorised signatory resolution',['board_res','board_resolution','authorised_signatory_resolution'],'Active',true,['signatory match','resolution date','scope of authority','certification'],'Blocks signatory/authority reliance when required and failed/pending/stale.',['Onboarding / KYC'],[]),
   canonicalAgent1Policy('entity','DOC-ENTITY-REGISTERED-ADDRESS-v1','Proof of registered address',['poa','proof_of_registered_address'],'Active',true,['document date','entity name match','address match','clarity/readability','certification'],'Blocks onboarding approval, address change completion, and periodic review completion when required.',['Onboarding / KYC','Address change','Periodic review'],['address/risk consistency refresh']),
-  canonicalAgent1Policy('entity','DOC-ENTITY-FINANCIALS-v1','Financial statements / management accounts',['fin_stmt','financial_statements'],'Active',true,['financial period','entity name match','turnover consistency','certification'],'Blocks reliance when required as business scale or periodic review evidence.',['Onboarding / KYC','Periodic review'],['risk recalculation where financial/business activity changes']),
-  canonicalAgent1Policy('entity','DOC-ENTITY-LICENCE-v1','Regulatory licence',['licence','business_licence'],'Active',true,['licence applicability gate','entity name match','licence validity','licence scope','certification'],'Blocks reliance where a regulated/licensed business activity is declared.',['Onboarding / KYC'],[]),
+  canonicalAgent1Policy('entity','DOC-ENTITY-FINANCIALS-v1','Financial Statements / Management Accounts',['fin_stmt','financial_statements'],'Active',true,['financial period','entity name match','turnover consistency','certification'],'Blocks reliance when required as business scale or periodic review evidence.',['Onboarding / KYC','Periodic review'],['risk recalculation where financial/business activity changes']),
+  canonicalAgent1Policy('entity','DOC-ENTITY-LICENCE-v1','Regulatory Licence',['licence','business_licence'],'Active',true,['licence applicability gate','entity name match','licence validity','licence scope','certification'],'Blocks reliance where a regulated/licensed business activity is declared.',['Onboarding / KYC'],[]),
   canonicalAgent1Policy('entity','DOC-ENTITY-CONTRACTS-v1','Contracts / invoices / business activity evidence',['contracts','invoices'],'Active',true,['name match','business relevance','clarity'],'Blocks automated reliance only when used in memo or approval reasoning.',['Onboarding / KYC','Periodic review'],['memo staleness if cited evidence changes']),
   canonicalAgent1Policy('entity','DOC-ENTITY-AML-POLICY-v1','AML/compliance policy',['aml_policy','compliance_policy'],'Active',true,['policy completeness','policy date','relevance'],'Blocks reliance when required for regulated/high-risk/intermediary review.',['Onboarding / KYC'],[]),
   canonicalAgent1Policy('entity','DOC-ENTITY-GOOD-STANDING-v1','Certificate of Good Standing / Incumbency',['cert_gs','certificate_good_standing'],'Manual review only',false,['issuer/authority review','date/freshness','entity continuity'],'Manual review only; accepted upload type but not runtime verified in pilot.',['Onboarding / KYC'],[]),
@@ -33929,7 +33929,7 @@ AGENT1_DOCUMENT_POLICIES = [
   canonicalAgent1Policy('person','DOC-PERSON-NATIONAL-ID-v1','National ID / government ID',['national_id','id_card','drivers_license','director_id','ubo_id'],'Active',true,['document expiry','name match','DOB match','nationality match','photo quality'],'Blocks identity reliance when required and failed/pending/stale.',['Onboarding / KYC','Director change','UBO change','Periodic review'],['re-screening if identity fields change']),
   canonicalAgent1Policy('person','DOC-PERSON-ADDRESS-v1','Proof of address',['poa_person','personal_poa','residential_address_proof'],'Active',true,['document date','name match','address match','clarity/readability','certification'],'Blocks person address reliance when required and failed/pending/stale.',['Onboarding / KYC','Director change','UBO change','Periodic review'],[]),
   canonicalAgent1Policy('person','DOC-PERSON-CV-v1','CV / LinkedIn profile',['cv','linkedin_profile'],'Active',true,['name match','employment history presence','employment relevance'],'Blocks EDD/person background reliance when required and failed/pending/stale.',['Onboarding / KYC','EDD basic pilot'],[]),
-  canonicalAgent1Policy('evidence','DOC-EVIDENCE-BANK-REFERENCE-v1','Bank reference',['bankref','bank_reference','pep_bank_reference','edd_bank_reference'],'Active',true,['bank letterhead','document date','entity/person name match','signatory'],'Blocks EDD/person/entity reliance when required and failed/pending/stale.',['Onboarding / KYC','EDD basic pilot'],[]),
+  canonicalAgent1Policy('evidence','DOC-EVIDENCE-BANK-REFERENCE-v1','Company Bank Reference Letter',['bankref','bank_reference','pep_bank_reference','edd_bank_reference'],'Active',true,['bank letterhead','document date','entity/person name match','signatory'],'Blocks EDD/person/entity reliance when required and failed/pending/stale.',['Onboarding / KYC','EDD basic pilot'],[]),
   canonicalAgent1Policy('person','DOC-PERSON-PEP-SUPPORT-v1','PEP declaration support',['pep_declaration','pep-declaration','pep_support'],'Active',true,['name match','source of wealth evidence','consistency / plausibility'],'Blocks EDD and approval reliance when required and failed/pending/stale.',['Onboarding / KYC','EDD basic pilot'],[]),
   canonicalAgent1Policy('evidence','DOC-EDD-SOW-v1','Source of Wealth',['source_wealth','sow','source_of_wealth'],'Active',true,['party match','source category match','value plausibility','date/freshness','supporting evidence consistency'],'Blocks person/evidence reliance when active required SOW evidence is requested.',['Onboarding / KYC','EDD basic pilot','Periodic review'],[]),
   canonicalAgent1Policy('edd','DOC-EDD-SOF-v1','Source of Funds',['source_funds','sof','source_of_funds'],'Active',true,['party match','source category match','value plausibility','date/freshness','supporting evidence consistency'],'Blocks EDD closure only when active required SOF evidence is requested.',['EDD basic pilot','Periodic review'],[]),

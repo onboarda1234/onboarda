@@ -3676,7 +3676,7 @@
             <div class="doc-item-top">
               <span class="doc-item-icon">💰</span>
               <div>
-                <div class="doc-item-name">Latest Annual Financial Statements / Management Accounts</div>
+                <div class="doc-item-name">Financial Statements / Management Accounts</div>
                 <div class="doc-item-desc">Audited accounts for most recent financial year. For companies less than 1 year old, provide financial forecast</div>
               </div>
             </div>
@@ -3751,7 +3751,7 @@
             <div class="doc-item-top">
               <span class="doc-item-icon">🪪</span>
               <div>
-                <div class="doc-item-name">Regulatory Licence(s)</div>
+                <div class="doc-item-name">Regulatory Licence</div>
                 <div class="doc-item-desc">Copies of any licences held by the entity</div>
               </div>
             </div>
@@ -4826,7 +4826,7 @@
             </div>
             <div class="ai-check-detail" style="border-left:3px solid var(--green);padding:14px 16px;">
               <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div style="display:flex;gap:10px;align-items:center;"><span style="font-size:20px;">📜</span><div><div style="font-size:13px;font-weight:600;">Memorandum & Articles of Association</div><div style="font-size:11px;color:var(--text3);">TechPay_MA.pdf · 1.2 MB · Uploaded 10 Mar 2026 14:30</div></div></div>
+                <div style="display:flex;gap:10px;align-items:center;"><span style="font-size:20px;">📜</span><div><div style="font-size:13px;font-weight:600;">Memorandum of Association</div><div style="font-size:11px;color:var(--text3);">TechPay_MA.pdf · 1.2 MB · Uploaded 10 Mar 2026 14:30</div></div></div>
                 <span class="ai-status passed">Received</span>
               </div>
             </div>
@@ -4850,7 +4850,7 @@
             </div>
             <div class="ai-check-detail" style="border-left:3px solid var(--amber);padding:14px 16px;">
               <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div style="display:flex;gap:10px;align-items:center;"><span style="font-size:20px;">🏦</span><div><div style="font-size:13px;font-weight:600;">Bank Reference Letter</div><div style="font-size:11px;color:var(--text3);">Not yet uploaded</div></div></div>
+                <div style="display:flex;gap:10px;align-items:center;"><span style="font-size:20px;">🏦</span><div><div style="font-size:13px;font-weight:600;">Company Bank Reference Letter</div><div style="font-size:11px;color:var(--text3);">Not yet uploaded</div></div></div>
                 <span class="ai-status pending-s">⏳ Pending</span>
               </div>
             </div>
@@ -7492,7 +7492,7 @@ function buildUploadPanelHTML(p) {
         '<input type="file" id="kyc-reg-dir-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'reg_dir\',this,\'' + p.type + '\')" />' +
       '</div>' +
       '<div>' +
-        '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128218; Register of Shareholders</label>' +
+        '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128218; Shareholder Register</label>' +
         '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-reg-sh-' + p.id + '\')" id="kyc-reg-sh-area-' + p.id + '"><span>&#128206;</span><span id="kyc-reg-sh-lbl-' + p.id + '">Click to upload</span></div>' +
         '<input type="file" id="kyc-reg-sh-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'reg_sh\',this,\'' + p.type + '\')" />' +
       '</div>' +
@@ -7502,7 +7502,7 @@ function buildUploadPanelHTML(p) {
         '<input type="file" id="kyc-cert-gs-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'cert_gs\',this,\'' + p.type + '\')" />' +
       '</div>' +
       '<div>' +
-        '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128212; Latest Financial Statements</label>' +
+        '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128212; Financial Statements / Management Accounts</label>' +
         '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-fin-stmt-' + p.id + '\')" id="kyc-fin-stmt-area-' + p.id + '"><span>&#128206;</span><span id="kyc-fin-stmt-lbl-' + p.id + '">Click to upload</span></div>' +
         '<input type="file" id="kyc-fin-stmt-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'fin_stmt\',this,\'' + p.type + '\')" />' +
       '</div>' +
@@ -8999,7 +8999,7 @@ var DOC_RULES = {
     ]
   },
   'doc-bank-ref': {
-    name: 'Bank Reference Letter',
+    name: 'Company Bank Reference Letter',
     checks: [
       { id: 'letterhead', label: 'Bank Letterhead', rule: 'Must be on official bank letterhead', type: 'quality' },
       { id: 'date-check', label: 'Date', rule: 'Must be dated within the last 3 months', type: 'age', maxMonths: 3 },
@@ -9088,7 +9088,7 @@ var KYC_PERSON_DOC_RULES = {
     ]
   },
   'bankref': {
-    name: 'Bank Reference Letter',
+    name: 'Personal Bank Reference Letter',
     checks: [
       { id: 'date-check', label: 'Document Date', rule: 'Must be dated within the last 3 months', type: 'age', maxMonths: 3 },
       { id: 'name-match', label: 'Name Match', rule: 'Account holder name must match the declared person', type: 'name' },
@@ -9123,7 +9123,7 @@ var KYC_PERSON_DOC_RULES = {
     ]
   },
   'reg_sh': {
-    name: 'Register of Shareholders (Intermediary)',
+    name: 'Shareholder Register (Intermediary)',
     checks: [
       { id: 'completeness', label: 'Shareholder List Complete', rule: 'All shareholders with ownership % must be listed', type: 'content' },
       { id: 'ownership-total', label: 'Ownership Totals', rule: 'Ownership percentages must sum to 100%', type: 'content' },
@@ -10983,7 +10983,7 @@ var SECTION_A_DOCS = [
   { id: 'doc-board-res', name: 'Board Resolution', required: true, conditional: false },
   { id: 'doc-structure-chart', name: 'Company Structure Chart', required: true, conditional: false },
   { id: 'doc-bank-statements', name: 'Bank Statements (Last 6 Months)', required: true, conditional: 'has-bank' },
-  { id: 'doc-license-cert', name: 'Regulatory Licence(s)', required: false, conditional: 'has-licence' }
+  { id: 'doc-license-cert', name: 'Regulatory Licence', required: false, conditional: 'has-licence' }
 ];
 
 var SECTION_C_DOCS = [
@@ -11240,7 +11240,7 @@ function buildReviewScreen() {
     var isInter = personType === 'intermediary';
     if (isInter) {
       var interDocs = ['cert-inc', 'reg-dir', 'reg-sh', 'cert-gs', 'fin-stmt'];
-      var interDocNames = ['Certificate of Incorporation', 'Register of Directors', 'Register of Shareholders', 'Certificate of Good Standing', 'Financial Statements'];
+      var interDocNames = ['Certificate of Incorporation', 'Register of Directors', 'Shareholder Register', 'Certificate of Good Standing', 'Financial Statements / Management Accounts'];
       var interUploaded = 0;
       var interVerified = 0;
       var intermediaryRows = '';
