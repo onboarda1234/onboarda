@@ -7687,15 +7687,17 @@ def repair_all_skip_verified_documents(db: DBConnection) -> int:
     per-row parse failures are skipped rather than aborting startup.
     """
     try:
-        # The '%skip%' pattern must be bound as a parameter, never inlined in
-        # the SQL text: psycopg2 always applies parameter interpolation, so a
-        # literal "%s" sequence inside "LIKE '%skip%'" is parsed as a
-        # placeholder and the scan throws on PostgreSQL (SQLite is unaffected,
-        # which is why the functional tests could not catch it).
+        # Two PostgreSQL parity rules, both staging-validated the hard way:
+        # 1. The '%skip%' pattern must be bound as a parameter, never inlined
+        #    in the SQL text — psycopg2 always applies parameter
+        #    interpolation, so a literal "%s" sequence in the SQL throws.
+        # 2. verification_results is native JSONB on PostgreSQL (TEXT on
+        #    SQLite), and jsonb has no LIKE operator — CAST to TEXT first,
+        #    the same idiom the PEP-declaration queries use.
         rows = db.execute(
             "SELECT id, verification_results FROM documents "
             "WHERE verification_status='verified' "
-            "AND verification_results LIKE ?",
+            "AND CAST(verification_results AS TEXT) LIKE ?",
             ("%skip%",),
         ).fetchall()
     except Exception as e:
@@ -7704,10 +7706,17 @@ def repair_all_skip_verified_documents(db: DBConnection) -> int:
 
     repaired = []
     for row in rows:
-        try:
-            results = json.loads(row["verification_results"] or "{}")
-        except Exception:
-            continue
+        # psycopg2 deserialises JSONB columns to Python dicts; SQLite
+        # returns the TEXT verbatim. Accept both (safe_json_loads semantics,
+        # inlined so db.py keeps zero higher-layer imports).
+        raw = row["verification_results"]
+        if isinstance(raw, dict):
+            results = raw
+        else:
+            try:
+                results = json.loads(raw or "{}")
+            except Exception:
+                continue
         if not isinstance(results, dict):
             continue
         checks = results.get("checks")
