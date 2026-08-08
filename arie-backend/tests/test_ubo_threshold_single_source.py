@@ -170,8 +170,10 @@ def test_doc15b_fails_undeclared_shareholder_in_new_band():
     assert "Band Holder" in doc15b["message"]
 
 
-def test_doc15b_exactly_at_threshold_qualifies():
-    # >= comparator: exactly 20.0 qualifies and must be declared.
+def test_doc15b_exactly_at_threshold_must_be_declared():
+    # The discriminating >= pin (review-strengthened): an UNDECLARED
+    # exactly-20.0 holder FAILS under >= but would pass under a strict >
+    # regression. The declared-holder PASS leg rides along.
     from document_verification import run_rule_checks
     from verification_matrix import CheckStatus
 
@@ -179,8 +181,15 @@ def test_doc15b_exactly_at_threshold_qualifies():
         {"name": "Edge Holder", "percentage": 20.0},
         {"name": "Main Holder", "percentage": 80.0},
     ]}
-    ps = {"ubos": [{"full_name": "Edge Holder"}, {"full_name": "Main Holder"}],
-          "registered_entity_name": "Edge Test Ltd"}
-    results = run_rule_checks("reg_sh", "entity", extracted, ps, "LOW")
+    undeclared = {"ubos": [{"full_name": "Main Holder"}],
+                  "registered_entity_name": "Edge Test Ltd"}
+    results = run_rule_checks("reg_sh", "entity", extracted, undeclared, "LOW")
+    doc15b = next(r for r in results if r.get("id") == "DOC-15B")
+    assert doc15b["result"] == CheckStatus.FAIL
+    assert "Edge Holder" in doc15b["message"]
+
+    declared = {"ubos": [{"full_name": "Edge Holder"}, {"full_name": "Main Holder"}],
+                "registered_entity_name": "Edge Test Ltd"}
+    results = run_rule_checks("reg_sh", "entity", extracted, declared, "LOW")
     doc15b = next(r for r in results if r.get("id") == "DOC-15B")
     assert doc15b["result"] == CheckStatus.PASS
