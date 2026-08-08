@@ -48,7 +48,7 @@ append-only, delete-protected.
   and is the authoritative reverse map for webhook routing.
 
 ## 6. Fixture governance
-QAFIX seeder (`seed_screening_qa_fixtures.py`) creates ARF-QAFIX-001..005 + the inactive
+QAFIX seeder (`seed_screening_qa_fixtures.py`) creates ARF-QAFIX-001..005 and ARF-QAFIX-008 (licensed-entity LIC-GATE fixture; 006/007 are occupied staging identities outside the managed set) + the inactive
 `qafix-client`; refuses production; deletes only under the sanctioned
 `fixture_cleanup_nonprod` context. Known limitation: the wipe cannot clear
 fixture-linked `edd_cases` created by disposition blast radius (open follow-up).

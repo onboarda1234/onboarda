@@ -27,6 +27,13 @@ ARF-QAFIX-002    QA Fixture Second Review Ltd   Pending second review (first
 ARF-QAFIX-003    QA Fixture Follow Up Ltd       Follow-up Required (RFI recorded).
 ARF-QAFIX-004    QA Fixture Provider Error Ltd  Failed / Provider Error.
 ARF-QAFIX-005    QA Fixture Stale Ltd           Stale / Requires Refresh.
+ARF-QAFIX-008    QA Fixture Licensed Entity Ltd Clear; declares a regulatory
+                                                licence and carries an
+                                                entity:licence document so the
+                                                LIC-GATE PASS path is
+                                                exercisable (006/007 are
+                                                occupied staging identities —
+                                                see the FIXTURES entry).
 ===============  =============================  ==================================
 
 Usage::
@@ -201,6 +208,42 @@ FIXTURES = [
         "directors": [],
         "review": None,
     },
+    {
+        # PR-C rider: the only fixture whose pre-screening DECLARES a
+        # regulatory licence, with a licence document seeded so the
+        # LIC-GATE PASS path is exercisable end-to-end (every other
+        # fixture declares no licence, so the gate always short-circuits
+        # to SKIP). The fixture:// file_path follows the convention of
+        # every other seeder — evidence checks degrade on the virtual
+        # file, which is fine: the gate itself is pure prescreening logic.
+        #
+        # Identity is deliberately 008: ARF-QAFIX-006 and -007 are OCCUPIED
+        # staging identities outside this seeder's managed set — 006 is the
+        # protected-module pending-second-review evidence specimen pinned by
+        # the PR-MON-PROTECTED-BASELINE-1 semantic baseline and both staging
+        # smoke scripts. Reusing an occupied id would hijack it and the wipe
+        # would destroy the specimen.
+        "id": "f1xedqa000000008",
+        "ref": "ARF-QAFIX-008",
+        "company": "QA Fixture Licensed Entity Ltd",
+        "report": _report(matched=False),
+        "directors": [],
+        "review": None,
+        "prescreening_extra": {
+            "regulatory_licences": "EMI licence Malta, ref QA-12345",
+            "registered_entity_name": "QA Fixture Licensed Entity Ltd",
+            "business_activity": "Electronic money issuance",
+        },
+        "documents": [
+            {
+                "id": "f1xedqa0000doc08",
+                "doc_type": "licence",
+                "doc_name": "QA Regulatory Licence.pdf",
+                "file_path": "fixture://qa-licence-008",
+                "slot_key": "entity:licence",
+            }
+        ],
+    },
 ]
 
 FIXTURE_REFS = tuple(f["ref"] for f in FIXTURES)
@@ -228,12 +271,14 @@ FIXTURE_REFS = tuple(f["ref"] for f in FIXTURES)
 #
 # ACCEPTED RESIDUAL RISK — ``staging`` is also the pilot stack
 # (staging.regmind.co, per CLAUDE.md), so a single unconfirmed CLI run can
-# write fixtures into a pilot database. Blast radius is bounded (five
-# hard-coded ``f1xed*`` ids plus the qafix client, all ``is_fixture=True`` and
-# therefore hidden from the default officer queue), but the runbook records two
-# effects the wipe cannot undo: fixture-linked ``edd_cases`` are not cleared,
-# and re-seeding reuses application ids, which conflicts on the live
-# ComplyAdvantage Mesh account. ``arie-backend/fixtures/cli.py`` already
+# write fixtures into a pilot database. Blast radius is bounded to the
+# hard-coded ``f1xed*`` ids in FIXTURES plus the qafix client (deleted only
+# when no out-of-set application still references it), all ``is_fixture=True``
+# and therefore hidden from the default officer queue, but the runbook
+# records effects the wipe cannot undo: fixture-linked ``edd_cases`` are not
+# cleared, verification runs against the ARF-QAFIX-008 licence document leave
+# orphan ``agent_executions`` rows (no FK), and re-seeding reuses application
+# ids, which conflicts on the live ComplyAdvantage Mesh account. ``arie-backend/fixtures/cli.py`` already
 # implements the stronger pattern (ENVIRONMENT=staging AND ALLOW_FIXTURE_SEED=1
 # AND an explicit --confirm token); adopting it here is the tracked follow-up.
 # It is deliberately NOT changed in this commit because it alters the operator
@@ -309,9 +354,22 @@ def wipe_screening_qa_fixtures(db):
     placeholders = ",".join("?" for _ in fixture_ids)
     with _fixture_cleanup_context("Remove/refresh screening QA disposition fixtures (f1xedqa namespace)"):
         db.execute(f"DELETE FROM screening_reviews WHERE application_id IN ({placeholders})", fixture_ids)
+    # documents is not a regulated table (the sanctioned-context validator
+    # rejects unclassified tables in its scope) — plain delete like directors.
+    db.execute(f"DELETE FROM documents WHERE application_id IN ({placeholders})", fixture_ids)
     db.execute(f"DELETE FROM directors WHERE application_id IN ({placeholders})", fixture_ids)
     db.execute(f"DELETE FROM applications WHERE id IN ({placeholders})", fixture_ids)
-    db.execute("DELETE FROM clients WHERE id = ?", (QAFIX_CLIENT_ID,))
+    # Delete the owning client only when nothing else references it: on
+    # staging, applications OUTSIDE this seeder's managed set (e.g. the
+    # ARF-QAFIX-006 protected-module specimen) share qafix-client, and
+    # applications.client_id has no ON DELETE action — an unconditional
+    # delete would FK-fail and abort the reseed.
+    remaining = db.execute(
+        "SELECT COUNT(*) AS c FROM applications WHERE client_id = ?",
+        (QAFIX_CLIENT_ID,),
+    ).fetchone()
+    if not int((remaining or {}).get("c") or 0):
+        db.execute("DELETE FROM clients WHERE id = ?", (QAFIX_CLIENT_ID,))
     db.commit()
     return len(fixture_ids)
 
@@ -338,11 +396,14 @@ def seed_screening_qa_fixtures(db):
                 "Technology",
                 "SME",
                 "in_review",
-                json.dumps({
-                    "company_name": fixture["company"],
-                    "screening_report": fixture["report"],
-                    "last_screened_at": SCREENED_AT,
-                }),
+                json.dumps(dict(
+                    {
+                        "company_name": fixture["company"],
+                        "screening_report": fixture["report"],
+                        "last_screened_at": SCREENED_AT,
+                    },
+                    **fixture.get("prescreening_extra", {})
+                )),
                 # Python bool, NOT an integer literal: is_fixture is BOOLEAN on
                 # PostgreSQL (psycopg2 raises DatatypeMismatch for ints, which
                 # SQLite silently tolerated — the first staging seeder run
@@ -364,6 +425,29 @@ def seed_screening_qa_fixtures(db):
                     director["full_name"],
                     director["nationality"],
                     director["is_pep"],
+                ),
+            )
+        for document in fixture.get("documents", []):
+            db.execute(
+                """
+                INSERT INTO documents
+                (id, application_id, doc_type, doc_name, file_path, slot_key,
+                 verification_status, is_current, version)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, 1)
+                """,
+                (
+                    document["id"],
+                    fixture["id"],
+                    document["doc_type"],
+                    document["doc_name"],
+                    document["file_path"],
+                    # slot_key must match "<category>:<doc_type>" or the back
+                    # office integrity gate rejects the row
+                    # (conflicting_document_slot_identity).
+                    document["slot_key"],
+                    # Python bool for the same PostgreSQL BOOLEAN reason as
+                    # is_fixture (documents.is_current is BOOLEAN on PG).
+                    True,
                 ),
             )
         review = fixture["review"]

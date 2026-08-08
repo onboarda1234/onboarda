@@ -679,10 +679,51 @@ class TestStartupBackfill:
 
         src = inspect.getsource(repair_all_skip_verified_documents)
         code_only = "\n".join(line.split("#", 1)[0] for line in src.splitlines())
-        assert "LIKE ?" in code_only, "backfill scan must use a parameterized LIKE"
+        assert "CAST(verification_results AS TEXT) LIKE ?" in code_only, (
+            "backfill scan must CAST the JSONB column to TEXT and bind the "
+            "LIKE pattern as a parameter (verification_results is native "
+            "JSONB on PostgreSQL — jsonb has no LIKE operator)"
+        )
         assert "LIKE '%" not in code_only, (
             "literal % in SQL text breaks psycopg2 parameter interpolation on PostgreSQL"
         )
+
+    def test_repair_handles_postgres_jsonb_dict_rows(self):
+        # On PostgreSQL, psycopg2 deserialises the JSONB column to a Python
+        # dict before the repair ever sees it — json.loads(dict) would raise
+        # and silently skip every row (the second staging failure mode).
+        from db import repair_all_skip_verified_documents
+
+        class _FakePGConnection:
+            def __init__(self):
+                self.calls = []
+                self._pending = None
+
+            def execute(self, sql, params=()):
+                self.calls.append((sql, params))
+                self._pending = sql
+                return self
+
+            def fetchall(self):
+                assert "CAST(verification_results AS TEXT) LIKE ?" in self._pending
+                return [
+                    {"id": "pgdoc1", "verification_results": {
+                        "overall": "verified",
+                        "checks": [{"id": "LIC-GATE", "result": "skip"}]}},
+                    {"id": "pgdoc2", "verification_results": {
+                        "overall": "verified",
+                        "checks": [{"id": "DOC-05", "result": "pass"}]}},
+                ]
+
+        fake = _FakePGConnection()
+        assert repair_all_skip_verified_documents(fake) == 1
+        updates = [c for c in fake.calls if c[0].startswith("UPDATE documents")]
+        assert updates == [(
+            "UPDATE documents SET verification_status='skipped', verified_at=NULL WHERE id=?",
+            ("pgdoc1",),
+        )]
+        audits = [c for c in fake.calls if "INSERT INTO audit_log" in c[0]]
+        assert len(audits) == 1 and "all_skip_verified_repair" in audits[0][1][3]
 
 
 class TestMemoExcludesNotApplicable:
