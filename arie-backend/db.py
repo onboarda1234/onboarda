@@ -11,6 +11,10 @@ import hashlib
 import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+
+# C10b: single source for the UBO ownership threshold (verification_matrix
+# is a pure data module — no import cycle). Used by the agent seed strings.
+from verification_matrix import UBO_THRESHOLD_PCT
 from typing import Any, Optional, Dict, List, Tuple
 import secrets
 import subprocess
@@ -11442,7 +11446,7 @@ _AGENT_DEFINITIONS_V2 = {
         ),
         "checks": [
             "Direct ownership calculation (rule)", "Indirect ownership via intermediaries (rule)",
-            "UBO threshold qualification ≥25% (rule)", "Total ownership completeness (rule)",
+            f"UBO threshold qualification ≥{UBO_THRESHOLD_PCT:.0f}% (rule)", "Total ownership completeness (rule)",
             "Circular ownership detection (rule)", "Nominee arrangement detection (rule)",
             "Trust/foundation structure detection (rule)", "Holding company/SPV detection (rule)",
             "Opaque jurisdiction flagging (rule)", "Shell company indicator aggregation (rule)",
@@ -12238,7 +12242,7 @@ def seed_initial_data(db: DBConnection):
         ])
         agent4_checks = json.dumps([
             "Direct ownership calculation (rule)", "Indirect ownership via intermediaries (rule)",
-            "UBO threshold qualification ≥25% (rule)", "Total ownership completeness (rule)",
+            f"UBO threshold qualification ≥{UBO_THRESHOLD_PCT:.0f}% (rule)", "Total ownership completeness (rule)",
             "Circular ownership detection (rule)", "Nominee arrangement detection (rule)",
             "Trust/foundation structure detection (rule)", "Holding company/SPV detection (rule)",
             "Opaque jurisdiction flagging (rule)", "Shell company indicator aggregation (rule)",

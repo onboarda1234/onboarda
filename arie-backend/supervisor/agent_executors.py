@@ -749,7 +749,9 @@ def execute_external_database(application_id: str, context: Dict[str, Any]) -> D
 # ═══════════════════════════════════════════════════════════
 
 # --- Agent 4 constants (rule-based thresholds) ---
-UBO_THRESHOLD_PCT = 25.0          # FATF R24/R25: beneficial owner = ≥25% ownership
+# C10b: single-sourced from verification_matrix (FATF R24/R25 citation and
+# change-control note live there). Local name preserved for call sites.
+from verification_matrix import UBO_THRESHOLD_PCT
 COMPLETENESS_GOOD = 0.75          # ownership ≥75% mapped → acceptable
 COMPLETENESS_PARTIAL = 0.50       # ownership ≥50% mapped → partial
 COMPLEXITY_UBO_COUNT = 3           # >3 UBOs → complex structure

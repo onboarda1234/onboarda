@@ -23,6 +23,9 @@ import json
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+# C10b: schema default single-sourced from verification_matrix.
+from verification_matrix import UBO_THRESHOLD_PCT as _UBO_THRESHOLD_PCT_DEFAULT
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -369,7 +372,7 @@ class CorporateStructureUBOOutput(AgentOutputBase):
     ubos_identified: List[Dict[str, Any]] = Field(default_factory=list)
     ubo_completeness: Optional[float] = Field(None, ge=0.0, le=1.0)
     qualified_ubo_count: int = Field(0, description="Count of owners meeting UBO threshold")
-    ubo_threshold_pct: float = Field(25.0, description="Threshold percentage for UBO qualification")
+    ubo_threshold_pct: float = Field(_UBO_THRESHOLD_PCT_DEFAULT, description="Threshold percentage for UBO qualification")
     complex_structure_flag: bool = False
     shell_company_indicators: List[str] = Field(default_factory=list)
     circular_ownership_detected: bool = False

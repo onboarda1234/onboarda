@@ -46,6 +46,7 @@ from verification_matrix import (
     TriggerTiming,
     EscalationOutcome,
     PSField,
+    UBO_THRESHOLD_PCT,
     get_checks_for_doc_type,
     get_ai_checks_for_doc_type,
     get_rule_checks_for_doc_type,
@@ -184,7 +185,8 @@ DATE_WINDOW_3_MONTHS  = 90             # days
 DATE_WINDOW_12_MONTHS = 365
 DATE_WINDOW_18_MONTHS = 548
 DATE_WINDOW_6_MONTHS  = 182
-UBO_THRESHOLD_PCT = 25.0               # ≥25% shareholding → must be declared UBO
+# UBO_THRESHOLD_PCT is imported from verification_matrix — the single
+# source for the UBO ownership threshold (C10b).
 
 
 # ── Result builder helpers ─────────────────────────────────────────
@@ -1050,11 +1052,12 @@ def run_rule_checks(doc_type: str, category: str,
                     missing.append(holder.get("name", "unknown"))
             if missing:
                 results.append(_fail(id_, label, cls,
-                                     f"Shareholder(s) with ≥25% not declared as UBO: {', '.join(missing)}",
+                                     f"Shareholder(s) with ≥{UBO_THRESHOLD_PCT:.0f}% not declared as UBO: "
+                                     f"{', '.join(missing)}",
                                      rule_type=rtype))
             else:
                 results.append(_pass(id_, label, cls,
-                                     "All shareholders ≥25% are declared as UBOs",
+                                     f"All shareholders ≥{UBO_THRESHOLD_PCT:.0f}% are declared as UBOs",
                                      rule_type=rtype))
 
         # ── Director Completeness (set comparison) ──
