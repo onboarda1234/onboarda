@@ -583,26 +583,32 @@ def _name_similarity(a: str, b: str) -> float:
 
 
 def _check_name_match(id_, label, extracted: str, declared: str,
-                      classification=CheckClassification.RULE) -> dict:
-    """Run a name match check and return result dict."""
+                      classification=CheckClassification.RULE,
+                      ps_field=None) -> dict:
+    """Run a name match check and return result dict.
+
+    ps_field: the prescreening field the declared value came from (C4).
+    Defaults to the label for backward compatibility with direct callers.
+    """
+    ps_field = ps_field or label
     if not extracted:
         return _fail(id_, label, classification,
                      "Name could not be extracted from document — manual review required",
-                     ps_field=label, ps_value=declared, extracted_value=extracted)
+                     ps_field=ps_field, ps_value=declared, extracted_value=extracted)
     sim = _name_similarity(extracted, declared)
     if sim >= NAME_MATCH_PASS_THRESHOLD:
         return _pass(id_, label, classification,
                      f"Name match confirmed ({int(sim*100)}%)",
-                     ps_field=label, ps_value=declared, extracted_value=extracted,
+                     ps_field=ps_field, ps_value=declared, extracted_value=extracted,
                      confidence=sim, rule_type="name")
     if sim >= NAME_MATCH_WARN_THRESHOLD:
         return _warn(id_, label, classification,
                      f"Name partially matches ({int(sim*100)}%) — verify manually",
-                     ps_field=label, ps_value=declared, extracted_value=extracted,
+                     ps_field=ps_field, ps_value=declared, extracted_value=extracted,
                      confidence=sim, rule_type="name")
     return _fail(id_, label, classification,
                  f"Name mismatch: document has '{extracted}', declared is '{declared}' ({int(sim*100)}%)",
-                 ps_field=label, ps_value=declared, extracted_value=extracted,
+                 ps_field=ps_field, ps_value=declared, extracted_value=extracted,
                  confidence=sim, rule_type="name")
 
 
@@ -823,18 +829,37 @@ def run_rule_checks(doc_type: str, category: str,
         cls = CheckClassification.RULE
         rtype = chk.get("rule_type")
 
-        # ── Entity Name Match ──
-        if label in ("Entity Name Match", "Signatory Match", "Name Match") and rtype == "name":
-            declared = ps_get(PSField.COMPANY_NAME, "company_name",
-                              PSField.PERSON_FULL_NAME, "full_name",
-                              "registered_entity_name", "entity_name")
+        # ── Name matches (C4: dispatch by rule_type, resolve by the
+        # check's own ps_field) ──
+        # The old label-tuple dispatch resolved every name check through one
+        # global chain that put the COMPANY name first. Production
+        # prescreening context MERGES the person's full_name into the
+        # application dict (which already carries registered_entity_name),
+        # so every person-document Name Match compared the person's
+        # extracted name against the company name and failed. Each check's
+        # matrix-declared ps_field is authoritative; the legacy global
+        # chain remains only as a fallback for checks with no ps_field.
+        if rtype == "name":
+            ps_field = chk.get("ps_field") or ""
+            if ps_field == PSField.COMPANY_NAME:
+                declared = ps_get(PSField.COMPANY_NAME, "company_name", "entity_name")
+            elif ps_field == PSField.PERSON_FULL_NAME:
+                declared = ps_get(PSField.PERSON_FULL_NAME, "person_name")
+            elif ps_field == PSField.AUTHORISED_SIGNATORY:
+                declared = ps_get(PSField.AUTHORISED_SIGNATORY)
+            else:
+                declared = ps_get(PSField.COMPANY_NAME, "company_name",
+                                  PSField.PERSON_FULL_NAME, "full_name",
+                                  "registered_entity_name", "entity_name")
             extracted = ef.get("entity_name") or ef.get("name") or ef.get("company_name", "")
             if not declared:
                 results.append(_warn(id_, label, cls,
                                      "No declared name found in pre-screening to compare against",
+                                     ps_field=ps_field or None,
                                      rule_type=rtype))
                 continue
-            results.append(_check_name_match(id_, label, extracted, declared, cls))
+            results.append(_check_name_match(id_, label, extracted, declared, cls,
+                                             ps_field=ps_field or None))
 
         # ── Registration Number Match ──
         elif id_ == "DOC-06":
@@ -890,7 +915,10 @@ def run_rule_checks(doc_type: str, category: str,
                                                DATE_WINDOW_18_MONTHS, cls))
 
         # ── Document Expiry (passport, national_id, licence) ──
-        elif rtype == "date" and "expiry" in label.lower() or id_ in ("DOC-49", "DOC-53", "DOC-34"):
+        # C4: id-only dispatch. The old `rtype == "date" and "expiry" in
+        # label.lower()` clause was redundant (every date check is
+        # id-enumerated in this chain) and label-coupled.
+        elif id_ in ("DOC-49", "DOC-53", "DOC-34"):
             extracted_date = ef.get("expiry_date") or ef.get("expiry") or ef.get("validity_to")
             warn_days = 180 if id_ in ("DOC-49", "DOC-53") else 30
             results.append(_check_not_expired(id_, label, extracted_date, warn_days, cls))

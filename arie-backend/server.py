@@ -15667,7 +15667,15 @@ def _validate_ai_agent_payload(data, db, existing_id=None):
     return normalized, errors
 
 
-AI_CHECK_ALLOWED_TYPES = {"name", "content", "quality", "expiry", "age", "ai", "rule", "hybrid", "gate", "advisory", "presence"}
+# C5: one vocabulary — the union of the matrix seed (rule_type or
+# classification: name/date/date_match/enum/exact/numeric/presence/set/
+# threshold/hash/ai/hybrid), the supplementary seed (content/quality/age)
+# and the legacy admin values (expiry/rule/gate/advisory).
+AI_CHECK_ALLOWED_TYPES = {
+    "name", "content", "quality", "expiry", "age", "ai", "rule", "hybrid",
+    "gate", "advisory", "presence", "date", "date_match", "enum", "exact",
+    "numeric", "set", "threshold", "hash",
+}
 AI_CHECK_ALLOWED_AUTHORITY = {"gate", "rule", "hybrid", "ai", "advisory"}
 AI_CHECK_ALLOWED_SEVERITY = {"info", "low", "medium", "high", "critical"}
 
@@ -15699,7 +15707,9 @@ def _validate_ai_checks_payload(data):
             continue
         check_id = str(check.get("id") or check.get("check_id") or "").strip()
         if check_id:
-            if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,80}", check_id):
+            # C5: seed-shaped ids are uppercase (DOC-05, LIC-GATE) — the
+            # register round-trip must not reject them.
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{1,80}", check_id):
                 errors.append({"code": "invalid_check_id", "field": f"checks[{idx}].id", "message": "check id must be a stable lowercase identifier"})
             if check_id in seen_ids:
                 errors.append({"code": "duplicate_check_id", "field": f"checks[{idx}].id", "message": "check ids must be unique"})

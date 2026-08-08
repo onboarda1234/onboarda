@@ -1132,6 +1132,12 @@ def get_checks_for_doc_type(doc_type: str, category: str = "entity") -> list:
             entry = ALL_DOC_CHECKS.get("poa_person", {})
         else:
             entry = ALL_DOC_CHECKS.get("poa", {})
+    elif doc_type == "bankref" and category == "person":
+        # C4 (PR-G): person bank references previously received the ENTITY
+        # check list — Entity Name Match compared the person's letter
+        # against the company name. bankref_pep is the person-category
+        # entry (doc_type_alias "bankref"), same pattern as poa_person.
+        entry = ALL_DOC_CHECKS.get("bankref_pep", {})
     else:
         entry = ALL_DOC_CHECKS.get(doc_type, {})
 

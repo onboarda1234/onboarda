@@ -310,7 +310,12 @@ POLICY_DEFINITIONS = [
     },
     {
         "key": "bankref",
-        "label": "Company Bank Reference Letter",
+        # PR-G: neutral FAMILY title — this one policy spans the entity
+        # (Company) and person (Personal) bank references; a Company-
+        # titled family mislabelled unlinked person docs via the
+        # documentExpectedTypeLabel policy fallback. Requirement labels
+        # stay Company/Personal where linked.
+        "label": "Bank Reference Letter",
         "category": "evidence",
         "policy_id": "DOC-EVIDENCE-BANK-REFERENCE-v1",
         "aliases": ["bank_reference", "pep_bank_reference", "edd_bank_reference"],

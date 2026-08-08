@@ -60,7 +60,9 @@ def test_backend_registers_carry_the_canon():
     assert labels["reg_sh"] == "Shareholder Register"
     assert labels["fin_stmt"] == "Financial Statements / Management Accounts"
     assert labels["licence"] == "Regulatory Licence"
-    assert labels["bankref"] == "Company Bank Reference Letter"
+    # PR-G: the shared evidence policy FAMILY is neutral — it spans the
+    # entity (Company) and person (Personal) bank references.
+    assert labels["bankref"] == "Bank Reference Letter"
 
 
 def test_enhanced_requirement_labels_carry_the_canon():
