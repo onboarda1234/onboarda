@@ -179,13 +179,13 @@ def test_application_scan_cap_reported_in_metrics(db):
 
 
 def test_licensed_fixture_exercises_lic_gate_pass_path(db):
-    """PR-C rider: ARF-QAFIX-006 is the one fixture whose pre-screening
+    """PR-C rider: ARF-QAFIX-008 is the one fixture whose pre-screening
     declares a regulatory licence, seeded WITH a licence document, so the
     LIC-GATE PASS path is exercisable on staging (every other fixture
     declares no licence and short-circuits to SKIP)."""
     from verification_matrix import is_licence_applicable
 
-    fixture = next(f for f in FIXTURES if f["ref"] == "ARF-QAFIX-006")
+    fixture = next(f for f in FIXTURES if f["ref"] == "ARF-QAFIX-008")
     assert is_licence_applicable(fixture["prescreening_extra"]) is True
     assert fixture["documents"][0]["slot_key"] == "entity:licence"
     assert fixture["documents"][0]["doc_type"] == "licence"
@@ -193,7 +193,7 @@ def test_licensed_fixture_exercises_lic_gate_pass_path(db):
 
     seed_screening_qa_fixtures(db)
     app = db.execute(
-        "SELECT prescreening_data FROM applications WHERE ref='ARF-QAFIX-006'"
+        "SELECT prescreening_data FROM applications WHERE ref='ARF-QAFIX-008'"
     ).fetchone()
     ps = app["prescreening_data"]
     ps = ps if isinstance(ps, dict) else json.loads(ps)
@@ -201,7 +201,7 @@ def test_licensed_fixture_exercises_lic_gate_pass_path(db):
 
     doc = db.execute(
         "SELECT doc_type, slot_key, verification_status, is_current FROM documents "
-        "WHERE application_id='f1xedqa000000006'"
+        "WHERE application_id='f1xedqa000000008'"
     ).fetchone()
     assert doc["doc_type"] == "licence"
     assert doc["slot_key"] == "entity:licence"
@@ -210,12 +210,12 @@ def test_licensed_fixture_exercises_lic_gate_pass_path(db):
     # wipe symmetry: reseed must not duplicate, wipe must remove the doc
     seed_screening_qa_fixtures(db)
     n = db.execute(
-        "SELECT COUNT(*) AS c FROM documents WHERE application_id='f1xedqa000000006'"
+        "SELECT COUNT(*) AS c FROM documents WHERE application_id='f1xedqa000000008'"
     ).fetchone()["c"]
     assert n == 1
     wipe_screening_qa_fixtures(db)
     n = db.execute(
-        "SELECT COUNT(*) AS c FROM documents WHERE application_id='f1xedqa000000006'"
+        "SELECT COUNT(*) AS c FROM documents WHERE application_id='f1xedqa000000008'"
     ).fetchone()["c"]
     assert n == 0
 

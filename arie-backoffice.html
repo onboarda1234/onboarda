@@ -8827,7 +8827,15 @@ function backofficeLicenceApplicable(app) {
   if (typeof ps.has_licence === 'boolean') return ps.has_licence;
   var val = ps.regulatory_licences;
   if (!val) return false;
-  var stripped = String(val).trim().toLowerCase();
+  if (typeof val !== 'string') {
+    // Python parity: str() of a truthy non-string is never a no-licence
+    // sentinel, so Python returns true — except empty containers, which
+    // Python treats as falsy ("not val") before it ever stringifies.
+    if (Array.isArray(val) && val.length === 0) return false;
+    if (typeof val === 'object' && Object.keys(val).length === 0) return false;
+    return true;
+  }
+  var stripped = val.trim().toLowerCase();
   if (stripped === '') return false;
   return ['none', 'n/a', 'na', 'no'].indexOf(stripped) === -1;
 }

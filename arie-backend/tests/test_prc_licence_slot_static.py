@@ -53,6 +53,20 @@ def test_backoffice_licence_predicate_matches_python_truth_table():
         {"has_licence": True},
         {"has_licence": False, "regulatory_licences": "EMI licence"},
         {},
+        # Non-string JSON shapes (review finding: str()/String() semantics
+        # diverge between Python and JS — the predicate must special-case
+        # non-strings to stay parity-correct on legacy/direct-DB rows).
+        {"regulatory_licences": ["none"]},
+        {"regulatory_licences": [""]},
+        {"regulatory_licences": []},
+        {"regulatory_licences": {}},
+        {"regulatory_licences": {"licence": "EMI"}},
+        {"regulatory_licences": 0},
+        {"regulatory_licences": 5},
+        {"regulatory_licences": [["none"]]},
+        {"regulatory_licences": True},
+        {"is_licensed": 1},
+        {"is_licensed": "true"},
     ]
     expected = [is_licence_applicable(ps) for ps in cases]
 
@@ -89,7 +103,7 @@ def test_expected_slots_gain_conditional_licence_entity_slot():
 
     # The 8 unconditional entity slots are unchanged and precede the branch.
     for doc_type in ("cert_inc", "memarts", "reg_sh", "reg_dir",
-                     "fin_stmt", "board_res", "structure_chart"):
+                     "fin_stmt", "poa", "board_res", "structure_chart"):
         assert builder.index("doc_type: '" + doc_type + "'") < guard_idx
 
 
