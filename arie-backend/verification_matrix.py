@@ -112,6 +112,17 @@ def _check(id_, label, classification, ps_field, why, logic, trigger, escalation
     }
 
 
+# ── Regulatory thresholds ─────────────────────────────────────────
+# C10b: THE single source for the UBO ownership threshold. Every other
+# surface derives from (or is guard-tested against) this constant —
+# document_verification, supervisor executors/schemas, the db.py agent
+# seeds, the server risk-indicator SQL, and the two UI check registers
+# (mirrored strings pinned by tests/test_ubo_threshold_single_source.py).
+# FATF R24/R25 cite 25%; any change is a regulatory decision (C10/PR-E,
+# founder + MLRO sign-off) and must be made HERE only.
+UBO_THRESHOLD_PCT = 25.0               # ≥25% shareholding → must be declared UBO
+
+
 # ── Cross-cutting checks (applied to ALL documents) ───────────────
 GATE_CHECKS = [
     _check(
@@ -340,11 +351,12 @@ SECTION_A_CHECKS = {
             ),
             _check(
                 id_="DOC-15B",
-                label="UBO Identification (≥25%)",
+                label=f"UBO Identification (≥{UBO_THRESHOLD_PCT:.0f}%)",
                 classification=CheckClassification.RULE,
                 ps_field=PSField.UBOS,
                 why="Threshold comparison + list membership is deterministic.",
-                logic="Any shareholder with ≥25% must appear in declared UBO list from pre-screening.",
+                logic=f"Any shareholder with ≥{UBO_THRESHOLD_PCT:.0f}% must appear "
+                      "in declared UBO list from pre-screening.",
                 trigger=TriggerTiming.AFTER_OCR,
                 escalation=EscalationOutcome.FAIL,
                 rule_type="threshold",
