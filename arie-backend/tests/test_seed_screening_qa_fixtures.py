@@ -15,6 +15,7 @@ import pytest
 
 import server
 from seed_screening_qa_fixtures import (
+    FIXTURES,
     FIXTURE_REFS,
     seed_screening_qa_fixtures,
     wipe_screening_qa_fixtures,
@@ -101,7 +102,7 @@ def test_seeder_is_idempotent_and_wipe_removes_the_set(db):
     seed_screening_qa_fixtures(db)
     seed_screening_qa_fixtures(db)  # re-run must not duplicate
     _, rows = _rows_by_ref(db, show_fixtures=True)
-    assert sum(len(items) for items in rows.values()) == 6  # 5 entities + 1 director
+    assert sum(len(items) for items in rows.values()) == 7  # 6 entities + 1 director
 
     wipe_screening_qa_fixtures(db)
     _, rows = _rows_by_ref(db, show_fixtures=True)
@@ -175,6 +176,48 @@ def test_application_scan_cap_reported_in_metrics(db):
     assert metrics["application_scan_capped"] == (
         metrics["applications_scanned"] >= metrics["application_scan_cap"]
     )
+
+
+def test_licensed_fixture_exercises_lic_gate_pass_path(db):
+    """PR-C rider: ARF-QAFIX-006 is the one fixture whose pre-screening
+    declares a regulatory licence, seeded WITH a licence document, so the
+    LIC-GATE PASS path is exercisable on staging (every other fixture
+    declares no licence and short-circuits to SKIP)."""
+    from verification_matrix import is_licence_applicable
+
+    fixture = next(f for f in FIXTURES if f["ref"] == "ARF-QAFIX-006")
+    assert is_licence_applicable(fixture["prescreening_extra"]) is True
+    assert fixture["documents"][0]["slot_key"] == "entity:licence"
+    assert fixture["documents"][0]["doc_type"] == "licence"
+    assert fixture["documents"][0]["id"].startswith("f1xed")
+
+    seed_screening_qa_fixtures(db)
+    app = db.execute(
+        "SELECT prescreening_data FROM applications WHERE ref='ARF-QAFIX-006'"
+    ).fetchone()
+    ps = app["prescreening_data"]
+    ps = ps if isinstance(ps, dict) else json.loads(ps)
+    assert is_licence_applicable(ps) is True
+
+    doc = db.execute(
+        "SELECT doc_type, slot_key, verification_status, is_current FROM documents "
+        "WHERE application_id='f1xedqa000000006'"
+    ).fetchone()
+    assert doc["doc_type"] == "licence"
+    assert doc["slot_key"] == "entity:licence"
+    assert doc["verification_status"] == "pending"
+
+    # wipe symmetry: reseed must not duplicate, wipe must remove the doc
+    seed_screening_qa_fixtures(db)
+    n = db.execute(
+        "SELECT COUNT(*) AS c FROM documents WHERE application_id='f1xedqa000000006'"
+    ).fetchone()["c"]
+    assert n == 1
+    wipe_screening_qa_fixtures(db)
+    n = db.execute(
+        "SELECT COUNT(*) AS c FROM documents WHERE application_id='f1xedqa000000006'"
+    ).fetchone()["c"]
+    assert n == 0
 
 
 def test_seeder_context_satisfies_the_regulated_delete_guard():

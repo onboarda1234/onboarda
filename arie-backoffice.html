@@ -1837,6 +1837,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
               <option value="structure_chart">Structure Chart</option>
               <option value="poa">Proof of Address</option>
               <option value="bankref">Bank Reference Letter</option>
+              <option value="licence">Regulatory Licence(s)</option>
               <option value="source_wealth">Source of Wealth</option>
               <option value="source_funds">Source of Funds</option>
               <option value="supporting_document">Other Supporting Document</option>
@@ -8815,6 +8816,22 @@ function registryPrescreeningData(app) {
   return (app && (app.prescreeningData || app.prescreening_data || app._raw_prescreening)) || {};
 }
 
+function backofficeLicenceApplicable(app) {
+  // JS mirror of verification_matrix.is_licence_applicable — keep the
+  // precedence identical: boolean is_licensed, then boolean has_licence,
+  // then the regulatory_licences declaration string (rejecting the
+  // no-licence sentinels). Divergence would show a Section A licence slot
+  // the verification engine treats as not applicable, or vice versa.
+  var ps = registryPrescreeningData(app);
+  if (typeof ps.is_licensed === 'boolean') return ps.is_licensed;
+  if (typeof ps.has_licence === 'boolean') return ps.has_licence;
+  var val = ps.regulatory_licences;
+  if (!val) return false;
+  var stripped = String(val).trim().toLowerCase();
+  if (stripped === '') return false;
+  return ['none', 'n/a', 'na', 'no'].indexOf(stripped) === -1;
+}
+
 function registryTruthy(value) {
   if (value === true || value === 1) return true;
   return ['1', 'true', 'yes', 'y'].indexOf(String(value || '').trim().toLowerCase()) >= 0;
@@ -11234,6 +11251,13 @@ function buildExpectedKycDocumentSlots(app) {
     { doc_type: 'board_res', label: 'Board Resolution', taxonomy_section: 'entity' },
     { doc_type: 'structure_chart', label: 'Company Structure Chart', taxonomy_section: 'entity' }
   ];
+  if (backofficeLicenceApplicable(app)) {
+    // C2/C2b: the licence slot exists only when the client declared a
+    // licence at pre-screening — unconditional it would render a
+    // permanently-empty Section A tile on every non-licensed file.
+    expected.push({ doc_type: 'licence', label: KYC_DOCUMENT_SLOT_LABELS.licence || 'Regulatory Licence(s)',
+                    person_id: null, taxonomy_section: 'entity', optional: true });
+  }
   (app.directors || []).forEach(function(person) {
     var owner = buildPartyDisplayName(person);
     expected.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.id || person.person_key, legacy_person_key: person.person_key || '', person_type: 'director', owner: owner, taxonomy_section: 'person' });

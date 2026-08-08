@@ -612,11 +612,20 @@ SECTION_A_CHECKS = {
         ],
     },
 
-    # ── Bank Reference Letter (conditional: HIGH/VERY_HIGH risk only) ──
+    # ── Bank Reference Letter (check list only — NOT a Section A slot) ──
+    # C2d: this entry supplies the verification CHECK LIST for bank
+    # reference documents; it deliberately declares no Section A expected
+    # slot. The operative company-level requirement is the
+    # "company_bank_reference" ENHANCED requirement (enhanced_requirements
+    # .py — Section C, applies_when existing_bank_account, HIGH/VERY_HIGH
+    # trigger), so the regulator can distinguish EDD evidence from CDD.
+    # Person-level bank references (directors/UBOs, Section B) reuse this
+    # check list via bankref_pep's doc_type_alias. "category" is a
+    # verification-engine routing key, not a UI section.
     "bankref": {
         "doc_name": "Bank Reference Letter",
         "category": "entity",
-        "conditional": "high_risk",   # Only required for HIGH/VERY_HIGH risk applications
+        "conditional": "high_risk",   # Gates check applicability, not a UI slot
         "checks": [
             _check(
                 id_="DOC-30",

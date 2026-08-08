@@ -201,6 +201,35 @@ FIXTURES = [
         "directors": [],
         "review": None,
     },
+    {
+        # PR-C rider: the only staging application whose pre-screening
+        # DECLARES a regulatory licence, with a licence document seeded so
+        # the LIC-GATE PASS path is exercisable end-to-end (every other
+        # fixture declares no licence, so the gate always short-circuits
+        # to SKIP). The fixture:// file_path follows the convention of
+        # every other seeder — evidence checks degrade on the virtual
+        # file, which is fine: the gate itself is pure prescreening logic.
+        "id": "f1xedqa000000006",
+        "ref": "ARF-QAFIX-006",
+        "company": "QA Fixture Licensed Entity Ltd",
+        "report": _report(matched=False),
+        "directors": [],
+        "review": None,
+        "prescreening_extra": {
+            "regulatory_licences": "EMI licence Malta, ref QA-12345",
+            "registered_entity_name": "QA Fixture Licensed Entity Ltd",
+            "business_activity": "Electronic money issuance",
+        },
+        "documents": [
+            {
+                "id": "f1xedqa0000doc06",
+                "doc_type": "licence",
+                "doc_name": "QA Regulatory Licence.pdf",
+                "file_path": "fixture://qa-licence-006",
+                "slot_key": "entity:licence",
+            }
+        ],
+    },
 ]
 
 FIXTURE_REFS = tuple(f["ref"] for f in FIXTURES)
@@ -309,6 +338,9 @@ def wipe_screening_qa_fixtures(db):
     placeholders = ",".join("?" for _ in fixture_ids)
     with _fixture_cleanup_context("Remove/refresh screening QA disposition fixtures (f1xedqa namespace)"):
         db.execute(f"DELETE FROM screening_reviews WHERE application_id IN ({placeholders})", fixture_ids)
+    # documents is not a regulated table (the sanctioned-context validator
+    # rejects unclassified tables in its scope) — plain delete like directors.
+    db.execute(f"DELETE FROM documents WHERE application_id IN ({placeholders})", fixture_ids)
     db.execute(f"DELETE FROM directors WHERE application_id IN ({placeholders})", fixture_ids)
     db.execute(f"DELETE FROM applications WHERE id IN ({placeholders})", fixture_ids)
     db.execute("DELETE FROM clients WHERE id = ?", (QAFIX_CLIENT_ID,))
@@ -338,11 +370,14 @@ def seed_screening_qa_fixtures(db):
                 "Technology",
                 "SME",
                 "in_review",
-                json.dumps({
-                    "company_name": fixture["company"],
-                    "screening_report": fixture["report"],
-                    "last_screened_at": SCREENED_AT,
-                }),
+                json.dumps(dict(
+                    {
+                        "company_name": fixture["company"],
+                        "screening_report": fixture["report"],
+                        "last_screened_at": SCREENED_AT,
+                    },
+                    **fixture.get("prescreening_extra", {})
+                )),
                 # Python bool, NOT an integer literal: is_fixture is BOOLEAN on
                 # PostgreSQL (psycopg2 raises DatatypeMismatch for ints, which
                 # SQLite silently tolerated — the first staging seeder run
@@ -364,6 +399,29 @@ def seed_screening_qa_fixtures(db):
                     director["full_name"],
                     director["nationality"],
                     director["is_pep"],
+                ),
+            )
+        for document in fixture.get("documents", []):
+            db.execute(
+                """
+                INSERT INTO documents
+                (id, application_id, doc_type, doc_name, file_path, slot_key,
+                 verification_status, is_current, version)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, 1)
+                """,
+                (
+                    document["id"],
+                    fixture["id"],
+                    document["doc_type"],
+                    document["doc_name"],
+                    document["file_path"],
+                    # slot_key must match "<category>:<doc_type>" or the back
+                    # office integrity gate rejects the row
+                    # (conflicting_document_slot_identity).
+                    document["slot_key"],
+                    # Python bool for the same PostgreSQL BOOLEAN reason as
+                    # is_fixture below.
+                    True,
                 ),
             )
         review = fixture["review"]
