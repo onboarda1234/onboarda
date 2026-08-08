@@ -5,7 +5,7 @@ Unit tests for rule-based executor logic.
 Tests cover:
   Agent 4:
     - Direct ownership calculation
-    - UBO threshold qualification (≥25%)
+    - UBO threshold qualification (≥ UBO_THRESHOLD_PCT, FSC 20%)
     - Ownership completeness tiers
     - Circular ownership detection
     - Nominee/trust/holding keyword detection

@@ -1093,7 +1093,9 @@ def execute_corporate_structure_ubo(application_id: str, context: Dict[str, Any]
         "confidence": confidence,
         "source": "deterministic_ubo_mapping",
         "evidence_refs": [],
-        "regulatory_relevance": f"FATF R24/R25 require identification of all beneficial owners ≥{UBO_THRESHOLD_PCT:.0f}%",
+        "regulatory_relevance": f"FSC rule requires identification of all beneficial owners "
+                                f"≥{UBO_THRESHOLD_PCT:.0f}% — deliberately stricter than the FATF R24/R25 "
+                                f"customary 25% figure.",
         "classification": "rule",
     })
 

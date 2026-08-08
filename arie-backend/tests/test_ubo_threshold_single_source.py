@@ -116,6 +116,9 @@ def test_portal_mirror_matches_the_constant():
     html = (ROOT / "arie-portal.html").read_text(encoding="utf-8")
     assert f"label: 'UBO Identification (\\u2265{pct}%)'" in html
     assert f"rule: 'Any shareholder holding \\u2265 {pct}% must be identified as a declared UBO'" in html
+    # PR-E absence guard (portal side): no stale 25%-era mirror survives.
+    for stale in ("UBO Identification (\\u226525%)", "if (pctValue > 25)"):
+        assert stale not in html, f"stale 25%-era portal mirror still present: {stale}"
 
 
 def test_supervisor_borderline_band_derives_from_the_constant():
@@ -145,3 +148,39 @@ def test_server_indicator_ladder_bottom_rung_matches_the_constant():
     src = (BACKEND / "server.py").read_text(encoding="utf-8")
     assert f"COALESCE(g.ownership_pct, 0) > {pct} THEN 1 ELSE 0 END AS ownership_above_20" in src
     assert f'"UBO ownership above {pct}%"' in src
+
+
+# ── Behavioural pins at the new boundary (review follow-up) ────────
+
+def test_doc15b_fails_undeclared_shareholder_in_new_band():
+    # A 22% shareholder was NOT a UBO under the old 25% rule; under the
+    # FSC 20% rule an undeclared 22% holder must FAIL DOC-15B.
+    from document_verification import run_rule_checks
+    from verification_matrix import CheckStatus
+
+    extracted = {"shareholders": [
+        {"name": "Band Holder", "percentage": 22.0},
+        {"name": "Main Holder", "percentage": 78.0},
+    ]}
+    ps = {"ubos": [{"full_name": "Main Holder"}],
+          "registered_entity_name": "Band Test Ltd"}
+    results = run_rule_checks("reg_sh", "entity", extracted, ps, "LOW")
+    doc15b = next(r for r in results if r.get("id") == "DOC-15B")
+    assert doc15b["result"] == CheckStatus.FAIL
+    assert "Band Holder" in doc15b["message"]
+
+
+def test_doc15b_exactly_at_threshold_qualifies():
+    # >= comparator: exactly 20.0 qualifies and must be declared.
+    from document_verification import run_rule_checks
+    from verification_matrix import CheckStatus
+
+    extracted = {"shareholders": [
+        {"name": "Edge Holder", "percentage": 20.0},
+        {"name": "Main Holder", "percentage": 80.0},
+    ]}
+    ps = {"ubos": [{"full_name": "Edge Holder"}, {"full_name": "Main Holder"}],
+          "registered_entity_name": "Edge Test Ltd"}
+    results = run_rule_checks("reg_sh", "entity", extracted, ps, "LOW")
+    doc15b = next(r for r in results if r.get("id") == "DOC-15B")
+    assert doc15b["result"] == CheckStatus.PASS

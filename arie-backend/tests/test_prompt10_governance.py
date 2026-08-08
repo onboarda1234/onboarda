@@ -193,20 +193,24 @@ class TestGdprPeriodicCallbackRegistered:
 
 
 # ════════════════════════════════════════════════════════════
-# 4. UBO Threshold Is FATF Standard
+# 4. UBO Threshold Is The FSC Rule (20%)
 # ════════════════════════════════════════════════════════════
 
 class TestUboThreshold:
-    """UBO threshold must be 25.0% per FATF Recommendation 24."""
+    """UBO threshold must be 20.0% per the FSC rule (C10/PR-E, founder +
+    MLRO approved 2026-08-08) — deliberately stricter than the FATF R24/R25
+    customary 25% figure."""
 
-    def test_ubo_threshold_is_25_percent(self):
-        """UBO_THRESHOLD_PCT in document_verification.py must be 25.0."""
+    def test_ubo_threshold_is_fsc_20_percent(self):
+        """UBO_THRESHOLD_PCT (re-exported by document_verification.py from
+        the verification_matrix single source) must be 20.0."""
         import document_verification
         assert hasattr(document_verification, "UBO_THRESHOLD_PCT"), (
             "document_verification.py must define UBO_THRESHOLD_PCT"
         )
         assert document_verification.UBO_THRESHOLD_PCT == 20.0, (
-            f"UBO_THRESHOLD_PCT must be 25.0 (FATF standard), got {document_verification.UBO_THRESHOLD_PCT}"
+            f"UBO_THRESHOLD_PCT must be 20.0 (FSC rule, approved 2026-08-08), "
+            f"got {document_verification.UBO_THRESHOLD_PCT}"
         )
 
     def test_ubo_threshold_used_in_ownership_check(self):
