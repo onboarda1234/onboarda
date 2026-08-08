@@ -205,7 +205,7 @@ class TestUboThreshold:
         assert hasattr(document_verification, "UBO_THRESHOLD_PCT"), (
             "document_verification.py must define UBO_THRESHOLD_PCT"
         )
-        assert document_verification.UBO_THRESHOLD_PCT == 25.0, (
+        assert document_verification.UBO_THRESHOLD_PCT == 20.0, (
             f"UBO_THRESHOLD_PCT must be 25.0 (FATF standard), got {document_verification.UBO_THRESHOLD_PCT}"
         )
 

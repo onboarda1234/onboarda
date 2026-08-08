@@ -44,11 +44,12 @@ def test_exactly_one_assignment_in_backend_python():
     )
 
 
-def test_current_value_is_the_fatf_25_until_pr_e():
-    # C10/PR-E tripwire: changing the threshold is a regulatory decision
-    # (founder + MLRO). PR-E flips this assertion deliberately.
+def test_current_value_is_the_fsc_20_approved_2026_08_08():
+    # C10/PR-E tripwire: 20% per the FSC rule, founder + MLRO approved
+    # 2026-08-08 (stricter than the FATF R24/R25 25% figure). Any further
+    # change is a regulatory decision and flips this assertion deliberately.
     from verification_matrix import UBO_THRESHOLD_PCT
-    assert UBO_THRESHOLD_PCT == 25.0
+    assert UBO_THRESHOLD_PCT == 20.0
 
 
 def test_python_surfaces_share_the_constant():
@@ -102,6 +103,12 @@ def test_backoffice_mirrors_match_the_constant():
     ]
     missing = [m for m in mirrors if m not in html]
     assert missing == [], f"back-office UBO threshold mirrors out of sync: {missing}"
+    # PR-E absence guard: no stale copy of the outgoing 25% mirrors survives.
+    for stale in ("UBO Identification (\\u226525%)",
+                  "UBO threshold qualification ≥25% (rule)",
+                  "'UBOs > 25%'", "'Ownership >25%'",
+                  "ownership_above_25"):
+        assert stale not in html, f"stale 25%-era mirror still present: {stale}"
 
 
 def test_portal_mirror_matches_the_constant():
@@ -125,12 +132,9 @@ def test_portal_ubo_hint_and_data_collection_copy_mirrors():
     html = (ROOT / "arie-portal.html").read_text(encoding="utf-8")
     # Soft advisory JS hint in the realtime UBO mapping panel.
     assert f"if (pctValue > {pct})" in html
-    # KNOWN DIVERGENCE, pinned deliberately: the applicant-facing UBO
-    # data-collection copy says "\u2265 20% ownership" while the engine
-    # threshold is 25% — conservative in direction (collects more), and
-    # already at the C10/PR-E FSC target. PR-E resolves the divergence by
-    # moving the engine to 20; this pin makes the pair visible until then.
-    assert html.count("\u2265 20% ownership") >= 1
+    # PR-E closed the historical divergence: the applicant-facing UBO
+    # data-collection copy and the engine threshold now agree at 20%.
+    assert html.count(f"\u2265 {pct}% ownership") >= 1
 
 
 def test_server_indicator_ladder_bottom_rung_matches_the_constant():
@@ -139,5 +143,5 @@ def test_server_indicator_ladder_bottom_rung_matches_the_constant():
     # This pin makes PR-E confront the bottom rung explicitly.
     pct = _pct_str()
     src = (BACKEND / "server.py").read_text(encoding="utf-8")
-    assert f"COALESCE(g.ownership_pct, 0) > {pct} THEN 1 ELSE 0 END AS ownership_above_25" in src
+    assert f"COALESCE(g.ownership_pct, 0) > {pct} THEN 1 ELSE 0 END AS ownership_above_20" in src
     assert f'"UBO ownership above {pct}%"' in src

@@ -118,9 +118,10 @@ def _check(id_, label, classification, ps_field, why, logic, trigger, escalation
 # document_verification, supervisor executors/schemas, the db.py agent
 # seeds, the server risk-indicator SQL, and the two UI check registers
 # (mirrored strings pinned by tests/test_ubo_threshold_single_source.py).
-# FATF R24/R25 cite 25%; any change is a regulatory decision (C10/PR-E,
-# founder + MLRO sign-off) and must be made HERE only.
-UBO_THRESHOLD_PCT = 25.0               # ≥25% shareholding → must be declared UBO
+# C10/PR-E (founder + MLRO approved 2026-08-08): 20% per the FSC rule —
+# deliberately stricter than the FATF R24/R25 25% figure. Any further
+# change is a regulatory decision and must be made HERE only.
+UBO_THRESHOLD_PCT = 20.0               # ≥20% shareholding → must be declared UBO
 
 
 # ── Cross-cutting checks (applied to ALL documents) ───────────────
