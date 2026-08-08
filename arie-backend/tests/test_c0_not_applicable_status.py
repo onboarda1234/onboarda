@@ -667,6 +667,23 @@ class TestStartupBackfill:
         assert repair_all_skip_verified_documents(conn) == 0
         conn.close()
 
+    def test_backfill_scan_binds_like_pattern_as_parameter(self):
+        # PG-parity regression (found in staging validation of PR #940): the
+        # DBConnection PG path always passes params to cursor.execute, so
+        # psycopg2 interprets a literal "%s" sequence inside "LIKE '%skip%'"
+        # as a placeholder and the scan throws — caught, logged, 0 rows
+        # repaired. SQLite ignores '%' with qmark style, so functional tests
+        # pass either way. Pin the parameterized form.
+        import inspect
+        from db import repair_all_skip_verified_documents
+
+        src = inspect.getsource(repair_all_skip_verified_documents)
+        code_only = "\n".join(line.split("#", 1)[0] for line in src.splitlines())
+        assert "LIKE ?" in code_only, "backfill scan must use a parameterized LIKE"
+        assert "LIKE '%" not in code_only, (
+            "literal % in SQL text breaks psycopg2 parameter interpolation on PostgreSQL"
+        )
+
 
 class TestMemoExcludesNotApplicable:
     def _memo_for(self, docs):
