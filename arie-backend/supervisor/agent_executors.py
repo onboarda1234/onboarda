@@ -1012,7 +1012,7 @@ def execute_corporate_structure_ubo(application_id: str, context: Dict[str, Any]
     Design philosophy:
       - Direct ownership calculation → rule
       - Indirect ownership calculation → rule
-      - UBO threshold determination (≥25%) → rule
+      - UBO threshold determination (UBO_THRESHOLD_PCT) → rule
       - Total ownership completeness → rule
       - Circular ownership detection → rule
       - Nominee/trust/holding detection → rule (keyword-based)
@@ -2490,17 +2490,19 @@ def _check_ownership_changes(app: Dict, ubos: List[Dict], intermediaries: List[D
             "detail": f"{len(intermediaries)} intermediary shareholder(s) in structure",
         })
 
-    # Flag if any UBO has borderline ownership (near 25% threshold)
+    # Flag if any UBO has borderline ownership (threshold ± 5 points) —
+    # band and copy derive from the single-sourced threshold (C10b).
     for ubo in ubos:
         pct = ubo.get("ownership_pct") or 0
         try:
             pct = float(pct)
         except (ValueError, TypeError):
             pct = 0
-        if 20 <= pct <= 30:
+        if UBO_THRESHOLD_PCT - 5 <= pct <= UBO_THRESHOLD_PCT + 5:
             changes.append({
                 "type": "borderline_ubo_threshold",
-                "detail": f"UBO {ubo.get('full_name', 'Unknown')} at {pct}% (near 25% threshold)",
+                "detail": f"UBO {ubo.get('full_name', 'Unknown')} at {pct}% "
+                          f"(near {UBO_THRESHOLD_PCT:.0f}% threshold)",
             })
 
     return {

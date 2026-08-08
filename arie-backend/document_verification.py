@@ -1034,7 +1034,7 @@ def run_rule_checks(doc_type: str, category: str,
                                      f"Total shareholdings = {total:.1f}% — does not sum to 100%",
                                      rule_type=rtype))
 
-        # ── UBO Identification (≥25%) ──
+        # ── UBO Identification (≥ UBO_THRESHOLD_PCT) ──
         elif id_ == "DOC-15B":
             declared_ubos = ps_get(PSField.UBOS, "ubos") or []
             extracted_holders = ef.get("shareholders", [])

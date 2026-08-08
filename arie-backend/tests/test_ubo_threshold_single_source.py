@@ -20,9 +20,11 @@ ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "arie-backend"
 
 
-def _pct_int():
+def _pct_str():
+    # Same rendering as every production f-string (:.0f), so a fractional
+    # threshold cannot diverge between code and this suite.
     from verification_matrix import UBO_THRESHOLD_PCT
-    return int(UBO_THRESHOLD_PCT)
+    return f"{UBO_THRESHOLD_PCT:.0f}"
 
 
 # ── The single source ──────────────────────────────────────────────
@@ -30,10 +32,10 @@ def _pct_int():
 def test_exactly_one_assignment_in_backend_python():
     assignments = []
     for path in BACKEND.rglob("*.py"):
-        if "tests" in path.parts or ".venv" in path.parts:
+        if "tests" in path.parts or ".venv" in path.parts or "venv" in path.parts:
             continue
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if re.match(r"\s*UBO_THRESHOLD_PCT\s*=\s*[0-9]", line):
+            if re.match(r"\s*UBO_THRESHOLD_PCT\s*(?::[^=]+)?=\s*[0-9]", line):
                 assignments.append(f"{path.relative_to(ROOT)}:{lineno}")
     assert assignments == ["arie-backend/verification_matrix.py:{}".format(
         assignments[0].rsplit(":", 1)[1] if assignments else "?")], (
@@ -57,7 +59,6 @@ def test_python_surfaces_share_the_constant():
     assert document_verification.UBO_THRESHOLD_PCT == verification_matrix.UBO_THRESHOLD_PCT
     assert agent_executors.UBO_THRESHOLD_PCT == verification_matrix.UBO_THRESHOLD_PCT
     # Schema default derives from the constant.
-    field = schemas.__dict__
     from supervisor.schemas import _UBO_THRESHOLD_PCT_DEFAULT
     assert _UBO_THRESHOLD_PCT_DEFAULT == verification_matrix.UBO_THRESHOLD_PCT
 
@@ -86,7 +87,7 @@ def test_db_agent_seed_strings_derive_from_the_constant():
 # ── Pinned mirrors (cannot import Python — must move with PR-E) ────
 
 def test_backoffice_mirrors_match_the_constant():
-    pct = _pct_int()
+    pct = _pct_str()
     html = (ROOT / "arie-backoffice.html").read_text(encoding="utf-8")
     mirrors = [
         # fallback check register (reg_sh entry)
@@ -104,17 +105,39 @@ def test_backoffice_mirrors_match_the_constant():
 
 
 def test_portal_mirror_matches_the_constant():
-    pct = _pct_int()
+    pct = _pct_str()
     html = (ROOT / "arie-portal.html").read_text(encoding="utf-8")
     assert f"label: 'UBO Identification (\\u2265{pct}%)'" in html
     assert f"rule: 'Any shareholder holding \\u2265 {pct}% must be identified as a declared UBO'" in html
+
+
+def test_supervisor_borderline_band_derives_from_the_constant():
+    # Review finding (both reviewers): the periodic-review borderline-UBO
+    # band was a hardcoded 20..30 with "near 25% threshold" copy — a
+    # threshold-derived surface that would go silently stale at PR-E.
+    src = (BACKEND / "supervisor" / "agent_executors.py").read_text(encoding="utf-8")
+    assert "UBO_THRESHOLD_PCT - 5 <= pct <= UBO_THRESHOLD_PCT + 5" in src
+    assert "(near 25% threshold)" not in src, "borderline copy must derive"
+
+
+def test_portal_ubo_hint_and_data_collection_copy_mirrors():
+    pct = _pct_str()
+    html = (ROOT / "arie-portal.html").read_text(encoding="utf-8")
+    # Soft advisory JS hint in the realtime UBO mapping panel.
+    assert f"if (pctValue > {pct})" in html
+    # KNOWN DIVERGENCE, pinned deliberately: the applicant-facing UBO
+    # data-collection copy says "\u2265 20% ownership" while the engine
+    # threshold is 25% — conservative in direction (collects more), and
+    # already at the C10/PR-E FSC target. PR-E resolves the divergence by
+    # moving the engine to 20; this pin makes the pair visible until then.
+    assert html.count("\u2265 20% ownership") >= 1
 
 
 def test_server_indicator_ladder_bottom_rung_matches_the_constant():
     # The ladder (>25 / >50 / >75) is a risk-indicator tiering, not the
     # qualification comparison — PR-D deliberately leaves its SQL alone.
     # This pin makes PR-E confront the bottom rung explicitly.
-    pct = _pct_int()
+    pct = _pct_str()
     src = (BACKEND / "server.py").read_text(encoding="utf-8")
     assert f"COALESCE(g.ownership_pct, 0) > {pct} THEN 1 ELSE 0 END AS ownership_above_25" in src
     assert f'"UBO ownership above {pct}%"' in src
