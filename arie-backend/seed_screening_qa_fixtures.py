@@ -271,11 +271,10 @@ FIXTURE_REFS = tuple(f["ref"] for f in FIXTURES)
 #
 # ACCEPTED RESIDUAL RISK — ``staging`` is also the pilot stack
 # (staging.regmind.co, per CLAUDE.md), so a single unconfirmed CLI run can
-# write fixtures into a pilot database. Blast radius is bounded (five
-# hard-coded ``f1xed*`` ids plus the qafix client, all ``is_fixture=True`` and
-# therefore hidden from the default officer queue; blast radius is bounded to
-# the hard-coded ``f1xed*`` ids in FIXTURES plus the qafix client — deleted
-# only when no out-of-set application still references it), but the runbook
+# write fixtures into a pilot database. Blast radius is bounded to the
+# hard-coded ``f1xed*`` ids in FIXTURES plus the qafix client (deleted only
+# when no out-of-set application still references it), all ``is_fixture=True``
+# and therefore hidden from the default officer queue, but the runbook
 # records effects the wipe cannot undo: fixture-linked ``edd_cases`` are not
 # cleared, verification runs against the ARF-QAFIX-008 licence document leave
 # orphan ``agent_executions`` rows (no FK), and re-seeding reuses application
