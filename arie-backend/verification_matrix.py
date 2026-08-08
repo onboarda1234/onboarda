@@ -415,9 +415,9 @@ SECTION_A_CHECKS = {
         ],
     },
 
-    # ── Latest Annual Financial Statements / Management Accounts ──
+    # ── Financial Statements / Management Accounts ──
     "fin_stmt": {
-        "doc_name": "Latest Annual Financial Statements / Management Accounts",
+        "doc_name": "Financial Statements / Management Accounts",
         "category": "entity",
         "conditional": None,
         "checks": [
@@ -636,7 +636,7 @@ SECTION_A_CHECKS = {
     # check list via bankref_pep's doc_type_alias. "category" is a
     # verification-engine routing key, not a UI section.
     "bankref": {
-        "doc_name": "Bank Reference Letter",
+        "doc_name": "Company Bank Reference Letter",
         "category": "entity",
         "conditional": "high_risk",   # Gates check applicability, not a UI slot
         "checks": [
@@ -680,9 +680,9 @@ SECTION_A_CHECKS = {
         ],
     },
 
-    # ── Regulatory Licence(s) — CONDITIONAL ──
+    # ── Regulatory Licence — CONDITIONAL ──
     "licence": {
-        "doc_name": "Regulatory Licence(s)",
+        "doc_name": "Regulatory Licence",
         "category": "entity",
         "conditional": "holds_licence",   # Skip entirely if holds_regulatory_licence is false/None/empty
         "checks": [
@@ -1032,9 +1032,9 @@ SECTION_B_CHECKS = {
         ],
     },
 
-    # ── Bank Reference Letter (PEP — required for PEPs) ──
+    # ── Personal Bank Reference Letter (high risk or PEP) ──
     "bankref_pep": {
-        "doc_name": "Bank Reference Letter (PEP)",
+        "doc_name": "Personal Bank Reference Letter",
         "category": "person",
         "conditional": None,
         "doc_type_alias": "bankref",

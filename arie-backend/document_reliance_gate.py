@@ -79,6 +79,10 @@ DOCUMENT_TYPE_NORMALIZE = {
     "register of shareholders": "reg_sh",
     "shareholder_register": "reg_sh",
     "shareholder register": "reg_sh",
+    "regulatory licence": "licence",
+    "regulatory licence(s)": "licence",
+    "company bank reference letter": "bankref",
+    "personal bank reference letter": "bankref",
     "doc-directors-reg": "reg_dir",
     "register_of_directors": "reg_dir",
     "register of directors": "reg_dir",
@@ -347,9 +351,9 @@ def build_required_document_expectations(db: Any, app: Mapping[str, Any]) -> Lis
             for doc_type, label in (
                 ("cert_inc", "Certificate of Incorporation"),
                 ("reg_dir", "Register of Directors"),
-                ("reg_sh", "Register of Shareholders"),
+                ("reg_sh", "Shareholder Register"),
                 ("cert_gs", "Certificate of Good Standing"),
-                ("fin_stmt", "Financial Statements"),
+                ("fin_stmt", "Financial Statements / Management Accounts"),
             ):
                 expectations.append({
                     "doc_type": doc_type,

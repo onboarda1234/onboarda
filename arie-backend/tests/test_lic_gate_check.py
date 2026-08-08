@@ -178,7 +178,7 @@ def test_seed_includes_lic_gate_for_licence():
 
 def test_backoffice_fallback_list_shows_lic_gate():
     html = (ROOT / "arie-backoffice.html").read_text(encoding="utf-8")
-    start = html.index("{ docId:'licence', name:'Licence / Regulatory Approval'")
+    start = html.index("{ docId:'licence', name:'Regulatory Licence'")
     end = html.index("]}", start)
     licence_block = html[start:end]
     assert "Licence Applicability Gate" in licence_block

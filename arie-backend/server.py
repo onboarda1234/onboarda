@@ -11138,7 +11138,7 @@ def _kyc_required_document_expectations(db, app):
             if high_or_very_high or _kyc_party_is_pep(person):
                 expectations.append({
                     "doc_type": "bankref",
-                    "label": f"Bank Reference Letter for {owner}",
+                    "label": f"Personal Bank Reference Letter for {owner}",
                     "person_id": person_id,
                     "person_type": party_type,
                     "legacy_person_key": legacy_key_for(person, person_id, party_type),
@@ -11158,9 +11158,9 @@ def _kyc_required_document_expectations(db, app):
         for doc_type, label in (
             ("cert_inc", "Certificate of Incorporation"),
             ("reg_dir", "Register of Directors"),
-            ("reg_sh", "Register of Shareholders"),
+            ("reg_sh", "Shareholder Register"),
             ("cert_gs", "Certificate of Good Standing"),
-            ("fin_stmt", "Financial Statements"),
+            ("fin_stmt", "Financial Statements / Management Accounts"),
         ):
             expectations.append({
                 "doc_type": doc_type,
@@ -33633,6 +33633,10 @@ DOCUMENT_TYPE_NORMALIZE = {
     "register of shareholders": "reg_sh",
     "shareholder_register": "reg_sh",
     "shareholder register": "reg_sh",
+    "regulatory licence": "licence",
+    "regulatory licence(s)": "licence",
+    "company bank reference letter": "bankref",
+    "personal bank reference letter": "bankref",
     "doc-directors-reg": "reg_dir",
     "register_of_directors": "reg_dir",
     "register of directors": "reg_dir",

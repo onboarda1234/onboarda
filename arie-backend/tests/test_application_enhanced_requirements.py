@@ -1516,8 +1516,8 @@ def test_pr6g_pep_sow_evidence_is_person_specific_for_directors_and_ubos(enhance
     labels = {row["requirement_label"] for row in rows}
     assert "Source of Wealth evidence - Amina Public" in labels
     assert "Source of Wealth evidence - Uma Public" in labels
-    assert "Bank Reference Letter - Amina Public" in labels
-    assert "Bank Reference Letter - Uma Public" in labels
+    assert "Personal Bank Reference Letter - Amina Public" in labels
+    assert "Personal Bank Reference Letter - Uma Public" in labels
     assert all(row["subject_scope"] in {"director", "ubo"} for row in rows)
     assert conn.execute(
         """

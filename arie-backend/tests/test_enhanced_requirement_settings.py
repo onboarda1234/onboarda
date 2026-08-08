@@ -207,8 +207,8 @@ def test_approved_taxonomy_rule_defaults_are_seeded(enhanced_req_api_server):
     by_key = {row["requirement_key"]: row for row in rows}
     conn.close()
 
-    assert by_key["company_bank_reference"]["requirement_label"] == "Company bank reference letter"
-    assert by_key["company_bank_reference"]["client_safe_label"] == "Company bank reference letter"
+    assert by_key["company_bank_reference"]["requirement_label"] == "Company Bank Reference Letter"
+    assert by_key["company_bank_reference"]["client_safe_label"] == "Company Bank Reference Letter"
     assert by_key["company_bank_reference"]["blocking_approval"] == 0
     assert by_key["company_bank_reference"]["mandatory"] == 1
     assert by_key["company_sof_evidence"]["active"] == 1
