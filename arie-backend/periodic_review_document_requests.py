@@ -55,7 +55,7 @@ QUESTION_REQUIREMENT_MAP = {
         {
             "requirement_key": "updated_register_of_shareholders",
             "requirement_label": "Updated Shareholder Register",
-            "requirement_description": "Upload the latest register of shareholders reflecting the declared ownership changes.",
+            "requirement_description": "Upload the latest shareholder register reflecting the declared ownership changes.",
             "subject_scope": "company",
             "mandatory": True,
         },

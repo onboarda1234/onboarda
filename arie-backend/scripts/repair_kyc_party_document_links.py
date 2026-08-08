@@ -156,6 +156,7 @@ DOCUMENT_TYPE_NORMALIZE = {
     "regulatory licence(s)": "licence",
     "company bank reference letter": "bankref",
     "personal bank reference letter": "bankref",
+    "financial statements / management accounts": "fin_stmt",
     "doc-directors-reg": "reg_dir",
     "register_of_directors": "reg_dir",
     "register of directors": "reg_dir",

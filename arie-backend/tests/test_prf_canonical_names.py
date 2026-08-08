@@ -80,5 +80,6 @@ def test_alias_maps_accept_canonical_and_legacy_inbound_names():
         ("Register of Shareholders", "reg_sh"),   # legacy must keep resolving
         ("Memorandum and Articles", "memarts"),   # legacy must keep resolving
         ("Shareholder Register", "reg_sh"),
+        ("Financial Statements / Management Accounts", "fin_stmt"),
     ]:
         assert server.DOCUMENT_TYPE_NORMALIZE.get(inbound.lower()) == expected, inbound
