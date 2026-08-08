@@ -1064,6 +1064,7 @@ html[data-theme="dark"] .enterprise-agent-copy { background:var(--surface2); col
 .badge.low { background:var(--green-bg); color:var(--green); }
 .check-type-badge.content { background:rgba(34,197,94,0.08); color:var(--green); }
 .check-type-badge.age { background:rgba(245,158,11,0.08); color:var(--amber); }
+.check-type-badge.presence { background:rgba(100,116,139,0.10); color:#475569; }
 .threshold-row { display:flex; align-items:center; gap:16px; padding:10px 0; }
 .threshold-color { width:14px; height:14px; border-radius:50%; flex-shrink:0; }
 
@@ -33595,6 +33596,7 @@ var ENTITY_DOC_CHECKS = [
     { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'licence', name:'Licence / Regulatory Approval', checks:[
+    { label:'Licence Applicability Gate', rule:'Applies only when a regulatory licence was declared at pre-screening; if the client declared no licence, all licence checks are skipped', type:'presence' },
     { label:'Entity Name Match', rule:'Entity name must match', type:'name' },
     { label:'Licence Validity', rule:'Licence must be current and not expired', type:'expiry' },
     { label:'Licence Scope', rule:'Licence must cover the business activities declared in the application', type:'ai' },
@@ -33983,6 +33985,7 @@ function renderCheckTab(type) {
             '<option value="quality"' + (ch.type==='quality'?' selected':'') + '>quality</option>' +
             '<option value="expiry"' + (ch.type==='expiry'?' selected':'') + '>expiry</option>' +
             '<option value="age"' + (ch.type==='age'?' selected':'') + '>age</option>' +
+            '<option value="presence"' + (ch.type==='presence'?' selected':'') + '>presence</option>' +
           '</select>' +
           '<button class="btn btn-outline btn-sm" onclick="removeCheck(\'' + type + '\',' + di + ',' + ci + ')" style="color:var(--red);border-color:var(--red);font-size:10px;padding:3px 8px;">✕ Remove</button>' +
         '</div>' +

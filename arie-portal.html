@@ -9010,6 +9010,7 @@ var DOC_RULES = {
   'doc-license-cert': {
     name: 'Regulatory Licence',
     checks: [
+      { id: 'lic-gate', label: 'Licence Applicability Gate', rule: 'Applies only when a regulatory licence was declared during initial review; if no licence is held, licence checks are skipped', type: 'presence' },
       { id: 'name-match', label: 'Entity Name Match', rule: 'Entity name must match application', type: 'name' },
       { id: 'validity', label: 'Licence Validity', rule: 'Licence must be current and not expired', type: 'expiry' },
       { id: 'scope', label: 'Licence Scope', rule: 'Licence must cover the business activities declared in the application', type: 'ai' },

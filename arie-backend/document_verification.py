@@ -1227,6 +1227,35 @@ def run_rule_checks(doc_type: str, category: str,
                                      extracted_value=extracted_jur,
                                      rule_type=rtype))
 
+        # ── Licence Applicability Gate (LIC-GATE) ──
+        elif id_ == "LIC-GATE":
+            if is_licence_applicable(ps):
+                # Evidence must not contradict the verdict: cite the licence
+                # text only when it is itself an affirmative declaration;
+                # otherwise cite the boolean flag that drove
+                # is_licence_applicable (e.g. is_licensed=True can coexist
+                # with regulatory_licences="none").
+                declared = ps_get(PSField.HOLDS_LICENCE, "is_licensed", "has_licence")
+                if not is_licence_applicable({PSField.HOLDS_LICENCE: declared}):
+                    declared = (ps.get("is_licensed")
+                                if isinstance(ps.get("is_licensed"), bool)
+                                else ps.get("has_licence"))
+                results.append(_pass(id_, label, cls,
+                                     "Client declared a regulatory licence at pre-screening — "
+                                     "licence checks apply",
+                                     ps_field=PSField.HOLDS_LICENCE,
+                                     ps_value=declared,
+                                     rule_type=rtype))
+            else:
+                # verify_document_layered short-circuits the whole document
+                # before rule checks run when the licence is not applicable,
+                # but run_rule_checks is also a public entry point — mirror
+                # the gate's SKIP escalation so both paths agree.
+                results.append(_skip(id_, label, cls,
+                                     "Regulatory licence checks skipped — client declared no licence",
+                                     ps_field=PSField.HOLDS_LICENCE,
+                                     rule_type=rtype))
+
         # NOTE: DOC-13 Authorised Share Capital Match rule REMOVED per policy decision
         # (matching check retired from verification_matrix.memarts).
 

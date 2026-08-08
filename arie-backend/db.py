@@ -7687,10 +7687,16 @@ def repair_all_skip_verified_documents(db: DBConnection) -> int:
     per-row parse failures are skipped rather than aborting startup.
     """
     try:
+        # The '%skip%' pattern must be bound as a parameter, never inlined in
+        # the SQL text: psycopg2 always applies parameter interpolation, so a
+        # literal "%s" sequence inside "LIKE '%skip%'" is parsed as a
+        # placeholder and the scan throws on PostgreSQL (SQLite is unaffected,
+        # which is why the functional tests could not catch it).
         rows = db.execute(
             "SELECT id, verification_results FROM documents "
             "WHERE verification_status='verified' "
-            "AND verification_results LIKE '%skip%'"
+            "AND verification_results LIKE ?",
+            ("%skip%",),
         ).fetchall()
     except Exception as e:
         logger.warning("C0 all-skip repair scan failed: %s", e)
