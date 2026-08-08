@@ -300,9 +300,14 @@ def cleanup_pilot_canonical_dataset(
         raise FixtureCleanupDenied("pilot canonical reviewed manifest hash is missing or invalid")
 
     manifest_rows = {row["reference"]: row for row in load_manifest()["scenarios"]}
+    # LIKE patterns are bound as parameters throughout this module: the
+    # DBConnection PostgreSQL path always passes params to cursor.execute,
+    # so a literal '%' inside the SQL text is parsed by psycopg2 as a
+    # format directive and the statement throws (SQLite is unaffected).
     roots = db.execute(
         "SELECT id, ref, is_fixture, prescreening_data FROM applications "
-        "WHERE ref LIKE 'RM-PILOT-%' ORDER BY ref"
+        "WHERE ref LIKE ? ORDER BY ref",
+        ("RM-PILOT-%",),
     ).fetchall()
     if not roots:
         return {table: 0 for table in PILOT_CANONICAL_CLEANUP_TABLES}
@@ -372,9 +377,9 @@ def cleanup_pilot_canonical_dataset(
                 ):
                     remove(
                         "audit_log",
-                        "user_id='fixture_seed' AND action LIKE 'fixture.pilot_canonical_%' "
+                        "user_id='fixture_seed' AND action LIKE ? "
                         "AND detail LIKE ?",
-                        (f"%{reference}%",),
+                        ("fixture.pilot_canonical_%", f"%{reference}%"),
                     )
                     if reference == roots[-1]["ref"]:
                         remove(
@@ -394,13 +399,15 @@ def cleanup_pilot_canonical_dataset(
                 )
 
         residue = db.execute(
-            "SELECT count(*) AS n FROM applications WHERE ref LIKE 'RM-PILOT-%'"
+            "SELECT count(*) AS n FROM applications WHERE ref LIKE ?",
+            ("RM-PILOT-%",),
         ).fetchone()
         if int((residue or {}).get("n") or 0):
             raise FixtureCleanupDenied("pilot canonical cleanup left application residue")
         audit_residue = db.execute(
             "SELECT count(*) AS n FROM audit_log "
-            "WHERE user_id='fixture_seed' AND action LIKE 'fixture.pilot_canonical_%'"
+            "WHERE user_id='fixture_seed' AND action LIKE ?",
+            ("fixture.pilot_canonical_%",),
         ).fetchone()
         if int((audit_residue or {}).get("n") or 0):
             raise FixtureCleanupDenied("pilot canonical cleanup left audit residue")

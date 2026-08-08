@@ -1230,12 +1230,21 @@ def run_rule_checks(doc_type: str, category: str,
         # ── Licence Applicability Gate (LIC-GATE) ──
         elif id_ == "LIC-GATE":
             if is_licence_applicable(ps):
+                # Evidence must not contradict the verdict: cite the licence
+                # text only when it is itself an affirmative declaration;
+                # otherwise cite the boolean flag that drove
+                # is_licence_applicable (e.g. is_licensed=True can coexist
+                # with regulatory_licences="none").
                 declared = ps_get(PSField.HOLDS_LICENCE, "is_licensed", "has_licence")
+                if not is_licence_applicable({PSField.HOLDS_LICENCE: declared}):
+                    declared = (ps.get("is_licensed")
+                                if isinstance(ps.get("is_licensed"), bool)
+                                else ps.get("has_licence"))
                 results.append(_pass(id_, label, cls,
                                      "Client declared a regulatory licence at pre-screening — "
                                      "licence checks apply",
                                      ps_field=PSField.HOLDS_LICENCE,
-                                     ps_value=declared if declared is not None else None,
+                                     ps_value=declared,
                                      rule_type=rtype))
             else:
                 # verify_document_layered short-circuits the whole document

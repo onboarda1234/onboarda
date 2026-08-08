@@ -94,6 +94,18 @@ class TestLicGateRuleCheck:
             offenders = [r for r in results if NOT_IMPLEMENTED_MARKER in str(r.get("message", ""))]
             assert offenders == [], f"licence checks fell into fallback: {offenders!r}"
 
+    def test_pass_evidence_never_contradicts_verdict(self):
+        # Review finding: on {is_licensed: True, regulatory_licences: "none"}
+        # the verdict is PASS (boolean takes precedence in
+        # is_licence_applicable) but naive evidence selection surfaced
+        # ps_value "none" next to it. Evidence must cite the value that
+        # drove the verdict.
+        gate = _lic_gate(run_rule_checks(
+            "licence", "entity", {},
+            {"is_licensed": True, "regulatory_licences": "none"}, "LOW"))
+        assert gate["result"] == CheckStatus.PASS
+        assert gate.get("ps_value") == "True"
+
     def test_pass_result_matches_helper_verdict(self):
         # The handler must reuse is_licence_applicable — the same inputs
         # must produce the same verdict on both paths.
@@ -185,6 +197,71 @@ def test_backoffice_type_select_offers_presence():
 def test_backoffice_presence_badge_css_exists():
     html = (ROOT / "arie-backoffice.html").read_text(encoding="utf-8")
     assert ".check-type-badge.presence" in html
+
+
+# ── C1b: admin save round-trip — select types must be server-accepted ──
+
+def test_backoffice_select_types_are_accepted_by_server_validator():
+    """Review finding (blocking): saveAIChecks PUTs every check with the
+    type currently selected in the admin <select>. Any option value the
+    server's AI_CHECK_ALLOWED_TYPES whitelist rejects turns the save into a
+    hard 400 — and because the PUTs run sequentially in one try block, all
+    payloads queued behind the failing one are dropped. Pin: every option
+    offered by the back-office select is accepted by the server validator.
+    """
+    import re
+
+    bo = (ROOT / "arie-backoffice.html").read_text(encoding="utf-8")
+    server_src = (ROOT / "arie-backend" / "server.py").read_text(encoding="utf-8")
+
+    # Scope to the admin check-type select built inside renderCheckTab —
+    # the only select whose values saveAIChecks PUTs as check types.
+    region_start = bo.index("check-type-sel")
+    region_end = bo.index("</select>", region_start)
+    options = re.findall(r"<option value=\\?\"([a-z_]+)\\?\"", bo[region_start:region_end])
+    assert options, "could not locate check-type select options"
+    assert "presence" in options
+
+    m = re.search(r"AI_CHECK_ALLOWED_TYPES\s*=\s*(\{[^}]*\})", server_src)
+    assert m, "could not locate AI_CHECK_ALLOWED_TYPES in server.py"
+    allowed = eval(m.group(1))  # literal set of str
+    assert "presence" in allowed
+
+    not_allowed = [o for o in set(options) if o not in allowed]
+    assert not_allowed == [], (
+        f"admin select offers types the server rejects (save would 400): {not_allowed}"
+    )
+
+
+# ── PG parity: no inline single-% LIKE literals on the PG path ─────
+
+def test_no_inline_percent_like_literals_in_pg_reachable_modules():
+    """Same bug class as the C0 backfill failure (and its cleanup.py
+    siblings found in review): the DBConnection PostgreSQL path always
+    passes params to cursor.execute, so a literal '%' inside SQL text is
+    parsed by psycopg2 as a format directive and the statement throws.
+    LIKE patterns must be bound as parameters (or use the '%%' doubling
+    idiom). Scans code lines only; the sqlite_master scan in db.py runs on
+    a raw sqlite3 cursor and is allowlisted.
+    """
+    import re
+
+    pat = re.compile(r"LIKE\s+'[^']*(?<!%)%(?!%)[^']*'", re.IGNORECASE)
+    offenders = []
+    for rel in ("arie-backend/fixtures/cleanup.py",
+                "arie-backend/server.py",
+                "arie-backend/db.py"):
+        for lineno, line in enumerate((ROOT / rel).read_text(encoding="utf-8").splitlines(), 1):
+            code = line.split("#", 1)[0]
+            if "sqlite_master" in code:
+                continue  # native sqlite3 cursor — never executes on PG
+            if pat.search(code):
+                offenders.append(f"{rel}:{lineno}: {line.strip()[:100]}")
+    assert offenders == [], (
+        "inline single-% LIKE literal(s) would throw under psycopg2 parameter "
+        "interpolation on PostgreSQL — bind the pattern as a parameter:\n"
+        + "\n".join(offenders)
+    )
 
 
 # ── C1b: portal reference register ─────────────────────────────────

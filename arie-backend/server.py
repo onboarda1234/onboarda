@@ -15667,7 +15667,7 @@ def _validate_ai_agent_payload(data, db, existing_id=None):
     return normalized, errors
 
 
-AI_CHECK_ALLOWED_TYPES = {"name", "content", "quality", "expiry", "age", "ai", "rule", "hybrid", "gate", "advisory"}
+AI_CHECK_ALLOWED_TYPES = {"name", "content", "quality", "expiry", "age", "ai", "rule", "hybrid", "gate", "advisory", "presence"}
 AI_CHECK_ALLOWED_AUTHORITY = {"gate", "rule", "hybrid", "ai", "advisory"}
 AI_CHECK_ALLOWED_SEVERITY = {"info", "low", "medium", "high", "critical"}
 
